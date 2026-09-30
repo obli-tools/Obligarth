@@ -29,7 +29,7 @@ export interface AuditLogRow {
   resourceType: string | null;
   resourcePath: string | null;
   /** Display name resolved from the owning table when possible
-   *  (e.g. `scripts.name` for `resource_type='script'`). `null` when
+   *  (e.g. `device_groups.name` for `resource_type='group'`). `null` when
    *  the entity has been deleted, or when the resource_type doesn't
    *  map to a nameable table (commands, files, sessions, etc.). The
    *  raw `resourceType:resourcePath` pair stays available so the UI

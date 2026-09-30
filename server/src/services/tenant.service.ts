@@ -32,8 +32,8 @@ function rowToTenant(row: TenantRow): Tenant {
 
 // Tables whose `target_tenant_ids` (int[]) name the tenants a master-owned row
 // is fanned out to. The module that owns such a table registers it
-// (registerTenantFanoutTable; modules/rmm.ts for the RMM's): deleting a
-// tenant strips its id from every registered table.
+// (registerTenantFanoutTable): deleting a tenant strips its id from every
+// registered table.
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const fanoutTables: string[] = [];
 

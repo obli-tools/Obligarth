@@ -5,11 +5,12 @@ import { SocketEvents, isMasterTenant } from '@obliance/shared';
 import type { SmartDisk, DiskHealthStatus } from '@obliance/shared';
 
 /**
- * Disk health (SMART). Fed out-of-band by a scheduled metric script whose JSON
- * output carries a `disks` array (see command.service.ts) — NEVER by the 10s
- * metrics push. Stores one row per physical disk, computes an overall status,
- * and fires the same notification/live-alert path as the metric thresholds on
- * a state transition (dedup via devices.last_disk_health_status).
+ * Disk health (SMART). Fed out-of-band by the disk-health probe
+ * (diskHealthCollector), a script whose JSON output carries a `disks` array
+ * (see command.service.ts) — NEVER by the 10s metrics push. Stores one row
+ * per physical disk, computes an overall status, and fires the same
+ * notification/live-alert path as the metric thresholds on a state
+ * transition (dedup via devices.last_disk_health_status).
  */
 
 const ORDER: Record<DiskHealthStatus, number> = { unknown: 0, good: 0, caution: 1, bad: 2 };
@@ -62,7 +63,7 @@ export const diskHealthService = {
     return rows.map(rowToDisk);
   },
 
-  /** Replace the device's SMART snapshot from a metric-script `disks` payload,
+  /** Replace the device's SMART snapshot from a probe's `disks` payload,
    *  then alert on a health-state transition. Best-effort — never throws into
    *  the caller (a script-result handler). */
   async saveFromScript(deviceId: number, tenantId: number, disks: IncomingDisk[]): Promise<void> {

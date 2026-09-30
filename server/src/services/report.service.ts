@@ -67,7 +67,7 @@ class ReportService {
       tenant_id: tenantId, name: data.name, description: data.description,
       type: data.type || 'fleet', format: data.format || 'pdf',
       scope_type: data.scopeType || 'tenant', scope_id: data.scopeId,
-      sections: JSON.stringify(data.sections || ['hardware','software','updates','compliance']),
+      sections: JSON.stringify(data.sections || ['hardware','software']),
       filters: JSON.stringify(data.filters || {}),
       schedule_cron: data.scheduleCron, timezone: data.timezone || 'UTC',
       is_enabled: data.isEnabled !== false, created_by: data.createdBy,
@@ -274,8 +274,8 @@ class ReportService {
   }
 
   // Excel's hard per-cell limit. exceljs does NOT enforce it, so an oversized
-  // cell (e.g. a whole compliance `results` jsonb blob) silently truncates on
-  // open in Excel — cap it explicitly with a visible marker instead.
+  // cell (e.g. a whole hardwareDetail array) silently truncates on open in
+  // Excel — cap it explicitly with a visible marker instead.
   private static readonly XLSX_CELL_MAX = 32767;
 
   // Cell value for the xlsx path — keep native number/boolean/Date types so
@@ -294,7 +294,7 @@ class ReportService {
 
   // Render the rich report document to a real PDF via the system Chromium
   // (launchChromium resolves the executable + container-safe flags — same as
-  // the device/hyperv PDF exports). Returns the PDF bytes; browser always closed.
+  // the device PDF export). Returns the PDF bytes; browser always closed.
   private async toPdf(data: Record<string, any>, report: any, tenantName: string): Promise<Buffer> {
     const html = renderReportHtml(data, report, { tenantName });
     const browser = await launchChromium();
@@ -456,69 +456,12 @@ class ReportService {
       }));
     }
 
-    if (sections_list.includes('updates')) {
-      const updates = await db('device_updates')
-        .where({ tenant_id: report.tenant_id })
-        .whereIn('device_id', deviceIds)
-        .whereIn('status', ['available', 'approved', 'failed']);
-      sections.updates = updates.map((u: any) => ({
-        device: deviceName.get(u.device_id) || `#${u.device_id}`,
-        title: u.title, severity: u.severity, status: u.status,
-        category: u.category, requires_reboot: u.requires_reboot,
-        // keep raw fields the renderer's metrics read (device_id/severity/requires_reboot)
-        device_id: u.device_id,
-      }));
-    }
-
-    if (sections_list.includes('compliance')) {
-      const compliance = await db('compliance_results')
-        .where({ tenant_id: report.tenant_id })
-        .whereIn('device_id', deviceIds)
-        .orderBy('checked_at', 'desc');
-      // compliance_results is INSERT-per-scan (full history), like hardware —
-      // keep only the LATEST row per (device, policy) or the table/exports fill
-      // with duplicate historical scans and the count is wrong.
-      const seenCp = new Set<string>();
-      const latestCp = compliance.filter((c: any) => {
-        const k = `${c.device_id}:${c.policy_id}`;
-        if (seenCp.has(k)) return false;
-        seenCp.add(k);
-        return true;
-      });
-      // Attach hostname for the detail table but KEEP device_id/policy_id/
-      // compliance_score/results — the renderer's metrics read those.
-      sections.compliance = latestCp.map((c: any) => ({
-        device: deviceName.get(c.device_id) || `#${c.device_id}`,
-        compliance_score: c.compliance_score,
-        checked_at: c.checked_at,
-        device_id: c.device_id, policy_id: c.policy_id, results: c.results,
-      }));
-    }
-
-    if (sections_list.includes('scripts_history')) {
-      const execs = await db('script_executions')
-        .where({ tenant_id: report.tenant_id })
-        .whereIn('device_id', deviceIds)
-        .orderBy('triggered_at', 'desc')
-        .limit(500);
-      // NEVER export script_snapshot (full source), parameter_values (may hold
-      // secrets), stdout or stderr — a report is a shareable artifact. Only the
-      // script NAME + outcome.
-      sections.scriptHistory = execs.map((e: any) => ({
-        device: deviceName.get(e.device_id) || `#${e.device_id}`,
-        script: (this.jval(e.script_snapshot) || {}).name || '',
-        status: e.status,
-        exit_code: e.exit_code,
-        triggered_at: e.triggered_at,
-      }));
-    }
-
     return sections;
   }
 
   // RFC-4180 field: always quote and double any internal quote. cellValue()
   // first turns objects/arrays/Dates into a flat string, so a nested cell (e.g.
-  // compliance.results, hardwareDetail arrays) becomes ONE quoted field — its
+  // hardwareDetail arrays) becomes ONE quoted field — its
   // internal commas no longer split the row. (JSON.stringify alone left array/
   // object cells unquoted at the CSV level, corrupting column alignment.)
   private csvField(v: any): string {

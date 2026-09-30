@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import dns from 'dns/promises';
 import { deviceService, getAgentVersion } from '../services/device.service';
-import { customMetricService } from '../services/customMetric.service';
 import { commandService } from '../services/command.service';
 import { requireRole, requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
@@ -10,7 +9,6 @@ import { db } from '../db';
 import { getIO } from '../socket';
 import { launchChromium } from '../utils/chromium';
 import { SocketEvents, isMasterTenant } from '@obliance/shared';
-import { scenarioService } from '../services/scenario.service';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -20,7 +18,7 @@ const router = Router();
 // GET /api/devices
 router.get('/', async (req, res, next) => {
   try {
-    const { groupId, includeSubgroups, status, approvalStatus, search, osType, osName, osVersion, page, pageSize, sortBy, sortOrder, ungrouped, staleHours, pendingUpdates, tags, tenantIds } = req.query as any;
+    const { groupId, includeSubgroups, status, approvalStatus, search, osType, osName, osVersion, page, pageSize, sortBy, sortOrder, ungrouped, staleHours, tags, tenantIds } = req.query as any;
 
     // Tags arrive either as repeated query params (`?tags=a&tags=b`)
     // → already an array — or as a comma-separated string. Normalise.
@@ -59,7 +57,6 @@ router.get('/', async (req, res, next) => {
       sortBy, sortOrder,
       ungrouped: ungrouped === 'true' || ungrouped === true,
       staleHours: staleHours ? parseInt(staleHours) : undefined,
-      pendingUpdates: pendingUpdates === 'true' || pendingUpdates === '1' || pendingUpdates === true,
       tags: tagsArr,
       tenantIds: tenantIdsArr,
     });
@@ -498,41 +495,6 @@ router.get('/group-stats', async (req, res, next) => {
     if (!isMaster) deviceQ.where({ tenant_id: tenantId });
     const deviceRows = await deviceQ;
 
-    // Compliance scores per group (latest per device). On master we
-    // drop the tenant filter on both sides of the JOIN/sub-select —
-    // everything flows through `compliance_results` rows already
-    // tied to the right device's tenant.
-    const tenantFilterCompliance = isMaster ? '' : 'AND d.tenant_id = ?';
-    const tenantFilterComplianceSub = isMaster ? '' : 'WHERE tenant_id = ?';
-    const complianceParams = isMaster ? [] : [tenantId, tenantId];
-    const complianceRows = await db.raw(`
-      SELECT d.group_id,
-             ROUND(AVG(cr.compliance_score)::numeric, 1) as avg_score,
-             COUNT(DISTINCT cr.policy_id) as policy_count
-      FROM compliance_results cr
-      JOIN devices d ON d.id = cr.device_id
-      WHERE d.approval_status = 'approved' ${tenantFilterCompliance}
-        AND cr.id IN (
-          SELECT DISTINCT ON (device_id, policy_id) id
-          FROM compliance_results
-          ${tenantFilterComplianceSub}
-          ORDER BY device_id, policy_id, checked_at DESC
-        )
-      GROUP BY d.group_id
-    `, complianceParams);
-
-    // Pending updates per group
-    const tenantFilterUpdates = isMaster ? '' : 'WHERE d.tenant_id = ? AND du.status = \'available\'';
-    const updateWhere = isMaster ? `WHERE du.status = 'available'` : tenantFilterUpdates;
-    const updateParams = isMaster ? [] : [tenantId];
-    const updateRows = await db.raw(`
-      SELECT d.group_id, COUNT(DISTINCT du.device_id) as devices_with_updates
-      FROM device_updates du
-      JOIN devices d ON d.id = du.device_id
-      ${updateWhere}
-      GROUP BY d.group_id
-    `, updateParams);
-
     // Group metadata (parent + sortOrder feed the dashboard's hierarchical
     // "Vue par groupe" — root → children indented by depth, ordered by the
     // admin-defined sort_order rather than device count).
@@ -558,7 +520,6 @@ router.get('/group-stats', async (req, res, next) => {
           groupId: gid, groupName: null, parentId: null, sortOrder: 0,
           tenantId: null, tenantName: null,
           online: 0, offline: 0, warning: 0, critical: 0, total: 0,
-          complianceScore: null, policyCount: 0, pendingUpdates: 0,
         });
       }
       return statsMap.get(gid)!;
@@ -573,17 +534,6 @@ router.get('/group-stats', async (req, res, next) => {
       else if (row.status === 'warning') s.warning += count;
       else if (row.status === 'update_error') s.warning += count;
       else if (row.status === 'critical') s.critical += count;
-    }
-
-    for (const row of (complianceRows.rows ?? complianceRows)) {
-      const s = getOrCreate(row.group_id);
-      s.complianceScore = parseFloat(row.avg_score);
-      s.policyCount = parseInt(row.policy_count);
-    }
-
-    for (const row of (updateRows.rows ?? updateRows)) {
-      const s = getOrCreate(row.group_id);
-      s.pendingUpdates = parseInt(row.devices_with_updates);
     }
 
     // Make sure every group has a stats row even if it has no devices —
@@ -722,12 +672,9 @@ router.post('/batch/transfer', requireTenantCapability('devices.manage'), async 
             tenant_id: targetTenantId,
             api_key_id: targetApiKeyId,
             group_id: null,
-            schedule_alert: null,
             updated_at: new Date(),
           });
 
-          await trx('device_custom_metrics').where({ device_id: device.id }).delete();
-          await trx('software_compliance_results').where({ device_id: device.id }).delete();
           await trx('command_queue')
             .where({ device_id: device.id, tenant_id: req.tenantId! })
             .whereIn('status', ['pending', 'sent'])
@@ -765,8 +712,6 @@ router.post('/batch/transfer', requireTenantCapability('devices.manage'), async 
 
 // POST /api/devices/batch/change-group — move N devices to a new group in one shot.
 // Body: { deviceIds: number[], groupId: number | null }
-// Fires the 'group_join' scenario trigger for each device whose group actually
-// changed, matching the single-device PATCH flow.
 router.post('/batch/change-group', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
     const { deviceIds, groupId } = req.body as { deviceIds: number[]; groupId: number | null };
@@ -791,7 +736,7 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
     });
     if (!approved) return;
 
-    // Capture previous groupIds so we only fire triggers when the group changed.
+    // Capture previous groupIds so only the devices whose group changed count.
     const prev = await db('devices')
       .whereIn('id', deviceIds)
       .andWhere({ tenant_id: req.tenantId! })
@@ -809,10 +754,6 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
       if (prevById.get(id) !== normalized) {
         changedCount++;
         changedIds.push(id);
-        if (normalized !== null) {
-          scenarioService.fireTrigger('group_join', id, req.tenantId!, { groupId: normalized })
-            .catch(err => logger.error({ err, deviceId: id }, 'group_join trigger failed'));
-        }
       }
     }
     // The new group chain may mute / unmute metric alerts (`notify`):
@@ -843,7 +784,7 @@ router.post('/batch', requireRole('admin'), async (req, res, next) => {
   try {
     const { groupId, deviceIds, action } = req.body as {
       groupId?: number; deviceIds?: number[];
-      action: 'restart_agent' | 'reboot' | 'shutdown' | 'sleep' | 'scan_inventory' | 'scan_updates' | 'check_compliance' | 'update_agent';
+      action: 'restart_agent' | 'reboot' | 'shutdown' | 'sleep' | 'scan_inventory' | 'update_agent';
     };
     if (!action) return res.status(400).json({ error: 'action required' });
 
@@ -970,16 +911,8 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
         req.body.thresholdsOverride = parsed.data;
       }
     }
-    // Check if group is changing so we can fire a scenario trigger
-    const hadGroupChange = req.body.groupId !== undefined;
     const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body);
     if (!device) return res.status(404).json({ error: 'Device not found' });
-    // Fire scenario trigger when device joins a new group
-    if (hadGroupChange && device.groupId) {
-      scenarioService.fireTrigger('group_join', deviceId, req.tenantId!, { groupId: device.groupId }).catch(err => {
-        logger.error({ err, deviceId }, 'Failed to fire group_join scenario trigger');
-      });
-    }
     res.json({ data: device });
   } catch (err) { next(err); }
 });
@@ -1007,15 +940,6 @@ router.get('/:id/metrics/history', requireDeviceRead(), async (req, res, next) =
     const deviceId = parseInt(req.params.id);
     const history = await deviceService.getDeviceMetricsHistory(deviceId, req.tenantId!);
     res.json({ data: history });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/custom-metrics
-router.get('/:id/custom-metrics', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const metrics = await customMetricService.listForDevice(deviceId, req.tenantId!);
-    res.json({ data: metrics });
   } catch (err) { next(err); }
 });
 
@@ -1131,11 +1055,7 @@ router.post('/:id/approve', requireTenantCapability('agent_config:approval'), as
   try {
     const id = parseInt(req.params.id);
     const device = await deviceService.approveDevice(id, req.tenantId!, req.session.userId!);
-    // Fire scenario trigger for newly approved agent
     if (device) {
-      scenarioService.fireTrigger('agent_approved', device.id, req.tenantId!).catch(err => {
-        logger.error({ err, deviceId: device.id }, 'Failed to fire agent_approved scenario trigger');
-      });
       try {
         const { auditService } = await import('../services/audit.service');
         await auditService.logReq(req, 'device.approved', {
@@ -1596,14 +1516,8 @@ router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (r
         tenant_id: targetTenantId,
         api_key_id: targetApiKeyId,
         group_id: null,
-        schedule_alert: null,
         updated_at: new Date(),
       });
-
-      // Clear cross-tenant artefacts that would otherwise point at the
-      // old tenant's schedules / compliance lists.
-      await trx('device_custom_metrics').where({ device_id: deviceId }).delete();
-      await trx('software_compliance_results').where({ device_id: deviceId }).delete();
 
       // Cancel any still-pending commands from the source tenant.
       await trx('command_queue')

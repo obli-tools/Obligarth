@@ -303,9 +303,6 @@ class DeviceService {
     /** Dashboard hero "Injoignables 72h" → /devices?stale=72. Filter rows
      *  whose last_seen_at is older than the threshold (in hours). */
     staleHours?: number;
-    /** Dashboard hero "MAJ en attente" → /devices?pendingUpdates=1. Filter
-     *  to only devices with at least one device_updates row in 'available'. */
-    pendingUpdates?: boolean;
     /** Lot C 3-tier OS filter: marketing name (e.g. "Microsoft Windows 10
      *  IoT Enterprise LTSC 2021"). Accepts a single string (legacy
      *  single-select callers) OR an array of strings — multi-select
@@ -407,15 +404,6 @@ class DeviceService {
       const cutoff = new Date(Date.now() - filters.staleHours * 60 * 60 * 1000);
       q = q.where('devices.last_seen_at', '<', cutoff);
     }
-    if (filters?.pendingUpdates) {
-      // In god view there's no single tenant_id to filter device_updates
-      // by — match on status alone and let the device-side filter rope
-      // in the right rows. Still safe because the join above already
-      // determined which devices are visible.
-      const updatesSubQ = db('device_updates').where({ status: 'available' }).distinct('device_id');
-      if (!isMaster) updatesSubQ.where({ tenant_id: tenantId });
-      q = q.whereIn('devices.id', updatesSubQ);
-    }
     // Tags filter — `tags` is a JSONB array of strings on the
     // devices table. The Postgres `?|` operator returns true when
     // the JSONB value contains ANY of the given keys, which is the
@@ -516,37 +504,7 @@ class DeviceService {
       return device;
     });
 
-    // Attach custom metrics in a single batch query (avoids N+1).
-    await this._attachCustomMetrics(items, isMaster ? null : tenantId);
-
     return { items, total, page, pageSize };
-  }
-
-  /** Batch-load custom metrics for a list of devices and attach them in-place.
-   *  Pass `null` for tenantId in master/god-view contexts where the device
-   *  set spans tenants and the query must walk every device_custom_metrics
-   *  row regardless of its tenant. */
-  private async _attachCustomMetrics(devices: Device[], tenantId: number | null): Promise<void> {
-    if (devices.length === 0) return;
-    const ids = devices.map((d) => d.id);
-    const q = db('device_custom_metrics').whereIn('device_id', ids);
-    if (tenantId != null) q.where({ tenant_id: tenantId });
-    const rows = await q.select('device_id', 'schedule_id', 'name', 'value', 'unit', 'status');
-    const byDevice = new Map<number, any[]>();
-    for (const r of rows) {
-      const list = byDevice.get(r.device_id) ?? [];
-      list.push({
-        scheduleId: r.schedule_id,
-        name: r.name,
-        value: r.value,
-        unit: r.unit,
-        status: r.status,
-      });
-      byDevice.set(r.device_id, list);
-    }
-    for (const d of devices) {
-      (d as any).customMetrics = byDevice.get(d.id) ?? [];
-    }
   }
 
   /** Legacy non-paginated list — used by sidebar and internal calls. */
@@ -661,13 +619,11 @@ class DeviceService {
     }
     const rows = await rowsQuery;
 
-    const items = rows.map((row: any) => {
+    return rows.map((row: any) => {
       const device = this.rowToDevice(row);
       (device as any).groupName = row.group_name ?? null;
       return device;
     });
-    await this._attachCustomMetrics(items, tenantId);
-    return items;
   }
 
   async getDeviceById(id: number, tenantId: number): Promise<Device | null> {
@@ -682,9 +638,7 @@ class DeviceService {
     if (!isMaster) q.where('devices.tenant_id', tenantId);
     const row = await q.first();
     if (!row) return null;
-    const device = this.rowToDevice(row);
-    await this._attachCustomMetrics([device], isMaster ? null : tenantId);
-    return device;
+    return this.rowToDevice(row);
   }
 
   async getDeviceByUuid(uuid: string, tenantId: number): Promise<Device | null> {
@@ -708,7 +662,6 @@ class DeviceService {
     scanIntervalSeconds: number | null;
     overrideGroupSettings: boolean;
     maxMissedPushes: number;
-    complianceRemediationEnabled: boolean;
     purchaseDate: string | null;
     warrantyExpiry: string | null;
     warrantyVendor: string | null;
@@ -734,7 +687,6 @@ class DeviceService {
     if (data.scanIntervalSeconds !== undefined) updates.scan_interval_seconds = data.scanIntervalSeconds;
     if (data.overrideGroupSettings !== undefined) updates.override_group_settings = data.overrideGroupSettings;
     if (data.maxMissedPushes !== undefined) updates.max_missed_pushes = data.maxMissedPushes;
-    if (data.complianceRemediationEnabled !== undefined) updates.compliance_remediation_enabled = data.complianceRemediationEnabled;
     if (data.purchaseDate !== undefined) updates.purchase_date = data.purchaseDate;
     if (data.warrantyExpiry !== undefined) updates.warranty_expiry = data.warrantyExpiry;
     if (data.warrantyVendor !== undefined) updates.warranty_vendor = data.warrantyVendor;
@@ -895,12 +847,8 @@ class DeviceService {
    */
   private async purgeDeviceData(id: number) {
     const tables = [
-      'device_updates',
       'command_queue',
-      'script_executions',
       'remote_sessions',
-      'compliance_results',
-      'config_snapshots',
     ];
     for (const table of tables) {
       try {
@@ -908,7 +856,6 @@ class DeviceService {
       } catch { /* table may not exist on old schema versions */ }
     }
     // Polymorphic references
-    try { await db('update_policies').where({ target_type: 'device', target_id: id }).delete(); } catch { /* ignore */ }
     try { await db('reports').where({ scope_type: 'device', scope_id: id }).delete(); } catch { /* ignore */ }
   }
 
@@ -940,18 +887,14 @@ class DeviceService {
   /**
    * Self-healing: delete orphaned records that reference devices no longer
    * in the platform. Runs periodically so the DB stays consistent even if
-   * a CASCADE constraint was missing or a polymorphic reference (target_id /
-   * scope_id) has no FK at the DB level.
+   * a CASCADE constraint was missing or a polymorphic reference (scope_id)
+   * has no FK at the DB level.
    */
   async cleanOrphans() {
     // FK tables (should cascade, but purge any stragglers)
     const fkTables = [
-      'device_updates',
       'command_queue',
-      'script_executions',
       'remote_sessions',
-      'compliance_results',
-      'config_snapshots',
     ];
 
     let total = 0;
@@ -973,16 +916,6 @@ class DeviceService {
     }
 
     // Polymorphic references (no DB FK — must be cleaned in code)
-    try {
-      const b = await db.raw(`
-        DELETE FROM update_policies
-        WHERE target_type = 'device'
-          AND target_id IS NOT NULL
-          AND target_id NOT IN (SELECT id FROM devices)
-      `);
-      total += b?.rowCount ?? 0;
-    } catch { /* ignore */ }
-
     try {
       const c = await db.raw(`
         DELETE FROM reports
@@ -1188,10 +1121,10 @@ class DeviceService {
       duplicate_agent_id_suspected: newFlag,
     });
 
-    // Fire UI + bell + automation notifications only on the false→true
-    // transition. The acknowledge path trims the buffer so a transient
-    // ack doesn't suppress a fresh wave of evidence — the flag re-fires
-    // naturally next time the buffer crosses threshold.
+    // Fire UI + bell notifications only on the false→true transition. The
+    // acknowledge path trims the buffer so a transient ack doesn't
+    // suppress a fresh wave of evidence — the flag re-fires naturally next
+    // time the buffer crosses threshold.
     if (newFlag && !wasFlagged) {
       const dispName = (row.display_name as string | null) || (row.hostname as string | null) || `#${deviceId}`;
       const hostList = Array.from(hosts).slice(0, 6).join(', ');
@@ -1274,7 +1207,7 @@ class DeviceService {
     // still sit in the web bell / mobile "À traiter"? (Self-healing below;
     // an index probe on the partial index of active rows, no extra query.)
     const prev = await db('devices').where({ id: deviceId })
-      .select('status', 'agent_version', 'privacy_mode_enabled', 'airgap_enabled', 'last_offline_at', 'tenant_id', 'group_id', 'last_metric_status', 'last_metric_alert_status', 'metric_alerts_enabled', 'peak_metrics', 'latest_metrics',
+      .select('status', 'agent_version', 'privacy_mode_enabled', 'airgap_enabled', 'tenant_id', 'group_id', 'last_metric_status', 'last_metric_alert_status', 'metric_alerts_enabled', 'peak_metrics', 'latest_metrics',
         'os_type', 'os_arch', 'agent_flavor',
         db.raw(
           'EXISTS (SELECT 1 FROM live_alerts la WHERE la.resolved_at IS NULL AND la.stable_key IN (?, ?)) AS has_active_metric_alert',
@@ -1282,7 +1215,6 @@ class DeviceService {
         ))
       .first();
     const prevStatus = prev?.status as string | undefined;
-    const prevOfflineAt = prev?.last_offline_at ? new Date(prev.last_offline_at) : null;
     const prevMetricStatus = (prev?.last_metric_status ?? null) as 'ok' | 'warning' | 'critical' | null;
     // Alertable level (breaches of metrics whose alerts are ON). NULL =
     // never written yet → read as the full level (migration 125).
@@ -1362,8 +1294,7 @@ class DeviceService {
     }
 
     // Two levels from ONE evaluation:
-    //   - metricStatus / breaches: every breach → device status, colours and
-    //     the metric_warning / metric_critical scenario triggers (unchanged);
+    //   - metricStatus / breaches: every breach → device status and colours;
     //   - alertStatus / alertBreaches: only the metrics whose per-metric
     //     alerts switch (`notify`) is on → notification channels + live
     //     alerts (web bell / toast / mobile "À traiter").
@@ -1411,14 +1342,15 @@ class DeviceService {
     }
 
     // Persist the metric levels separately from device status so
-    // notifications + scenario triggers fire on metric-state transitions
-    // (ok→warning, warning→critical, …→ok) regardless of the device
-    // status (which may legitimately stay protected as 'suspended' etc).
-    //   - last_metric_status       = level of EVERY breach → triggers;
+    // notifications fire on metric-state transitions (ok→warning,
+    // warning→critical, …→ok) regardless of the device status (which may
+    // legitimately stay protected as 'suspended' etc).
+    //   - last_metric_status       = level of EVERY breach (read in place of
+    //     the alertable level while that one was never written);
     //   - last_metric_alert_status = level of the breaches whose alerts are
     //     on → notification channels + live alerts.
-    // Same transition rules for both (levelTransition): ok→bad and
-    // warning→critical alert, bad→ok recovers, critical→warning is silent.
+    // Transition rules (levelTransition): ok→bad and warning→critical
+    // alert, bad→ok recovers, critical→warning is silent.
     // With `thresholds` null (all-metrics switch off / no metrics) both
     // levels reset to ok silently, as before. Pure plan in
     // thresholdCascade.planMetricTransitions.
@@ -1568,34 +1500,6 @@ class DeviceService {
       }
     }
 
-    // ── Scenario triggers (full level, unchanged) ────────────────────────
-    // Only on transitions INTO warning/critical of EVERY breach — muting a
-    // metric's alerts does not stop automations. Recoveries don't fire
-    // (admins don't usually automate "all good").
-    if (plan.trigger) {
-      try {
-        const { scenarioService } = await import('./scenario.service');
-        const triggerType = metricStatus === 'critical' ? 'metric_critical' : 'metric_warning';
-        await scenarioService.fireTrigger(triggerType, deviceId, tenantId, { metricBreaches: breaches } as any);
-      } catch (triggerErr) {
-        logger.error(triggerErr, 'metric-threshold scenario trigger failed');
-      }
-    }
-
-    // metric_custom triggers fire on EVERY push that satisfies the
-    // node's comparator+threshold (not just transitions). Spam is
-    // controlled per trigger node via `cooldownSeconds`. We pass the
-    // raw metrics so the trigger filter can evaluate cpu/memory/disk
-    // values against the configured threshold.
-    if (push.metrics) {
-      try {
-        const { scenarioService } = await import('./scenario.service');
-        await scenarioService.fireTrigger('metric_custom', deviceId, tenantId, { metrics: push.metrics as any } as any);
-      } catch (triggerErr) {
-        logger.error(triggerErr, 'metric-custom scenario trigger failed');
-      }
-    }
-
     // Watchdog: if the agent reports that it was restarted by the watchdog
     // since the last push, increment the running total and store the latest
     // timestamp. A rising counter in a short window indicates an unstable
@@ -1645,30 +1549,6 @@ class DeviceService {
       // forward whatever it produced.
       if (statusChanged) {
         this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_UPDATED, { deviceId, status: targetStatus });
-      }
-
-      // Agent-back-online trigger: only fire when prevStatus was
-      // 'offline' AND the outage lasted long enough to clear the
-      // per-trigger-node debounce. fireTrigger does the per-node
-      // duration check (each trigger node carries its own
-      // `offlineDelaySeconds` config). We pass the duration in
-      // seconds so the dispatcher can drop flaps.
-      if (prevStatus === 'offline' && prevOfflineAt) {
-        const offlineSeconds = Math.round((now.getTime() - prevOfflineAt.getTime()) / 1000);
-        // Lazy import — scenario.service depends on us indirectly
-        // via the agent push pipeline.
-        import('./scenario.service').then(({ scenarioService }) => {
-          scenarioService.fireTrigger('agent_back_online', deviceId, tenantId, {
-            offlineSeconds,
-          } as any).catch((err: unknown) => {
-            logger.error({ err, deviceId, offlineSeconds }, 'Failed to fire agent_back_online trigger');
-          });
-        }).catch(() => { /* import error — non-fatal */ });
-      }
-      // Clear last_offline_at now that the device is back online so
-      // subsequent transitions get a clean slate.
-      if (prevStatus === 'offline') {
-        db('devices').where({ id: deviceId }).update({ last_offline_at: null }).catch(() => { /* swallow */ });
       }
 
       // Notify UI when privacy mode or airgap mode toggles via agent push
@@ -1724,7 +1604,6 @@ class DeviceService {
         displayConfig: config.displayConfig,
         sensorDisplayNames: config.sensorDisplayNames,
         notificationTypes: config.notificationTypes,
-        remediationEnabled: config.remediationEnabled,
       },
       commands: pendingCommands.map(c => ({
         id: c.id,
@@ -1800,7 +1679,6 @@ class DeviceService {
       displayConfig: device.display_config || {},
       sensorDisplayNames: device.sensor_display_names || {},
       notificationTypes: device.notification_types || {},
-      remediationEnabled: device.compliance_remediation_enabled ?? true,
     };
   }
 
@@ -1898,11 +1776,6 @@ class DeviceService {
             .where('last_push_at', '<', threshold)
             .update({
               status: 'offline',
-              // Record the moment this device went offline so the
-              // 'agent_back_online' trigger can compute the outage
-              // duration on the next push and decide whether the gap
-              // qualifies as a real outage vs a transient flap.
-              last_offline_at: now,
               updated_at: now,
             });
           if (!flipped) continue;
@@ -2081,9 +1954,8 @@ class DeviceService {
     const counts: Record<string, number> = {};
     for (const r of rows) counts[r.status] = parseInt(r.count);
 
-    const updatesQ = db('device_updates').where({ status: 'available' }).countDistinct('device_id as count');
-    if (!isMaster) updatesQ.where({ tenant_id: tenantId });
-    const pendingUpdates = await updatesQ.first().then(r => parseInt(String((r as any)?.count ?? 0)));
+    // No OS update management on this server: never a pending update.
+    const pendingUpdates = 0;
 
     // Agent version stats
     const latestVersion = getAgentVersion();
@@ -2124,18 +1996,11 @@ class DeviceService {
     // No remote access on this server: never an active remote session.
     const activeRemoteSessions = 0;
 
-    // Upcoming schedules (next 24h)
-    const now = new Date();
-    const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-    const upcomingQ = db('script_schedules')
-      .where({ enabled: true })
-      .where('next_run_at', '>', now)
-      .where('next_run_at', '<=', in24h)
-      .count('id as count');
-    if (!isMaster) upcomingQ.where({ tenant_id: tenantId });
-    const upcomingSchedules = await upcomingQ.first().then(r => parseInt(String((r as any)?.count ?? 0)));
+    // No script schedules on this server: never an upcoming run.
+    const upcomingSchedules = 0;
 
     // Stale devices (no contact in 72h)
+    const now = new Date();
     const staleThreshold = new Date(now.getTime() - 72 * 60 * 60 * 1000);
     const staleQ = db('devices')
       .whereNotIn('status', ['pending', 'suspended', 'pending_uninstall'])

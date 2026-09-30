@@ -1,8 +1,8 @@
 // ---------------------------------------------------------------------------
 // Report renderer — turns the collected report `data` (the generic
 // section→rows map produced by report.service.collectData) into a real,
-// print-quality HTML document: KPI counters, SVG donut/gauge charts, severity
-// bars, styled detail tables and a tenant signature footer.
+// print-quality HTML document: KPI counters, SVG donut/gauge charts, styled
+// detail tables and a tenant signature footer.
 //
 // Everything is SELF-CONTAINED (inline SVG + inline CSS, no CDN / external
 // asset) so it renders identically in a browser (HTML export) and inside the
@@ -34,14 +34,6 @@ const OS_META: Record<string, { label: string; color: string }> = {
   macos:   { label: 'macOS',   color: '#374151' },
   linux:   { label: 'Linux',   color: '#f59e0b' },
   other:   { label: 'Other',   color: '#9ca3af' },
-};
-
-const SEV_META: Record<string, { label: string; color: string }> = {
-  critical:  { label: 'Critical',  color: '#ef4444' },
-  important: { label: 'Important', color: '#f59e0b' },
-  moderate:  { label: 'Moderate',  color: '#eab308' },
-  optional:  { label: 'Optional',  color: '#3b82f6' },
-  unknown:   { label: 'Unknown',   color: '#9ca3af' },
 };
 
 // Devices in these states are actually reachable (the box answered a recent
@@ -159,22 +151,6 @@ function donut(title: string, segments: Array<{ label: string; value: number; co
 </div>`;
 }
 
-/** Horizontal severity/count bars (HTML/CSS — crisp at any print scale). */
-function bars(title: string, rows: Array<{ label: string; value: number; color: string }>): string {
-  const max = Math.max(1, ...rows.map((r) => r.value));
-  const body = rows.map((r) =>
-    `<div class="bar-row">
-      <span class="bar-label">${esc(r.label)}</span>
-      <div class="bar-track"><div class="bar-fill" style="width:${(r.value / max) * 100}%;background:${r.color}"></div></div>
-      <span class="bar-val">${num(r.value)}</span>
-    </div>`
-  ).join('');
-  return `<div class="chart-card wide">
-<div class="chart-title">${esc(title)}</div>
-<div class="bars">${body || `<div style="color:${MUTED};font-size:11px">No data</div>`}</div>
-</div>`;
-}
-
 function kpi(value: string, label: string, sub: string, color: string): string {
   return `<div class="kpi">
 <div class="kpi-val" style="color:${color}">${esc(value)}</div>
@@ -201,60 +177,6 @@ function computeMetrics(data: Record<string, any>) {
   }
   const reachablePct = total ? (reachable / total) * 100 : 0;
 
-  // Compliance — latest row per (device, policy). complianceAvg is the mean
-  // across all latest (device,policy) scores; the "≥90%" KPI is per DEVICE
-  // (average of that device's policy scores), not per policy — otherwise one
-  // passing policy would mark a device compliant while its other policies fail.
-  const compRows: any[] = Array.isArray(data.compliance) ? data.compliance : [];
-  const seenPolicy = new Set<string>();
-  let scoreSum = 0, scoreN = 0;
-  let rulePass = 0, ruleFail = 0, ruleWarn = 0, ruleOther = 0;
-  const perDevice = new Map<number, { sum: number; n: number }>();
-  for (const r of compRows) {
-    const key = `${r.device_id}:${r.policy_id}`;
-    if (seenPolicy.has(key)) continue; // rows arrive checked_at DESC → first = latest
-    seenPolicy.add(key);
-    // Number(null)===0 and Number('')===0 both pass isFinite, so a missing
-    // score would be counted as a real 0% — reject null/'' explicitly first.
-    const raw = r.compliance_score;
-    if (raw != null && raw !== '') {
-      const score = Number(raw);
-      if (Number.isFinite(score)) {
-        scoreSum += score; scoreN++;
-        const agg = perDevice.get(r.device_id) ?? { sum: 0, n: 0 };
-        agg.sum += score; agg.n++;
-        perDevice.set(r.device_id, agg);
-      }
-    }
-    const results = Array.isArray(r.results) ? r.results : [];
-    for (const rule of results) {
-      switch (rule?.status) {
-        case 'pass': rulePass++; break;
-        case 'fail': case 'error': ruleFail++; break;
-        case 'warning': ruleWarn++; break;
-        default: ruleOther++;
-      }
-    }
-  }
-  let compliantDeviceCount = 0;
-  for (const { sum, n } of perDevice.values()) {
-    if (n > 0 && sum / n >= 90) compliantDeviceCount++;
-  }
-  const complianceAvg = scoreN ? scoreSum / scoreN : 0;
-  const hasCompliance = compRows.length > 0;
-
-  // Updates — counts by severity, reboot-needed devices.
-  const updRows: any[] = Array.isArray(data.updates) ? data.updates : [];
-  const sevCounts: Record<string, number> = {};
-  const rebootDevices = new Set<number>();
-  for (const u of updRows) {
-    const sev = String(u.severity ?? 'unknown');
-    sevCounts[sev] = (sevCounts[sev] || 0) + 1;
-    if (u.requires_reboot) rebootDevices.add(u.device_id);
-  }
-  const hasUpdates = updRows.length > 0;
-  const criticalUpdates = (sevCounts.critical || 0) + (sevCounts.important || 0);
-
   const softwareRows: any[] = Array.isArray(data.software) ? data.software : [];
 
   // Hardware — already curated (one parsed row per device) in collectData.
@@ -269,9 +191,6 @@ function computeMetrics(data: Record<string, any>) {
 
   return {
     total, reachable, reachablePct, statusCounts, osCounts,
-    hasCompliance, complianceAvg, compliantDevices: compliantDeviceCount, scoredDevices: perDevice.size,
-    rulePass, ruleFail, ruleWarn, ruleOther,
-    hasUpdates, updateTotal: updRows.length, sevCounts, criticalUpdates, rebootDevices: rebootDevices.size,
     softwareTotal: softwareRows.length,
     hasHardware, totalCores, totalRamGb, totalDiskGb,
   };
@@ -282,26 +201,23 @@ function computeMetrics(data: Record<string, any>) {
 const ROW_CAP = 500;   // keep the PDF sane; full data lives in CSV/XLSX exports
 const CELL_MAX = 220;  // hard cap per cell so one blob can't span pages
 
-// Columns never rendered in detail tables: raw payload dumps, jsonb arrays that
-// belong in charts (results), internal ids duplicated by a hostname column, and
-// SENSITIVE fields (product keys) that must never leak into a shared report.
+// Columns never rendered in detail tables: raw payload dumps, internal ids
+// duplicated by a hostname column, and SENSITIVE fields (product keys) that
+// must never leak into a shared report.
 const HIDDEN_COLS = new Set([
-  'raw', 'results', 'sections', 'filters',
-  'device_id', 'policy_id', 'tenant_id',
+  'raw', 'sections', 'filters',
+  'device_id', 'tenant_id',
   'windowsKey', 'officeKey', 'install_location', 'description',
 ]);
 
 // Human column headers (fallback: snake_case → spaced). Covers the curated
-// hardware/software/updates/compliance/devices columns.
+// hardware/software/devices columns.
 const COLUMN_LABELS: Record<string, string> = {
   id: 'ID', device: 'Server', hostname: 'Hostname', displayName: 'Display name',
   status: 'Status', osType: 'OS', osVersion: 'OS version', lastSeen: 'Last seen',
   cpu: 'CPU', cores: 'Cores', threads: 'Threads', ram_gb: 'RAM (GB)', disk_gb: 'Disk (GB)',
   ipv4: 'IP address', mac: 'MAC', nics: 'Adapters', os: 'OS', scanned_at: 'Scanned',
   name: 'Name', version: 'Version', publisher: 'Publisher', install_date: 'Installed', source: 'Source',
-  title: 'Update', severity: 'Severity', category: 'Category', requires_reboot: 'Reboot',
-  compliance_score: 'Score (%)', checked_at: 'Checked',
-  script: 'Script', exit_code: 'Exit code', triggered_at: 'Triggered',
 };
 const colLabel = (h: string): string => COLUMN_LABELS[h] || h.replace(/_/g, ' ');
 
@@ -328,15 +244,14 @@ function detailTable(section: string, rows: any[]): string {
 function sectionTitle(section: string): string {
   const map: Record<string, string> = {
     devices: 'Devices', hardware: 'Inventory', software: 'Software inventory',
-    updates: 'Pending updates', compliance: 'Compliance results', scriptHistory: 'Script execution history',
   };
   return map[section] || section;
 }
 
-// Report "content" chips shown in the header — reflect what the user checked.
+// Report "content" chips shown in the header — reflect what the user checked
+// (the sections this server renders).
 const SECTION_LABELS: Record<string, string> = {
-  hardware: 'Hardware', network: 'Network', software: 'Software',
-  updates: 'Updates', compliance: 'Compliance', scripts_history: 'Scripts', inventory_detail: 'Detailed',
+  hardware: 'Hardware', network: 'Network', software: 'Software', inventory_detail: 'Detailed',
 };
 
 // ── per-server detailed hardware cards ────────────────────────────────────────
@@ -598,47 +513,27 @@ export function renderReportHtml(data: Record<string, any>, report: any, opts: R
     kpi(num(m.reachable), 'Reachable', `${pct(m.reachablePct)}% of fleet`, '#10b981'),
     kpi(num(m.total - m.reachable), 'Offline', `${pct(100 - m.reachablePct)}% of fleet`, '#9ca3af'),
   ];
-  if (m.hasCompliance) kpis.push(kpi(`${pct(m.complianceAvg)}%`, 'Compliance', `${num(m.compliantDevices)}/${num(m.scoredDevices)} devices ≥90%`, m.complianceAvg >= 90 ? '#10b981' : m.complianceAvg >= 70 ? '#f59e0b' : '#ef4444'));
   if (m.totalCores > 0) kpis.push(kpi(num(m.totalCores), 'CPU cores', 'across fleet', ACCENT));
   if (m.totalRamGb > 0) kpis.push(kpi(capacity(m.totalRamGb), 'RAM', 'total installed', '#8b5cf6'));
   if (m.totalDiskGb > 0) kpis.push(kpi(capacity(m.totalDiskGb), 'Storage', 'total capacity', '#0ea5e9'));
-  if (m.hasUpdates) {
-    kpis.push(kpi(num(m.updateTotal), 'Pending updates', `${num(m.criticalUpdates)} critical/important`, m.criticalUpdates > 0 ? '#ef4444' : '#3b82f6'));
-    kpis.push(kpi(num(m.rebootDevices), 'Reboot needed', 'devices', m.rebootDevices > 0 ? '#f59e0b' : '#10b981'));
-  }
   // (software analytics live in their own section strip, not the exec row)
 
   // Charts.
   const charts: string[] = [];
   charts.push(ring(m.reachablePct, m.reachablePct >= 80 ? '#10b981' : m.reachablePct >= 50 ? '#f59e0b' : '#ef4444', 'Fleet availability'));
-  if (m.hasCompliance) {
-    charts.push(ring(m.complianceAvg, m.complianceAvg >= 90 ? '#10b981' : m.complianceAvg >= 70 ? '#f59e0b' : '#ef4444', 'Compliance score'));
-  }
   charts.push(donut('Device status',
     Object.entries(m.statusCounts).map(([k, v]) => ({ label: STATUS_META[k]?.label || k, value: v, color: STATUS_META[k]?.color || MUTED })),
     num(m.total)));
   charts.push(donut('Operating systems',
     Object.entries(m.osCounts).map(([k, v]) => ({ label: OS_META[k]?.label || k, value: v, color: OS_META[k]?.color || MUTED })),
     num(m.total)));
-  if (m.hasUpdates) {
-    charts.push(bars('Updates by severity',
-      Object.keys(SEV_META).filter((k) => m.sevCounts[k]).map((k) => ({ label: SEV_META[k].label, value: m.sevCounts[k], color: SEV_META[k].color }))));
-  }
-  if (m.hasCompliance && (m.rulePass + m.ruleFail + m.ruleWarn + m.ruleOther) > 0) {
-    charts.push(donut('Compliance checks', [
-      { label: 'Pass', value: m.rulePass, color: '#10b981' },
-      { label: 'Fail', value: m.ruleFail, color: '#ef4444' },
-      { label: 'Warning', value: m.ruleWarn, color: '#f59e0b' },
-      { label: 'Other', value: m.ruleOther, color: '#9ca3af' },
-    ], num(m.rulePass + m.ruleFail + m.ruleWarn + m.ruleOther)));
-  }
 
   // Detail sections, in a stable order. Two sections are special-cased instead
   // of the generic detailTable: hardware (flat table + per-server cards) and
   // software (catalog in normal mode; grouped-by-server cards in detailed mode).
   const wantDetail = Array.isArray(report.sections) && report.sections.includes('inventory_detail');
   const fleetSize = m.total || (Array.isArray(data.devices) ? data.devices.length : 0);
-  const order = ['devices', 'hardware', 'software', 'updates', 'compliance', 'scriptHistory'];
+  const order = ['devices', 'hardware', 'software'];
   const skip = new Set([...order, 'hardwareDetail']);
   const parts: string[] = [];
   for (const s of [...order, ...Object.keys(data).filter((k) => !skip.has(k))]) {
@@ -660,9 +555,10 @@ export function renderReportHtml(data: Record<string, any>, report: any, opts: R
   }
   const details = parts.join('\n');
 
-  // Header "content" chips reflect exactly what the user checked.
+  // Header "content" chips reflect what the user checked, among the sections
+  // this server renders (a section of a removed module shows nothing).
   const content = Array.isArray(report.sections)
-    ? report.sections.map((s: string) => SECTION_LABELS[s] || s).join(' · ')
+    ? report.sections.filter((s: string) => SECTION_LABELS[s]).map((s: string) => SECTION_LABELS[s]).join(' · ')
     : '';
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(report.name)}</title>
@@ -700,12 +596,6 @@ body { font-family: -apple-system, "Segoe UI", Roboto, sans-serif; color: ${INK}
 .lg-row { display: flex; align-items: center; font-size: 10px; padding: 2px 0; color: #334155; }
 .lg-dot { width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; display: inline-block; }
 .lg-val { margin-left: auto; font-weight: 700; color: ${INK}; }
-.bars { display: flex; flex-direction: column; gap: 7px; margin-top: 4px; }
-.bar-row { display: flex; align-items: center; gap: 8px; font-size: 10px; }
-.bar-label { width: 68px; flex: 0 0 68px; color: #334155; }
-.bar-track { flex: 1; height: 12px; background: #f1f5f9; border-radius: 6px; overflow: hidden; }
-.bar-fill { height: 100%; border-radius: 6px; }
-.bar-val { width: 34px; flex: 0 0 34px; text-align: right; font-weight: 700; }
 
 /* Detail tables */
 h2 { font-size: 13px; margin: 20px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e5e7eb; page-break-after: avoid; }

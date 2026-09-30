@@ -34,7 +34,7 @@ import { isMasterTenant } from '@obliance/shared';
 const EXPIRY_MINUTES = 30;
 const SWEEP_INTERVAL_MS = 60_000;
 
-export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'setting_change';
+export type ApprovalRequestType = 'batch_command' | 'device_uninstall';
 
 export interface BatchCommandPayload {
   action: string;              // 'reboot' | 'shutdown' | 'restart_agent' | ...

@@ -19,11 +19,6 @@ import {
 } from '../controllers/agent.controller';
 import { geolocationService } from '../services/geolocation.service';
 import { inventoryService } from '../services/inventory.service';
-import { updateService } from '../services/update.service';
-import { complianceService } from '../services/compliance.service';
-import { softwareComplianceService } from '../services/softwareCompliance.service';
-import { networkDiscoveryService } from '../services/networkDiscovery.service';
-import { scenarioService } from '../services/scenario.service';
 import { SocketEvents } from '@obliance/shared';
 import { getIO } from '../socket';
 
@@ -100,25 +95,8 @@ router.post('/push', agentAuth, async (req, res, next) => {
       lastLoggedInUser?: string;
       distroFamily?: string;
       agentFlavor?: 'modern' | 'legacy';
-      virtualizationHost?: string;
-      backupHost?: string;
     };
-    const { deviceUuid, metrics, acks = [], agentVersion, hostname, osInfo, ipLocal, macAddress, privacyMode, airgapMode, lastLoggedInUser, distroFamily, agentFlavor, virtualizationHost, backupHost } = body;
-    // Host-role flags (hypervisor / backup server). Tri-state on purpose:
-    //   - field ABSENT (undefined)  => agent doesn't report this role at all
-    //     (legacy Go 1.20 agent, or a modern agent older than the feature) =>
-    //     `undefined` sentinel => KEEP whatever is already stored. Without this
-    //     a legacy push would write null on every contact and permanently wipe
-    //     a value a modern agent on the same host had set.
-    //   - field PRESENT but unknown/"" => a real clear (role uninstalled /
-    //     downgraded) => null => hide the tab.
-    //   - field PRESENT and known => set that role.
-    const vhost = virtualizationHost === undefined
-      ? undefined
-      : (['hyperv', 'esxi', 'proxmox', 'kvm'].includes(virtualizationHost) ? virtualizationHost : null);
-    const bhost = backupHost === undefined
-      ? undefined
-      : (['veeam'].includes(backupHost) ? backupHost : null);
+    const { deviceUuid, metrics, acks = [], agentVersion, hostname, osInfo, ipLocal, macAddress, privacyMode, airgapMode, lastLoggedInUser, distroFamily, agentFlavor } = body;
 
     // The Go 1.20 legacy agent doesn't include `distroFamily` in its push
     // body (and lacks every WebSocket tunnel / ObliReach / software
@@ -241,8 +219,6 @@ router.post('/push', agentAuth, async (req, res, next) => {
       set('airgap_enabled', typeof airgapMode === 'boolean' ? airgapMode : device.airgap_enabled, device.airgap_enabled);
       set('last_logged_in_user', lastLoggedInUser || device.last_logged_in_user, device.last_logged_in_user);
       set('os_distro', distroFamily || device.os_distro, device.os_distro);
-      set('virtualization_host_type', vhost !== undefined ? vhost : device.virtualization_host_type, device.virtualization_host_type);
-      set('backup_host_type', bhost !== undefined ? bhost : device.backup_host_type, device.backup_host_type);
       set('timezone', osInfo?.timezone || device.timezone, device.timezone);
       if (osInfo?.bootTime) {
         const nr = new Date(osInfo.bootTime * 1000);
@@ -289,17 +265,6 @@ router.post('/push', agentAuth, async (req, res, next) => {
     }
 
     const response = await deviceService.handlePush(device.id, tenantId, { ...body, agentVersion });
-
-    // Handle agent events (session_login, machine_boot, etc.) for scenario triggers
-    if (Array.isArray(body.events)) {
-      for (const event of body.events) {
-        if (event.type === 'session_login' || event.type === 'machine_boot') {
-          scenarioService.fireTrigger(event.type, device.id, device.tenant_id, event.data).catch(err => {
-            logger.error({ err, deviceId: device.id, eventType: event.type }, 'Failed to fire scenario trigger');
-          });
-        }
-      }
-    }
 
     res.json(response);
   } catch (err) {
@@ -406,131 +371,6 @@ router.post('/inventory', agentAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/agent/hyperv-vms
-// Called by the host agent after enumerating its VMs (inventory cadence or
-// the hyperv_list_vms command). Replaces the stored VM set for the host.
-router.post('/hyperv-vms', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices').where({ uuid: deviceUuid, tenant_id: tenantId }).first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    const { hostType, vms } = req.body as { hostType?: string; vms?: any[] };
-    const ht = (['hyperv', 'esxi', 'proxmox', 'kvm'].includes(hostType ?? '') ? hostType! : 'hyperv') as any;
-    const { hyperVService } = await import('../services/hyperV.service');
-    await hyperVService.ingestVMs(device.id, tenantId, ht, Array.isArray(vms) ? vms : []);
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/veeam-jobs
-// Called by the host agent after enumerating its Veeam jobs (inventory cadence
-// or the veeam_list_jobs command). Replaces the stored job set for the host.
-router.post('/veeam-jobs', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices').where({ uuid: deviceUuid, tenant_id: tenantId }).first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    const { hostType, jobs } = req.body as { hostType?: string; jobs?: any[] };
-    const ht = (['veeam'].includes(hostType ?? '') ? hostType! : 'veeam') as any;
-    const { veeamService } = await import('../services/veeam.service');
-    await veeamService.ingestJobs(device.id, tenantId, ht, Array.isArray(jobs) ? jobs : []);
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/hyperv-thumbnail
-// VM console framebuffer (PNG, base64) captured by the host agent. Relayed
-// to open console previews/viewers via Socket.io; the latest frame per VM is
-// also cached in memory for an immediate first paint.
-router.post('/hyperv-thumbnail', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices').where({ uuid: deviceUuid, tenant_id: tenantId }).first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    const { vmId, pngBase64, width, height, error } = req.body as { vmId?: string; pngBase64?: string; width?: number; height?: number; error?: string };
-    if (!vmId) return res.status(400).json({ error: 'vmId required' });
-
-    const { getIO } = await import('../socket');
-
-    // Capture-error path: the agent couldn't grab a framebuffer (VM off, no
-    // integration video, host refused). Relay the reason so the open console
-    // shows it instead of spinning forever. No cache write.
-    if (error) {
-      try {
-        getIO().to(`tenant:${tenantId}`).emit('HYPERV_THUMBNAIL', {
-          hostDeviceId: device.id, vmId, error: String(error).slice(0, 300), at: Date.now(),
-        });
-      } catch { /* socket not ready */ }
-      return res.json({ ok: true });
-    }
-
-    if (!pngBase64) return res.status(400).json({ error: 'pngBase64 or error required' });
-
-    const { hyperVConsoleStore } = await import('../services/hyperVConsole.service');
-    hyperVConsoleStore.put(device.id, vmId, { pngBase64, width: width ?? 0, height: height ?? 0 });
-
-    try {
-      getIO().to(`tenant:${tenantId}`).emit('HYPERV_THUMBNAIL', {
-        hostDeviceId: device.id, vmId, pngBase64, width: width ?? 0, height: height ?? 0, at: Date.now(),
-      });
-    } catch { /* socket not ready */ }
-    res.json({ ok: true });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/updates
-// Called by the agent after a scan_updates command completes.
-// Upserts the list of available OS/software updates.
-router.post('/updates', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices')
-      .where({ uuid: deviceUuid, tenant_id: tenantId })
-      .first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    const { updates, rebootPending } = req.body as { updates: any[]; rebootPending?: boolean };
-    if (Array.isArray(updates) && updates.length > 0) {
-      await updateService.upsertUpdates(device.id, tenantId, updates);
-      // Apply auto-approve policies to newly discovered updates
-      await updateService.applyAutoApprove(device.id, tenantId);
-    }
-
-    // Store reboot pending flag on device
-    if (typeof rebootPending === 'boolean') {
-      await db('devices').where({ id: device.id }).update({
-        reboot_pending: rebootPending,
-        updated_at: new Date(),
-      });
-    }
-
-    res.json({ ok: true, count: updates?.length ?? 0 });
-  } catch (err) { next(err); }
-});
-
 // POST /api/agent/services
 // Called by the agent whenever it collects a fresh service list (on scan, after
 // a start/stop/restart action, or when the background watcher detects a change).
@@ -593,115 +433,6 @@ router.post('/services', agentAuth, async (req, res, next) => {
     });
 
     res.json({ ok: true, count: services.length });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/compliance
-// Called by the agent after evaluating compliance rules for a policy.
-// Stores rule-level results in compliance_results and emits a socket event.
-router.post('/compliance', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices')
-      .where({ uuid: deviceUuid, tenant_id: tenantId })
-      .first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    const { policyId, results, score } = req.body as {
-      policyId?: number;
-      results: any[];
-      score: number;
-    };
-
-    // Ignore periodic scans without a real policy
-    if (!policyId) {
-      return res.json({ ok: true, stored: false, reason: 'no_policy_id' });
-    }
-    if (!Array.isArray(results)) {
-      return res.status(400).json({ error: 'results must be an array' });
-    }
-
-    const stored = await complianceService.storeResults(
-      device.id, tenantId, Number(policyId), results, score,
-    );
-
-    // Emit real-time update
-    try {
-      getIO().to(`tenant:${tenantId}`).emit(SocketEvents.COMPLIANCE_RESULT, stored);
-    } catch {}
-
-    res.json({ ok: true, stored: true, id: stored.id });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/software-compliance
-// Called by the agent after evaluating software compliance for a list.
-// Stores entry-level results in software_compliance_results and emits a socket event.
-router.post('/software-compliance', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices')
-      .where({ uuid: deviceUuid, tenant_id: tenantId })
-      .first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    const { listId, results, score } = req.body as {
-      listId?: number;
-      results: any[];
-      score: number;
-    };
-
-    if (!listId) {
-      return res.json({ ok: true, stored: false, reason: 'no_list_id' });
-    }
-    if (!Array.isArray(results)) {
-      return res.status(400).json({ error: 'results must be an array' });
-    }
-
-    const stored = await softwareComplianceService.storeResults(
-      device.id, tenantId, Number(listId), results, score,
-    );
-
-    // Emit real-time update
-    try {
-      getIO().to(`tenant:${tenantId}`).emit(SocketEvents.SOFTWARE_COMPLIANCE_RESULT, stored);
-    } catch {}
-
-    res.json({ ok: true, stored: true, id: stored.id });
-  } catch (err) { next(err); }
-});
-
-// POST /api/agent/network-scan
-// Called by the agent after a scan_network command completes.
-// Upserts discovered network hosts into discovered_devices.
-router.post('/network-scan', agentAuth, async (req, res, next) => {
-  try {
-    const deviceUuid = req.headers['x-device-uuid'] as string | undefined;
-    if (!deviceUuid) return res.status(400).json({ error: 'X-Device-UUID header required' });
-
-    const tenantId = req.agentTenantId!;
-    const device = await db('devices')
-      .where({ uuid: deviceUuid, tenant_id: tenantId })
-      .first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    if (device.approval_status === 'refused' || device.status === 'suspended') {
-      return res.status(403).json({ error: 'Device access denied' });
-    }
-
-    await networkDiscoveryService.processScanResults(tenantId, device.id, req.body.results || []);
-    res.json({ ok: true });
   } catch (err) { next(err); }
 });
 

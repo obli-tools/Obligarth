@@ -9,14 +9,10 @@ import type { CommandType, CommandPriority } from '@obliance/shared';
 
 const router = Router();
 
-// Command types whose payload can trigger arbitrary code execution on the
-// agent (custom install scripts, attacker-chosen msi URLs), or that only a
-// platform administrator may start (agent update): forbidden on this generic
-// endpoint for non-admins — and so is cancelling them.
+// Command types only a platform administrator may start (agent update):
+// forbidden on this generic endpoint for non-admins — and so is cancelling
+// them.
 const ADMIN_ONLY_COMMANDS: CommandType[] = [
-  'install_software',
-  'uninstall_software',
-  'check_software_compliance',
   // Force-applying an agent update is an admin-only operation.
   'update_agent',
 ];
@@ -47,11 +43,10 @@ router.post('/', async (req, res, next) => {
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
     // Legacy-agent compatibility gate. The Go 1.20 build that runs on
-    // Server 2008 R2 / 2012 lacks the software-compliance and privacy-mode
-    // handlers — queuing these commands would silently hang forever. Refuse
-    // at the edge so the caller gets a clear error instead of a ghost command.
+    // Server 2008 R2 / 2012 lacks the privacy-mode handler — queuing these
+    // commands would silently hang forever. Refuse at the edge so the caller
+    // gets a clear error instead of a ghost command.
     const LEGACY_INCOMPATIBLE: string[] = [
-      'install_software', 'uninstall_software', 'check_software_compliance',
       'enable_privacy_mode',
       // The legacy Go 1.20 agent has no self-update path (no MSI, deployed
       // via sc create) — it explicitly rejects update_agent. Refuse here so
@@ -78,15 +73,10 @@ router.post('/', async (req, res, next) => {
     // Permission check — non-admins need write access to the device.
     //
     // ADMIN_ONLY_COMMANDS (above) are forbidden on this generic endpoint for
-    // non-admins. Non-admins must instead use the dedicated routes
-    // (/software-compliance/check, /remediate) which resolve entries
-    // server-side from admin-curated lists — the payload is never taken from
-    // the client. Admins keep direct access here for debug and manual
-    // orchestration.
+    // non-admins.
     if (req.session.role !== 'admin') {
       if (ADMIN_ONLY_COMMANDS.includes(type)) {
-        return next(new AppError(403,
-          `Command type '${type}' must be invoked via the dedicated /api/software-compliance/* routes`));
+        return next(new AppError(403, `Only an administrator can send a '${type}' command`));
       }
 
       // Determine required capability based on command type

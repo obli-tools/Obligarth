@@ -36,8 +36,8 @@ import { SYSTEM_DEFAULT_THRESHOLDS, isMountNotified } from '@obliance/shared';
 //
 // IMPORTANT — `notify` never changes the evaluation itself:
 // `computeMetricStatus` returns every breach exactly as before (device
-// status, colours, scenario metric_* triggers). Only the notification
-// paths filter the breaches through `filterNotifiedBreaches`.
+// status, colours). Only the notification paths filter the breaches
+// through `filterNotifiedBreaches`.
 
 export interface CascadeLayer {
   origin: ThresholdOrigin;
@@ -134,8 +134,7 @@ export function resolveCascade(layers: CascadeLayer[]): ResolvedThresholds {
 
 /**
  * Decide whether a disk should be skipped by every threshold pipeline
- * (notifications, status flip, dashboard saturated card, scenario
- * triggers). Three signals:
+ * (notifications, status flip, dashboard saturated card). Three signals:
  *
  *   1. Agent-reported `removable` flag (Windows GetDriveType, Linux
  *      /sys/block/*\/removable, macOS DiskArbitration). Most reliable
@@ -185,12 +184,11 @@ export function worstLevel(breaches: ReadonlyArray<Pick<MetricBreach, 'level'>>)
 
 /**
  * Worst metric severity for a single push, plus the breach details (which
- * metric, at what %, which level) for the notification body and the
- * metric_warning / metric_critical trigger filter.
+ * metric, at what %, which level) for the notification body.
  *
  * The alerts switch (`notify`) is deliberately NOT applied here: a muted
- * metric still degrades the device status and still fires the scenario
- * triggers. Notification paths call `filterNotifiedBreaches` on top.
+ * metric still degrades the device status. Notification paths call
+ * `filterNotifiedBreaches` on top.
  */
 export function computeMetricStatus(
   metrics: PushMetrics | null | undefined,
@@ -210,7 +208,7 @@ export function computeMetricStatus(
     // Per-mount: every disk is evaluated against its specific override
     // (or the default disk threshold when no override is set). Each
     // saturated mount produces its own breach so the notification body
-    // and the trigger filter both know which drive crossed. Removable /
+    // knows which drive crossed. Removable /
     // optical disks are skipped — a 100% full ISO is normal, and a USB
     // key shouldn't trigger fleet-wide alerts the way a system disk does.
     for (const d of metrics.disks) {
@@ -240,8 +238,8 @@ export function filterNotifiedBreaches<B extends Pick<MetricBreach, 'metric' | '
 }
 
 /**
- * Transition rules shared by the notification level and the trigger level
- * (unchanged from the historical handlePush logic):
+ * Transition rules of the notification level (unchanged from the
+ * historical handlePush logic):
  *   - becameBad: ok (or unknown) → warning/critical, or warning → critical
  *   - recovered: warning/critical → ok
  *   - critical → warning: neither (nothing is sent)
@@ -259,9 +257,7 @@ export function levelTransition(prev: MetricLevel | null, next: MetricLevel): { 
  *     breach, `last_metric_alert_status` = level of the breaches whose
  *     alerts are on; a NULL alert column is read as the full level);
  *   - `notify`: 'alert' / 'recovery' on a transition of the ALERTABLE level
- *     (notification channels + live alert), null otherwise;
- *   - `trigger`: true on a transition INTO warning/critical of the FULL
- *     level (scenario metric_warning / metric_critical — unchanged).
+ *     (notification channels + live alert), null otherwise.
  * `evaluated` = thresholds were resolved for this push (false when the
  * all-metrics switch is off or the push has no metrics: both levels then
  * reset to ok silently, as before).
@@ -276,7 +272,6 @@ export function planMetricTransitions(input: {
   levelUpdate: { last_metric_status?: MetricLevel; last_metric_alert_status?: MetricLevel };
   prevAlert: MetricLevel | null;
   notify: 'alert' | 'recovery' | null;
-  trigger: boolean;
 } {
   const { prevMetric, rawPrevAlert, metric, alert, evaluated } = input;
   const prevAlert = rawPrevAlert ?? prevMetric;
@@ -289,8 +284,7 @@ export function planMetricTransitions(input: {
     const t = levelTransition(prevAlert, alert);
     notify = t.becameBad ? 'alert' : (t.recovered ? 'recovery' : null);
   }
-  const trigger = evaluated && prevMetric !== metric && levelTransition(prevMetric, metric).becameBad;
-  return { levelUpdate, prevAlert, notify, trigger };
+  return { levelUpdate, prevAlert, notify };
 }
 
 /**

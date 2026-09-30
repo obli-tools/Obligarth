@@ -18,9 +18,6 @@ import { commandService } from './command.service';
 //     (requeueUndelivered), and a delivered one never confirmed is handed out
 //     again (UPDATE_AGENT_MAX_REDELIVERIES) — a lost HTTP response or a
 //     socket closing mid-send never loses it.
-//     Exception: an update queued by a SCENARIO node keeps the node's
-//     timeout (the run must not park forever) and every outcome is reported
-//     to the scenario engine.
 //  2. ONE outstanding (pending or sent) update per device, enforced by the
 //     partial unique index of migration 131 + INSERT … ON CONFLICT DO NOTHING
 //     on every enqueue path (device page, bulk, approvals, "update all").
@@ -136,15 +133,6 @@ function parsePayload(v: unknown): Record<string, any> {
   return v as Record<string, any>;
 }
 
-/** Queued by a scenario (v2 node / v1 step): bounded wait, outcome reported
- *  to the engine. */
-export function isScenarioSource(sourceType: unknown): boolean {
-  return sourceType === 'scenario_node' || (typeof sourceType === 'string' && sourceType.startsWith('scenario_step_'));
-}
-/** SQL twin of isScenarioSource — never NULL (a NULL source is false: `NOT`
- *  of a NULL would drop the row from the statement). */
-const scenarioSql = (col: string) => `(COALESCE(${col}, '') = 'scenario_node' OR starts_with(COALESCE(${col}, ''), 'scenario_step_'))`;
-
 function emitCommand(row: any, adminOnly = false): void {
   try {
     const room = adminOnly ? `tenant:${row.tenant_id}:admin` : `tenant:${row.tenant_id}`;
@@ -213,9 +201,8 @@ export interface UpdateAllResult extends UpdateAllPreview {
 }
 
 export const agentUpdateRollout = {
-  /** One device (POST /api/commands, approvals, scenarios). No expiry
-   *  (except a scenario's own timeout); returns the already outstanding
-   *  update instead of a second one. */
+  /** One device (POST /api/commands, approvals). No expiry; returns the
+   *  already outstanding update instead of a second one. */
   async enqueue(data: {
     deviceId: number;
     tenantId: number;
@@ -223,13 +210,8 @@ export const agentUpdateRollout = {
     priority?: CommandPriority;
     sourceType?: string;
     sourceId?: string;
-    /** Honoured for a scenario source only (the run must not wait forever). */
-    expiresInSeconds?: number;
   }): Promise<{ command: Command; created: boolean }> {
     const current = await currentAgentVersion();
-    const expiresAt = isScenarioSource(data.sourceType) && data.expiresInSeconds && data.expiresInSeconds > 0
-      ? new Date(Date.now() + data.expiresInSeconds * 1000)
-      : null;
     for (let attempt = 0; attempt < 3; attempt++) {
       const [row] = await db('command_queue').insert({
         device_id: data.deviceId,
@@ -239,7 +221,7 @@ export const agentUpdateRollout = {
         status: 'pending',
         priority: data.priority || 'normal',
         max_retries: 0,
-        expires_at: expiresAt,
+        expires_at: null,
         source_type: data.sourceType,
         source_id: data.sourceId,
         created_by: data.createdBy,
@@ -390,11 +372,6 @@ export const agentUpdateRollout = {
     }).returning('*') as any[];
     if (rows.length) dropHead();
     emitCapped(rows);
-    for (const row of rows) {
-      if (isScenarioSource(row.source_type)) {
-        await commandService.notifyEngine(row, -1, null, 'Agent update cancelled: the rollout was stopped by an administrator');
-      }
-    }
     const by = countByTenant(rows);
     return {
       cancelled: rows.length,
@@ -422,11 +399,11 @@ export const agentUpdateRollout = {
       { agent_version: string | null; agent_flavor: string | null; status: string; approval_status: string } | undefined;
     if (!dev) return null;
     if (dev.agent_flavor === 'legacy') {
-      await this._close(row, { reason: 'legacy_agent', message: 'The legacy agent cannot update itself — nothing sent' }, 1);
+      await this._close(row, { reason: 'legacy_agent', message: 'The legacy agent cannot update itself — nothing sent' });
       return null;
     }
     if (dev.agent_version && dev.agent_version === current) {
-      await this._close(row, { reason: 'already_up_to_date', message: `Agent already up to date (${current}) — nothing sent`, agentVersion: current }, 0);
+      await this._close(row, { reason: 'already_up_to_date', message: `Agent already up to date (${current}) — nothing sent`, agentVersion: current });
       return null;
     }
     if (dev.approval_status !== 'approved' || NOT_ELIGIBLE_STATUSES.includes(dev.status)) return null;
@@ -447,17 +424,13 @@ export const agentUpdateRollout = {
       if (!(await this._hasRoom(trx))) return null;
       const now = Date.now();
       const deadline = now + UPDATE_AGENT_DELIVERY_TIMEOUT_MS;
-      // A scenario's own deadline is kept when it is later.
-      const expires = isScenarioSource(row.source_type) && row.expires_at
-        ? Math.max(new Date(row.expires_at).getTime(), deadline)
-        : deadline;
       const payload = { ...parsePayload(row.payload), version: current };
       const [done] = await trx('command_queue')
         .where({ id: row.id, status: 'pending' })
         .update({
           status: 'sent',
           sent_at: new Date(now),
-          expires_at: new Date(expires),
+          expires_at: new Date(deadline),
           payload: JSON.stringify(payload),
           updated_at: new Date(now),
         })
@@ -511,8 +484,8 @@ export const agentUpdateRollout = {
       .update({
         status: 'pending',
         sent_at: null,
-        // A scenario's deadline stays; the others wait for the device again.
-        expires_at: db.raw(`CASE WHEN ${scenarioSql('source_type')} THEN expires_at ELSE NULL END`),
+        // Waits for the device again.
+        expires_at: null,
         updated_at: new Date(),
       })
       .returning('*') as any[];
@@ -548,10 +521,8 @@ export const agentUpdateRollout = {
    * of events at deploy time):
    *  1. delivered + the device reports the target version → 'success';
    *  2. delivered, never acknowledged, deadline passed → handed out again
-   *     (≤ UPDATE_AGENT_MAX_REDELIVERIES; not for a scenario's update);
-   *  3. otherwise deadline passed (delivered, or a scenario's update never
-   *     delivered in time) → 'timeout'.
-   * A scenario's update reports its outcome to the engine.
+   *     (≤ UPDATE_AGENT_MAX_REDELIVERIES);
+   *  3. otherwise delivered and deadline passed → 'timeout'.
    */
   async sweep(): Promise<{ confirmed: number; redelivered: number; timedOut: number }> {
     const deadline = `LEAST(now(), COALESCE(c.sent_at, c.created_at) + interval '${DELIVERY_TIMEOUT_MINUTES} minutes')`;
@@ -580,7 +551,6 @@ export const agentUpdateRollout = {
        WHERE c.type = 'update_agent' AND c.status = 'sent'
          AND c.expires_at < now() AND c.acked_at IS NULL
          AND c.retry_count < ?
-         AND NOT ${scenarioSql('c.source_type')}
       RETURNING c.*`, [UPDATE_AGENT_MAX_REDELIVERIES]));
     const timedOut = rowsOf(await db.raw(`
       UPDATE command_queue c
@@ -588,23 +558,12 @@ export const agentUpdateRollout = {
              finished_at = LEAST(now(), c.expires_at),
              updated_at = now(),
              result = COALESCE(c.result, '{}'::jsonb) || jsonb_build_object('message',
-               CASE WHEN c.status = 'pending'
-                    THEN 'The device did not call in before the scenario timeout — nothing sent'
-                    ELSE 'No confirmation from the agent — the device still reports an older version' END)
-       WHERE c.type = 'update_agent' AND c.status IN ('pending', 'sent')
+               'No confirmation from the agent — the device still reports an older version')
+       WHERE c.type = 'update_agent' AND c.status = 'sent'
          AND c.expires_at < now()
-         AND (c.status = 'sent' OR ${scenarioSql('c.source_type')})
       RETURNING c.*`));
     if (redelivered.length) dropHead();
     emitCapped([...confirmed, ...redelivered, ...timedOut]);
-    for (const row of confirmed) {
-      if (isScenarioSource(row.source_type)) await commandService.notifyEngine(row, 0, `Agent now reports version ${parsePayload(row.result).agentVersion ?? ''}`, null);
-    }
-    for (const row of timedOut) {
-      if (isScenarioSource(row.source_type)) {
-        await commandService.notifyEngine(row, -1, null, 'Command timed out — agent never acknowledged within the configured timeout window.');
-      }
-    }
     return { confirmed: confirmed.length, redelivered: redelivered.length, timedOut: timedOut.length };
   },
 
@@ -655,7 +614,7 @@ export const agentUpdateRollout = {
     return false;
   },
 
-  async _close(row: any, result: Record<string, unknown>, engineExitCode: number): Promise<void> {
+  async _close(row: any, result: Record<string, unknown>): Promise<void> {
     const now = new Date();
     const [done] = await db('command_queue')
       .where({ id: row.id, status: 'pending' })
@@ -663,10 +622,6 @@ export const agentUpdateRollout = {
       .returning('*');
     if (!done) return;
     emitCommand(done);
-    if (isScenarioSource(done.source_type)) {
-      const msg = String(result.message ?? '');
-      await commandService.notifyEngine(done, engineExitCode, engineExitCode === 0 ? msg : null, engineExitCode === 0 ? null : msg);
-    }
   },
 
   /** Tests only. */

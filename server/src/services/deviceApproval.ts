@@ -35,13 +35,6 @@ export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
   if (!prev.length) refuse('None of the devices of this request is still in the tenant');
   await db('devices').whereIn('id', prev.map((d) => d.id)).andWhere({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
   const changed = prev.filter((d) => d.group_id !== groupId).map((d) => d.id);
-  if (groupId !== null && changed.length) {
-    const { scenarioService } = await import('./scenario.service');
-    for (const id of changed) {
-      scenarioService.fireTrigger('group_join', id, tenantId, { groupId })
-        .catch((err: unknown) => logger.error({ err, deviceId: id }, 'group_join trigger failed'));
-    }
-  }
   if (changed.length) {
     const { metricAlertRebaseline } = await import('./metricAlertRebaseline.service');
     metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: changed }, 'bulk group change');
@@ -105,10 +98,9 @@ export async function executeDeviceRequest(x: ApprovalExecution): Promise<string
 /**
  * Approved tenant transfer (device.transfer_tenant), single or bulk: the
  * same transaction as the routes (reconfigure_agent in the source queue
- * with the target key, device moved, cross-tenant artefacts dropped,
- * pending commands cancelled). The requester must still be a platform
- * admin or an administrator of BOTH tenants. The target API key is read
- * now (never kept in the request).
+ * with the target key, device moved, pending commands cancelled). The
+ * requester must still be a platform admin or an administrator of BOTH
+ * tenants. The target API key is read now (never kept in the request).
  */
 async function transferDevices(tenantId: number, requesterId: number, rawIds: unknown[], t: { targetTenantId: number; targetApiKeyId: number; serverUrl?: unknown }): Promise<string | void> {
   const requester = await activeRequester(requesterId);
@@ -150,11 +142,8 @@ async function transferDevices(tenantId: number, requesterId: number, rawIds: un
           tenant_id: t.targetTenantId,
           api_key_id: t.targetApiKeyId,
           group_id: null,
-          schedule_alert: null,
           updated_at: new Date(),
         });
-        await trx('device_custom_metrics').where({ device_id: device.id }).delete();
-        await trx('software_compliance_results').where({ device_id: device.id }).delete();
         await trx('command_queue')
           .where({ device_id: device.id, tenant_id: tenantId })
           .whereIn('status', ['pending', 'sent'])

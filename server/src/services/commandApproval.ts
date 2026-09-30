@@ -13,30 +13,22 @@ import {
 // (approval.service). Registered by modules/rmm.ts.
 
 /** Raw device commands only a platform administrator may send (POST
- *  /api/commands ADMIN_ONLY_COMMANDS; a software remediation from its own
- *  route carries a list id and is executed apart). */
+ *  /api/commands ADMIN_ONLY_COMMANDS). */
 const DEVICE_ADMIN_ONLY: ReadonlySet<string> = new Set([
-  'install_software', 'uninstall_software', 'check_software_compliance', 'update_agent',
+  'update_agent',
 ]);
 
 /** Commands the legacy (Go 1.20) agent cannot run — same list as POST
  *  /api/commands (LEGACY_INCOMPATIBLE there). */
 const LEGACY_INCOMPATIBLE: ReadonlySet<string> = new Set([
-  'install_software', 'uninstall_software', 'check_software_compliance',
   'enable_privacy_mode',
   'update_agent',
 ]);
 
 /** Capability a non-admin requester needs on a device for this command
- *  (same mapping as POST /api/commands, hyperv.routes ACTION_META and
- *  veeam.routes). */
-function commandCapability(action: string, params: Record<string, any> | undefined): string {
+ *  (same mapping as POST /api/commands). */
+function commandCapability(action: string): string {
   if (['reboot', 'shutdown', 'sleep', 'restart_agent', 'uninstall_agent'].includes(action)) return 'power';
-  if (action === 'hyperv_control') {
-    const vm = String(params?.action ?? '');
-    return ['start', 'stop', 'shutdown', 'restart', 'save', 'pause', 'resume'].includes(vm) ? 'hyperv:power' : 'hyperv:manage';
-  }
-  if (action === 'veeam_control') return 'veeam:control';
   return 'execute';
 }
 
@@ -87,10 +79,9 @@ export async function executeUpdateAllAgents(x: ApprovalExecution): Promise<stri
 
 /**
  * Device commands (POST /api/commands, /api/devices/batch, privacy mode,
- * airgap, Hyper-V, Veeam…): the approval executor of every 'batch_command'
- * action no other executor took. Enqueued as the requester on the devices
- * still in the tenant; a privacy-blocked command skips the devices now in
- * privacy mode.
+ * airgap…): the approval executor of every 'batch_command' action no other
+ * executor took. Enqueued as the requester on the devices still in the
+ * tenant; a privacy-blocked command skips the devices now in privacy mode.
  */
 export async function executeDeviceCommands(x: ApprovalExecution): Promise<string | void> {
   const payload = x.payload as BatchCommandPayload;
@@ -137,7 +128,7 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
   if (!devices.length) refuse(`Nothing was sent — ${errors.join('; ')}`);
   // Rights may have changed while the request waited: a requester that is
   // not a platform admin still needs, on each device, the capability the
-  // route required (power / Hyper-V / Veeam / execute).
+  // route required (power / execute).
   if (!requester.isPlatformAdmin) {
     if (DEVICE_ADMIN_ONLY.has(action)) refuse(`Only a platform administrator can run '${action}'`);
     const { permissionService } = await import('./permission.service');
@@ -146,7 +137,7 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
         refuse('The requester no longer holds devices.manage in this tenant');
       }
     } else {
-      const cap = commandCapability(action, rawParams);
+      const cap = commandCapability(action);
       const lacking = new Set(await permissionService.devicesLackingCapability(userId, devices.map((d) => d.id), cap));
       for (const d of devices) {
         if (lacking.has(d.id)) errors.push(`${d.hostname}: the requester no longer holds '${cap}' on it`);

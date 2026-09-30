@@ -28,7 +28,7 @@ FROM node:24-alpine AS production
 WORKDIR /app
 
 # openssh-client: SSH build hosts / tunnels.
-# chromium + font/lib deps: server-side PDF rendering (reports, device & Hyper-V
+# chromium + font/lib deps: server-side PDF rendering (reports, device
 # exports) via playwright-chromium pointed at this system binary. Playwright's
 # own bundled Chromium is glibc-only and won't run on Alpine.
 RUN apk add --no-cache openssh-client \

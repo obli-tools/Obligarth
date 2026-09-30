@@ -2,18 +2,18 @@
 //
 // A two-step approval (pending_approvals) keeps its `payload` for up to 30
 // minutes, returns it to every reviewer through GET /api/approvals and keeps
-// it afterwards as history: a password, a token, an API key, a secret script
-// parameter or a 2FA code must never be in it (P1 rule, extended).
+// it afterwards as history: a password, a token, an API key or a 2FA code
+// must never be in it (P1 rule, extended).
 //
 //  - The routes decide, from what the SERVER knows to be secret, that an
 //    action carries one (`carriesSecret` of restrictionService.enforce): the
 //    secret fields a module declares for its device commands, the Obligate
-//    API key / inbound secret, the own password change, the parameters a
-//    script DECLARES secret. Such an action asks a fresh step-up (no trusted-IP
-//    shortcut) at the 'restricted' level instead of a second administrator —
-//    the rule P1 applied to the admin password reset. The name of a field
-//    the CALLER added never decides it: a junk `token` key must not turn a
-//    two-person action into a one-person one.
+//    API key / inbound secret, the own password change. Such an action asks
+//    a fresh step-up (no trusted-IP shortcut) at the 'restricted' level
+//    instead of a second administrator — the rule P1 applied to the admin
+//    password reset. The name of a field the CALLER added never decides it:
+//    a junk `token` key must not turn a two-person action into a one-person
+//    one.
 //  - approvalService.create strips any secret-named key that still reaches
 //    it (and logs the key paths, never the values): a junk key is dropped,
 //    the approval is filed as usual.

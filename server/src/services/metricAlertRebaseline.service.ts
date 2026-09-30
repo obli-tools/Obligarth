@@ -20,8 +20,8 @@ import {
 // re-evaluates each affected device's `latest_metrics` under the NEW
 // cascade and lowers the stored alertable level when the drop comes from
 // the mute (rules in `rebaselineAlertLevel`):
-//   - no notification, no scenario trigger, `devices.status` untouched,
-//     `last_metric_status` (trigger memory) untouched;
+//   - no notification, `devices.status` untouched, `last_metric_status`
+//     (full level) untouched;
 //   - never raises the level: un-muting a breaching metric alerts on the
 //     next push, as a new breach;
 //   - when the alertable level drops to ok, the device's metric incident is
@@ -65,7 +65,7 @@ async function candidateIds(scope: RebaselineScope): Promise<number[]> {
   else if (scope.kind === 'groupSubtree') {
     q.whereIn('group_id', db('device_group_closure').where({ ancestor_id: scope.groupId }).select('descendant_id'));
   } else if (scope.kind === 'devices') {
-    // Explicit list (group delete, transfer, scenario move…): query it in
+    // Explicit list (group delete, transfer, bulk move…): query it in
     // chunks so a large list never hits the bind-parameter limit.
     const ids = [...new Set(scope.deviceIds)];
     const out: number[] = [];

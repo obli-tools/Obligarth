@@ -152,7 +152,7 @@ async function scopeAppliesToDevice(scope: RestrictionScope, deviceId: number, t
   return scope.mode === 'include' ? inScope : !inScope;
 }
 
-/** An action key of the matrix ('command.reboot', 'hyperv.vm_delete'…):
+/** An action key of the matrix ('command.reboot', 'device.delete'…):
  *  forward-compatible, but never an arbitrary field name. */
 export function isActionKey(key: string): boolean {
   return /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(key) && key.length <= 100;
@@ -342,8 +342,8 @@ export const restrictionService = {
           body: { error: 'This action is restricted but no approval path is configured.' },
         };
       }
-      // A secret (password, key, secret script parameter) never sits in an
-      // approval (services/approvalSecrets.ts): such an action asks a FRESH
+      // A secret (password, key) never sits in an approval
+      // (services/approvalSecrets.ts): such an action asks a FRESH
       // step-up here instead of a second administrator — the rule P1 applied
       // to the admin password reset. Always a code / the phone: a trusted IP
       // never replaces the second person. Only the route's explicit flag

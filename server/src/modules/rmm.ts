@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { logger } from '../utils/logger';
-import { registerBootTask, registerStartTask, registerStopTask, registerUpgradeHandler } from '../lifecycle';
+import { registerStartTask, registerStopTask, registerUpgradeHandler } from '../lifecycle';
 import { exemptFromApiLimiter } from '../middleware/rateLimiter';
 import { registerSettingsWrite } from '../services/settingsWrite.service';
 import { registerAuditResourceName } from '../services/audit.service';
@@ -9,22 +9,14 @@ import {
 } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { registerSecretCommandFields } from '../services/approvalSecrets';
-import { registerTenantFanoutTable } from '../services/tenant.service';
 import { registerDashboardStat } from '../services/obligate.service';
 // RMM modules
 import { deviceService } from '../services/device.service';
-import { scheduleService } from '../services/schedule.service';
 import { commandService } from '../services/command.service';
-import { complianceService } from '../services/compliance.service';
-import { softwareComplianceService } from '../services/softwareCompliance.service';
 import { agentChannelUpgrade, closeAgentChannelServer } from '../services/agentHub.upgrade';
 import { globalThresholdsWrite } from '../services/thresholdSettings.service';
 import { executeDeviceCommands, executeUpdateAllAgents } from '../services/commandApproval';
 import { executeChangeGroup, executeDeviceRequest, executeTransferTenant } from '../services/deviceApproval';
-import { executeSoftwareRemediation, isSoftwareRemediation } from '../services/softwareComplianceApproval';
-import {
-  executeManualScriptRun, executeSettingChange, isManualScriptRun,
-} from '../services/automationApproval';
 
 // =============================================================================
 // RMM MODULES (Obliance heritage) — TO BE REMOVED.
@@ -38,14 +30,8 @@ import {
 //                diskHealth, rewind, metrics, agent update rollout)
 //   [devices]    agent-managed device jobs and actions of device.service
 //                (to adapt: the device registry itself stays)
-//   [scripts]    scripts and schedules
-//   [scenarios]  scenarios
-//   [compliance] compliance policies and presets
-//   [software]   software compliance
-//   [cve]        CVE catalog
 //   [thresholds] metric thresholds (cascade)
 //   [privacy]    privacy mode
-//   [hyperv]     Hyper-V   [veeam] Veeam backups
 // Registration order is kept where it shows: start-up order of the former
 // index.ts, order of the restrictions matrix.
 // =============================================================================
@@ -57,18 +43,6 @@ export function registerRmmModules(): void {
   registered = true;
 
   // ── Start-up, background jobs, shutdown (lifecycle.ts) ───────────────────
-
-  // [scenarios] Scenario accountability epoch (scenarioPermission.service):
-  // recorded before any request can save / enable a scenario or a trigger
-  // can fire.
-  registerBootTask('scenarios.accountability', async () => {
-    const { initScenarioAccountability } = await import('../services/scenarioPermission.service');
-    await initScenarioAccountability();
-  });
-
-  // [scripts] Script scheduler + catch-up.
-  registerStartTask('scripts.scheduler', () => { scheduleService.start(); });
-  registerStopTask('scripts.scheduler', () => { scheduleService.stop(); });
 
   // [agent] Expire timed-out commands.
   registerStartTask('commands.cleanup', () => { commandService.startCleanupJob(); });
@@ -140,69 +114,6 @@ export function registerRmmModules(): void {
     setInterval(() => deviceService.cleanOrphans(), 4 * 60 * 60 * 1000);
   });
 
-  // [compliance] Sync built-in preset rules to existing policies (auto-update
-  // on deploy), then scheduled compliance checks — every 6h, skip devices
-  // checked within the window (first run 1 min after startup).
-  registerStartTask('compliance.checks', () => {
-    complianceService.syncPresetsToExistingPolicies()
-      .then((n: number) => { if (n > 0) logger.info({ synced: n }, 'Compliance presets synced to existing policies'); })
-      .catch(() => {});
-    const COMPLIANCE_INTERVAL = 6 * 60 * 60 * 1000;
-    setTimeout(() => complianceService.runScheduledChecks(COMPLIANCE_INTERVAL).catch(() => {}), 60_000); // first run 1 min after startup
-    setInterval(() => complianceService.runScheduledChecks(COMPLIANCE_INTERVAL).catch(() => {}), COMPLIANCE_INTERVAL);
-  });
-
-  // [software] Scheduled software compliance checks — every 6h, same pattern
-  // (first run 1.5 min after startup).
-  registerStartTask('software.checks', () => {
-    const SW_COMPLIANCE_INTERVAL = 6 * 60 * 60 * 1000;
-    setTimeout(() => softwareComplianceService.runScheduledChecks(SW_COMPLIANCE_INTERVAL).catch(() => {}), 90_000); // first run 1.5 min after startup
-    setInterval(() => softwareComplianceService.runScheduledChecks(SW_COMPLIANCE_INTERVAL).catch(() => {}), SW_COMPLIANCE_INTERVAL);
-  });
-
-  // [cve] CVE catalog sync — daily refresh + fleet rescan. Pulls every
-  // registered source (NVD KEV + NVD recent CRITICAL today, extensible via
-  // CVE_SOURCES in cve.service.ts). Master tenant rescan covers every child
-  // in one pass since device_cves is tenant-scoped at the device level.
-  registerStartTask('cve.sync', () => {
-    setTimeout(async () => {
-      try {
-        const { cveService } = await import('../services/cve.service');
-        await cveService.syncAllSources();
-        await cveService.rescanFleet(1);
-      } catch (err) { logger.error(err, 'CVE initial sync/rescan failed'); }
-    }, 2 * 60_000);
-    setInterval(async () => {
-      try {
-        const { cveService } = await import('../services/cve.service');
-        await cveService.syncAllSources();
-        await cveService.rescanFleet(1);
-      } catch (err) { logger.error(err, 'CVE daily sync/rescan failed'); }
-    }, 24 * 60 * 60 * 1000);
-  });
-
-  // [scenarios] Scenarios v2 — boot migration + cron tick. Convert any
-  // leftover v1 (steps-based) scenarios to the new graph model, then start a
-  // per-minute tick that fires schedule_cron triggers. Both run with an
-  // exception barrier so a single broken scenario doesn't take the boot
-  // down. Not awaited.
-  registerStartTask('scenarios.engine', () => {
-    (async () => {
-      try {
-        const { migrateAllV1Scenarios } = await import('../services/scenarioMigrate.service');
-        await migrateAllV1Scenarios();
-      } catch (err) { logger.error(err, 'Scenarios v2 boot migration failed'); }
-      try {
-        const { scenarioGraphCron } = await import('../services/scenarioGraphCron.service');
-        scenarioGraphCron.start();
-      } catch (err) { logger.error(err, 'Scenarios v2 cron scheduler failed to start'); }
-      try {
-        const { rearmWaitTimersOnBoot } = await import('../services/scenarioGraph.service');
-        await rearmWaitTimersOnBoot();
-      } catch (err) { logger.error(err, 'Scenarios v2 wait timer rearm failed'); }
-    })();
-  });
-
   // ── Raw WebSocket upgrades (lifecycle.ts dispatcher) ─────────────────────
   // [agent] /api/agent/ws — agent command channel.
   registerUpgradeHandler('agent.channel', agentChannelUpgrade);
@@ -212,21 +123,14 @@ export function registerRmmModules(): void {
   registerSettingsWrite(globalThresholdsWrite);    // [thresholds] PUT /api/admin/config/global-thresholds
 
   // ── Audit: names of the resources (audit.service) ────────────────────────
-  registerAuditResourceName('script', 'scripts');                             // [scripts]
-  registerAuditResourceName('scenario', 'scenarios');                         // [scenarios]
   registerAuditResourceName('api_key', 'agent_api_keys');                     // [agent] enrollment keys
-  registerAuditResourceName('schedule', 'script_schedules');                  // [scripts]
-  registerAuditResourceName('software_policy', 'software_compliance_lists');  // [software]
 
   // ── Two-step approvals: executors (approval.service) ─────────────────────
-  registerApprovalExecutor(isManualScriptRun, executeManualScriptRun);         // [scripts] POST /api/scripts/:id/execute
   registerApprovalExecutor('change_group', executeChangeGroup);                // [devices] bulk group change
   registerApprovalExecutor('transfer_tenant', executeTransferTenant);          // [devices] bulk tenant transfer
-  registerApprovalExecutor(isSoftwareRemediation, executeSoftwareRemediation); // [software] manual remediation
   registerApprovalExecutor('update_all_agents', executeUpdateAllAgents);       // [agent] dashboard "update all agents"
   registerDefaultApprovalExecutor(executeDeviceCommands);                      // [agent] device commands
   registerApprovalRequestType('device_uninstall', executeDeviceRequest);      // [devices] uninstall / delete / transfer
-  registerApprovalRequestType('setting_change', executeSettingChange);        // [scenarios] [scripts] privacy bypass
 
   // ── Restrictions matrix (restriction.service), in the order it lists them ─
   registerRestrictableActions([
@@ -246,43 +150,10 @@ export function registerRmmModules(): void {
     { key: 'device.delete',                label: 'Delete device (record)',   category: 'Device' },
     { key: 'device.bulk_group_change',     label: 'Bulk change group',        category: 'Device' },
     { key: 'device.transfer_tenant',       label: 'Transfer device to another tenant', category: 'Device' },
-    // [software]
-    { key: 'software.remediate_install',   label: 'Install software (manual)', category: 'Software' },
-    { key: 'software.remediate_uninstall', label: 'Uninstall software (manual)', category: 'Software' },
     // [agent] Services — start is low-risk, stop/restart impact the host.
     { key: 'command.start_service',        label: 'Start a service',          category: 'Services' },
     { key: 'command.stop_service',         label: 'Stop a service',           category: 'Services' },
     { key: 'command.restart_service',      label: 'Restart a service',        category: 'Services' },
-    // [scripts] Manual execution from the UI (schedules are un-gated).
-    { key: 'script.execute_manual',        label: 'Manually execute a script', category: 'Scripts' },
-    // [scenarios] [scripts] Bypass-privacy toggles on automations — flipping
-    // these on lets an automation run on a device whose user has explicitly
-    // enabled privacy mode. Default is "restricted" (double admin approval)
-    // so an admin can't single-handedly override a user's privacy choice.
-    { key: 'scenario.bypass_privacy_mode', label: 'Allow a scenario to run on privacy-mode devices', category: 'Automations' },
-    { key: 'schedule.bypass_privacy_mode', label: 'Allow a schedule to run on privacy-mode devices', category: 'Automations' },
-    // [hyperv] Power actions on a VM are low-risk (a guest reboot is no worse
-    // than rebooting a physical box); checkpoints, edits and especially
-    // create/delete escalate. delete = double-admin by default.
-    { key: 'hyperv.vm_start',             label: 'Start a VM',                     category: 'Hyper-V' },
-    { key: 'hyperv.vm_stop',              label: 'Power off a VM (hard)',          category: 'Hyper-V' },
-    { key: 'hyperv.vm_shutdown',          label: 'Shut down a VM (graceful)',      category: 'Hyper-V' },
-    { key: 'hyperv.vm_restart',           label: 'Restart a VM',                   category: 'Hyper-V' },
-    { key: 'hyperv.vm_save',              label: 'Save / pause / resume a VM',     category: 'Hyper-V' },
-    { key: 'hyperv.vm_checkpoint',        label: 'Create a VM checkpoint',         category: 'Hyper-V' },
-    { key: 'hyperv.vm_checkpoint_apply',  label: 'Apply / restore a VM checkpoint',category: 'Hyper-V' },
-    { key: 'hyperv.vm_checkpoint_delete', label: 'Delete a VM checkpoint',         category: 'Hyper-V' },
-    { key: 'hyperv.vm_edit',              label: 'Edit VM settings (vCPU / RAM / …)', category: 'Hyper-V' },
-    { key: 'hyperv.vm_create',            label: 'Create a VM',                    category: 'Hyper-V' },
-    { key: 'hyperv.vm_delete',            label: 'Delete a VM',                    category: 'Hyper-V' },
-    // [veeam] start / retry / enable ensure backups run (benign); stop
-    // interrupts a running job and disable silently turns off scheduled
-    // backups (real data-loss risk) → default-gated with 2FA.
-    { key: 'veeam.job_start',             label: 'Start a backup job',             category: 'Backups' },
-    { key: 'veeam.job_stop',              label: 'Stop a running backup job',      category: 'Backups' },
-    { key: 'veeam.job_retry',             label: 'Retry a backup job',             category: 'Backups' },
-    { key: 'veeam.job_enable',            label: 'Enable a backup job schedule',   category: 'Backups' },
-    { key: 'veeam.job_disable',           label: 'Disable a backup job schedule',  category: 'Backups' },
   ], {
     // Recommended default levels (the migrations seed the same).
     'command.reboot':               'sensitive',
@@ -299,29 +170,6 @@ export function registerRmmModules(): void {
     'device.delete':                'sensitive',
     'device.bulk_group_change':     'sensitive',
     'device.transfer_tenant':       'sensitive',
-    'software.remediate_install':   'sensitive',
-    'software.remediate_uninstall': 'sensitive',
-    // Manual script execution defaults to sensitive — scripts can do anything
-    // on the target host, so a fresh TOTP confirm is a sane default.
-    'script.execute_manual':        'sensitive',
-    // Privacy-mode bypass on automations — restricted by default so two
-    // admins must sign off before an automation can sweep across a device
-    // whose user has opted into privacy. Migration 102 seeds the same.
-    'scenario.bypass_privacy_mode': 'restricted',
-    'schedule.bypass_privacy_mode': 'restricted',
-    // Veeam: stopping a running backup and disabling a backup schedule are the
-    // risky ones (incomplete/no backup) → 2FA. start/retry/enable stay un-gated.
-    'veeam.job_stop':              'sensitive',
-    'veeam.job_disable':           'sensitive',
-    // Hyper-V defaults follow the product owner's spec: power actions are
-    // un-gated (none), checkpoint-restore/delete + edit + create require a
-    // fresh 2FA (sensitive), and deleting a VM needs a second admin
-    // (restricted). Plain checkpoint creation is non-destructive → none.
-    'hyperv.vm_checkpoint_apply':  'sensitive',
-    'hyperv.vm_checkpoint_delete': 'sensitive',
-    'hyperv.vm_edit':              'sensitive',
-    'hyperv.vm_create':            'sensitive',
-    'hyperv.vm_delete':            'restricted',
     // Services are intentionally NOT defaulted — admins opt in from the
     // matrix once they have TOTP deployed across privileged accounts,
     // otherwise a fresh install could softlock itself.
@@ -334,18 +182,12 @@ export function registerRmmModules(): void {
   // ── Rate limiter exemptions (apiLimiter) ─────────────────────────────────
   // [agent] All /api/agent/* paths are API-key authenticated (X-API-Key
   // header). Rate-limiting them would cause false positives when agents post
-  // inventory, compliance results, scan data, and metrics at their natural
-  // cadence. Security is provided by the API key itself.
+  // inventory, service lists and metrics at their natural cadence. Security
+  // is provided by the API key itself.
   exemptFromApiLimiter('/api/agent/');
   // Passive heartbeats (token authenticated, triggered by external systems):
   // no route serves this path any more; kept so the limiter counts nothing new.
   exemptFromApiLimiter('/api/heartbeat/');
-
-  // ── Tenant deletion: master-owned fan-out arrays (tenant.service) ────────
-  registerTenantFanoutTable('scripts');             // [scripts]
-  registerTenantFanoutTable('scenarios');           // [scenarios]
-  registerTenantFanoutTable('script_schedules');    // [scripts]
-  registerTenantFanoutTable('compliance_policies'); // [compliance]
 
   // ── Obligate dashboard card (GET /api/auth/dashboard-stats) ─────────────
   registerDashboardStat({ // [agent]
