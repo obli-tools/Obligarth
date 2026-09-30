@@ -37,7 +37,6 @@ export const config = {
   defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || 'admin',
   defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || 'admin123',
   disable2faForce: process.env.DISABLE_2FA_FORCE === 'true',
-  minPushInterval: parseInt(process.env.MIN_PUSH_INTERVAL || '10', 10),
   customDir: process.env.CUSTOM_DIR || './custom',
   // Device-bound 2FA (docs/mobile/device-bound-2fa.md §9). Parsed and
   // validated by services/deviceKey/deviceKey.service.ts.

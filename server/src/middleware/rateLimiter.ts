@@ -1,10 +1,10 @@
 import rateLimit from 'express-rate-limit';
 
 // Path prefixes of machine-to-machine endpoints, never counted by apiLimiter:
-// declared by the module that serves them (exemptFromApiLimiter;
-// modules/rmm.ts for the RMM's). Only for endpoints authenticated otherwise
-// (API key, token), polled at their own cadence: counting them would eat the
-// shared budget of the login page, limiting them adds nothing to their auth.
+// declared by the module that serves them (exemptFromApiLimiter; none
+// today). Only for endpoints authenticated otherwise (API key, token), polled
+// at their own cadence: counting them would eat the shared budget of the
+// login page, limiting them adds nothing to their auth.
 const exemptPrefixes: string[] = [];
 
 export function exemptFromApiLimiter(prefix: string): void {

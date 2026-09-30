@@ -19,11 +19,6 @@ COPY server/src/ ./server/src/
 RUN cd server && npm run build
 
 # ---- Production stage ----
-# Agent binaries are pre-built by 000-RegularUpdate.bat:
-#   Windows: local build → agent/dist/obliance-agent.exe + .msi
-#   macOS:   SSH to 192.168.1.5 → agent/dist/obliance-agent-darwin-*
-#   Linux:   SSH to 10.0.0.152 → agent/dist/obliance-agent-linux-*
-# No Go compilation needed in Docker — just COPY from agent/dist/.
 FROM node:24-alpine AS production
 WORKDIR /app
 
@@ -50,18 +45,6 @@ COPY --from=builder /app/server/dist/ ./server/dist/
 
 # Client package.json — version used by GET /api/system
 COPY client/package.json ./client/
-
-# Agent installer scripts + VERSION file (used by GET /api/agent/version)
-COPY agent/installer/ ./agent/installer/
-COPY agent/VERSION ./agent/
-
-# Pre-built agent binaries (Windows .exe/.msi, Linux, macOS) from agent/dist/
-# Built by 000-RegularUpdate.bat before docker build — no Go stage needed.
-# CACHEBUST forces a new layer hash whenever the value changes — used to recover
-# from a corrupted/stuck blob upload state on Docker Hub (resume from poisoned offset).
-ARG CACHEBUST=1
-RUN mkdir -p ./agent/dist && echo "$CACHEBUST" > ./agent/dist/.cachebust
-COPY agent/dist/ ./agent/dist/
 
 # Obli mobile app (Android) — served by GET /api/mobile/android/{version,download}
 # (docs/obli-mobile.md §6). Drop zone written by the release script:

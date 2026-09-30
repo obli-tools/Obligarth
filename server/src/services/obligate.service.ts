@@ -355,8 +355,8 @@ export interface ObligateUserAssertion {
 
 // ── Counters of the Obligate dashboard card (GET /api/auth/dashboard-stats) ─
 // The core counts the devices; a module adds its own counters after them
-// (registerDashboardStat; modules/rmm.ts for the RMM's). A fleet-wide count
-// only: the route answers a Bearer secret that may be public.
+// (registerDashboardStat). A fleet-wide count only: the route answers a
+// Bearer secret that may be public.
 
 export interface ObligateDashboardStat {
   label: string;
@@ -412,7 +412,7 @@ export const obligateService = {
   /**
    * Authenticate a server-to-server call made by Obligate to this server
    * (`Authorization: Bearer <secret>`): sso-user-sync, app-info,
-   * dashboard-stats, /api/obliance/link.
+   * dashboard-stats.
    *
    * The expected secret is the distinct inbound secret when one is set
    * (setting or OBLIGATE_INBOUND_SECRET), else the API key (today's wire
@@ -961,32 +961,6 @@ export const obligateService = {
   //   - Team membership defines WHERE (which groups / devices)
   //   - Tenant-wide page gates are toggled per-team in Obliance UI
   // Obligate-side schema cleanup is handled separately.
-
-  /**
-   * Register a device UUID + path with Obligate for cross-app linking.
-   * Throttled: only calls Obligate once every 10 minutes per UUID.
-   * Failed attempts don't update the throttle so the next push retries.
-   */
-  _linkThrottle: new Map<string, number>(),
-  async registerDeviceLink(uuid: string, appPath: string): Promise<void> {
-    const now = Date.now();
-    if (now - (this._linkThrottle.get(uuid) ?? 0) < 10 * 60 * 1000) return;
-
-    const raw = await appConfigService.getObligateRaw();
-    if (!raw.url || !raw.apiKey) return;
-
-    try {
-      const res = await fetch(`${raw.url}/api/devices/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${raw.apiKey}`,
-        },
-        body: JSON.stringify({ uuid, path: appPath }),
-      });
-      if (res.ok) this._linkThrottle.set(uuid, now);
-    } catch { /* non-critical — will retry on next push */ }
-  },
 
   /**
    * Get cross-app links for a device UUID from Obligate.

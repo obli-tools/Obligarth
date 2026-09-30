@@ -1,7 +1,6 @@
 import { db } from '../db';
 import { isMasterTenant } from '@obliance/shared';
 import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obliance/shared';
-import { invalidateGroupThresholdCache } from './threshold.service';
 
 interface GroupRow {
   id: number;
@@ -20,6 +19,9 @@ interface GroupRow {
   updated_at: Date;
 }
 
+// always_on, group_config, thresholds and metric_alerts_enabled were the
+// RMM configuration of a group: no longer written, still mapped (the shared
+// DeviceGroup type declares them) until the future base migration.
 function rowToGroup(row: GroupRow & { tenant_name?: string | null }): DeviceGroup {
   return {
     id: row.id,
@@ -92,7 +94,6 @@ export const groupService = {
     parentId?: number | null;
     sortOrder?: number;
     groupNotifications?: boolean;
-    groupConfig?: DeviceGroupConfig;
   }, tenantId: number): Promise<DeviceGroup> {
     const slug = await ensureUniqueSlug(slugify(data.name));
 
@@ -104,7 +105,6 @@ export const groupService = {
         parent_id: data.parentId ?? null,
         sort_order: data.sortOrder ?? 0,
         group_notifications: data.groupNotifications ?? false,
-        group_config: data.groupConfig ?? {},
         tenant_id: tenantId,
       })
       .returning('*');
@@ -128,8 +128,6 @@ export const groupService = {
       );
     }
 
-    // The threshold cascade walks the group tree from a cached index.
-    invalidateGroupThresholdCache();
     return rowToGroup(row);
   },
 
@@ -140,11 +138,6 @@ export const groupService = {
       description?: string | null;
       sortOrder?: number;
       groupNotifications?: boolean;
-      alwaysOn?: boolean;
-      groupConfig?: DeviceGroupConfig;
-      thresholds?: MetricThresholds;
-      /** Tri-state metric alerts toggle. `null` = use system default (true). */
-      metricAlertsEnabled?: boolean | null;
     },
   ): Promise<DeviceGroup | null> {
     const updateData: Record<string, unknown> = { updated_at: new Date() };
@@ -156,17 +149,12 @@ export const groupService = {
     if (data.description !== undefined) updateData.description = data.description;
     if (data.sortOrder !== undefined) updateData.sort_order = data.sortOrder;
     if (data.groupNotifications !== undefined) updateData.group_notifications = data.groupNotifications;
-    if (data.alwaysOn !== undefined) updateData.always_on = data.alwaysOn;
-    if (data.groupConfig !== undefined) updateData.group_config = JSON.stringify(data.groupConfig);
-    if (data.thresholds !== undefined) updateData.thresholds = JSON.stringify(data.thresholds);
-    if (data.metricAlertsEnabled !== undefined) updateData.metric_alerts_enabled = data.metricAlertsEnabled;
 
     const [row] = await db<GroupRow>('device_groups')
       .where({ id })
       .update(updateData)
       .returning('*');
 
-    if (data.thresholds !== undefined || data.name !== undefined) invalidateGroupThresholdCache();
     return row ? rowToGroup(row) : null;
   },
 
@@ -217,14 +205,12 @@ export const groupService = {
       .update({ parent_id: newParentId, updated_at: new Date() })
       .returning('*');
 
-    invalidateGroupThresholdCache();
     return row ? rowToGroup(row) : null;
   },
 
   async delete(id: number): Promise<boolean> {
     // CASCADE in the DB handles closure table and child groups
     const count = await db('device_groups').where({ id }).del();
-    invalidateGroupThresholdCache();
     return count > 0;
   },
 

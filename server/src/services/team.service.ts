@@ -102,7 +102,7 @@ export const teamService = {
    *  check before exposing the row to the user (see
    *  `teamsController.setPermissions` for the canonical pattern). The
    *  helper is left tenant-agnostic on purpose because internal jobs
-   *  (e.g. agentHub.unbindTeam, group cascade) need cross-tenant access. */
+   *  (e.g. group cascade) need cross-tenant access. */
   async getById(id: number): Promise<UserTeam | null> {
     const row = await db<TeamRow>('user_teams').where({ id }).first();
     return row ? rowToTeam(row) : null;

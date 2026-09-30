@@ -58,10 +58,6 @@ router.get('/', requireAuth, appConfigController.getAll);
 // first). The modules' named settings (routes/index.ts, mounted before this
 // router on /admin/config) are served before it.
 
-// Agent global defaults — admin only
-router.get('/agent-global', requireAuth, requireRole('admin'), appConfigController.getAgentGlobal);
-router.patch('/agent-global', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.patchAgentGlobal);
-
 // Obligate SSO gateway config — admin only
 router.get('/obligate', requireAuth, requireRole('admin'), appConfigController.getObligateConfig);
 router.put('/obligate', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.setObligateConfig);

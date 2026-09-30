@@ -9,7 +9,6 @@ import twoFactorRoutes from './twoFactor.routes';
 import deviceKeyRoutes from './deviceKey.routes';
 import obligateCallbackRoutes from './obligateCallback.routes';
 import oblitoolsRoutes from './oblitools.routes';
-import agentToolsRoutes from './agentTools.routes';
 import profileRoutes from './profile.routes';
 import tenantRoutes from './tenant.routes';
 import usersRoutes from './users.routes';
@@ -22,16 +21,13 @@ import { liveAlertRouter as liveAlertsRoutes } from './liveAlert.routes';
 import adminRoutes from './appConfig.routes';
 import smtpRoutes from './smtpServer.routes';
 
-// RMM core routes
+// Devices and the other tenant-scoped modules
 import deviceRoutes from './device.routes';
-import commandRoutes from './command.routes';
 import inventoryRoutes from './inventory.routes';
 import softwareRepoRoutes from './softwareRepo.routes';
 import repoPublicRoutes from './repoPublic.routes';
 import reportRoutes from './report.routes';
-import agentRoutes from './agent.routes';
 import agentAdminRoutes from './agentAdmin.routes';
-import oblianceRoutes from './obliance.routes';
 import systemRoutes from './system.routes';
 import licenseRoutes from './license.routes';
 import permissionSetsRoutes from './permissionSets.routes';
@@ -39,7 +35,6 @@ import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
 import restrictionRoutes from './restriction.routes';
 import mobileAppRoutes from './mobileApp.routes';
-import { globalThresholdRoutes, tenantThresholdRoutes } from './thresholdSettings.routes';
 
 const router = Router();
 
@@ -47,11 +42,8 @@ const router = Router();
 router.use('/auth', authRoutes);
 router.use('/auth', obligateCallbackRoutes);  // sso-config, connected-apps, app-info (under /api/auth)
 router.use('/oblitools', oblitoolsRoutes); // ObliTools desktop manifest (auth required)
-router.use('/agent', agentRoutes);       // agent push endpoint (uses agentAuth middleware internally)
 router.use('/mobile', mobileAppRoutes);    // Public: Android app version + APK download (/api/mobile/android/*)
 router.use('/repo', repoPublicRoutes);   // script-facing software repo (per-tenant access key auth)
-router.use('/agent-tools', agentToolsRoutes); // static smartctl binary for the disk-health collector (HMAC token)
-router.use('/obliance', oblianceRoutes);    // cross-app link endpoint (Bearer auth)
 router.use('/system', systemRoutes);       // system info / about (admin only, no tenant required)
 
 // ── Authenticated, no tenant required ───────────────────────────────────────
@@ -62,10 +54,6 @@ router.use('/profile/2fa', twoFactorRoutes); // must be before /profile (auth ha
 router.use('/profile', requireAuth, profileRoutes);
 router.use('/tenants', requireAuth, tenantRoutes);
 router.use('/tenant', requireAuth, tenantRoutes);
-// Metric thresholds of the current tenant (cascade layer 3), after the core
-// tenant router, on both of its mount points.
-router.use('/tenants', requireAuth, tenantThresholdRoutes);
-router.use('/tenant', requireAuth, tenantThresholdRoutes);
 router.use('/live-alerts', requireAuth, liveAlertsRoutes);
 
 // ── Authenticated + tenant scoped ────────────────────────────────────────────
@@ -83,7 +71,6 @@ tenantRouter.use('/devices', delegatedAuth);
 tenantRouter.use(requireAuth, requireTenant);
 
 tenantRouter.use('/devices',     deviceRoutes);
-tenantRouter.use('/commands',    commandRoutes);
 tenantRouter.use('/inventory',   inventoryRoutes);
 tenantRouter.use('/software-repo', softwareRepoRoutes);
 tenantRouter.use('/reports',     reportRoutes);
@@ -96,9 +83,8 @@ tenantRouter.use('/maintenance', maintenanceRoutes);
 tenantRouter.use('/approvals',   approvalRoutes);
 tenantRouter.use('/audit-log',   auditRoutes);
 tenantRouter.use('/restrictions', restrictionRoutes);
-// The modules' named platform settings, before the core settings router (its
-// PUT /:key would take their paths).
-tenantRouter.use('/admin/config', globalThresholdRoutes);      // metric thresholds, global default
+// A module's named platform settings are mounted before the core settings
+// router (its PUT /:key would take their paths).
 tenantRouter.use('/admin/config', adminRoutes);
 tenantRouter.use('/admin/smtp-servers', smtpRoutes);
 tenantRouter.use('/agent',       agentAdminRoutes);  // admin: API key management

@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { AppConfigData, DeviceNotificationTypes, ObligateConfig } from '@obliance/shared';
+import type { AppConfigData, ObligateConfig } from '@obliance/shared';
 
 // ── Platform settings of the modules ────────────────────────────────────────
 // A module's own app_config keys (registerConfigKey): listed by getAll()
@@ -31,8 +31,21 @@ export function moduleConfigKey(key: string): ModuleConfigKey | undefined {
   return moduleConfigKeys.find((k) => k.key === key);
 }
 
-const AGENT_GLOBAL_CONFIG_KEY = 'agent_global_config';
-const OBLIGATE_CONFIG_KEY     = 'obligate_config';
+const OBLIGATE_CONFIG_KEY = 'obligate_config';
+
+/**
+ * Keys of the removed RMM that the shared AppConfigData type still declares:
+ * the agent (automatic approval, push / fast-poll intervals, command poll
+ * delay), remote sessions and script schedules. Never returned; their rows,
+ * seeded by migration 001, stay until the future base migration.
+ */
+type RetiredConfigKey =
+  | 'agent_auto_approve' | 'default_push_interval' | 'fast_poll_interval'
+  | 'remote_fast_poll_interval' | 'task_retrieve_delay_seconds'
+  | 'remote_session_timeout_minutes' | 'catchup_window_days';
+
+/** The platform settings getAll() returns. */
+export type PlatformConfig = Omit<AppConfigData, RetiredConfigKey>;
 
 // ── Obligate settings helpers ─────────────────────────────────────────────
 // The browser-facing /authorize client_id is always the public id
@@ -64,22 +77,6 @@ function obligatePublicView(s: ObligateStored, enabled: boolean): ObligateConfig
     inboundSecretFromEnv: !!envSecret,
   };
 }
-export interface AgentGlobalConfig {
-  checkIntervalSeconds: number | null;
-  scanIntervalSeconds: number | null;  // 0 = disabled, >0 = run all scans every N seconds
-  heartbeatMonitoring: boolean | null;
-  maxMissedPushes: number | null;
-  notificationTypes: DeviceNotificationTypes | null;
-}
-
-const DEFAULT_NOTIFICATION_TYPES: Required<DeviceNotificationTypes> = {
-  online: true,
-  offline: true,
-  warning: true,
-  critical: true,
-  update: false,
-};
-
 export const appConfigService = {
   async get(key: string): Promise<string | null> {
     const row = await db('app_config').where({ key }).first('value');
@@ -93,7 +90,7 @@ export const appConfigService = {
       .merge({ value });
   },
 
-  async getAll(): Promise<AppConfigData> {
+  async getAll(): Promise<PlatformConfig> {
     const rows = await db('app_config').select('key', 'value');
     const map = Object.fromEntries(rows.map((r: { key: string; value: string }) => [r.key, r.value]));
 
@@ -103,17 +100,10 @@ export const appConfigService = {
       try { return (JSON.parse(map[key]) as { url?: string }).url || null; } catch { return null; }
     };
 
-    const data: AppConfigData = {
+    const data: PlatformConfig = {
       allow_2fa: map['allow_2fa'] ?? 'false',
       force_2fa: map['force_2fa'] ?? 'false',
       otp_smtp_server_id: map['otp_smtp_server_id'] ?? null,
-      agent_auto_approve: map['agent_auto_approve'] ?? 'false',
-      default_push_interval: map['default_push_interval'] ?? '60',
-      fast_poll_interval: map['fast_poll_interval'] ?? '5',
-      remote_fast_poll_interval: map['remote_fast_poll_interval'] ?? '3',
-      task_retrieve_delay_seconds: map['task_retrieve_delay_seconds'] ?? '10',
-      remote_session_timeout_minutes: map['remote_session_timeout_minutes'] ?? '30',
-      catchup_window_days: map['catchup_window_days'] ?? '7',
       inventory_retention_days: map['inventory_retention_days'] ?? '90',
       app_name: map['app_name'] ?? 'Obliance',
       default_language: map['default_language'] ?? 'en',
@@ -194,54 +184,5 @@ export const appConfigService = {
     }
     const enabled = (await this.get('obligate_enabled')) === 'true';
     return obligatePublicView(merged, enabled);
-  },
-
-  /** Get global agent defaults from app_config */
-  async getAgentGlobal(): Promise<AgentGlobalConfig> {
-    const raw = await this.get(AGENT_GLOBAL_CONFIG_KEY);
-    if (!raw) {
-      return {
-        checkIntervalSeconds: null,
-        scanIntervalSeconds: null,
-        heartbeatMonitoring: null,
-        maxMissedPushes: null,
-        notificationTypes: null,
-      };
-    }
-    try {
-      return JSON.parse(raw) as AgentGlobalConfig;
-    } catch {
-      return {
-        checkIntervalSeconds: null,
-        scanIntervalSeconds: null,
-        heartbeatMonitoring: null,
-        maxMissedPushes: null,
-        notificationTypes: null,
-      };
-    }
-  },
-
-  /** Merge-patch global agent defaults */
-  async setAgentGlobal(patch: Partial<AgentGlobalConfig>): Promise<AgentGlobalConfig> {
-    const current = await this.getAgentGlobal();
-    const updated: AgentGlobalConfig = { ...current, ...patch };
-    await this.set(AGENT_GLOBAL_CONFIG_KEY, JSON.stringify(updated));
-    return updated;
-  },
-
-  /**
-   * Read the global notification types (fully resolved -- each field falls back to
-   * DEFAULT_NOTIFICATION_TYPES when null).
-   */
-  async getResolvedAgentNotificationTypes(): Promise<Required<DeviceNotificationTypes>> {
-    const cfg = await this.getAgentGlobal();
-    const nt: DeviceNotificationTypes | null = cfg.notificationTypes ?? null;
-    return {
-      online:   nt?.online   ?? DEFAULT_NOTIFICATION_TYPES.online,
-      offline:  nt?.offline  ?? DEFAULT_NOTIFICATION_TYPES.offline,
-      warning:  nt?.warning  ?? DEFAULT_NOTIFICATION_TYPES.warning,
-      critical: nt?.critical ?? DEFAULT_NOTIFICATION_TYPES.critical,
-      update:   nt?.update   ?? DEFAULT_NOTIFICATION_TYPES.update,
-    };
   },
 };

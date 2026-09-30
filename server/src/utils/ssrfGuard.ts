@@ -2,8 +2,8 @@ import { lookup } from 'dns/promises';
 import { isIP } from 'net';
 
 // Reject any HTTP target that resolves to a private / loopback /
-// link-local / metadata range. Used by webhook + geolocation +
-// software-repo download paths so an admin (or compromised tenant
+// link-local / metadata range. Used by webhook + software-repo
+// download paths so an admin (or compromised tenant
 // admin) can't aim our outbound fetcher at internal services
 // (Redis, Kubelet, AWS metadata 169.254.169.254, …).
 //

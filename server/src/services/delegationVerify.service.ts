@@ -78,9 +78,9 @@ const JWKS_MAX_BYTES = 64 * 1024;
 const UNKNOWN_KID_MAX = 100;
 /**
  * Obligate URL / enabled flag cache. app_config has no cache of its own, so
- * without this every delegated read costs two extra SELECTs. 60s is the same
- * staleness window the agent key cache already accepts: turning the Obligate
- * integration off stops delegated reads within a minute, not instantly.
+ * without this every delegated read costs two extra SELECTs. 60s: turning
+ * the Obligate integration off stops delegated reads within a minute, not
+ * instantly.
  */
 const CONFIG_TTL_MS = 60_000;
 

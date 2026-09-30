@@ -13,8 +13,8 @@ import { appConfigService, moduleConfigKey } from './appConfig.service';
 //
 // A module adds its own settings: plain keys through PUT /:key
 // (appConfig.service registerConfigKey) and named writes on their own path
-// (registerSettingsWrite, e.g. PUT /global-thresholds), both gated and
-// replayed like the core's.
+// under /api/admin/config (registerSettingsWrite), both gated and replayed
+// like the core's.
 
 /** The core's keys of PUT /:key (a module's keys: appConfig.service registerConfigKey). */
 export const CONFIG_KEYS = [
@@ -107,15 +107,6 @@ export async function writeConfigKey(key: string, value: unknown, ctx: SettingsW
   await appConfigService.set(key, String(value));
 }
 
-/** PATCH /agent-global: only the known fields, as sent. */
-export function agentGlobalPatch(body: Record<string, unknown>): Record<string, unknown> {
-  const patch: Record<string, unknown> = {};
-  for (const k of ['checkIntervalSeconds', 'scanIntervalSeconds', 'heartbeatMonitoring', 'maxMissedPushes', 'notificationTypes']) {
-    if (k in body) patch[k] = body[k];
-  }
-  return patch;
-}
-
 export type ObligatePatch = {
   url?: string | null; apiKey?: string | null; enabled?: boolean;
   inboundSecret?: string | null;
@@ -168,14 +159,6 @@ export async function prepareSettingsApproval(method: string, path: string, rawB
     return p.length ? `${title} — ${p.join('; ')}` : `${title} (no change)`;
   };
 
-  if (m === 'PATCH' && path === '/agent-global') {
-    const body = agentGlobalPatch(raw);
-    const before = await appConfigService.getAgentGlobal() as unknown as Record<string, unknown>;
-    return {
-      body, carriesSecret: false, otherChanges: true,
-      description: join('Agent global defaults', Object.keys(body).map((k) => change(k, before[k], body[k]))),
-    };
-  }
   if (m === 'PUT' && path === '/obligate') {
     const patch = obligatePatch(raw);
     const cur = await appConfigService.getObligateRaw();
@@ -226,7 +209,6 @@ export async function prepareSettingsApproval(method: string, path: string, rawB
 export async function applySettingsRequest(method: string, path: string, body: unknown, ctx: SettingsWriteCtx = {}): Promise<void> {
   const b = (body && typeof body === 'object' && !Array.isArray(body)) ? body as Record<string, unknown> : {};
   const m = String(method).toUpperCase();
-  if (m === 'PATCH' && path === '/agent-global') { await appConfigService.setAgentGlobal(agentGlobalPatch(b)); return; }
   if (m === 'PUT' && path === '/obligate') { await appConfigService.patchObligateConfig(obligatePatch(b)); return; }
   const named = namedWrite(m, path);
   if (named) { await named.apply(b, ctx); return; }

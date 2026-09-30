@@ -5,8 +5,8 @@ import os from 'os';
 import type { IncomingMessage } from 'http';
 
 /**
- * The one way to know a client's IP (audit, "trust this IP" 2FA window,
- * agent address) — not the rate-limit key, see below.
+ * The one way to know a client's IP (audit, "trust this IP" 2FA window) —
+ * not the rate-limit key, see below.
  *
  * `X-Forwarded-For` is a list the CLIENT can pre-fill: only the entries added
  * by proxies we trust are meaningful. Like Express's `trust proxy`, the list
@@ -199,7 +199,7 @@ export function isRelayAddress(ip: string | undefined): boolean {
 }
 
 // One warning per address: an edge proxy missing from TRUSTED_PROXIES makes
-// every user share its address (audit, 2FA trust, agent public IPs).
+// every user share its address (audit, 2FA trust).
 const warnedForwarders = new Set<string>();
 function warnUntrustedForwarder(ip: string): void {
   if (warnedForwarders.has(ip) || warnedForwarders.size >= 50) return;
@@ -208,7 +208,7 @@ function warnUntrustedForwarder(ip: string): void {
   void import('./logger').then(({ logger }) => {
     logger.warn({ ip },
       `Client IP: requests are forwarded by ${ip}, which is not in TRUSTED_PROXIES — every client behind it shows up as ${ip} `
-      + '(audit log, "Trust this IP" disabled, agent public IPs not updated). If it is your reverse proxy, add it (or its subnet) to TRUSTED_PROXIES.');
+      + '(audit log, "Trust this IP" disabled). If it is your reverse proxy, add it (or its subnet) to TRUSTED_PROXIES.');
   }).catch(() => { /* logging only */ });
 }
 

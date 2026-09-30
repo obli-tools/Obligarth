@@ -29,7 +29,7 @@ const SECRET_KEY = /(password|passwd|passphrase|^pwd$|^pass$|secret|token|apikey
  *  `keyId`, `tokenIds`…) are not. */
 export function isSecretKey(key: string): boolean {
   // Dotted keys are map keys, not field names (restriction action keys such
-  // as 'command.reboot'): never a credential.
+  // as 'device.delete'): never a credential.
   if (key.includes('.')) return false;
   const n = key.toLowerCase().replace(/[_\-\s]/g, '');
   if (/(id|ids)$/.test(n)) return false;
@@ -81,9 +81,9 @@ export function scrubSecrets<T>(value: T): { clean: T; removed: string[] } {
 }
 
 /** Command types whose payload carries a secret, and its fields: declared by
- *  the module that owns the command (registerSecretCommandFields; e.g. the
- *  agent reconfiguration key). Fixed by the server: never inferred from the
- *  caller's field names. */
+ *  the module that owns the command (registerSecretCommandFields; none
+ *  today). Fixed by the server: never inferred from the caller's field
+ *  names. */
 const SECRET_COMMAND_FIELDS = new Map<string, readonly string[]>();
 
 export function registerSecretCommandFields(type: string, fields: readonly string[]): void {

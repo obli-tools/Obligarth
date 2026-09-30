@@ -22,10 +22,7 @@ export type RequestDevice = {
   id: number;
   tenant_id: number;
   hostname: string | null;
-  agent_flavor: string | null;
   approval_status: string | null;
-  privacy_mode_enabled: boolean | null;
-  privacy_password_set: boolean | null;
 };
 
 export type RequestDeviceOutcome =
@@ -53,9 +50,7 @@ export async function resolveRequestDevice(
 
   const q = db('devices').where({ id: deviceId });
   if (!(isAdmin && isMasterTenant(tenantId))) q.where({ tenant_id: tenantId });
-  const device = await q.first(
-    'id', 'tenant_id', 'hostname', 'agent_flavor', 'approval_status', 'privacy_mode_enabled', 'privacy_password_set',
-  ) as RequestDevice | undefined;
+  const device = await q.first('id', 'tenant_id', 'hostname', 'approval_status') as RequestDevice | undefined;
   if (!device) return notFound;
   if (isAdmin) return { ok: true, device, isAdmin };
 

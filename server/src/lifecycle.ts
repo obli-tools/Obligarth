@@ -7,8 +7,8 @@ import type { Server as SocketIOServer } from 'socket.io';
 // index.ts wires the core start-up (migrations, default admin, HTTP server,
 // Socket.io, the core's own periodic jobs). A module adds its background work
 // here instead of in index.ts, so removing the module removes its
-// registration, never a line of index.ts (modules/rmm.ts registers the
-// RMM's):
+// registration, never a line of index.ts (modules/devices.ts registers the
+// device registry's):
 //   boot  — awaited one after the other, after the migrations and the default
 //           admin, before the HTTP app is created (no request can arrive);
 //   start — one after the other once the HTTP and Socket.io servers exist,
@@ -19,8 +19,9 @@ import type { Server as SocketIOServer } from 'socket.io';
 // An error of a task is not caught here: each task handles its own, as the
 // inline code of index.ts did.
 //
-// Raw WebSocket upgrades that are not Socket.io's (agent channels, relays)
-// are served by the modules' upgrade handlers (installUpgradeDispatcher).
+// Raw WebSocket upgrades that are not Socket.io's (a device channel, a relay;
+// none today) are served by the modules' upgrade handlers
+// (installUpgradeDispatcher).
 
 export interface StartContext {
   server: HttpServer;

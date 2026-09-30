@@ -46,9 +46,6 @@ export const DELEGATION_HEADER = 'x-obli-delegation';
  *   GET /api/devices/:id
  *   GET /api/devices/:id/change-events
  *   GET /api/devices/:id/change-events/summary
- *   GET /api/devices/:id/rewind/range
- *   GET /api/devices/:id/rewind/series
- *   GET /api/devices/:id/rewind/at
  *
  * An allowlist, not a denylist: a route that has not been reviewed for
  * delegated access does not get it, and a route added later stays closed until
@@ -58,7 +55,6 @@ const DELEGATED_ROUTES: RegExp[] = [
   /^\/\d+$/,
   /^\/\d+\/change-events$/,
   /^\/\d+\/change-events\/summary$/,
-  /^\/\d+\/rewind\/(range|series|at)$/,
 ];
 
 /** Reasons this middleware can add on top of the verifier's own. */

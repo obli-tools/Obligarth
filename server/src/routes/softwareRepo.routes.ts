@@ -24,7 +24,7 @@ router.get('/settings', async (req, res, next) => {
 
 // PUT /software-repo/settings — enable/disable + quota (admin only).
 // A platform admin sitting on the master tenant edits child tenants by
-// switching into them, exactly like the metric-threshold defaults.
+// switching into them.
 router.put('/settings', requireRole('admin'), async (req, res, next) => {
   try {
     const { enabled, quotaBytes } = req.body as { enabled?: boolean; quotaBytes?: number | null };

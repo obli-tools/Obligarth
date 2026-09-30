@@ -41,7 +41,7 @@ export function createApp() {
   // for the `secure` session cookie, and req.ip = the address that nginx saw.
   // req.ip is the RATE-LIMIT key: a client can never choose it (behind an
   // edge proxy every user shares it, as before). The client's real address
-  // (audit, 2FA "trust this IP", agent public IP) comes from
+  // (audit, 2FA "trust this IP") comes from
   // clientIp(req) (utils/clientIp.ts), which walks further through
   // TRUSTED_PROXIES — a walk a client can steer when it reaches the client
   // container from a trusted range, so it must never key a rate limit.

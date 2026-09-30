@@ -70,6 +70,11 @@ function rowToAlert(row: Record<string, unknown>): LiveAlertRow {
 //   duplicate_agent_id  device:{id}:duplicate_agent_id                    duplicate flag cleared (re-evaluation, acknowledge)
 //   (every kind)                                                          device deleted (deleteDevice, bulkDelete, cleanOrphans)
 //
+// These four kinds were raised and resolved by the agent channel (push
+// handling, command channel, disk health, identity checks), now removed:
+// nothing raises them any more, and a row already stored only leaves with
+// its device (last line). The engine stays for the incidents of the MDM.
+//
 // Stable keys outside this table keep the historical behaviour (dedup on an
 // unread row of the same tenant + key, never resolved).
 export type LiveAlertIncidentKind = 'metric' | 'offline' | 'diskhealth' | 'duplicate_agent_id';
@@ -129,10 +134,10 @@ type IncidentDeviceState = {
 const INCIDENT_DEVICE_COLUMNS = ['status', 'last_metric_status', 'last_metric_alert_status'] as const;
 
 /**
- * Is the device's metric incident still open? handlePush writes the
- * alertable level (`last_metric_alert_status`; NULL = never written, read as
- * the full level, migration 125) BEFORE it raises or resolves the incident,
- * so the stored level is the truth both sides re-check under the lock.
+ * Is the device's metric incident still open? The alertable level
+ * (`last_metric_alert_status`; NULL = never written, read as the full level,
+ * migration 125) is written BEFORE the incident is raised or resolved, so
+ * the stored level is the truth both sides re-check under the lock.
  */
 function metricIncidentOpen(d: IncidentDeviceState): boolean {
   const level = d.last_metric_alert_status ?? d.last_metric_status;
@@ -306,35 +311,6 @@ export const liveAlertService = {
   },
 
   /**
-   * Metric recovery of ONE device (handlePush, after it wrote the alertable
-   * level): resolve the incident's active rows, in ANY tenant, only if,
-   * under the incident lock, the stored alertable level is still ok (or the
-   * device is gone). The mirror of the re-check in raiseIncident: two pushes
-   * of the same device that overlap (manual refresh next to a regular push,
-   * a push held by a slow outbound channel, one agent id on two machines)
-   * always leave the rows matching the level written last — never a
-   * phantom alert on a device back to normal, never a missing one on a
-   * device still breaching. Also the self-healing path: handlePush calls it
-   * on every push whose alertable level is ok while a row is still active,
-   * whatever left that row there. Emits NOTIFICATION_RESOLVED; returns the
-   * resolved ids. Internal callers only.
-   */
-  async resolveRecoveredMetricIncident(deviceId: number): Promise<number[]> {
-    const rows = await db.transaction(async (trx) => {
-      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [incidentLockKey('metric', deviceId)]);
-      const device = await trx('devices').where({ id: deviceId }).first(...INCIDENT_DEVICE_COLUMNS) as IncidentDeviceState | undefined;
-      if (device && metricIncidentOpen(device)) return [] as TenantRow[];
-      return await trx('live_alerts')
-        .whereIn('stable_key', incidentStableKeys('metric', deviceId))
-        .whereNull('resolved_at')
-        .update({ resolved_at: new Date() })
-        .returning(['id', 'tenant_id']) as TenantRow[];
-    });
-    emitResolved(rows);
-    return rows.map((r) => r.id);
-  },
-
-  /**
    * The devices are gone (deleted): every incident of theirs is over, in
    * every tenant. Without this their active rows would stay listed for
    * good (no recovery can ever come, and the trim keeps active rows).
@@ -415,43 +391,6 @@ export const liveAlertService = {
 
   async markRead(id: number, tenantId: number): Promise<void> {
     await db('live_alerts').where({ id, tenant_id: tenantId }).update({ read_at: new Date() });
-  },
-
-  /**
-   * Silent re-baseline: a muted metric brought the device's alertable level
-   * back to ok, so its metric incident (`stable_key =
-   * device:{id}:metric:warning|critical`) is over. The active rows are
-   * resolved (NOTIFICATION_RESOLVED) so they leave the web bell and the
-   * mobile "À traiter"; the unread ones are also marked read
-   * (NOTIFICATION_READ, as before, for clients that predate resolution).
-   * Device ids are global, so this is deliberately NOT tenant-scoped:
-   * after a tenant transfer the device's alerts still sit in the SOURCE
-   * tenant and must leave that inbox too. Internal callers only (never
-   * with ids taken from a request). Returns the resolved ids.
-   */
-  async resolveMutedMetricAlerts(deviceIds: number[]): Promise<number[]> {
-    const ids = [...new Set(deviceIds)];
-    if (ids.length === 0) return [];
-    const readAt = new Date();
-    const read: TenantRow[] = [];
-    for (let i = 0; i < ids.length; i += RESOLVE_CHUNK) {
-      const keys = ids.slice(i, i + RESOLVE_CHUNK).flatMap((id) => incidentStableKeys('metric', id));
-      const rows = await db('live_alerts')
-        .whereIn('stable_key', keys)
-        .whereNull('resolved_at')
-        .whereNull('read_at')
-        .update({ read_at: readAt })
-        .returning(['id', 'tenant_id']) as TenantRow[];
-      read.push(...rows);
-    }
-    if (_io) {
-      for (const [tenantId, rowIds] of groupByTenant(read)) {
-        _io.to(`tenant:${tenantId}:notifications`).emit(SocketEvents.NOTIFICATION_READ, {
-          tenantId, ids: rowIds, readAt: readAt.toISOString(),
-        });
-      }
-    }
-    return liveAlertService.resolveIncidents('metric', ids);
   },
 
   async markAllRead(tenantId: number): Promise<void> {

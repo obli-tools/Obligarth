@@ -28,6 +28,25 @@ export interface SettingOverride {
   value: number;
 }
 
+// ── Keys served here ─────────────────────────────────────────────────────────
+// The shared catalog (SETTINGS_KEYS) still lists the settings of the removed
+// agent: push, scan and fast-poll intervals, missed pushes before offline,
+// automatic approval of new agents, ObliReach install. They are never
+// resolved nor set here (their stored rows stay until the future base
+// migration).
+const RETIRED_SETTING_KEYS: ReadonlySet<string> = new Set<string>([
+  SETTINGS_KEYS.PUSH_INTERVAL,
+  SETTINGS_KEYS.SCAN_INTERVAL,
+  SETTINGS_KEYS.FAST_POLL_INTERVAL,
+  SETTINGS_KEYS.MAX_MISSED_PUSHES,
+  SETTINGS_KEYS.AUTO_APPROVE_DEVICES,
+  SETTINGS_KEYS.OBLIREACH_AUTO_INSTALL,
+]);
+
+/** The setting keys this server serves: the shared catalog without the retired ones. */
+export const SERVED_SETTING_KEYS: readonly SettingKey[] = (Object.values(SETTINGS_KEYS) as SettingKey[])
+  .filter((k) => !RETIRED_SETTING_KEYS.has(k));
+
 export const settingsService = {
   // ── Raw CRUD ──
 
@@ -38,6 +57,7 @@ export const settingsService = {
 
     const result: Record<string, number> = {};
     for (const row of rows) {
+      if (RETIRED_SETTING_KEYS.has(row.key)) continue;
       result[row.key] = row.value as number;
     }
     return result;
@@ -45,7 +65,9 @@ export const settingsService = {
 
   async set(tenantId: number, scope: SettingScope, scopeId: number | null, key: SettingKey, value: number): Promise<void> {
     // Validate key
-    const def = SETTINGS_DEFINITIONS.find((d: SettingDefinition) => d.key === key);
+    const def = SERVED_SETTING_KEYS.includes(key)
+      ? SETTINGS_DEFINITIONS.find((d: SettingDefinition) => d.key === key)
+      : undefined;
     if (!def) throw new Error(`Unknown setting key: ${key}`);
     // Tenant-wide policies can only be set at the global scope.
     if (def.globalOnly && scope !== 'global') {
@@ -108,7 +130,7 @@ export const settingsService = {
   async resolveForDevice(tenantId: number, deviceId: number, groupId: number | null): Promise<ResolvedSettings> {
     // 1. Start with hardcoded defaults
     const resolved: ResolvedSettings = {} as ResolvedSettings;
-    const allKeys = Object.values(SETTINGS_KEYS);
+    const allKeys = SERVED_SETTING_KEYS;
 
     for (const key of allKeys) {
       resolved[key as SettingKey] = {
@@ -178,7 +200,7 @@ export const settingsService = {
    * Does NOT include the group's own overrides as resolved — returns them separately.
    */
   async resolveForGroup(tenantId: number, groupId: number): Promise<{ resolved: ResolvedSettings; overrides: Record<string, number> }> {
-    const allKeys = Object.values(SETTINGS_KEYS);
+    const allKeys = SERVED_SETTING_KEYS;
 
     // 1. Start with hardcoded defaults
     const resolved: ResolvedSettings = {} as ResolvedSettings;
@@ -245,7 +267,7 @@ export const settingsService = {
   },
 
   async resolveGlobal(tenantId: number): Promise<{ resolved: ResolvedSettings; overrides: Record<string, number> }> {
-    const allKeys = Object.values(SETTINGS_KEYS);
+    const allKeys = SERVED_SETTING_KEYS;
     const resolved: ResolvedSettings = {} as ResolvedSettings;
 
     for (const key of allKeys) {

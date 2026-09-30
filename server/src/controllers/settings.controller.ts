@@ -70,12 +70,6 @@ export const settingsController = {
 
       await settingsService.set(req.tenantId!, scope, scopeId, key as SettingKey, value);
 
-      // Broadcast settings update
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('settings:updated', { scope, scopeId, key, value });
-      }
-
       res.json({ success: true, message: 'Setting saved' });
     } catch (err: unknown) {
       if (err instanceof Error && (err.message.includes('must be between') || err.message.includes('Unknown setting'))) {
@@ -99,11 +93,6 @@ export const settingsController = {
         overrides.map((o) => ({ key: o.key as SettingKey, value: o.value })),
       );
 
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('settings:updated', { scope, scopeId, overrides });
-      }
-
       res.json({ success: true, message: 'Settings saved' });
     } catch (err) {
       next(err);
@@ -117,13 +106,6 @@ export const settingsController = {
       const { key } = req.params;
 
       const deleted = await settingsService.remove(req.tenantId!, scope, scopeId, key as SettingKey);
-
-      if (deleted) {
-        const io = req.app.get('io');
-        if (io) {
-          io.to('role:admin').emit('settings:updated', { scope, scopeId, key, removed: true });
-        }
-      }
 
       res.json({ success: true, message: deleted ? 'Setting reset to inherited' : 'No override found' });
     } catch (err) {

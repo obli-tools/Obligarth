@@ -8,10 +8,10 @@ import { approvalService, type ApprovalRequestType } from './approval.service';
 // Per-tenant JSONB map, each entry is either:
 //
 //   // Shorthand (applies to every device):
-//   "command.reboot": "restricted"
+//   "device.delete": "restricted"
 //
 //   // Full form with scope:
-//   "command.uninstall_agent": {
+//   "device.transfer_tenant": {
 //     "level": "sensitive",
 //     "scope": { "mode": "exclude", "deviceIds": [42], "groupIds": [7] }
 //   }
@@ -45,9 +45,9 @@ export type RestrictionMap = Record<string, RestrictionEntry>;
 // ── Catalog of the restrictable actions ─────────────────────────────────────
 // The UI renders this list plus any extra keys that exist in the tenant's
 // map (forward-compat). A module lists its own actions
-// (registerRestrictableActions; modules/rmm.ts for the RMM's): the matrix
-// shows the modules' actions first, in registration order, then the core's
-// tenant-configuration actions.
+// (registerRestrictableActions; modules/devices.ts for the device registry):
+// the matrix shows the modules' actions first, in registration order, then
+// the core's tenant-configuration actions.
 
 export interface RestrictableAction {
   key: string;
@@ -152,7 +152,7 @@ async function scopeAppliesToDevice(scope: RestrictionScope, deviceId: number, t
   return scope.mode === 'include' ? inScope : !inScope;
 }
 
-/** An action key of the matrix ('command.reboot', 'device.delete'…):
+/** An action key of the matrix ('device.delete', 'audit.clear'…):
  *  forward-compatible, but never an arbitrary field name. */
 export function isActionKey(key: string): boolean {
   return /^[a-z][a-z0-9_]*(\.[a-z0-9_]+)+$/.test(key) && key.length <= 100;
@@ -283,9 +283,10 @@ export const restrictionService = {
     levelTenantIds?: number[];
     /** With levelTenantIds: file the approval in the REQUEST's tenant even
      *  when another tenant imposes the level — for an action whose scope is
-     *  the approval's tenant (master "update all agents": the level is the
-     *  strictest of every tenant it touches, the approval stays in the
-     *  master tenant so that it still executes on every tenant). */
+     *  the approval's tenant (e.g. a master-tenant action over every tenant:
+     *  the level is the strictest of every tenant it touches, the approval
+     *  stays in the master tenant so that it still executes on every
+     *  tenant). */
     approvalInRequestTenant?: boolean;
     /** The target device's tenant, when it may differ from the request's
      *  (a master-tenant admin's god view): the level is the strictest of

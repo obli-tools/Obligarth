@@ -15,14 +15,14 @@ export const updateChannelSchema = z.object({
 
 export const addBindingSchema = z.object({
   channelId: z.number().int().positive(),
-  scope: z.enum(['global', 'group', 'monitor', 'agent']),
+  scope: z.enum(['global', 'group', 'agent']),
   scopeId: z.number().int().positive().nullable(),
   overrideMode: z.enum(['merge', 'replace', 'exclude']).optional(),
 });
 
 export const removeBindingSchema = z.object({
   channelId: z.number().int().positive(),
-  scope: z.enum(['global', 'group', 'monitor', 'agent']),
+  scope: z.enum(['global', 'group', 'agent']),
   scopeId: z.number().int().positive().nullable(),
 });
 

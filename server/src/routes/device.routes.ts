@@ -1,14 +1,10 @@
 import { Router } from 'express';
-import dns from 'dns/promises';
-import { deviceService, getAgentVersion } from '../services/device.service';
-import { commandService } from '../services/command.service';
-import { requireRole, requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
+import { deviceService } from '../services/device.service';
+import { requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
-import { AppError } from '../middleware/errorHandler';
 import { db } from '../db';
-import { getIO } from '../socket';
 import { launchChromium } from '../utils/chromium';
-import { SocketEvents, isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obliance/shared';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -108,8 +104,7 @@ router.get('/export', async (req, res, next) => {
 
     // Rows for the export — stable column order. `pdf: false` keeps a column
     // out of the (width-constrained) PDF while still exporting it to CSV/XLSX,
-    // so the spreadsheet holds the full micro-inventory and the PDF stays
-    // readable.
+    // so the spreadsheet holds every column and the PDF stays readable.
     const columns: Array<{ header: string; key: string; width: number; pdf?: boolean }> = [
       { header: 'Hostname',       key: 'hostname',      width: 24 },
       { header: 'Display Name',   key: 'displayName',   width: 24 },
@@ -117,86 +112,41 @@ router.get('/export', async (req, res, next) => {
       { header: 'OS',             key: 'osName',        width: 18 },
       { header: 'OS Version',     key: 'osVersion',     width: 16, pdf: false },
       { header: 'Architecture',   key: 'osArch',        width: 10, pdf: false },
-      { header: 'Agent Version',  key: 'agentVersion',  width: 12, pdf: false },
       { header: 'Group',          key: 'groupName',     width: 20 },
-      // ── Micro-inventory: capacity (total) + current + peak (max) ──────────
+      // ── Hardware summary ─────────────────────────────────────────────────
       { header: 'CPU Model',       key: 'cpuModel',     width: 30, pdf: false },
       { header: 'CPU Cores',       key: 'cpuCores',     width: 9 },
-      { header: 'CPU % Now',       key: 'cpuPct',       width: 9,  pdf: false },
-      { header: 'CPU % Max',       key: 'cpuPeak',      width: 9 },
       { header: 'RAM Total (GB)',  key: 'ramTotalGb',   width: 12 },
-      { header: 'RAM Used (GB)',   key: 'ramUsedGb',    width: 12, pdf: false },
-      { header: 'RAM % Now',       key: 'ramPct',       width: 9,  pdf: false },
-      { header: 'RAM % Max',       key: 'ramPeak',      width: 9 },
-      { header: 'Disk Total (GB)', key: 'diskTotalGb',  width: 13 },
-      { header: 'Disk Used (GB)',  key: 'diskUsedGb',   width: 13, pdf: false },
-      { header: 'Disk % Now',      key: 'diskPct',      width: 9,  pdf: false },
-      { header: 'Disk % Max',      key: 'diskPeak',     width: 9 },
-      { header: 'Disks',           key: 'diskCount',    width: 7,  pdf: false },
-      { header: 'GPU',             key: 'gpu',          width: 26, pdf: false },
-      { header: 'Peak Since',      key: 'peakSince',    width: 22, pdf: false },
       // ── Network / identity ────────────────────────────────────────────────
       { header: 'Local IP',       key: 'ipLocal',       width: 16 },
       { header: 'Public IP',      key: 'ipPublic',      width: 16, pdf: false },
       { header: 'MAC Address',    key: 'macAddress',    width: 18, pdf: false },
       { header: 'Last Seen',      key: 'lastSeenAt',    width: 22 },
       { header: 'Last User',      key: 'lastLoggedInUser', width: 18, pdf: false },
-      { header: 'Agent UUID',     key: 'uuid',          width: 38, pdf: false },
+      { header: 'UUID',           key: 'uuid',          width: 38, pdf: false },
     ];
 
-    // Round helpers — blank (not 0) when a value is unknown, so an offline
-    // device that never reported metrics doesn't read as "0 GB / 0 %".
+    // Blank (not 0) when a value is unknown.
     const r1 = (n: number) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : '');
-    const r0 = (n: number) => (Number.isFinite(n) ? Math.round(n) : '');
 
-    const rows = devices.map((d: any) => {
-      const mt = d.latestMetrics || {};
-      const cpu = mt.cpu || {};
-      const mem = mt.memory || {};
-      const disks: any[] = Array.isArray(mt.disks) ? mt.disks : [];
-      const peak = d.peakMetrics || null;
-
-      // RAM: prefer live (more precise) then fall back to static inventory.
-      const ramTotalGb = mem.totalMb ? mem.totalMb / 1024 : (d.ramTotalGb ?? NaN);
-      const ramUsedGb  = mem.usedMb ? mem.usedMb / 1024 : NaN;
-      // Disk: sum capacity/used across mounts; "now" = the fullest mount.
-      const diskTotalGb = disks.reduce((s, dk) => s + (Number(dk.totalGb) || 0), 0);
-      const diskUsedGb  = disks.reduce((s, dk) => s + (Number(dk.usedGb) || 0), 0);
-      const diskPctNow  = disks.reduce((mx, dk) => Math.max(mx, Number(dk.percent) || 0), NaN);
-      const gpu = Array.isArray(mt.gpus) ? mt.gpus.map((g: any) => g.model).filter(Boolean).join(', ') : '';
-
-      return {
-        hostname:         d.hostname ?? '',
-        displayName:      d.displayName ?? '',
-        status:           d.status ?? '',
-        osName:           d.osName ?? d.osType ?? '',
-        osVersion:        d.osVersion ?? '',
-        osArch:           d.osArch ?? '',
-        agentVersion:     d.agentVersion ?? '',
-        groupName:        d.groupName ?? '',
-        cpuModel:         d.cpuModel ?? cpu.model ?? '',
-        cpuCores:         d.cpuCores ?? (Array.isArray(cpu.cores) ? cpu.cores.length : '') ?? '',
-        cpuPct:           r0(Number(cpu.percent)),
-        cpuPeak:          peak ? r0(Number(peak.cpu)) : '',
-        ramTotalGb:       r1(ramTotalGb),
-        ramUsedGb:        r1(ramUsedGb),
-        ramPct:           r0(Number(mem.percent)),
-        ramPeak:          peak ? r0(Number(peak.ram)) : '',
-        diskTotalGb:      disks.length ? r1(diskTotalGb) : '',
-        diskUsedGb:       disks.length ? r1(diskUsedGb) : '',
-        diskPct:          r0(diskPctNow),
-        diskPeak:         peak ? r0(Number(peak.disk)) : '',
-        diskCount:        disks.length || '',
-        gpu,
-        peakSince:        peak?.since ?? '',
-        ipLocal:          d.ipLocal ?? '',
-        ipPublic:         d.ipPublic ?? '',
-        macAddress:       d.macAddress ?? '',
-        lastSeenAt:       d.lastSeenAt ?? '',
-        lastLoggedInUser: d.lastLoggedInUser ?? '',
-        uuid:             d.uuid ?? '',
-      };
-    });
+    const rows = devices.map((d: any) => ({
+      hostname:         d.hostname ?? '',
+      displayName:      d.displayName ?? '',
+      status:           d.status ?? '',
+      osName:           d.osName ?? d.osType ?? '',
+      osVersion:        d.osVersion ?? '',
+      osArch:           d.osArch ?? '',
+      groupName:        d.groupName ?? '',
+      cpuModel:         d.cpuModel ?? '',
+      cpuCores:         d.cpuCores ?? '',
+      ramTotalGb:       r1(Number(d.ramTotalGb ?? NaN)),
+      ipLocal:          d.ipLocal ?? '',
+      ipPublic:         d.ipPublic ?? '',
+      macAddress:       d.macAddress ?? '',
+      lastSeenAt:       d.lastSeenAt ?? '',
+      lastLoggedInUser: d.lastLoggedInUser ?? '',
+      uuid:             d.uuid ?? '',
+    }));
 
     const ExcelJS = (await import('exceljs')).default;
 
@@ -298,151 +248,6 @@ router.get('/fleet-hourly', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// GET /api/devices/agent-versions
-// Top N agent versions by device count. Used by the dashboard "Top versions
-// agent" mini chart so admins spot devices stuck on old auto-update cycles.
-router.get('/agent-versions', async (req, res, next) => {
-  try {
-    const versions = await deviceService.getAgentVersionDistribution(req.tenantId!);
-    res.json({ data: versions });
-  } catch (err) { next(err); }
-});
-
-// ── "Update all agents" (dashboard) ─────────────────────────────────────────
-// Every OUTDATED agent of the scope (approved, modern agent, not suspended /
-// being uninstalled, version ≠ the one this server ships): the master tenant
-// targets every tenant's agents, any other tenant only its own. Queued like
-// any agent update (services/agentUpdateRollout.service.ts): no expiry
-// (offline agents are updated when they come back), one per device, paced
-// fleet-wide, each row carrying the DEVICE's tenant.
-//
-// The scope is the session's CURRENT tenant, which another tab can switch:
-// the client sends back the scope of the preview it confirmed
-// ({scopeTenantId, allTenants}) and the action is refused (409) when the
-// session's tenant no longer matches — "this tenant only" never silently
-// becomes "every tenant".
-
-/** 400/409 when the confirmed scope is missing or no longer the session's. */
-function checkConfirmedScope(req: any, res: any): boolean {
-  const body = (req.body ?? {}) as { scopeTenantId?: unknown; allTenants?: unknown };
-  const scopeTenantId = Number(body.scopeTenantId);
-  if (!Number.isInteger(scopeTenantId) || typeof body.allTenants !== 'boolean') {
-    res.status(400).json({ error: 'scopeTenantId and allTenants (from the preview) are required — reload the dashboard.', code: 'scope_required' });
-    return false;
-  }
-  if (scopeTenantId !== req.tenantId || body.allTenants !== isMasterTenant(req.tenantId)) {
-    res.status(409).json({ error: 'The selected tenant changed since the confirmation (another tab?) — reload the dashboard and try again.', code: 'scope_changed' });
-    return false;
-  }
-  return true;
-}
-
-/** Master-scope action: one summary row in each affected tenant's own audit
- *  log too (their admins do not see the master's). */
-async function auditPerTenant(req: any, action: string, byTenant: Array<{ tenantId: number } & Record<string, unknown>>, extra: Record<string, unknown>): Promise<void> {
-  try {
-    const { auditService } = await import('../services/audit.service');
-    for (const { tenantId, ...counts } of byTenant) {
-      if (tenantId === req.tenantId) continue;
-      await auditService.logReqAs(req, tenantId, action, {
-        resourceType: 'device',
-        details: { scope: 'all_tenants', initiatedFromTenantId: req.tenantId, ...extra, ...counts },
-      });
-    }
-  } catch {}
-}
-
-// GET /api/devices/update-all-agents/preview — figures for the confirmation
-// (and the dashboard buttons: eligible count, updates still waiting).
-router.get('/update-all-agents/preview', requireRole('admin'), async (req, res, next) => {
-  try {
-    const { agentUpdateRollout } = await import('../services/agentUpdateRollout.service');
-    res.json({ data: await agentUpdateRollout.preview(req.tenantId!) });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/update-all-agents  { scopeTenantId, allTenants, expectedTargets? }
-// Restriction 'command.update_agent' as on every update path: 'sensitive' →
-// step-up, 'restricted' → an approval that stores only the scope (the tenant
-// of the request) and re-resolves the outdated set when it is executed —
-// never a device list. On the master tenant the level is the STRICTEST of the
-// master's and of every tenant owning a target (a sub-tenant's own policy is
-// never bypassed from above); the approval stays in the master tenant (its
-// scope). The device scope of a restriction entry is not evaluated (the
-// target set is only known at execution): any update_agent restriction of a
-// concerned tenant gates the fleet-wide action.
-router.post('/update-all-agents', requireRole('admin'), async (req, res, next) => {
-  try {
-    if (!checkConfirmedScope(req, res)) return;
-    const { agentUpdateRollout } = await import('../services/agentUpdateRollout.service');
-    const preview = await agentUpdateRollout.preview(req.tenantId!);
-    if (!preview.latestVersion) {
-      return res.status(409).json({ error: 'Cannot determine the latest agent version (agent/VERSION missing).' });
-    }
-    // The fleet grew a lot since the confirmation (e.g. another version
-    // published): ask again rather than update far more than announced.
-    const expected = Number((req.body ?? {}).expectedTargets);
-    if (Number.isInteger(expected) && expected >= 0 && preview.targets > expected * 2 + 50) {
-      return res.status(409).json({ error: `The number of outdated agents changed (${preview.targets} now, ${expected} confirmed) — reload the dashboard and confirm again.`, code: 'targets_changed', targets: preview.targets });
-    }
-    if (preview.targets === 0) return res.json({ data: { ...preview, queued: 0, byTenant: [] } });
-
-    const scope = preview.allTenants ? 'all_tenants' : 'tenant';
-    const levelTenantIds = preview.allTenants ? await agentUpdateRollout.outdatedTenantIds(req.tenantId!) : undefined;
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'command.update_agent',
-      approvalRequestType: 'batch_command',
-      approvalDescription: preview.allTenants
-        ? `update_agent on every outdated agent of every tenant (${preview.targets} now, re-evaluated on approval) → ${preview.latestVersion}`
-        : `update_agent on every outdated agent of this tenant (${preview.targets} now, re-evaluated on approval) → ${preview.latestVersion}`,
-      approvalPayload: { action: 'update_all_agents', params: { scope } },
-      ...(levelTenantIds ? { levelTenantIds, approvalInRequestTenant: true } : {}),
-    });
-    if (!approved) return;
-
-    const result = await agentUpdateRollout.updateAllOutdated(req.tenantId!, req.session.userId);
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.update_all_agents', {
-        resourceType: 'device',
-        details: {
-          scope, scopeTenantId: req.tenantId!, targetVersion: result.latestVersion,
-          targets: result.targets, queued: result.queued, alreadyQueued: result.alreadyQueued,
-          online: result.online, offline: result.offline,
-          ...(result.allTenants ? { tenants: result.byTenant.length } : {}),
-        },
-      });
-    } catch {}
-    if (result.allTenants) await auditPerTenant(req, 'device.update_all_agents', result.byTenant, { targetVersion: result.latestVersion });
-    res.json({ data: result });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/update-all-agents/cancel  { scopeTenantId, allTenants }
-// "Stop the rollout": cancels every agent update still WAITING in the scope
-// (master tenant: every tenant) — whatever queued it. Updates already handed
-// to an agent cannot be recalled. An emergency stop: admin only, audited, no
-// restriction gate (it only prevents actions).
-router.post('/update-all-agents/cancel', requireRole('admin'), async (req, res, next) => {
-  try {
-    if (!checkConfirmedScope(req, res)) return;
-    const { agentUpdateRollout } = await import('../services/agentUpdateRollout.service');
-    const r = await agentUpdateRollout.cancelPending(req.tenantId!, req.session.userId);
-    const allTenants = isMasterTenant(req.tenantId!);
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.update_all_agents_cancel', {
-        resourceType: 'device',
-        details: { scope: allTenants ? 'all_tenants' : 'tenant', scopeTenantId: req.tenantId!, cancelled: r.cancelled },
-      });
-    } catch {}
-    if (allTenants) await auditPerTenant(req, 'device.update_all_agents_cancel', r.byTenant, {});
-    res.json({ data: { cancelled: r.cancelled, allTenants } });
-  } catch (err) { next(err); }
-});
-
 // GET /api/devices/os-facets
 // Grouped facets used by the /devices 3-tier OS filter (family → name → build).
 // Returns one row per (osType, osName, osVersion) triplet with a count, so the
@@ -462,19 +267,6 @@ router.get('/tags', async (req, res, next) => {
   try {
     const tags = await deviceService.getTagFacets(req.tenantId!);
     res.json({ data: tags });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/disk-saturated?threshold=0
-// Devices whose latest hardware snapshot reports any disk above their
-// resolved per-device threshold (Lot D.2). The optional `threshold` query
-// param is a floor — useful when the dashboard wants a single "show me
-// anything ≥ N" override regardless of per-group/per-device settings.
-router.get('/disk-saturated', async (req, res, next) => {
-  try {
-    const threshold = Math.min(Math.max(parseInt(String(req.query.threshold ?? '0')) || 0, 0), 99);
-    const result = await deviceService.getDiskSaturation(req.tenantId!, threshold);
-    res.json({ data: result });
   } catch (err) { next(err); }
 });
 
@@ -641,60 +433,27 @@ router.post('/batch/transfer', requireTenantCapability('devices.manage'), async 
       deviceIds: validDevices.map((d: any) => d.id),
       approvalRequestType: 'batch_command',
       approvalDescription: `Transfer to ${await (await import('../services/approvalDescribe')).tenantLabel(targetTenantId)} (agent key "${targetKey.name ?? targetApiKeyId}") — ${await (await import('../services/approvalDescribe')).deviceList(req.tenantId!, validDevices.map((d: any) => d.id))}`,
-      // serverUrl: what the direct transfer writes into reconfigure_agent (the
-      // executor prefers SERVER_URL when set). The API key itself is read at
-      // execution, never kept in the request.
-      approvalPayload: { action: 'transfer_tenant', deviceIds: validDevices.map((d: any) => d.id), params: { targetTenantId, targetApiKeyId, serverUrl: `${req.protocol}://${req.get('host')}` } },
+      approvalPayload: { action: 'transfer_tenant', deviceIds: validDevices.map((d: any) => d.id), params: { targetTenantId, targetApiKeyId } },
     });
     if (!approved) return;
 
-    const serverUrl = `${req.protocol}://${req.get('host')}`;
-
+    // Each device joins the target tenant, attached to the target key (its
+    // pre-approval claim, permissionService) and ungrouped. Keep in sync
+    // with deviceApproval.ts (transferDevices).
     const results = { transferred: 0, failed: 0 };
-    const transferredIds: number[] = [];
     for (const device of validDevices) {
       try {
-        await db.transaction(async (trx) => {
-          // Enqueue the reconfigure command in the SOURCE tenant so the
-          // agent (still on the old key) receives it on its next push.
-          await trx('command_queue').insert({
-            device_id: device.id,
-            tenant_id: req.tenantId!,
-            type: 'reconfigure_agent',
-            payload: JSON.stringify({ apiKey: targetKey.key, serverUrl, targetTenantId }),
-            priority: 'urgent',
-            status: 'pending',
-            expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
-            created_by: userId,
-          });
-
-          await trx('devices').where({ id: device.id }).update({
-            tenant_id: targetTenantId,
-            api_key_id: targetApiKeyId,
-            group_id: null,
-            updated_at: new Date(),
-          });
-
-          await trx('command_queue')
-            .where({ device_id: device.id, tenant_id: req.tenantId! })
-            .whereIn('status', ['pending', 'sent'])
-            .whereNot({ type: 'reconfigure_agent' })
-            .update({ status: 'cancelled', finished_at: new Date() });
+        await db('devices').where({ id: device.id }).update({
+          tenant_id: targetTenantId,
+          api_key_id: targetApiKeyId,
+          group_id: null,
+          updated_at: new Date(),
         });
         results.transferred++;
-        transferredIds.push(device.id);
       } catch (err) {
         logger.error({ err, deviceId: device.id }, 'bulk transfer: failed for device');
         results.failed++;
       }
-    }
-
-    // New tenant, no group = a different alerts switch (`notify`) chain:
-    // silently re-baseline the alertable level (and, when it drops to ok,
-    // mark read the metric alerts left in the source tenant's inbox).
-    if (transferredIds.length > 0) {
-      const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-      metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: transferredIds }, 'tenant transfer');
     }
 
     try {
@@ -749,18 +508,8 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
       .update({ group_id: normalized, updated_at: new Date() });
 
     let changedCount = 0;
-    const changedIds: number[] = [];
     for (const id of deviceIds) {
-      if (prevById.get(id) !== normalized) {
-        changedCount++;
-        changedIds.push(id);
-      }
-    }
-    // The new group chain may mute / unmute metric alerts (`notify`):
-    // silently re-baseline the alertable level of the moved devices.
-    if (changedIds.length > 0) {
-      const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-      metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: changedIds }, 'bulk group change');
+      if (prevById.get(id) !== normalized) changedCount++;
     }
 
     try {
@@ -776,91 +525,6 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
   } catch (err) { next(err); }
 });
 
-// POST /api/devices/batch — batch action by group or device IDs.
-// When 2-step approval is enabled AND the action is destructive
-// (reboot/shutdown/restart_agent/sleep), a pending_approvals row is
-// created instead of direct dispatch.
-router.post('/batch', requireRole('admin'), async (req, res, next) => {
-  try {
-    const { groupId, deviceIds, action } = req.body as {
-      groupId?: number; deviceIds?: number[];
-      action: 'restart_agent' | 'reboot' | 'shutdown' | 'sleep' | 'scan_inventory' | 'update_agent';
-    };
-    if (!action) return res.status(400).json({ error: 'action required' });
-
-    let ids: number[] = deviceIds ?? [];
-    if (groupId && !deviceIds?.length) {
-      const rows = await db('devices')
-        .where({ tenant_id: req.tenantId!, group_id: groupId, approval_status: 'approved' })
-        .whereNot({ status: 'suspended' })
-        .select('id');
-      ids = rows.map((r: any) => r.id);
-    }
-    if (!ids.length) return res.json({ data: { dispatched: 0 } });
-
-    // Gate destructive actions via the per-action restriction policy. update_agent
-    // is included so the batch path honours the same restriction matrix as the
-    // single-command path (POST /api/commands) — otherwise an admin who set
-    // command.update_agent to 'sensitive'/'restricted' would have it bypassed here.
-    const destructive = ['reboot', 'shutdown', 'restart_agent', 'sleep', 'update_agent'].includes(action);
-    if (destructive) {
-      const { applyRestriction } = await import('../services/restriction.service');
-      const approved = await applyRestriction(res, {
-        req,
-        actionKey: `command.${action}`,
-        deviceIds: ids,
-        approvalRequestType: 'batch_command',
-        approvalDescription: `${action} on ${await (await import('../services/approvalDescribe')).deviceList(req.tenantId!, ids)}`,
-        approvalPayload: { action, deviceIds: ids },
-      });
-      if (!approved) return;
-    }
-
-    // update_agent: queued without expiry (offline devices get it when they
-    // come back), one per device, paced and version-checked at delivery
-    // (services/agentUpdateRollout.service.ts); one bulk INSERT per 500
-    // devices. Skipped: legacy (Go 1.20) agents (no self-update — a ghost
-    // command), devices not approved / suspended / being uninstalled,
-    // agents already on the current version, updates already queued.
-    //   dispatched = queued for a device reachable now (next contact)
-    //   queued     = queued for an offline device (when it comes back)
-    if (action === 'update_agent') {
-      const ver = getAgentVersion();
-      if (!ver) {
-        return res.status(409).json({ error: 'Cannot determine the latest agent version (agent/VERSION missing).' });
-      }
-      const { agentUpdateRollout, AGENT_REACHABLE_STATUSES } = await import('../services/agentUpdateRollout.service');
-      const uniqueIds = [...new Set(ids.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
-      const rows = await db('devices')
-        .whereIn('id', uniqueIds)
-        .where({ tenant_id: req.tenantId! })
-        .select('id', 'tenant_id', 'status', 'approval_status', 'agent_flavor', 'agent_version') as
-        Array<{ id: number; tenant_id: number; status: string; approval_status: string; agent_flavor: string | null; agent_version: string | null }>;
-      const eligible = rows.filter((r) => r.agent_flavor !== 'legacy'
-        && r.approval_status === 'approved'
-        && !['suspended', 'pending_uninstall'].includes(r.status)
-        && r.agent_version !== ver);
-      const { created } = await agentUpdateRollout.enqueueBulk(eligible, { createdBy: req.session.userId, priority: 'normal' });
-      const createdIds = new Set(created.map((c: any) => Number(c.device_id)));
-      const dispatched = eligible.filter((r) => createdIds.has(r.id) && AGENT_REACHABLE_STATUSES.includes(r.status)).length;
-      return res.json({ data: { dispatched, queued: created.length - dispatched, skipped: uniqueIds.length - created.length } });
-    }
-
-    let dispatched = 0;
-    for (const deviceId of ids) {
-      await commandService.enqueue({
-        deviceId,
-        tenantId: req.tenantId!,
-        type: action as any,
-        priority: 'normal',
-        createdBy: req.session.userId,
-      });
-      dispatched++;
-    }
-    res.json({ data: { dispatched } });
-  } catch (err) { next(err); }
-});
-
 // ── Single-device routes (:id) ────────────────────────────────────────────────
 
 // GET /api/devices/:id
@@ -872,130 +536,21 @@ router.get('/:id', requireDeviceRead(), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/devices/:id/live-metrics
-// Toggles a "live mode" on the device — the agent pushes metrics every
-// ~3 seconds until the window expires (default 60s, refreshed by every
-// new request). Used by the device detail page so the user sees CPU
-// actually moving instead of waiting for the next 60s push tick. With
-// `mode: 'push_now'` the agent fires a single immediate push instead,
-// which is what the manual refresh button hooks into.
-router.post('/:id/live-metrics', requireDeviceRead('id'), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const mode = (req.body?.mode === 'live' ? 'live' : 'push_now') as 'live' | 'push_now';
-    const windowSec = mode === 'live'
-      ? Math.max(5, Math.min(600, Number(req.body?.windowSec ?? 60)))
-      : undefined;
-    const sent = await deviceService.requestLiveMetrics(deviceId, req.tenantId!, mode, windowSec);
-    res.json({ data: { sent, mode, windowSec } });
-  } catch (err) { next(err); }
-});
-
 // PATCH /api/devices/:id
 router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
-    // thresholdsOverride is stored verbatim in JSONB and read by the
-    // threshold cascade on every push: validate it with the same schema as
-    // the group / tenant / global layers (null or {} = clear the override).
-    if (req.body && req.body.thresholdsOverride !== undefined) {
-      if (req.body.thresholdsOverride === null) {
-        req.body.thresholdsOverride = {};
-      } else {
-        const { metricThresholdsSchema } = await import('../validators/group.schema');
-        const parsed = metricThresholdsSchema.safeParse(req.body.thresholdsOverride);
-        if (!parsed.success) {
-          const issues = parsed.error.errors.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
-          throw new AppError(400, `Invalid thresholdsOverride — ${issues}`);
-        }
-        req.body.thresholdsOverride = parsed.data;
-      }
-    }
     const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body);
     if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
 });
 
-// GET /api/devices/:id/thresholds-resolved — threshold cascade of the device
-// with the origin (layer + name) of every value. `?scope=parent` stops above
-// the device's own override: what the device inherits (device editor:
-// placeholders + greyed alerts switch), group chain or tenant when ungrouped.
-router.get('/:id/thresholds-resolved', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const q = db('devices').where({ id: deviceId }).first('id');
-    if (!isMasterTenant(req.tenantId!)) q.where({ tenant_id: req.tenantId! });
-    if (!(await q)) return res.status(404).json({ error: 'Device not found' });
-    const { thresholdService } = await import('../services/threshold.service');
-    const resolved = await thresholdService.resolveForDevice(deviceId, { includeDevice: req.query.scope !== 'parent' });
-    res.json({ data: resolved });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/metrics/history — windowed CPU/RAM avg·peak·min + disk
-// usage/delta over 24h / 7d / 30d, from the pre-aggregated metric buckets.
-router.get('/:id/metrics/history', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const history = await deviceService.getDeviceMetricsHistory(deviceId, req.tenantId!);
-    res.json({ data: history });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/disk-health — SMART per-disk snapshot for this device
-router.get('/:id/disk-health', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const { diskHealthService } = await import('../services/diskHealth.service');
-    const disks = await diskHealthService.listForDevice(deviceId, req.tenantId!);
-    res.json({ data: disks });
-  } catch (err) { next(err); }
-});
-
-// ── Rewind time-machine ─────────────────────────────────────────────────────
-// Accepts ISO strings or epoch-ms in from/to/ts query params.
-const parseRewindTs = (v: unknown): Date | null => {
-  if (v == null || v === '') return null;
-  const s = String(v);
-  const d = new Date(/^\d+$/.test(s) ? Number(s) : s);
-  return isNaN(d.getTime()) ? null : d;
-};
-
-// GET /api/devices/:id/rewind/range — scrubber bounds + where detail exists
-router.get('/:id/rewind/range', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const { rewindService } = await import('../services/rewind.service');
-    res.json({ data: await rewindService.getRange(deviceId, req.tenantId!) });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/rewind/series?from=&to= — CPU/RAM/Disk timeseries
-router.get('/:id/rewind/series', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const to = parseRewindTs(req.query.to) ?? new Date();
-    const from = parseRewindTs(req.query.from) ?? new Date(to.getTime() - 24 * 60 * 60 * 1000);
-    const { rewindService } = await import('../services/rewind.service');
-    res.json({ data: await rewindService.getSeries(deviceId, req.tenantId!, from, to) });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/rewind/at?ts= — processes + services nearest an instant
-router.get('/:id/rewind/at', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const at = parseRewindTs(req.query.ts) ?? new Date();
-    const { rewindService } = await import('../services/rewind.service');
-    res.json({ data: await rewindService.getSnapshotAt(deviceId, req.tenantId!, at) });
-  } catch (err) { next(err); }
-});
-
 // ── Change events (Blame Ribbon source) ─────────────────────────────────────
 // Read-through union over the tables Obliance already writes: what changed on
-// this device in a window. Same guard as the Rewind routes above — a weaker one
-// here would be a permission bypass, since this exposes per-device history.
+// this device in a window. Guarded like the device itself (requireDeviceRead) —
+// a weaker guard would be a permission bypass, since this exposes per-device
+// history.
 //
 // The service also filters per CALLER (a non-admin does not see another user's
 // audit rows), so the session identity is passed through rather than assumed.
@@ -1033,20 +588,6 @@ router.get('/:id/change-events/summary', requireDeviceRead(), async (req, res, n
         callerIsAdmin: req.session.role === 'admin',
       }),
     });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/services
-router.get('/:id/services', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const device = await db('devices')
-      .where({ id: deviceId, tenant_id: req.tenantId! })
-      .select('latest_services')
-      .first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    const services = device.latest_services ?? [];
-    res.json({ data: services });
   } catch (err) { next(err); }
 });
 
@@ -1116,242 +657,6 @@ router.post('/:id/unsuspend', requireTenantCapability('devices.manage'), async (
         details: { hostname: device.hostname },
       });
     } catch {}
-    res.json({ data: device });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/duplicate-id/acknowledge
-// Admin confirms they've seen the "duplicate agent ID suspected" warning.
-// Trims the identity-fingerprints buffer to its latest entry and clears
-// the flag — if duplication continues, the next ~2-3 alternating pushes
-// will re-flag automatically. Any tenant member with device-write on
-// this device can ack (no platform-admin gate — the fix lives outside
-// Obliance and the owning team should be able to silence the noise).
-router.post('/:id/duplicate-id/acknowledge', requireDeviceWrite(), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    await deviceService.acknowledgeDuplicateAgentId(id, req.tenantId!);
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.duplicate_id_acknowledged', {
-        deviceId: id, resourceType: 'device', resourcePath: String(id),
-      });
-    } catch {}
-    res.json({ data: { ok: true } });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/privacy-mode/enable — send enable_privacy_mode command to agent
-router.post('/:id/privacy-mode/enable', requireRole('admin'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    const device = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req, actionKey: 'command.enable_privacy_mode', deviceIds: [id],
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Enable privacy mode on ${device.hostname}`,
-      approvalPayload: { action: 'enable_privacy_mode', deviceIds: [id] },
-    });
-    if (!approved) return;
-
-    const cmd = await commandService.enqueue({
-      deviceId: id,
-      tenantId: req.tenantId!,
-      type: 'enable_privacy_mode' as any,
-      priority: 'high',
-      expiresInSeconds: 300,
-      createdBy: req.session.userId,
-    });
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'command.enable_privacy_mode', {
-        deviceId: id, resourceType: 'command', resourcePath: cmd.id,
-        details: { hostname: device.hostname },
-      });
-    } catch {}
-    res.json({ data: cmd });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/privacy-mode/disable — send disable_privacy_mode command to agent
-router.post('/:id/privacy-mode/disable', requireRole('admin'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    const device = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    // A privacy password set on the device: refused here (the agent does not
-    // check the password on a raw disable) — privacy mode is then lifted on
-    // the device itself.
-    if ((device as any).privacyPasswordSet) {
-      return next(new AppError(423, 'A privacy password is set on this device — privacy mode can only be disabled on the device'));
-    }
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req, actionKey: 'command.disable_privacy_mode', deviceIds: [id],
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Disable privacy mode on ${device.hostname}`,
-      approvalPayload: { action: 'disable_privacy_mode', deviceIds: [id] },
-    });
-    if (!approved) return;
-
-    const cmd = await commandService.enqueue({
-      deviceId: id,
-      tenantId: req.tenantId!,
-      type: 'disable_privacy_mode',
-      priority: 'high',
-      expiresInSeconds: 300,
-      createdBy: req.session.userId,
-    });
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'command.disable_privacy_mode', {
-        deviceId: id, resourceType: 'command', resourcePath: cmd.id,
-        details: { hostname: device.hostname },
-      });
-    } catch {}
-    res.json({ data: cmd });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/airgap/enable — enable airgap mode on device
-router.post('/:id/airgap/enable', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    const device = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    // Resolve server hostname to IPs so the agent knows which IPs to allow
-    const serverUrl = process.env.SERVER_URL || `${req.protocol}://${req.get('host')}`;
-    const hostname = new URL(serverUrl).hostname;
-    let serverIPs: string[] = [];
-    try { serverIPs.push(...await dns.resolve4(hostname)); } catch {}
-    try { serverIPs.push(...await dns.resolve6(hostname)); } catch {}
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req, actionKey: 'command.enable_airgap', deviceIds: [id],
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Enable airgap on ${device.hostname}`,
-      // The allow-list the agent keeps open (server IPs), as the direct path sends it.
-      approvalPayload: { action: 'enable_airgap', deviceIds: [id], params: { serverIPs } },
-    });
-    if (!approved) return;
-
-    await commandService.enqueue({
-      deviceId: id,
-      tenantId: req.tenantId!,
-      type: 'enable_airgap' as any,
-      payload: { serverIPs },
-      priority: 'high',
-      expiresInSeconds: 300,
-      createdBy: req.session.userId,
-    });
-
-    await db('devices').where({ id, tenant_id: req.tenantId! }).update({
-      airgap_enabled: true,
-      airgap_enabled_at: new Date(),
-      updated_at: new Date(),
-    });
-
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'command.enable_airgap', {
-        deviceId: id, resourceType: 'device', resourcePath: String(id),
-        details: { hostname: device.hostname },
-      });
-    } catch {}
-
-    getIO().to(`tenant:${req.tenantId}`).emit(SocketEvents.DEVICE_UPDATED, { id, airgapEnabled: true, airgapEnabledAt: new Date().toISOString() });
-    res.json({ data: { success: true } });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/airgap/disable — disable airgap mode on device
-router.post('/:id/airgap/disable', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    const device = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req, actionKey: 'command.disable_airgap', deviceIds: [id],
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Disable airgap on ${device.hostname}`,
-      approvalPayload: { action: 'disable_airgap', deviceIds: [id] },
-    });
-    if (!approved) return;
-
-    await commandService.enqueue({
-      deviceId: id,
-      tenantId: req.tenantId!,
-      type: 'disable_airgap' as any,
-      priority: 'high',
-      expiresInSeconds: 300,
-      createdBy: req.session.userId,
-    });
-
-    await db('devices').where({ id, tenant_id: req.tenantId! }).update({
-      airgap_enabled: false,
-      airgap_enabled_at: null,
-      updated_at: new Date(),
-    });
-
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'command.disable_airgap', {
-        deviceId: id, resourceType: 'device', resourcePath: String(id),
-        details: { hostname: device.hostname },
-      });
-    } catch {}
-
-    getIO().to(`tenant:${req.tenantId}`).emit(SocketEvents.DEVICE_UPDATED, { id, airgapEnabled: false, airgapEnabledAt: null });
-    res.json({ data: { success: true } });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/uninstall — mark as pending_uninstall + send uninstall command to agent.
-// Routed through 2-step approval when the tenant has opted in.
-router.post('/:id/uninstall', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id);
-    const existing = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!existing) return res.status(404).json({ error: 'Device not found' });
-
-    const name = existing.displayName || existing.hostname || `#${id}`;
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'command.uninstall_agent',
-      deviceIds: [id],
-      approvalRequestType: 'device_uninstall',
-      approvalDescription: `Uninstall agent from ${name}`,
-      approvalPayload: { deviceId: id },
-    });
-    if (!approved) return;
-
-    const device = await deviceService.initiateUninstall(id, req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-    commandService.enqueue({
-      deviceId: id, tenantId: req.tenantId!,
-      type: 'uninstall_agent', payload: {},
-      priority: 'urgent', expiresInSeconds: 600,
-      createdBy: req.session.userId,
-    }).catch(() => { /* ignore enqueue errors */ });
-    res.json({ data: device });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/cancel-uninstall — abort a pending uninstall, restore to offline
-router.post('/:id/cancel-uninstall', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const device = await deviceService.cancelUninstall(parseInt(req.params.id), req.tenantId!);
-    if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
 });
@@ -1442,9 +747,8 @@ router.get('/:id/transfer/candidates', requireTenantCapability('devices.manage')
 
 // POST /api/devices/:id/transfer — move a device from the current tenant
 // to another tenant. Caller must be admin in BOTH tenants (or platform
-// admin). The device's tenant_id + api_key_id are updated, group_id is
-// cleared, and a `reconfigure_agent` command is enqueued so the agent
-// picks up the new API key on its next push.
+// admin). The device's tenant_id + api_key_id (the target tenant's key,
+// its pre-approval claim) are updated and group_id is cleared.
 //
 // Body: { targetTenantId: number, targetApiKeyId: number }
 router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (req, res, next) => {
@@ -1485,54 +789,17 @@ router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (r
       deviceIds: [deviceId],
       approvalRequestType: 'device_uninstall',
       approvalDescription: `Transfer ${device.hostname} to ${await (await import('../services/approvalDescribe')).tenantLabel(targetTenantId)} (agent key "${targetKey.name ?? targetApiKeyId}")`,
-      approvalPayload: { deviceId, targetTenantId, targetApiKeyId, serverUrl: `${req.protocol}://${req.get('host')}` },
+      approvalPayload: { deviceId, targetTenantId, targetApiKeyId },
     });
     if (!approved) return;
 
-    const serverUrl = `${req.protocol}://${req.get('host')}`;
-
-    await db.transaction(async (trx) => {
-      // Enqueue the reconfigure command in the SOURCE tenant's queue so the
-      // agent still picks it up on its next push (it's still using the old
-      // API key). Payload carries the new key + server URL so the agent can
-      // rewrite its config.json and start authenticating against the target.
-      await trx('command_queue').insert({
-        device_id: deviceId,
-        tenant_id: req.tenantId!,
-        type: 'reconfigure_agent',
-        payload: JSON.stringify({
-          apiKey: targetKey.key,
-          serverUrl,
-          targetTenantId,
-        }),
-        priority: 'urgent',
-        status: 'pending',
-        expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        created_by: userId,
-      });
-
-      // Move the device record.
-      await trx('devices').where({ id: deviceId }).update({
-        tenant_id: targetTenantId,
-        api_key_id: targetApiKeyId,
-        group_id: null,
-        updated_at: new Date(),
-      });
-
-      // Cancel any still-pending commands from the source tenant.
-      await trx('command_queue')
-        .where({ device_id: deviceId, tenant_id: req.tenantId! })
-        .whereIn('status', ['pending', 'sent'])
-        .whereNot({ type: 'reconfigure_agent' })
-        .update({ status: 'cancelled', finished_at: new Date() });
+    // Move the device record (keep in sync with deviceApproval.ts, transferDevices).
+    await db('devices').where({ id: deviceId }).update({
+      tenant_id: targetTenantId,
+      api_key_id: targetApiKeyId,
+      group_id: null,
+      updated_at: new Date(),
     });
-
-    // New tenant, no group = a different alerts switch (`notify`) chain:
-    // silently re-baseline the alertable level (see bulk transfer above).
-    {
-      const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-      metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: [deviceId] }, 'tenant transfer');
-    }
 
     try {
       const { auditService } = await import('../services/audit.service');

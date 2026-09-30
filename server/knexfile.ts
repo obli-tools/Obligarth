@@ -32,13 +32,9 @@ const config: Knex.Config = {
     loadExtensions: isCompiled ? ['.js'] : ['.ts'],
   },
   pool: {
-    // An RMM ingests a push from every device on a short interval; each push
-    // runs several sequential queries (status resolve, threshold resolve,
-    // metric-history writes, trigger dispatch). max:10 was a hard throttle —
-    // under a real fleet the pool stayed saturated and every request (UI
-    // included) queued behind push traffic, which read as "the whole app is
-    // slow". 60 gives real headroom at 2000+ devices once the per-push query
-    // fan-out is cut (auth/config caching, metric-history batching).
+    // Sized for the push traffic of the former RMM agent (2000+ devices, where
+    // max:10 kept the pool saturated and every UI request queued behind it);
+    // kept until the load of the MDM is measured.
     // NOTE: keep pool.max × server-replicas comfortably under the Postgres
     // max_connections — docker-compose sets it to 200; the session store keeps
     // its own small pool, so 60 leaves ample margin.

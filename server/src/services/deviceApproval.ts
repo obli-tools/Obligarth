@@ -1,25 +1,23 @@
 import { db } from '../db';
 import { logger } from '../utils/logger';
-import { commandService } from './command.service';
 import {
-  REDO, activeRequester, auditAs, refuse, requireTenantCapability,
+  activeRequester, auditAs, refuse, requireTenantCapability,
   type ApprovalExecution, type BatchCommandPayload,
 } from './approval.service';
 
-// ── Approval executors of the device actions (agent-managed devices) ────────
-// Bulk group change, tenant transfer, record deletion and uninstall, executed
-// AS THE REQUESTER once a second administrator approved them
-// (approval.service). Registered by modules/rmm.ts.
+// ── Approval executors of the device actions ────────────────────────────────
+// Bulk group change, tenant transfer and record deletion, executed AS THE
+// REQUESTER once a second administrator approved them (approval.service).
+// Registered by modules/devices.ts.
 
 /** Payload of a 'device_uninstall' request (device.routes). */
 export interface DeviceUninstallPayload {
   deviceId: number;
-  /** DELETE /api/devices/:id (record only, no uninstall). */
+  /** DELETE /api/devices/:id (record only). */
   deleteOnly?: boolean;
   /** POST /api/devices/:id/transfer */
   targetTenantId?: number;
   targetApiKeyId?: number;
-  serverUrl?: string;
 }
 
 /** Approved bulk group change (device.bulk_group_change): 'change_group'. */
@@ -35,10 +33,6 @@ export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
   if (!prev.length) refuse('None of the devices of this request is still in the tenant');
   await db('devices').whereIn('id', prev.map((d) => d.id)).andWhere({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
   const changed = prev.filter((d) => d.group_id !== groupId).map((d) => d.id);
-  if (changed.length) {
-    const { metricAlertRebaseline } = await import('./metricAlertRebaseline.service');
-    metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: changed }, 'bulk group change');
-  }
   await auditAs(tenantId, requesterId, 'device.bulk_group_changed', {
     resourceType: 'device', resourcePath: prev.map((d) => d.id).join(','), details: { count: prev.length, changed: changed.length, toGroupId: groupId },
   });
@@ -49,15 +43,16 @@ export async function executeTransferTenant(x: ApprovalExecution): Promise<strin
   const payload = x.payload as BatchCommandPayload;
   const p = payload.params ?? {};
   return transferDevices(x.tenantId, x.requesterId, payload.deviceIds, {
-    targetTenantId: Number(p.targetTenantId), targetApiKeyId: Number(p.targetApiKeyId), serverUrl: p.serverUrl,
+    targetTenantId: Number(p.targetTenantId), targetApiKeyId: Number(p.targetApiKeyId),
   });
 }
 
 /**
- * Approved device request of type 'device_uninstall' — three routes file
- * it: uninstall (POST /:id/uninstall), record deletion (DELETE /:id,
- * `deleteOnly`) and tenant transfer (POST /:id/transfer, `targetTenantId`).
- * Each one does what its route does — never an uninstall for the others.
+ * Approved device request of type 'device_uninstall' — two routes file it
+ * now: record deletion (DELETE /:id, `deleteOnly`) and tenant transfer
+ * (POST /:id/transfer, `targetTenantId`). Each one does what its route does.
+ * The agent uninstall this request type also carried went with the agent: a
+ * request of that kind is refused.
  */
 export async function executeDeviceRequest(x: ApprovalExecution): Promise<string | void> {
   const { tenantId, requesterId } = x;
@@ -66,43 +61,29 @@ export async function executeDeviceRequest(x: ApprovalExecution): Promise<string
   if (!Number.isInteger(deviceId) || deviceId <= 0) refuse('Device request without a valid device id');
   if (payload.targetTenantId != null) {
     return transferDevices(tenantId, requesterId, [deviceId], {
-      targetTenantId: Number(payload.targetTenantId), targetApiKeyId: Number(payload.targetApiKeyId), serverUrl: payload.serverUrl,
+      targetTenantId: Number(payload.targetTenantId), targetApiKeyId: Number(payload.targetApiKeyId),
     });
   }
+  if (!payload.deleteOnly) refuse('Agent uninstall is not supported here — nothing was executed');
   await requireTenantCapability(requesterId, tenantId, 'devices.manage');
   const { deviceService } = await import('./device.service');
   const existing = await deviceService.getDeviceById(deviceId, tenantId);
   if (!existing) refuse('Device not found');
-  if (payload.deleteOnly) {
-    await deviceService.deleteDevice(deviceId, tenantId);
-    await auditAs(tenantId, requesterId, 'device.deleted', {
-      deviceId, resourceType: 'device', resourcePath: String(deviceId),
-      details: { hostname: existing.hostname, displayName: existing.displayName },
-    });
-    return;
-  }
-  // Uninstall: same 10-minute pending_uninstall window as the direct route.
-  await deviceService.initiateUninstall(deviceId, tenantId);
-  await commandService.enqueue({
-    deviceId,
-    tenantId,
-    type: 'uninstall_agent' as any,
-    payload: {},
-    priority: 'urgent',
-    expiresInSeconds: 600,
-    createdBy: requesterId,
+  await deviceService.deleteDevice(deviceId, tenantId);
+  await auditAs(tenantId, requesterId, 'device.deleted', {
+    deviceId, resourceType: 'device', resourcePath: String(deviceId),
+    details: { hostname: existing.hostname, displayName: existing.displayName },
   });
-  await auditAs(tenantId, requesterId, 'command.uninstall_agent', { deviceId, resourceType: 'device', resourcePath: String(deviceId), details: { hostname: existing.hostname } });
 }
 
 /**
  * Approved tenant transfer (device.transfer_tenant), single or bulk: the
- * same transaction as the routes (reconfigure_agent in the source queue
- * with the target key, device moved, pending commands cancelled). The
- * requester must still be a platform admin or an administrator of BOTH
- * tenants. The target API key is read now (never kept in the request).
+ * same update as the routes (device moved to the target tenant, attached to
+ * the target API key, ungrouped). The requester must still be a platform
+ * admin or an administrator of BOTH tenants, and the target key must still
+ * belong to the target tenant.
  */
-async function transferDevices(tenantId: number, requesterId: number, rawIds: unknown[], t: { targetTenantId: number; targetApiKeyId: number; serverUrl?: unknown }): Promise<string | void> {
+async function transferDevices(tenantId: number, requesterId: number, rawIds: unknown[], t: { targetTenantId: number; targetApiKeyId: number }): Promise<string | void> {
   const requester = await activeRequester(requesterId);
   if (!Number.isInteger(t.targetTenantId) || !Number.isInteger(t.targetApiKeyId) || t.targetTenantId === tenantId) {
     refuse('Transfer request without a valid target tenant / API key');
@@ -111,13 +92,7 @@ async function transferDevices(tenantId: number, requesterId: number, rawIds: un
     const rows = await db('user_tenants').where({ user_id: requesterId, role: 'admin' }).whereIn('tenant_id', [tenantId, t.targetTenantId]).pluck('tenant_id');
     if (new Set(rows.map(Number)).size !== 2) refuse('The requester is no longer an administrator of both tenants');
   }
-  // The configured public address first (the request's Host header is what
-  // the direct route uses; the reviewer never saw it).
-  const serverUrl = process.env.SERVER_URL
-    || (typeof t.serverUrl === 'string' && /^https?:\/\/[^\s]+$/.test(t.serverUrl) ? t.serverUrl : '')
-    || process.env.APP_URL || process.env.CLIENT_ORIGIN || '';
-  if (!serverUrl) refuse(`This transfer request was filed without the server address — ${REDO}`);
-  const targetKey = await db('agent_api_keys').where({ id: t.targetApiKeyId, tenant_id: t.targetTenantId }).first() as { key: string } | undefined;
+  const targetKey = await db('agent_api_keys').where({ id: t.targetApiKeyId, tenant_id: t.targetTenantId }).first('id');
   if (!targetKey) refuse('Target API key not found in target tenant');
   const ids = [...new Set(rawIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   const devices = ids.length ? await db('devices').whereIn('id', ids).andWhere({ tenant_id: tenantId }).select('id', 'hostname') as Array<{ id: number; hostname: string }> : [];
@@ -127,38 +102,17 @@ async function transferDevices(tenantId: number, requesterId: number, rawIds: un
   for (const device of devices) {
     try {
       // Keep in sync with device.routes.ts (POST /:id/transfer and /batch/transfer).
-      await db.transaction(async (trx) => {
-        await trx('command_queue').insert({
-          device_id: device.id,
-          tenant_id: tenantId,
-          type: 'reconfigure_agent',
-          payload: JSON.stringify({ apiKey: targetKey.key, serverUrl, targetTenantId: t.targetTenantId }),
-          priority: 'urgent',
-          status: 'pending',
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000),
-          created_by: requesterId,
-        });
-        await trx('devices').where({ id: device.id }).update({
-          tenant_id: t.targetTenantId,
-          api_key_id: t.targetApiKeyId,
-          group_id: null,
-          updated_at: new Date(),
-        });
-        await trx('command_queue')
-          .where({ device_id: device.id, tenant_id: tenantId })
-          .whereIn('status', ['pending', 'sent'])
-          .whereNot({ type: 'reconfigure_agent' })
-          .update({ status: 'cancelled', finished_at: new Date() });
+      await db('devices').where({ id: device.id }).update({
+        tenant_id: t.targetTenantId,
+        api_key_id: t.targetApiKeyId,
+        group_id: null,
+        updated_at: new Date(),
       });
       moved.push(device.id);
     } catch (err) {
       logger.error({ err, deviceId: device.id }, 'approved transfer: failed for device');
       failed.push(device.hostname);
     }
-  }
-  if (moved.length) {
-    const { metricAlertRebaseline } = await import('./metricAlertRebaseline.service');
-    metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: moved }, 'tenant transfer');
   }
   await auditAs(tenantId, requesterId, moved.length > 1 || devices.length > 1 ? 'device.bulk_transferred' : 'device.transferred', {
     deviceId: devices.length === 1 ? devices[0].id : undefined,

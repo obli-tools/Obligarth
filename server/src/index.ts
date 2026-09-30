@@ -14,13 +14,13 @@ import {
   runStartTasks,
   runStopTasks,
 } from './lifecycle';
-import { registerRmmModules } from './modules/rmm';
+import { registerDeviceModule } from './modules/devices';
 
 async function main() {
   // Modules hook into the core's registries (lifecycle tasks, upgrades,
   // Socket.io handlers, approvals, restrictions, settings…) before anything
-  // starts. The RMM modules are registered in one place, to be removed.
-  registerRmmModules();
+  // starts.
+  registerDeviceModule();
 
   // Run database migrations
   logger.info('Running database migrations...');

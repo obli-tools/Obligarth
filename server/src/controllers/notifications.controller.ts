@@ -239,7 +239,7 @@ export const notificationsController = {
     }
   },
 
-  // GET /api/notifications/bindings/resolved?scope=monitor|group|agent&scopeId=N
+  // GET /api/notifications/bindings/resolved?scope=group|device|agent&scopeId=N
   async resolvedBindings(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const scope = req.query.scope as 'group' | 'device' | 'agent';

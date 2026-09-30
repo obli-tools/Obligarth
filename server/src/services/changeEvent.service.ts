@@ -7,9 +7,7 @@ import { logger } from '../utils/logger';
 /**
  * Change-event timeline — "what changed on this device, when, and who did it".
  *
- * Sibling of `rewind.service.ts` (same guard, same tenant-scoping rules, same
- * route family). Rewind answers "what did the machine LOOK like at T"; this
- * answers "what was DONE to the machine around T", so an incident can be
+ * Answers "what was DONE to the machine around T", so an incident can be
  * correlated with the change that caused it (Oblidesk's Blame Ribbon).
  *
  * ── Endpoints (registered in `routes/device.routes.ts`) ──────────────────────
@@ -22,7 +20,7 @@ import { logger } from '../utils/logger';
  *     → { data: { formatVersion, deviceId, from, to, kinds, total,
  *                 counts: Record<ChangeEventKind, number> } }
  *
- *   Guard: `requireDeviceRead()` — identical to the /rewind/* routes.
+ *   Guard: `requireDeviceRead()`, as the device itself.
  *   `from`/`to` accept ISO-8601 or epoch-ms. Defaults: to = now, from = to-24h.
  *   Window is capped at 30 days and the list at 2000 rows; hitting the row cap
  *   sets `truncated: true` and drops the OLDEST events (the ribbon cares about
@@ -34,10 +32,8 @@ import { logger } from '../utils/logger';
  * Nothing is ingested, backfilled or denormalised: every kind is a live read
  * over the table that already owns that fact.
  *
- *   agent_upgraded     command_queue (update_agent)
  *   remote_session     remote_sessions
  *   config_change      audit_logs                      ← ADMIN ONLY, see below
- *   reboot             command_queue (reboot) + devices.last_reboot_at
  *
  * ── Permissions ─────────────────────────────────────────────────────────────
  * `requireDeviceRead()` is necessary but not sufficient: two sources are
@@ -52,26 +48,26 @@ import { logger } from '../utils/logger';
  * "no events" apart from "not allowed to see that kind".
  *
  * ── formatVersion ───────────────────────────────────────────────────────────
- * Currently 2. Never change the exported shape silently — bump
+ * Currently 3. Never change the exported shape silently — bump
  * `FORMAT_VERSION` below (and tell Oblidesk) when a field is renamed, removed
  * or restructured. `title`/`detail` are English fallbacks: consumers should
  * localise from `kind` + `payload`, which are the stable machine-readable part.
  * Version 1 also had the kinds patch_deployed, script_run, schedule_run,
  * scenario_run, compliance_drift, software_installed and software_removed,
- * and the actor types schedule, scenario and api (removed modules).
+ * and the actor types schedule, scenario and api (removed modules). Version 2
+ * also had the kinds agent_upgraded and reboot (the agent's command queue and
+ * its reported boot time) and the actor type agent (removed agent).
  */
 
-const FORMAT_VERSION = 2 as const;
+const FORMAT_VERSION = 3 as const;
 
 export const CHANGE_EVENT_KINDS = [
-  'agent_upgraded',
   'remote_session',
   'config_change',
-  'reboot',
 ] as const;
 
 export type ChangeEventKind = (typeof CHANGE_EVENT_KINDS)[number];
-export type ChangeEventActorType = 'user' | 'agent' | 'system';
+export type ChangeEventActorType = 'user' | 'system';
 export type ChangeEventSeverityHint = 'info' | 'low' | 'medium' | 'high' | 'critical';
 
 export interface ChangeEvent {
@@ -95,35 +91,20 @@ const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
 
-/** Command rows that actually reached the agent. 'pending' never ran and
- *  'cancelled' was pulled before delivery — neither changed the machine. */
-const DELIVERED_COMMAND_STATUSES = ['sent', 'ack_running', 'success', 'failure', 'timeout'];
-
 /** audit_logs actions that another kind already sources from its own table —
  *  listing them under config_change too would double-count the same change. */
 const AUDIT_ACTIONS_OWNED_ELSEWHERE = [
-  'command.reboot',
-  'command.update_agent',
   'remote.session_ended',
 ];
 
 // ── Query helpers ────────────────────────────────────────────────────────────
 
 /** Tenant-scoped base query on an aliased device-owned table. Master tenant
- *  (id=1) is the god view and keeps the device filter only — same rule as
- *  rewind.service.scope(). */
+ *  (id=1) is the god view and keeps the device filter only. */
 function scope(table: string, alias: string, deviceId: number, tenantId: number): Knex.QueryBuilder {
   const q = db(`${table} as ${alias}`).where(`${alias}.device_id`, deviceId);
   if (!isMasterTenant(tenantId)) q.where(`${alias}.tenant_id`, tenantId);
   return q;
-}
-
-/** Event instant of a command_queue row: when it finished, else the furthest
- *  point it reached. Used both as the window predicate and as `at`. */
-const CMD_AT = 'COALESCE(c.finished_at, c.acked_at, c.sent_at, c.created_at)';
-
-function betweenRaw(q: Knex.QueryBuilder, expr: string, from: Date, to: Date): Knex.QueryBuilder {
-  return q.whereRaw(`${expr} >= ? AND ${expr} <= ?`, [from, to]);
 }
 
 function toIso(v: unknown): string {
@@ -153,18 +134,10 @@ function short(v: unknown, max = 300): string | null {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
-/** Severity of a command_queue row by its terminal state. */
-function runSeverityHint(status: string): ChangeEventSeverityHint {
-  if (status === 'failure' || status === 'timeout') return 'high';
-  if (status === 'cancelled' || status === 'skipped') return 'low';
-  return 'info';
-}
-
-/** Destroying/moving a device or cutting its network is a far better blame
- *  candidate than a routine setting tweak. */
+/** Destroying or moving a device is a far better blame candidate than a
+ *  routine setting tweak. */
 function auditSeverityHint(action: string): ChangeEventSeverityHint {
   if (/\.(deleted|refused|suspended|transferred|cleared)$/.test(action)) return 'high';
-  if (action === 'command.enable_airgap' || action === 'command.enable_privacy_mode') return 'high';
   return 'medium';
 }
 
@@ -195,35 +168,6 @@ interface SourceContext {
 
 const USER_COLUMNS = ['u.username as actor_username', 'u.display_name as actor_display_name'];
 
-/** command_queue-backed source shared by reboot / agent_upgraded — same
- *  window expression, same delivery filter. */
-function commandSource(
-  ctx: SourceContext,
-  types: string[],
-  map: (row: any) => ChangeEvent,
-): EventSource {
-  return {
-    table: 'command_queue',
-    base: () => betweenRaw(
-      scope('command_queue', 'c', ctx.deviceId, ctx.tenantId)
-        .whereIn('c.type', types)
-        .whereIn('c.status', DELIVERED_COMMAND_STATUSES),
-      CMD_AT, ctx.from, ctx.to,
-    ),
-    columns: [
-      'c.id', 'c.type', 'c.status', 'c.payload', 'c.result', 'c.created_by',
-      ...USER_COLUMNS, db.raw(`${CMD_AT} as at`),
-    ],
-    order: CMD_AT,
-    countOn: 'c.id',
-    map,
-  };
-}
-
-function commandJoinUser(q: Knex.QueryBuilder): Knex.QueryBuilder {
-  return q.leftJoin('users as u', 'u.id', 'c.created_by');
-}
-
 /** Every source for a kind, in the order they are merged. A kind absent from
  *  the returned map is one the caller is not allowed to read (config_change
  *  for non-admins) — never one that silently returned nothing. */
@@ -231,26 +175,6 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
   const { deviceId, tenantId, from, to } = ctx;
 
   const sources: Partial<Record<ChangeEventKind, EventSource[]>> = {
-    // ── agent_upgraded ───────────────────────────────────────────────────────
-    agent_upgraded: [commandSource(ctx, ['update_agent'], (r) => {
-      const payload = toObj(r.payload);
-      const version = payload.version ? String(payload.version) : null;
-      return {
-        id: `agent_upgraded:command_queue:${r.id}`,
-        kind: 'agent_upgraded',
-        at: toIso(r.at),
-        title: version ? `Agent updated to ${version}` : 'Agent update',
-        detail: `Command ended as '${r.status}'`,
-        actor: actorName(r),
-        actorType: r.created_by ? 'user' : 'system',
-        severityHint: r.status === 'success' ? 'medium' : runSeverityHint(r.status),
-        resourceType: 'agent',
-        resourceId: String(r.id),
-        resourcePath: version,
-        payload: { commandId: r.id, status: r.status, targetVersion: version },
-      };
-    })],
-
     // ── remote_session ───────────────────────────────────────────────────────
     remote_session: [{
       table: 'remote_sessions',
@@ -293,54 +217,6 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
         },
       }),
     }],
-
-    // ── reboot ───────────────────────────────────────────────────────────────
-    reboot: [
-      commandSource(ctx, ['reboot'], (r) => ({
-        id: `reboot:command_queue:${r.id}`,
-        kind: 'reboot',
-        at: toIso(r.at),
-        title: 'Reboot commanded',
-        detail: `Command ended as '${r.status}'`,
-        actor: actorName(r),
-        actorType: r.created_by ? 'user' : 'system',
-        severityHint: 'high',
-        resourceType: 'command',
-        resourceId: String(r.id),
-        resourcePath: null,
-        payload: { commandId: r.id, status: r.status, observed: false },
-      })),
-      // Boot time observed by the agent (devices.last_reboot_at is a single
-      // column, so at most ONE such event exists — the most recent boot).
-      {
-        table: 'devices',
-        base: () => {
-          const q = db('devices as dv')
-            .where('dv.id', deviceId)
-            .whereNotNull('dv.last_reboot_at')
-            .whereBetween('dv.last_reboot_at', [from, to]);
-          if (!isMasterTenant(tenantId)) q.where('dv.tenant_id', tenantId);
-          return q;
-        },
-        columns: ['dv.id', 'dv.last_reboot_at as at'],
-        order: 'dv.last_reboot_at',
-        countOn: 'dv.id',
-        map: (r) => ({
-          id: `reboot:devices:${r.id}`,
-          kind: 'reboot',
-          at: toIso(r.at),
-          title: 'Device booted',
-          detail: 'Boot time reported by the agent',
-          actor: null,
-          actorType: 'agent',
-          severityHint: 'high',
-          resourceType: 'device',
-          resourceId: String(r.id),
-          resourcePath: null,
-          payload: { observed: true },
-        }),
-      },
-    ],
   };
 
   // audit_logs is admin-only everywhere else (routes/audit.routes.ts) — do not
@@ -379,14 +255,9 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
   return sources;
 }
 
-/** Joins that `columns` references but `base()` doesn't set up itself. */
-function withJoins(src: EventSource, q: Knex.QueryBuilder): Knex.QueryBuilder {
-  return src.table === 'command_queue' ? commandJoinUser(q) : q;
-}
-
 // ── Validation ───────────────────────────────────────────────────────────────
 
-/** Accepts ISO-8601 or epoch-ms, like the sibling /rewind/* routes. */
+/** Accepts ISO-8601 or epoch-ms. */
 const tsParam = z.preprocess(
   (v) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : v),
   z.coerce.date(),
@@ -459,7 +330,7 @@ export const changeEventService = {
 
     const batches = await Promise.all(
       kinds.flatMap((kind) => (sources[kind] ?? []).map(async (src) => {
-        const rows = await withJoins(src, src.base())
+        const rows = await src.base()
           .select(src.columns)
           .orderByRaw(`${src.order} DESC`)
           .limit(limit + 1);

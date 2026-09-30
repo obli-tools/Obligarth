@@ -4,7 +4,6 @@ import { permissionService } from '../services/permission.service';
 import { teamService } from '../services/team.service';
 import { groupNotificationService } from '../services/groupNotification.service';
 import { AppError } from '../middleware/errorHandler';
-import { db } from '../db';
 import type { CreateGroupInput, UpdateGroupInput, MoveGroupInput } from '../validators/group.schema';
 
 export const groupsController = {
@@ -109,12 +108,6 @@ export const groupsController = {
         }
       }
 
-      // Broadcast via Socket.io
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('group:created', { group });
-      }
-
       try {
         const { auditService } = await import('../services/audit.service');
         await auditService.logReq(req, 'group.created', {
@@ -147,21 +140,6 @@ export const groupsController = {
 
       if (data.groupNotifications !== undefined) {
         groupNotificationService.removeGroup(id);
-      }
-
-      // Per-metric alerts switch (`notify`) changed on this group → the
-      // group and every sub-group inherit it: silently re-baseline the
-      // alertable level of their devices (async, after the response).
-      if (data.thresholds !== undefined) {
-        const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-        if (metricAlertRebaseline.notifyChanged(existing.thresholds, group.thresholds)) {
-          metricAlertRebaseline.schedule({ kind: 'groupSubtree', groupId: id }, 'group notify switch');
-        }
-      }
-
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('group:updated', { group });
       }
 
       try {
@@ -209,17 +187,6 @@ export const groupsController = {
       const group = await groupService.move(id, newParentId);
       if (!group) throw new AppError(404, 'Group not found');
 
-      // New ancestors = possibly different inherited alerts switches.
-      if ((existing.parentId ?? null) !== (newParentId ?? null)) {
-        const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-        metricAlertRebaseline.schedule({ kind: 'groupSubtree', groupId: id }, 'group move');
-      }
-
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('group:moved', { group });
-      }
-
       res.json({ success: true, data: group });
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes('circular')) {
@@ -244,27 +211,8 @@ export const groupsController = {
 
       groupNotificationService.removeGroup(id);
 
-      // Devices of the deleted subtree inherit a different alerts switch
-      // (`notify`) chain afterwards (FK SET NULL: the group's devices
-      // become ungrouped, its children become roots). Collect them BEFORE
-      // the delete — the closure rows are cascaded away with the group.
-      const subtreeDeviceIds = await db('devices')
-        .whereIn('group_id', db('device_group_closure').where({ ancestor_id: id }).select('descendant_id'))
-        .pluck('id') as number[];
-
       const deleted = await groupService.delete(id);
       if (!deleted) throw new AppError(404, 'Group not found');
-
-      // groupService.delete already invalidated the group threshold cache.
-      if (subtreeDeviceIds.length > 0) {
-        const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-        metricAlertRebaseline.schedule({ kind: 'devices', deviceIds: subtreeDeviceIds }, 'group delete');
-      }
-
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('group:deleted', { groupId: id });
-      }
 
       try {
         const { auditService } = await import('../services/audit.service');
@@ -295,36 +243,10 @@ export const groupsController = {
       }
       await groupService.reorder(items);
 
-      const io = req.app.get('io');
-      if (io) {
-        io.to('role:admin').emit('group:reordered', { items });
-      }
-
       res.json({ success: true, message: 'Groups reordered' });
     } catch (err) {
       next(err);
     }
   },
 
-  /** PATCH /groups/:id/agent-config — update group config */
-  async updateAgentGroupConfig(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const groupId = parseInt(req.params.id, 10);
-
-      const group = await groupService.getById(groupId);
-      if (!group) throw new AppError(404, 'Group not found');
-
-      const { groupConfig } = req.body as {
-        groupConfig?: { pushIntervalSeconds?: number; maxMissedPushes?: number; autoApprove?: boolean };
-      };
-
-      const updated = groupConfig !== undefined
-        ? await groupService.update(groupId, { groupConfig })
-        : group;
-
-      res.json({ success: true, data: updated });
-    } catch (err) {
-      next(err);
-    }
-  },
 };

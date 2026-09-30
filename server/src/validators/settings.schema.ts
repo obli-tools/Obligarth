@@ -1,7 +1,7 @@
 import { z } from 'zod';
-import { SETTINGS_KEYS } from '@obliance/shared';
+import { SERVED_SETTING_KEYS } from '../services/settings.service';
 
-const settingsKeyValues = Object.values(SETTINGS_KEYS) as [string, ...string[]];
+const settingsKeyValues = SERVED_SETTING_KEYS as unknown as [string, ...string[]];
 
 export const setSettingSchema = z.object({
   key: z.enum(settingsKeyValues),

@@ -17,15 +17,6 @@ router.get('/', requireAuth, requireRole('admin'), async (_req: Request, res: Re
     appVersion = pkg.version;
   } catch { /* ignore */ }
 
-  // Agent version from VERSION file (injected into Docker image at build time)
-  let agentVersion = 'unknown';
-  const agentVersionFile = join(process.cwd(), '..', 'agent', 'VERSION');
-  try {
-    if (existsSync(agentVersionFile)) {
-      agentVersion = readFileSync(agentVersionFile, 'utf-8').trim();
-    }
-  } catch { /* ignore */ }
-
   // Client version from client/package.json
   let clientVersion = 'unknown';
   try {
@@ -58,7 +49,6 @@ router.get('/', requireAuth, requireRole('admin'), async (_req: Request, res: Re
   res.json({
     appVersion,
     nodeVersion:   process.version,
-    agentVersion,
     clientVersion,
     uptimeSeconds: Math.floor(process.uptime()),
     memory: { processRssMb, processHeapMb, systemTotalMb, systemFreeMb },

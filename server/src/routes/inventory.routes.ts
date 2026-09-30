@@ -32,13 +32,4 @@ router.get('/:deviceId/software', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-router.post('/:deviceId/scan', async (req, res, next) => {
-  try {
-    const cmd = await inventoryService.triggerScan(
-      parseInt(req.params.deviceId), req.tenantId!, req.session.userId!
-    );
-    res.json({ data: cmd });
-  } catch (err) { next(err); }
-});
-
 export default router;

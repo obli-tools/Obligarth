@@ -37,7 +37,7 @@ const SWEEP_INTERVAL_MS = 60_000;
 export type ApprovalRequestType = 'batch_command' | 'device_uninstall';
 
 export interface BatchCommandPayload {
-  action: string;              // 'reboot' | 'shutdown' | 'restart_agent' | ...
+  action: string;              // 'change_group' | 'transfer_tenant' | 'settings_update' | ...
   deviceIds: number[];
   params?: Record<string, any>;
 }
@@ -170,8 +170,9 @@ export async function auditAs(tenantId: number, userId: number, action: string, 
 
 // ── Module executors ────────────────────────────────────────────────────────
 // A module that files approvals for its own actions registers what executes
-// them (modules/rmm.ts registers the RMM's). Removing the module removes its
-// executors: a request it filed earlier is then refused, never guessed at.
+// them (modules/devices.ts for the device registry). Removing the module
+// removes its executors: a request it filed earlier is then refused, never
+// guessed at.
 
 /** An approved request, executed AS THE REQUESTER. */
 export interface ApprovalExecution {
@@ -212,8 +213,8 @@ export function registerApprovalExecutor(action: string | ApprovalActionMatcher,
   actionExecutors.push({ match, run });
 }
 
-/** Executor of the 'batch_command' requests no other executor took (the
- *  device commands). Without one, such a request is refused. */
+/** Executor of the 'batch_command' requests no other executor took (e.g. a
+ *  module's device commands). Without one, such a request is refused. */
 export function registerDefaultApprovalExecutor(run: ApprovalExecutor): void {
   if (defaultExecutor) throw new Error('Default approval executor registered twice');
   defaultExecutor = run;
