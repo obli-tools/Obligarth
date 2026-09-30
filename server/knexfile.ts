@@ -22,13 +22,18 @@ const config: Knex.Config = {
     extension: isCompiled ? 'js' : 'ts',
     loadExtensions: isCompiled ? ['.js'] : ['.ts'],
     schemaName: 'public',
+    // Obligarth's own tracking table (and obligarth_migrations_lock), not
+    // Knex's default knex_migrations: pointed by mistake at a database of
+    // another product (an Obliance one), the server finds none of its
+    // migrations applied, fails on the base schema's first CREATE TABLE and
+    // stops, instead of "migrating" that database.
+    tableName: 'obligarth_migrations',
     // Rolling the server image back to an OLDER version must still boot:
-    // knex_migrations then lists migrations the old image does not ship, and
-    // knex's list validation ("The migration directory is corrupt") would
-    // make db.migrate.latest() — run at every boot (index.ts) — exit the
-    // server. Newer tables / columns / triggers are simply ignored by older
-    // code (docs/mobile/device-bound-2fa.md §11). Only helps images built
-    // from this version on; for an image older than this change, see §11.
+    // the tracking table then lists migrations the old image does not ship,
+    // and knex's list validation ("The migration directory is corrupt")
+    // would make db.migrate.latest() — run at every boot (index.ts) — exit
+    // the server. Newer tables / columns / triggers are simply ignored by
+    // older code (docs/mobile/device-bound-2fa.md §11).
     disableMigrationsListValidation: true,
   },
   seeds: {
