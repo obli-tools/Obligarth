@@ -7,7 +7,7 @@ export function validate(schema: ZodSchema, source: 'body' | 'query' | 'params' 
 
     if (!result.success) {
       // Flatten the Zod issue tree into a single human-readable summary
-      // so admins get "permissions.0.capabilities: Invalid enum value"
+      // so admins get "permissions.0.level: Invalid enum value"
       // in their UI toast, instead of the opaque "Validation failed".
       // The structured `details` field is preserved for clients that
       // want to render per-field UI errors.

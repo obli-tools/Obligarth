@@ -396,22 +396,6 @@
     "failedUpdate": "Failed to update setting",
     "toggleSecretVisibility": "Show / hide",
     "defs": {
-      "pushInterval": {
-        "label": "Push Interval",
-        "description": "How often the agent sends metrics to the server"
-      },
-      "scanInterval": {
-        "label": "Scan Interval",
-        "description": "How often the agent automatically scans inventory, updates and compliance. 0 = disabled."
-      },
-      "fastPollInterval": {
-        "label": "Fast Poll Interval",
-        "description": "How often the agent polls when commands are pending"
-      },
-      "maxMissedPushes": {
-        "label": "Max Missed Pushes",
-        "description": "Number of missed pushes before marking device offline"
-      },
       "notificationCooldown": {
         "label": "Notification Cooldown",
         "description": "Minimum time between repeated alerts for the same device"
@@ -420,17 +404,9 @@
         "label": "Inventory Retention",
         "description": "How long to keep historical inventory snapshots"
       },
-      "autoApproveDevices": {
-        "label": "Auto-Approve Devices",
-        "description": "Automatically approve new devices when they register"
-      },
       "tfaTrustHours": {
         "label": "2FA \"Trust this IP\" duration",
         "description": "How long a \"Trust this IP\" choice skips the 2FA prompt for a user from the same IP after a successful code. 0 = disable IP trust (always prompt)."
-      },
-      "oblireachAutoInstall": {
-        "label": "ObliReach automatic install",
-        "description": "The Obliance agent installs ObliReach and keeps it at the version shipped by this server (Windows x64, macOS, Linux x64). Off: ObliReach is left as it is (never uninstalled). Privacy mode is respected."
       }
     }
   },
@@ -599,24 +575,6 @@
       "failedLoad": "Failed to load tenant assignments",
       "saved": "Tenant assignments saved",
       "failedSave": "Failed to save tenant assignments"
-    },
-    "capabilities": {
-      "execute": {
-        "label": "Execute",
-        "description": "Scripts, scans, services, install/uninstall"
-      },
-      "remote": {
-        "label": "Remote",
-        "description": "Reach, RDP, SSH shell sessions"
-      },
-      "files": {
-        "label": "Files",
-        "description": "Browse, upload, download, edit files"
-      },
-      "power": {
-        "label": "Power",
-        "description": "Reboot, shutdown, sleep, restart agent"
-      }
     },
     "restrictions": {
       "scopeHint": "Configure which devices / groups this restriction applies to",
@@ -974,9 +932,6 @@
     "refused": "Refused",
     "update_error": "Update error"
   },
-  "commands": {
-    "unsupportedOnAgent": "Not supported by this agent build"
-  },
   "groupPanel": {
     "title": "Groups",
     "allDevices": "All Devices",
@@ -1066,13 +1021,10 @@
     "scopeGroup": "Device group",
     "scopeTenant": "Entire tenant",
     "sectionLabels": {
-      "compliance": "Compliance",
       "hardware": "Hardware",
       "inventory_detail": "Detailed per-server",
       "network": "Network",
-      "scripts_history": "Script History",
-      "software": "Software",
-      "updates": "Updates"
+      "software": "Software"
     },
     "sections": "Sections",
     "status": {
@@ -1084,12 +1036,9 @@
     "timezone": "Timezone",
     "title": "Reports",
     "types": {
-      "compliance": "Compliance",
       "custom": "Custom",
       "fleet": "Fleet Overview",
-      "scripts": "Script Executions",
-      "software": "Software Inventory",
-      "updates": "Updates"
+      "software": "Software Inventory"
     },
     "updated": "Report updated",
     "viewOutputs": "View outputs",
@@ -1104,7 +1053,17 @@
   "permissionSets": {
     "confirmDelete": "Delete permission set \"{{name}}\"? This cannot be undone.",
     "defaultSet": "Default set",
-    "rename": "Rename"
+    "rename": "Rename",
+    "capabilities": {
+      "supervision_read": "Supervision · Reports",
+      "agent_config_keys": "Agent config · API keys",
+      "agent_config_approval": "Agent config · Approve / refuse agents",
+      "devices_manage": "Device Management",
+      "groups_manage": "Group Management",
+      "reports": "Reports",
+      "settings": "Settings",
+      "users_manage": "User Management"
+    }
   },
   "notificationCenter": {
     "title": "Notification Center",

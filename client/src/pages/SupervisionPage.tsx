@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { FileBarChart2 } from 'lucide-react';
+import type { TenantCapability } from '@obliance/shared';
 import { ReportsPage } from './ReportsPage';
 import { useAuthStore } from '@/store/authStore';
 import { PageContainer } from '@/components/common/PageContainer';
@@ -10,7 +11,7 @@ import { SegmentedTabs } from '@/components/common/SegmentedTabs';
 type Tab = 'reports';
 
 // Every tab is gated by the unified `supervision:read` capability.
-const TAB_CAPABILITY: Record<Tab, string> = {
+const TAB_CAPABILITY: Record<Tab, TenantCapability> = {
  reports: 'supervision:read',
 };
 

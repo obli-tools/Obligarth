@@ -2,6 +2,8 @@
 // Obliance RMM — Shared Types
 // =============================================================================
 
+import type { DeviceCapability, TenantCapability } from './capabilities';
+
 // ─── USERS ────────────────────────────────────────────────────────────────────
 
 export interface User {
@@ -44,22 +46,8 @@ export interface UserPreferences {
   sidebarFloating?: boolean;
   theme?: 'dark' | 'light';
   preferredTheme?: AppTheme;
-  /** Preferred video codec for Oblireach remote sessions. Falls back to JPEG if unavailable. */
-  preferredCodec?: 'h264' | 'h265' | 'vp9' | 'av1' | 'jpeg';
-  /** Personal quick reply messages for the chat (operator-defined). */
-  quickReplies?: string[];
   /** Anonymous mode — masks hostnames, IPs, usernames in the UI (for demos/screenshots). */
   anonymousMode?: boolean;
-}
-
-export interface QuickReplyTemplate {
-  id: number;
-  tenantId: number;
-  translations: Record<string, string>;
-  sortOrder: number;
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
 }
 
 // ─── TENANTS ─────────────────────────────────────────────────────────────────
@@ -117,101 +105,6 @@ export interface DeviceGroup {
   uuid: string;
   createdAt: string;
   updatedAt: string;
-}
-
-/** Lot D.2 — Pair of warn/crit percentages applied to a single metric.
- *  Either field may be undefined; the resolver substitutes the inherited
- *  level (group → tenant default) for any missing field.
- *
- *  `notify` is the per-metric ALERTS switch, tri-state per layer:
- *    - undefined = inherit from the layer above (default: alerts on),
- *    - true      = alerts on (re-enables what a parent layer muted),
- *    - false     = muted: the metric still drives the device status and
- *                  every colour (sidebar bubble, badges) exactly as before,
- *                  but it never sends a notification — no notification
- *                  channel message, no live alert (web bell / toast /
- *                  mobile "À traiter"). Scenario metric_* triggers are
- *                  automations, not notifications: they keep firing.
- *  Note: warn=0 / crit=0 keeps its historical meaning ("always critical"). */
-export interface MetricThreshold { warn?: number; crit?: number; notify?: boolean }
-
-/** Lot D.2 — Map of metric kind → threshold pair. Stored verbatim in JSONB
- *  on both `device_groups.thresholds` and `devices.thresholds_override`.
- *
- *  `diskByMount` lets admins set per-mount-point overrides — e.g. tighter
- *  thresholds on `/var` or `D:` than the default disk slot. Mounts not
- *  listed fall back to the generic `disk` threshold, then to the system
- *  default. cpu / ram stay generic; the breakdown isn't useful enough to
- *  carry the same UX cost as disk. */
-export type MetricThresholds = Partial<{
-  disk: MetricThreshold;
-  cpu: MetricThreshold;
-  ram: MetricThreshold;
-  diskByMount: Record<string, MetricThreshold>;
-}>;
-
-/** System defaults applied when neither the device nor the group sets a
- *  value. Hardcoded here so the agent and the dashboard stay aligned. The
- *  type forces every metric to carry both warn AND crit, so consumers
- *  (e.g. the threshold cascade resolver) can treat the system layer as
- *  a guaranteed fallback without extra null-checks. */
-/** Generic-metric defaults — keyed by the three "always-scalar" metric
- *  kinds (cpu / ram / disk). `diskByMount` is intentionally excluded
- *  here: it's an OPTIONAL override map applied on top of `disk`,
- *  resolved at run-time. */
-export type GenericMetricKind = 'disk' | 'cpu' | 'ram';
-export const SYSTEM_DEFAULT_THRESHOLDS: Record<GenericMetricKind, Required<MetricThreshold>> = {
-  disk: { warn: 85, crit: 95, notify: true },
-  cpu:  { warn: 80, crit: 95, notify: true },
-  ram:  { warn: 80, crit: 95, notify: true },
-};
-
-/** Layer of the threshold cascade a resolved value comes from. */
-export type ThresholdLayer = 'system' | 'global' | 'tenant' | 'group' | 'device';
-
-/** Where a resolved threshold value was set. `id` / `name` identify the
- *  tenant, group or device for those layers (null for system / global). */
-export interface ThresholdOrigin {
-  layer: ThresholdLayer;
-  id: number | null;
-  name: string | null;
-}
-
-/** One fully-resolved metric slot (output of the server cascade). */
-export interface ResolvedMetricThreshold {
-  warn: number;
-  crit: number;
-  /** Resolved alerts switch of THIS slot. For a `diskByMount` entry it is
-   *  the mount's own flag: the mount alerts only when the generic `disk`
-   *  slot alerts too — use `isMountNotified()`. */
-  notify: boolean;
-  /** Layer that set each value (absent on legacy payloads). */
-  origin?: { warn: ThresholdOrigin; crit: ThresholdOrigin; notify: ThresholdOrigin };
-}
-
-/** Output of the threshold cascade for a device, a group or a tenant. */
-export interface ResolvedThresholds {
-  cpu: ResolvedMetricThreshold;
-  ram: ResolvedMetricThreshold;
-  disk: ResolvedMetricThreshold;
-  diskByMount: Record<string, ResolvedMetricThreshold>;
-}
-
-/** Effective alerts switch of one disk mount: the generic disk switch AND
- *  the mount's own switch. Muting "Disk" therefore mutes every disk; a
- *  single mount can additionally be muted on its own (`notify: true` on a
- *  mount cannot re-enable it while the generic disk switch is off). */
-export function isMountNotified(r: Pick<ResolvedThresholds, 'disk' | 'diskByMount'>, mount?: string | null): boolean {
-  if (r.disk.notify === false) return false;
-  if (!mount) return true;
-  return r.diskByMount[mount]?.notify !== false;
-}
-
-export interface DeviceGroupConfig {
-  pushIntervalSeconds?: number;
-  scanIntervalSeconds?: number;
-  maxMissedPushes?: number;
-  autoApprove?: boolean;
 }
 
 export interface DeviceGroupTreeNode extends DeviceGroup {
@@ -369,30 +262,45 @@ export interface Device {
   updatedAt: string;
 }
 
-// ─── ObliReach automatic install (the Obliance agent keeps ObliReach aligned) ─
+// ─── GROUP AND DEVICE FIELDS OF THE REMOVED RMM ──────────────────────────────
 //
-// No command type and no extra poll: the target rides on the existing
-// /api/agent/push response, the agent's state comes back in its next push body.
+// What the removed agent and supervision kept on a group (agent settings,
+// metric thresholds) or reported on a device (ObliReach install, identity
+// fingerprints, failed schedule, display settings, metrics, hypervisor and
+// backup roles). DeviceGroup and Device still declare these fields, mapped
+// from their columns until the MDM data model; nothing writes them any more.
 
-/** Push RESPONSE block `oblireach`: what the Obliance agent converges to.
- *  Sent only to approved devices running the modern agent, and only when the
- *  server ships an ObliReach build (agent/dist/oblireach-version.txt). */
-export interface ObliReachDesired {
-  /** false → the agent stops managing ObliReach (it NEVER uninstalls it). */
-  enabled: boolean;
-  /** Version shipped by this server. The installed version must equal it
-   *  (a server rollback may downgrade). */
-  version: string;
-  /** File name under /api/agent/download/ for the device's os/arch;
-   *  '' = no ObliReach build for this platform. */
-  file: string;
-  /** SHA-256 of `file` (64 lowercase hex), '' when `file` is ''. */
-  sha256: string;
-  /** Size of `file` in bytes, 0 when `file` is ''. */
-  size: number;
-  /** An ObliReach remote session is open on the device: defer a
-   *  non-urgent reinstall / downgrade. */
-  hold: boolean;
+/** Lot D.2 — Pair of warn/crit percentages applied to a single metric.
+ *  Either field may be undefined (inherited from the layer above).
+ *
+ *  `notify` is the per-metric ALERTS switch, tri-state per layer:
+ *    - undefined = inherit from the layer above (default: alerts on),
+ *    - true      = alerts on (re-enables what a parent layer muted),
+ *    - false     = muted: the metric still drives the device status but
+ *                  never sends a notification.
+ *  Note: warn=0 / crit=0 keeps its historical meaning ("always critical"). */
+export interface MetricThreshold { warn?: number; crit?: number; notify?: boolean }
+
+/** Lot D.2 — Map of metric kind → threshold pair. Stored verbatim in JSONB
+ *  on both `device_groups.thresholds` and `devices.thresholds_override`.
+ *
+ *  `diskByMount` lets admins set per-mount-point overrides — e.g. tighter
+ *  thresholds on `/var` or `D:` than the default disk slot. Mounts not
+ *  listed fall back to the generic `disk` threshold, then to the system
+ *  default. cpu / ram stay generic; the breakdown isn't useful enough to
+ *  carry the same UX cost as disk. */
+export type MetricThresholds = Partial<{
+  disk: MetricThreshold;
+  cpu: MetricThreshold;
+  ram: MetricThreshold;
+  diskByMount: Record<string, MetricThreshold>;
+}>;
+
+export interface DeviceGroupConfig {
+  pushIntervalSeconds?: number;
+  scanIntervalSeconds?: number;
+  maxMissedPushes?: number;
+  autoApprove?: boolean;
 }
 
 /** States the agent reports (agent/oblireach_manager.go). Other well-formed
@@ -405,31 +313,6 @@ export type ObliReachAutoState =
   | 'privacy_deferred'  // privacy mode on: nothing installed, service kept stopped
   | 'disabled'          // automatic install turned off by the server
   | 'unsupported';      // no ObliReach build for this os/arch
-
-/** Push REQUEST block `oblireach` (modern agent). Absent = the agent does not
- *  report (older agent, or no target received): the stored status is kept. */
-export interface ObliReachAgentReport {
-  state: ObliReachAutoState | string;
-  /** Sub-reason code: pending → waiting_self_update | grace | spread |
-   *  busy_msi | busy_agent_update | hold; failed → backoff. */
-  reason?: string;
-  /** Version found on the machine ('' = not installed). */
-  installedVersion?: string;
-  /** Version the agent is converging to. */
-  desiredVersion?: string;
-  /** ObliReach service / process running. */
-  running?: boolean;
-  /** Last failure ("code: detail", '' when none). */
-  error?: string;
-  /** Consecutive failed attempts (0 after a success). */
-  attempts?: number;
-  /** RFC 3339 (or Unix seconds); '' = none. */
-  lastAttemptAt?: string | number;
-  /** Next retry (back-off); '' = none. */
-  nextAttemptAt?: string | number;
-  /** When the agent entered this state (RFC 3339). */
-  since?: string;
-}
 
 /** devices.oblireach_status: the last report, normalised by the server. */
 export interface ObliReachAutoStatus {
@@ -447,48 +330,6 @@ export interface ObliReachAutoStatus {
   since: string;
 }
 
-/**
- * Platform setting 'WebView2 install' (app_config 'oblireach_webview2_install'):
- * whether the ObliReach service installs the Microsoft Edge WebView2 runtime
- * (the chat window's engine) when it is missing. 'proactive' (default):
- * within about an hour of the agent connecting, spread over the fleet;
- * 'on_demand': when a chat cannot open, plus the device page's button;
- * 'disabled': never.
- */
-export type ObliReachWebView2Mode = 'proactive' | 'on_demand' | 'disabled';
-
-/** WebView2 runtime state an ObliReach agent (Windows) reports in its heartbeat. */
-export type ObliReachWebView2State = 'ok' | 'missing' | 'installing' | 'failed' | 'blocked' | 'unsupported' | 'unknown';
-
-/** Heartbeat `webview2` block of an ObliReach agent, validated by the server. */
-export interface ObliReachWebView2Status {
-  state: ObliReachWebView2State;
-  /** Installed runtime version (state 'ok'). */
-  version: string | null;
-  /** machine | other | user_only | none | unknown */
-  scope: string | null;
-  /** per_user_only | blocked_by_policy | unsupported_os | detect_error |
-   *  bootstrapper_missing | signature | network | timeout | access_denied |
-   *  cancelled | installer_failed | exit_code | not_detected | launch */
-  reason: string | null;
-  /** The Microsoft bootstrapper ships with this agent (it can install). */
-  installer: boolean;
-  installingSince: string | null;
-  /** Failed attempts in a row. */
-  attempts: number;
-  lastError: string | null;
-  lastAttemptAt: string | null;
-  lastResultAt: string | null;
-  /** Automatic attempts not before (a forced request only waits 1 min). */
-  nextAttemptAt: string | null;
-  checkedAt: string | null;
-}
-
-/** Why an ObliReach chat could not open (chat:ended reason 'unavailable', `code`).
- *  no_user: nobody is signed in on the machine (the chat window runs as the
- *  signed-in user). */
-export type ChatUnavailableCode = 'webview2_missing' | 'webview2_failed' | 'webview2_timeout' | 'helper_failed' | 'no_user';
-
 export interface DeviceIdentityFingerprint {
   hostname: string | null;
   ipLocal: string | null;
@@ -497,150 +338,12 @@ export interface DeviceIdentityFingerprint {
   observedAt: string;
 }
 
-// ─── CVE (Common Vulnerabilities and Exposures) ──────────────────────────────
-
-export interface Cve {
-  id: number;
-  cveId: string;                                    // CVE-YYYY-NNNNN
-  vendor: string | null;
-  product: string | null;
-  name: string | null;
-  description: string | null;
-  severity: 'critical' | 'high' | 'medium' | 'low' | 'unknown' | null;
-  cvssScore: number | null;
-  kevFlag: boolean;                                 // CISA Known Exploited
-  publishedAt: string | null;
-  dueDate: string | null;                           // CISA KEV remediation deadline
-  requiredAction: string | null;
-  /** Earliest known fixed version, derived from the NVD cpeMatch's
-   *  `versionEndExcluding` (the upper bound the vulnerability stops at —
-   *  so the patched build is exactly that version). Prefixed with "> "
-   *  when only `versionEndIncluding` was available. Null when NVD has
-   *  no version range for this CVE. */
-  firstPatchedVersion: string | null;
-}
-
-/** Aggregated row for the fleet-wide CVE list — one entry per CVE with
- *  affected device counts split by match confidence. Mirrors the shape
- *  of UpdateAggregated for the Updates page. */
-export interface CveAggregated {
-  id: number;
-  cveId: string;
-  vendor: string | null;
-  product: string | null;
-  name: string | null;
-  severity: Cve['severity'];
-  cvssScore: number | null;
-  kevFlag: boolean;
-  publishedAt: string | null;
-  dueDate: string | null;
-  firstPatchedVersion: string | null;
-  deviceCount: number;
-  highCount: number;
-  mediumCount: number;
-  lowCount: number;
-}
-
-export interface CveAffectedDevice {
-  id: number;
-  deviceId: number;
-  deviceName: string;
-  groupId: number | null;
-  deviceStatus: string;
-  /** Owning tenant — populated for the master tenant god-view so the UI
-   *  can render a TenantBadge. Null in child-tenant calls. */
-  tenantId: number | null;
-  matchConfidence: 'high' | 'medium' | 'low';
-  matchedVendor: string | null;
-  matchedProduct: string | null;
-  matchedVersion: string | null;
-}
-
-export interface DeviceCve {
-  id: number;                                       // device_cves.id
-  matchConfidence: 'high' | 'medium' | 'low';
-  matchedVendor: string | null;
-  matchedProduct: string | null;
-  matchedVersion: string | null;
-  cve: Cve & { id: number };
-}
-
-export interface CveStats {
-  totalCves: number;
-  affectedDevices: number;
-  kevCves: number;
-  criticalCves: number;
-}
-
-export type CveSourceKey = 'nvd_kev' | 'nvd_recent_critical' | 'ghsa';
-
-/** Per-source aggregate exposed by GET /api/cves/sources. Drives the
- *  CVE source selector dropdown in the UI: lets the admin compare the
- *  registered catalogs (entry count, most recent CVE publication, last
- *  sync time) and pick which one to refresh. */
-export interface CveSourceStats {
-  key: CveSourceKey;
-  label: string;
-  description: string;
-  count: number;
-  latestPublished: string | null;
-  lastSyncedAt: string | null;
-}
-
 export interface ScheduleAlert {
   scheduleId: number;
   scheduleName: string;
   exitCode: number;
   stderr: string;
   failedAt: string;
-}
-
-// ─── LICENSES ────────────────────────────────────────────────────────────────
-
-export interface DeviceLicense {
-  id: number;
-  deviceId: number;
-  tenantId: number;
-  softwareName: string;
-  licenseKey: string | null;
-  licenseType: 'per_device' | 'per_user' | 'volume' | 'subscription' | 'other' | null;
-  seats: number | null;
-  expiryDate: string | null;
-  vendor: string | null;
-  notes: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-// ─── NETWORK DISCOVERY ───────────────────────────────────────────────────────
-
-export interface DiscoveredDevice {
-  id: number;
-  tenantId: number;
-  discoveredByDeviceId: number;
-  ip: string;
-  mac: string | null;
-  hostname: string | null;
-  ports: number[];
-  ouiVendor: string | null;
-  osGuess: string | null;
-  deviceType: 'pc' | 'server' | 'printer' | 'iot' | 'network' | 'unknown';
-  isManaged: boolean;
-  managedDeviceId: number | null;
-  subnet: string | null;
-  firstSeen: string;
-  lastSeen: string;
-}
-
-// ─── PATCH COMPLIANCE ────────────────────────────────────────────────────────
-
-export interface PatchComplianceReport {
-  totalDevices: number;
-  fullyPatchedDevices: number;
-  fullyPatchedPercent: number;
-  bySeverity: Array<{ severity: string; total: number; patched: number; percent: number }>;
-  byGroup: Array<{ groupId: number | null; groupName: string | null; total: number; patched: number; percent: number }>;
-  byUpdate: Array<{ updateUid: string; title: string; severity: string; totalDevices: number; patchedDevices: number; percent: number }>;
 }
 
 export interface DeviceDisplayConfig {
@@ -652,7 +355,7 @@ export interface DeviceDisplayConfig {
   hideGpu?: boolean;
   renamedDisks?: Record<string, string>;
   renamedNetInterfaces?: Record<string, string>;
-  // Rich per-section display config (used by AgentDisplayConfigModal)
+  // Rich per-section display config
   cpu: {
     hiddenCores: number[];
     hiddenCharts: string[];
@@ -721,8 +424,8 @@ export interface DeviceMetrics {
 }
 
 /** Highest CPU / RAM / disk percentages ever observed for a device, plus the
- *  ISO timestamp tracking started. Accumulated in handlePush (element-wise max
- *  against the previous peak) — see migration 112_device_peak_metrics. */
+ *  ISO timestamp tracking started (element-wise max of the agent's pushes) —
+ *  see migration 112_device_peak_metrics. */
 export interface DevicePeakMetrics {
   cpu: number;
   ram: number;
@@ -730,116 +433,29 @@ export interface DevicePeakMetrics {
   since: string;
 }
 
-/** avg / peak / min of a percentage metric over one window (null = no data). */
-export interface MetricWindow {
-  avg: number | null;
-  peak: number | null;
-  min: number | null;
-}
+/** Hypervisor role the agent detected on the device (only 'hyperv' was ever
+ *  reported). */
+export type VirtualizationHostType = 'hyperv' | 'esxi' | 'proxmox' | 'kvm';
 
-/** Per-window stats for one disk volume. */
-export interface DiskVolumeWindow {
-  /** Average / peak fill % of this volume over the window. */
-  avgPct: number | null;
-  peakPct: number | null;
-  /** Growth of used space over the window (GB; negative = freed). */
-  deltaGb: number | null;
-}
+/** Backup product the agent detected on the device ('veeam' = a Veeam Backup
+ *  & Replication server). */
+export type BackupHostType = 'veeam';
 
-/** History for one disk volume (mount), with per-window stats + current usage. */
-export interface DiskVolumeHistory {
-  mount: string;
-  /** Latest used / total capacity (GB) for this volume. */
-  usedGb: number | null;
-  totalGb: number | null;
-  windows: { '1h': DiskVolumeWindow; '24h': DiskVolumeWindow; '7d': DiskVolumeWindow; '30d': DiskVolumeWindow };
-}
+// ─── LICENSES ────────────────────────────────────────────────────────────────
 
-/** Per-device windowed metric history (1h / 24h / 7d / 30d), from the pre-
- *  aggregated buckets (migration 113): 5-min buckets → 1h, hourly → 24h, daily →
- *  7d/30d. CPU/RAM are device-level; disk is per-volume. */
-export interface DeviceMetricsHistory {
-  cpu: { '1h': MetricWindow; '24h': MetricWindow; '7d': MetricWindow; '30d': MetricWindow };
-  ram: { '1h': MetricWindow; '24h': MetricWindow; '7d': MetricWindow; '30d': MetricWindow };
-  disks: DiskVolumeHistory[];
-}
-
-// ─── REWIND (time-machine) ───────────────────────────────────────────────────
-
-/** Scrubber bounds. Metric range = graph extent; process/service range = where
- *  point-in-time process/service snapshots exist (typically the last 7 days). */
-export interface RewindRange {
-  metricFrom: string | null;
-  metricTo: string | null;
-  processFrom: string | null;
-  processTo: string | null;
-  serviceFrom: string | null;
-  serviceTo: string | null;
-  now: string;
-}
-
-export interface RewindMetricPoint {
-  t: string;        // bucket timestamp
-  cpu: number;      // avg % over the bucket
-  cpuMax: number;   // peak % over the bucket
-  ram: number;
-  ramMax: number;
-}
-
-export interface RewindDiskPoint {
-  t: string;
-  pct: number;
-  pctMax: number;
-  usedGb: number;
-  totalGb: number;
-}
-
-export interface RewindDiskSeries {
-  mount: string;
-  points: RewindDiskPoint[];
-}
-
-export interface RewindSeries {
-  resolution: '5min' | 'hourly';
-  points: RewindMetricPoint[];
-  disks: RewindDiskSeries[];
-}
-
-export interface RewindProc {
-  pid: number;
-  name: string;
-  cpu: number;      // % at capture
-  memMb: number;    // RSS in MB
-  user: string | null;
-}
-
-export interface RewindProcessSnapshot {
-  capturedAt: string;
-  processCount: number;      // total processes on the machine at capture
-  cpuTotal: number | null;   // summed cpu% across all processes
-  memUsedMb: number | null;  // summed RSS across all processes
-  procs: RewindProc[];       // top-N by CPU/RAM
-}
-
-export interface RewindServiceEntry {
-  name?: string;
-  displayName?: string;
-  status?: string;
-  startType?: string;
-  user?: string;
-  [k: string]: unknown;
-}
-
-export interface RewindServiceSnapshot {
-  capturedAt: string;
-  serviceCount: number;
-  runningCount: number;
-  services: RewindServiceEntry[];
-}
-
-export interface RewindSnapshot {
-  process: RewindProcessSnapshot | null;
-  service: RewindServiceSnapshot | null;
+export interface DeviceLicense {
+  id: number;
+  deviceId: number;
+  tenantId: number;
+  softwareName: string;
+  licenseKey: string | null;
+  licenseType: 'per_device' | 'per_user' | 'volume' | 'subscription' | 'other' | null;
+  seats: number | null;
+  expiryDate: string | null;
+  vendor: string | null;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // ─── AGENT API KEYS ──────────────────────────────────────────────────────────
@@ -857,619 +473,7 @@ export interface AgentApiKey {
   deviceCount: number;
 }
 
-// ─── COMMAND QUEUE ────────────────────────────────────────────────────────────
-
-export type CommandType =
-  | 'run_script'
-  | 'install_update'
-  | 'install_updates'
-  | 'cancel_script'
-  | 'scan_inventory'
-  | 'scan_updates'
-  | 'check_compliance'
-  | 'open_remote_tunnel'
-  | 'close_remote_tunnel'
-  | 'reboot'
-  | 'shutdown'
-  | 'sleep'
-  | 'restart_agent'
-  | 'update_agent'
-  | 'list_services'
-  | 'restart_service'
-  | 'start_service'
-  | 'stop_service'
-  | 'install_software'
-  | 'uninstall_software'
-  | 'uninstall_agent'
-  | 'install_oblireach'
-  | 'list_processes'
-  | 'kill_process'
-  | 'list_wts_sessions'
-  | 'enable_privacy_mode'
-  | 'disable_privacy_mode'
-  | 'start_custom_section'
-  | 'stop_custom_section'
-  | 'resize_custom_section'
-  | 'enable_airgap'
-  | 'disable_airgap'
-  | 'set_privacy_password'
-  | 'change_privacy_password'
-  | 'remove_privacy_password'
-  | 'verify_privacy_password'
-  | 'list_directory'
-  | 'create_directory'
-  | 'rename_file'
-  | 'delete_file'
-  | 'download_file'
-  | 'upload_file'
-  | 'remediate_rule'
-  | 'scan_network'
-  | 'check_software_compliance'
-  | 'hyperv_list_vms'
-  | 'hyperv_control'
-  | 'hyperv_console_thumbnail'
-  | 'open_vm_console'
-  | 'close_vm_console'
-  | 'ssh_jump_grant'
-  | 'ssh_jump_revoke'
-  | 'install_vm_console'
-  | 'veeam_list_jobs'
-  | 'veeam_control';
-
-/** Commands the legacy Go 1.20 agent (Server 2008 R2 / 2012) can execute.
- *  Mirror of its dispatch switch (agent/cmd/legacy/main.go). The modern agent
- *  supports EVERY CommandType; the legacy agent lacks tunnels, ObliReach,
- *  Hyper-V, Veeam, VM console, file transfer, software compliance, custom
- *  sections, privacy-password management AND self-update (update_agent).
- *  Used to grey out unsupported actions in the UI per device.agentFlavor. */
-export const LEGACY_AGENT_COMMANDS: readonly CommandType[] = [
-  'run_script', 'cancel_script', 'restart_agent', 'scan_inventory', 'reboot', 'shutdown', 'sleep',
-  'list_processes', 'kill_process', 'list_services', 'restart_service', 'start_service', 'stop_service',
-  'list_directory', 'create_directory', 'rename_file', 'delete_file', 'check_compliance', 'scan_updates',
-  'install_update', 'install_updates', 'uninstall_agent', 'list_wts_sessions', 'disable_privacy_mode',
-  'enable_airgap', 'disable_airgap',
-];
-
-/** Whether an agent of the given flavor can execute a command. Modern agents
- *  (and unknown/null = assume modern, the safe default — at worst a rare legacy
- *  agent shows an action that errors gracefully) support everything; legacy
- *  agents are limited to LEGACY_AGENT_COMMANDS. */
-export function agentSupportsCommand(flavor: 'modern' | 'legacy' | null | undefined, command: CommandType): boolean {
-  if (flavor !== 'legacy') return true;
-  return LEGACY_AGENT_COMMANDS.includes(command);
-}
-
-export type CommandStatus = 'pending' | 'sent' | 'ack_running' | 'success' | 'failure' | 'timeout' | 'cancelled';
-export type CommandPriority = 'low' | 'normal' | 'high' | 'urgent';
-
-export interface Command {
-  id: string;
-  deviceId: number;
-  tenantId: number;
-  type: CommandType;
-  payload: Record<string, any>;
-  status: CommandStatus;
-  priority: CommandPriority;
-  sentAt: string | null;
-  ackedAt: string | null;
-  finishedAt: string | null;
-  expiresAt: string | null;
-  result: CommandResult;
-  retryCount: number;
-  maxRetries: number;
-  sourceType: string | null;
-  sourceId: string | null;
-  createdBy: number | null;
-  createdByName: string | null;
-  createdAt: string;
-  updatedAt: string;
-  durationMs: number | null;
-}
-
-export interface CommandResult {
-  exitCode?: number;
-  stdout?: string;
-  stderr?: string;
-  error?: string;
-  duration?: number;
-}
-
-// Service info returned by the agent for list_services / stored as latest_services
-export interface ServiceInfo {
-  name: string;
-  displayName?: string;
-  status: string;        // 'running' | 'stopped' | 'starting' | 'stopping' | ...
-  startType?: string;    // 'auto' | 'manual' | 'disabled' | ...
-  runAsUser?: string;    // account the service runs as (Windows: StartName, Linux: User=, macOS: ps user)
-}
-
-// Process info returned by the agent for list_processes
-export interface ProcessInfo {
-  pid: number;
-  name: string;
-  cpuPercent: number;
-  memBytes: number;
-  user: string;
-  command?: string;
-}
-
-// Agent push protocol
-export interface AgentPushEvent {
-  type: string;
-  timestamp: string;
-  data?: Record<string, any>;
-}
-
-export interface AgentPushRequest {
-  deviceUuid: string;
-  metrics: DeviceMetrics;
-  acks: CommandAck[];
-  agentVersion?: string;
-  events?: AgentPushEvent[];
-  /** Number of watchdog-triggered restarts since the last successful push. */
-  watchdogRestartCount?: number;
-  /** ISO timestamp of the most recent watchdog restart (if count > 0). */
-  watchdogLastRestartAt?: string;
-  /** ObliReach automatic install state (modern agent). */
-  oblireach?: ObliReachAgentReport | null;
-}
-
-export interface CommandAck {
-  commandId: string;
-  commandType?: string;
-  status: 'ack_running' | 'success' | 'failure' | 'timeout';
-  result?: CommandResult;
-}
-
-export interface AgentPushResponse {
-  config: AgentConfig;
-  commands: AgentCommand[];
-  nextPollIn: number; // seconds until next push
-  /** Piggybacked on every response so agents update without an extra round-trip. */
-  latestVersion?: string;
-  /** ObliReach automatic install target (approved modern agents only). */
-  oblireach?: ObliReachDesired;
-}
-
-export interface AgentConfig {
-  pushIntervalSeconds: number;
-  scanIntervalSeconds?: number;  // 0 = disabled, >0 = run all scans every N seconds
-  taskRetrieveDelaySeconds?: number; // polling interval for lightweight command poll
-  displayConfig: DeviceDisplayConfig;
-  sensorDisplayNames: Record<string, string>;
-  notificationTypes: DeviceNotificationTypes;
-  remediationEnabled?: boolean; // false = skip auto-remediation scripts on this device
-}
-
-export interface AgentCommand {
-  id: string;
-  type: CommandType;
-  payload: Record<string, any>;
-  priority: CommandPriority;
-}
-
-// ─── SCRIPTS ─────────────────────────────────────────────────────────────────
-
-export type ScriptPlatform = 'windows' | 'macos' | 'linux' | 'freebsd' | 'all';
-export type ScriptRuntime = 'powershell' | 'pwsh' | 'cmd' | 'bash' | 'zsh' | 'sh' | 'python' | 'python3' | 'perl' | 'ruby';
-export type ScriptPurpose = 'check' | 'resolve' | 'execute' | 'compliance' | 'metric';
-
-export interface DeviceCustomMetric {
-  id: number;
-  deviceId: number;
-  scheduleId: number;
-  tenantId: number;
-  name: string;
-  value: string;
-  unit: string | null;
-  status: 'ok' | 'warning' | 'critical' | 'error';
-  updatedAt: string;
-}
-
-// ─── DISK HEALTH (SMART) ──────────────────────────────────────────────────────
-// Per-physical-disk SMART snapshot, collected out-of-band (a scheduled metric
-// script reports it; NOT the 10s metrics push). All numeric fields are optional
-// because SMART availability varies wildly by OS, controller (RAID/USB opaque)
-// and disk. Absence just means "unknown" — never an error state.
-
-export type DiskHealthStatus = 'good' | 'caution' | 'bad' | 'unknown';
-
-export interface SmartDisk {
-  id: number;
-  deviceId: number;
-  serial: string;
-  model: string | null;
-  /** SSD | HDD | NVMe | unknown */
-  diskType: string | null;
-  status: DiskHealthStatus;
-  temperatureC: number | null;
-  /** Overall computed health 0-100 (e.g. 100 - SSD wear). */
-  healthPercent: number | null;
-  /** SSD wear / NVMe percentage-used (0-100, higher = more worn). */
-  wearPercent: number | null;
-  powerOnHours: number | null;
-  reallocatedSectors: number | null;
-  pendingSectors: number | null;
-  updatedAt: string;
-}
-export type ScriptParameterType = 'string' | 'number' | 'boolean' | 'secret' | 'select' | 'multiselect';
-
-export interface ScriptCategory {
-  id: number;
-  tenantId: number | null;
-  name: string;
-  icon: string | null;
-  color: string;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ScriptParameter {
-  id: number;
-  scriptId: number;
-  name: string;
-  label: string;
-  description: string | null;
-  type: ScriptParameterType;
-  options: string[];
-  defaultValue: string | null;
-  required: boolean;
-  sortOrder: number;
-}
-
-export interface Script {
-  id: number;
-  uuid: string;
-  tenantId: number | null;
-  /** Master-only fan-out: extra tenants that see this script in
-   *  read-only. Null/undefined when the script is local to its
-   *  owning tenant (the common case). */
-  targetTenantIds?: number[] | null;
-  categoryId: number | null;
-  /** Optional parent script — when set, the library renders this script
-   *  indented directly under its parent (typical use: a `resolve` script
-   *  parented by its matching `check` script). null = top-level. */
-  parentScriptId: number | null;
-  name: string;
-  description: string | null;
-  tags: string[];
-  platform: ScriptPlatform;
-  runtime: ScriptRuntime;
-  content: string;
-  timeoutSeconds: number;
-  expectedExitCode: number;
-  runAs: 'system' | 'user';
-  scriptType: 'system' | 'user'; // 'system' = Obliance built-in, 'user' = tenant-created
-  availableInReach: boolean;
-  isBuiltin: boolean;
-  createdBy: number | null;
-  updatedBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-  purpose?: ScriptPurpose;
-  parameters?: ScriptParameter[];
-  category?: ScriptCategory | null;
-  /** Reference counts surfaced by the list endpoint so the UI can
-   *  badge "used by N scenarios / M schedules" + filter "Unused".
-   *  Populated by `scriptService.getScripts` for every row.
-   *  Both fields default to 0. */
-  usage?: { scenarios: number; schedules: number };
-}
-
-// ─── SCRIPT SCHEDULES ────────────────────────────────────────────────────────
-
-export type ScheduleTargetType = 'device' | 'group' | 'all';
-
-export interface RunCondition {
-  field: string;
-  operator: 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'in' | 'not_in';
-  value: any;
-}
-
-export interface ScriptSchedule {
-  id: number;
-  uuid: string;
-  tenantId: number;
-  /** Master-only fan-out: extra tenants where this schedule is visible
-   *  in read-only. Null/undefined when the schedule is local. */
-  targetTenantIds?: number[] | null;
-  scriptId: number;
-  name: string;
-  description: string | null;
-  targetType: ScheduleTargetType;
-  targetIds: number[];
-  cronExpression: string | null;
-  fireOnceAt: string | null;
-  timezone: string;
-  parameterValues: Record<string, any>;
-  catchupEnabled: boolean;
-  catchupMax: number;
-  runConditions: RunCondition[];
-  assertPass: boolean;
-  enabled: boolean;
-  lastRunAt: string | null;
-  nextRunAt: string | null;
-  createdBy: number | null;
-  createdByName?: string | null;
-  updatedBy: number | null;
-  updatedByName?: string | null;
-  createdAt: string;
-  updatedAt: string;
-  onFailureScenarioId?: number | null;
-  notificationChannels: AutomationNotificationBinding[];
-  /** Overrides the script's default timeout. NULL = use script default. */
-  timeoutSeconds?: number | null;
-  /** If true, skip devices that still have a previous execution in progress. */
-  skipIfInFlight: boolean;
-  /** If true, only send one alert notification per device until recovery. */
-  notifyOnce: boolean;
-  /** When true, the schedule fires on devices currently in privacy mode.
-   *  When false (default), privacy-mode devices are skipped at run time.
-   *  Flipping this on is gated by the action-restriction matrix
-   *  (`schedule.bypass_privacy_mode`, default `restricted`). */
-  bypassPrivacyMode: boolean;
-  /** Number of approved + alive devices this schedule actually resolves to. */
-  resolvedDeviceCount?: number;
-  script?: Script;
-}
-
-// ─── SCRIPT EXECUTIONS ───────────────────────────────────────────────────────
-
-export type ExecutionStatus = 'pending' | 'sent' | 'running' | 'success' | 'failure' | 'timeout' | 'skipped' | 'cancelled';
-export type ExecutionTrigger = 'schedule' | 'manual' | 'api' | 'catchup';
-
-export interface ScriptExecution {
-  id: string;
-  tenantId: number;
-  scriptId: number;
-  deviceId: number;
-  scheduleId: number | null;
-  batchId: string | null;
-  commandQueueId: string | null;
-  scriptSnapshot: Pick<Script, 'id' | 'name' | 'platform' | 'runtime' | 'content' | 'timeoutSeconds' | 'runAs'>;
-  parameterValues: Record<string, any>;
-  status: ExecutionStatus;
-  triggeredBy: ExecutionTrigger;
-  triggeredByUserId: number | null;
-  triggeredAt: string;
-  sentAt: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  exitCode: number | null;
-  stdout: string | null;
-  stderr: string | null;
-  isCatchup: boolean;
-  catchupForAt: string | null;
-  createdAt: string;
-  device?: Pick<Device, 'id' | 'hostname' | 'displayName' | 'osType'>;
-  schedule?: Pick<ScriptSchedule, 'id' | 'name'>;
-}
-
-export interface ExecutionBatch {
-  batchId: string;
-  scriptId: number;
-  scriptName: string;
-  scheduleId: number | null;
-  scheduleName: string | null;
-  triggeredBy: ExecutionTrigger;
-  triggeredByUsername: string | null;
-  triggeredAt: string;
-  totalCount: number;
-  successCount: number;
-  failureCount: number;
-  pendingCount: number;
-  runningCount: number;
-}
-
-// ─── UPDATES ─────────────────────────────────────────────────────────────────
-
-export type UpdateSeverity = 'critical' | 'important' | 'moderate' | 'optional' | 'unknown';
-export type UpdateSource = 'windows_update' | 'apt' | 'yum' | 'dnf' | 'pacman' | 'brew' | 'chocolatey' | 'winget' | 'other';
-export type UpdateStatus = 'available' | 'approved' | 'pending_install' | 'installing' | 'installed' | 'pending_reboot' | 'failed' | 'excluded' | 'superseded';
-export type RebootBehavior = 'never' | 'ask' | 'auto_immediate' | 'auto_delayed';
-
-export interface UpdatePolicy {
-  id: number;
-  tenantId: number;
-  name: string;
-  description: string | null;
-  targetType: 'device' | 'group' | 'all';
-  targetId: number | null;
-  autoApproveCritical: boolean;
-  autoApproveSecurity: boolean;
-  autoApproveOptional: boolean;
-  approvalRequired: boolean;
-  installWindowStart: string;
-  installWindowEnd: string;
-  installWindowDays: number[];
-  timezone: string;
-  rebootBehavior: RebootBehavior;
-  rebootDelayMinutes: number;
-  excludedUpdateIds: string[];
-  excludedCategories: string[];
-  enabled: boolean;
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface DeviceUpdate {
-  id: number;
-  deviceId: number;
-  tenantId: number;
-  updateUid: string;
-  title: string | null;
-  description: string | null;
-  severity: UpdateSeverity;
-  category: string | null;
-  source: UpdateSource;
-  sizeBytes: number | null;
-  requiresReboot: boolean;
-  status: UpdateStatus;
-  approvedBy: number | null;
-  approvedAt: string | null;
-  installedAt: string | null;
-  installError: string | null;
-  scannedAt: string;
-  createdAt: string;
-  updatedAt: string;
-  /** Populated on tenant-wide listings (hostname or displayName) */
-  deviceName?: string | null;
-  /** Resolved tenant id of the related device — populated on master/god
-   *  view so the UI can render a TenantBadge against each row. Null
-   *  outside master. */
-  deviceTenantId?: number | null;
-}
-
-// ─── CONFIG TEMPLATES ────────────────────────────────────────────────────────
-
-export type ConfigCheckMethod = 'registry' | 'file' | 'command' | 'service' | 'process' | 'policy';
-export type ConfigCheckOperator = 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'exists' | 'not_exists';
-export type CheckSeverity = 'optional' | 'low' | 'moderate' | 'high' | 'critical';
-
-export interface ConfigCheck {
-  id: string;
-  name: string;
-  description?: string;
-  method: ConfigCheckMethod;
-  target: string;
-  expectedValue: any;
-  expectedType: 'string' | 'number' | 'boolean' | 'regex';
-  operator: ConfigCheckOperator;
-  severity: CheckSeverity;
-  remediationScriptId: number | null;
-}
-
-export interface ConfigTemplate {
-  id: number;
-  uuid: string;
-  tenantId: number | null;
-  name: string;
-  description: string | null;
-  platform: ScriptPlatform;
-  category: string;
-  checks: ConfigCheck[];
-  isBuiltin: boolean;
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ConfigCheckResult {
-  checkId: string;
-  actualValue: any;
-  status: 'pass' | 'fail' | 'warning' | 'unknown' | 'skipped' | 'error';
-  checkedAt: string;
-}
-
-export interface ConfigSnapshot {
-  id: number;
-  deviceId: number;
-  templateId: number;
-  results: ConfigCheckResult[];
-  complianceScore: number;
-  snappedAt: string;
-}
-
-// ─── COMPLIANCE ──────────────────────────────────────────────────────────────
-
-export type ComplianceFramework = 'CIS' | 'NIST' | 'ISO27001' | 'PCI_DSS' | 'HIPAA' | 'SOC2' | 'custom';
-export type ComplianceStatus = 'pass' | 'fail' | 'warning' | 'unknown' | 'skipped' | 'error';
-export type ComplianceCheckType = 'registry' | 'file' | 'command' | 'service' | 'event_log' | 'process' | 'policy';
-
-export type ComplianceOperator = 'eq' | 'neq' | 'gt' | 'lt' | 'contains' | 'not_contains' | 'exists' | 'not_exists' | 'regex';
-
-export interface ComplianceRule {
-  id: string;
-  name: string;
-  category?: string;
-  checkType: ComplianceCheckType;
-  targetPlatform: ScriptPlatform;
-  target: string;            // e.g. reg key path, file path, command, service name…
-  expected: any;             // expected value for comparison
-  operator: ComplianceOperator;
-  severity: CheckSeverity;
-  autoRemediateScriptId: number | null;
-  /** Inline remediation script — executed by the agent to fix a failing rule */
-  remediationScript?: string;
-  /** Minimum OS version required for this rule to apply (e.g. "Windows 10 1607", "macOS 12", "Ubuntu 20.04"). Agent skips rule if OS is older. */
-  minOsVersion?: string;
-}
-
-export interface CompliancePreset {
-  id: string;
-  name: string;
-  description: string;
-  framework: ComplianceFramework;
-  targetPlatform: ScriptPlatform;
-  rules: ComplianceRule[];
-}
-
-export interface CompliancePolicy {
-  id: number;
-  uuid: string;
-  tenantId: number;
-  /** Master-only fan-out: extra tenants where this policy is visible
-   *  in read-only. Null/undefined when local. */
-  targetTenantIds?: number[] | null;
-  name: string;
-  description: string | null;
-  framework: ComplianceFramework;
-  targetType: 'group' | 'all';
-  targetIds: number[];
-  targetPlatform: 'windows' | 'linux' | 'macos' | 'freebsd' | 'all';
-  rules: ComplianceRule[];
-  enabled: boolean;
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ComplianceRuleResult {
-  ruleId: string;
-  /** Human-readable rule name, optionally sent by the agent for display purposes */
-  ruleName?: string;
-  status: ComplianceStatus;
-  actualValue: any;
-  checkedAt: string;
-  remediationTriggered: boolean;
-  ignored?: boolean;
-}
-
-export interface ComplianceResult {
-  id: number;
-  deviceId: number;
-  deviceName: string | null;
-  policyId: number;
-  tenantId: number;
-  results: ComplianceRuleResult[];
-  complianceScore: number;
-  checkedAt: string;
-  createdAt: string;
-  policy?: Pick<CompliancePolicy, 'id' | 'name' | 'framework'>;
-}
-
-// ─── SOFTWARE COMPLIANCE ────────────────────────────────────────────────────
-
-export type SoftwareListType = 'whitelist' | 'blacklist';
-export type SoftwareMatchType = 'exact' | 'contains' | 'regex';
-export type SoftwareInstallSource = 'winget' | 'choco' | 'apt' | 'yum' | 'dnf' | 'brew' | 'pkg' | 'snap' | 'flatpak' | 'msi' | 'custom';
-export type DistroScope = 'windows' | 'macos' | 'debian' | 'rhel' | 'fedora' | 'arch' | 'suse' | 'freebsd' | 'any';
-
-export interface SoftwareEntrySourceConfig {
-  id?: number;
-  entryId?: number;
-  packageManager: SoftwareInstallSource;
-  packageId: string | null;
-  msiUrl: string | null;
-  repoPackageId: number | null;
-  repoPackageUuid?: string | null;
-  installScript: string | null;
-  msiParams: string | null;
-  platformScope: DistroScope;
-  sortOrder: number;
-}
+// ─── SOFTWARE REPOSITORY ─────────────────────────────────────────────────────
 
 export interface SoftwareRepoPackage {
   id: number;
@@ -1499,121 +503,6 @@ export interface SoftwareRepoSettings {
   packageCount: number;
   hasKey: boolean;
   keyPrefix: string | null;
-}
-
-export interface SoftwareComplianceEntry {
-  id: number;
-  listId: number;
-  name: string;
-  matchType: SoftwareMatchType;
-  publisher: string | null;
-  minVersion: string | null;
-  maxVersion: string | null;
-  /** @deprecated Use sources[] instead */
-  installSource: SoftwareInstallSource | null;
-  /** @deprecated Use sources[] instead */
-  installId: string | null;
-  /** @deprecated Use sources[] instead */
-  installScript: string | null;
-  /** @deprecated Use sources[] instead */
-  msiUrl: string | null;
-  /** @deprecated Use sources[] instead */
-  msiParams: string | null;
-  sortOrder: number;
-  sources: SoftwareEntrySourceConfig[];
-}
-
-/** Maps package managers to OS/distro families they can target */
-export const PACKAGE_MANAGER_PLATFORM: Record<SoftwareInstallSource, DistroScope> = {
-  winget: 'windows', choco: 'windows', msi: 'windows',
-  apt: 'debian', yum: 'rhel', dnf: 'fedora',
-  brew: 'macos', pkg: 'freebsd',
-  snap: 'any', flatpak: 'any', custom: 'any',
-};
-
-export interface SoftwareComplianceList {
-  id: number;
-  uuid: string;
-  tenantId: number;
-  name: string;
-  description: string | null;
-  listType: SoftwareListType;
-  targetType: 'group' | 'all';
-  targetIds: number[];
-  targetPlatform: 'windows' | 'linux' | 'macos' | 'freebsd' | 'all';
-  autoRemediate: boolean;
-  enabled: boolean;
-  entries: SoftwareComplianceEntry[];
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface SoftwareComplianceEntryResult {
-  entryId: number;
-  entryName: string;
-  status: 'compliant' | 'non_compliant' | 'remediated' | 'remediation_failed' | 'error';
-  matchedSoftware: string | null;
-  matchedVersion: string | null;
-  remediationTriggered: boolean;
-  detail: string | null;
-  checkedAt: string;
-}
-
-export interface SoftwareComplianceResult {
-  id: number;
-  deviceId: number;
-  deviceName: string | null;
-  listId: number;
-  tenantId: number;
-  results: SoftwareComplianceEntryResult[];
-  complianceScore: number;
-  checkedAt: string;
-  createdAt: string;
-  list?: Pick<SoftwareComplianceList, 'id' | 'name' | 'listType'>;
-}
-
-export interface KnownSoftwareApp {
-  name: string;
-  publisher: string | null;
-  source: string;
-  packageId: string | null;
-  osType: string;
-  deviceCount: number;
-  latestVersion: string | null;
-}
-
-// ─── REMOTE SESSIONS ─────────────────────────────────────────────────────────
-
-export type RemoteProtocol = 'rdp' | 'ssh' | 'cmd' | 'powershell' | 'oblireach' | 'vmconsole' | 'sshjump';
-export type RemoteSessionStatus = 'waiting' | 'connecting' | 'active' | 'closed' | 'failed' | 'timeout' | 'expired';
-/**
- * How POST /remote/sessions handed the open command to the agent:
- * 'live' = pushed on its live command channel, 'queued' = agent offline, the
- * command waits (5 min) for its next connection. 'key_mismatch' is answered
- * with a 409 (the ObliReach agent is registered with another API key).
- */
-export type RemoteDelivery = 'live' | 'queued' | 'key_mismatch';
-
-export interface RemoteSession {
-  id: string;
-  deviceId: number;
-  tenantId: number;
-  protocol: RemoteProtocol;
-  status: RemoteSessionStatus;
-  sessionToken: string;
-  startedBy: number;
-  startedAt: string;
-  connectedAt: string | null;
-  endedAt: string | null;
-  durationSeconds: number | null;
-  endReason: string | null;
-  notes: string | null;
-  createdAt: string;
-  device?: Pick<Device, 'id' | 'hostname' | 'displayName' | 'osType'>;
-  startedByUser?: Pick<User, 'id' | 'username' | 'displayName'>;
-  /** Only on the POST /remote/sessions answer. */
-  delivery?: RemoteDelivery;
 }
 
 // ─── INVENTORY ───────────────────────────────────────────────────────────────
@@ -1879,43 +768,6 @@ export interface TeamMembership {
   userId: number;
 }
 
-// Capabilities are stored as a JSONB array on `team_permissions.capabilities`.
-// `monitor` / `execute` / `remote` / `files` / `power` are device-scoped (apply
-// to a specific group or device per row). The `<page>:read` / `<page>:manage`
-// kind are tenant-wide page gates: granted once on any team_permission row
-// the user is a member of, they unlock a top-level page in the sidebar.
-//
-// Any new entry MUST also be added to:
-//   - server/src/validators/team.schema.ts (Zod enum on setTeamPermissionsSchema)
-//   - server/src/services/team.service.ts VALID_CAPABILITIES set (rowToPermission filter)
-// otherwise it gets silently dropped on the GET → toggle → PUT round trip.
-export type Capability =
-  // Device-scoped (per-row scope: group/device)
-  | 'monitor' | 'execute' | 'remote' | 'files' | 'power'
-  // Tenant-wide page gates (read access to a top-level page outside admin)
-  | 'supervision:read'
-  | 'agent_config:custom_sections'
-  | 'agent_config:discovery'
-  | 'agent_config:keys'
-  // Approve / refuse / bulk-approve newly-enrolled agents. Unlocks
-  // the "Approuvés / En attente / Refusés / Suspendus" chip row at
-  // the top of /devices for non-admins, plus the per-row approve /
-  // refuse buttons. Server-side gate sits next to requireRole('admin')
-  // on the device approval routes.
-  | 'agent_config:approval'
-  // Hyper-V (device-scoped — scoped to the host device/group). view = read
-  // the VM list; power = start/stop/restart/save; manage = checkpoints,
-  // edit, create, delete. Each manage action is additionally gated by the
-  // action-restriction matrix (hyperv.*).
-  | 'hyperv:view'
-  | 'hyperv:power'
-  | 'hyperv:manage'
-  // Veeam backups (device-scoped — scoped to the VBR host device/group).
-  // view = read job list + state; control = start/stop/retry/enable/disable
-  // (each further gated by the action-restriction matrix veeam.*).
-  | 'veeam:view'
-  | 'veeam:control';
-
 export interface TeamPermission {
   id: number;
   tenantId: number;
@@ -1928,7 +780,8 @@ export interface TeamPermission {
   scope: 'group' | 'device' | 'ungrouped';
   scopeId: number;
   level: 'ro' | 'rw';
-  capabilities: Capability[];
+  /** Device capabilities on the devices of the row (capabilities.ts). */
+  capabilities: DeviceCapability[];
 }
 
 // ─── SMTP ────────────────────────────────────────────────────────────────────
@@ -1980,10 +833,10 @@ export interface LiveAlertsResolvedEvent {
 
 // ─── REPORTS ─────────────────────────────────────────────────────────────────
 
-export type ReportType = 'fleet' | 'compliance' | 'scripts' | 'updates' | 'software' | 'custom';
+export type ReportType = 'fleet' | 'software' | 'custom';
 export type ReportFormat = 'json' | 'csv' | 'pdf' | 'excel' | 'html';
 export type ReportStatus = 'generating' | 'ready' | 'error';
-export type ReportSection = 'hardware' | 'software' | 'updates' | 'compliance' | 'scripts_history' | 'network' | 'inventory_detail';
+export type ReportSection = 'hardware' | 'software' | 'network' | 'inventory_detail';
 
 export interface Report {
   id: number;
@@ -2016,50 +869,6 @@ export interface ReportOutput {
   errorMessage: string | null;
   expiresAt: string | null;
   generatedAt: string | null;
-  createdAt: string;
-}
-
-// ─── SSH BASTION (ObliJump) ──────────────────────────────────────────────────
-
-// T0 = managed-shell (reuse the agent PTY tunnel, root, records content).
-// T1 = ephemeral authorized_keys on a hardened `obli` account (no sshd_config
-// edit, works OpenSSH 4.7 → Debian 13).
-export type BastionTier = 'managed_shell' | 'ephemeral_authkeys';
-export type BastionGrantStatus = 'pending' | 'active' | 'closed' | 'revoked' | 'error';
-
-export interface SshPublicKey {
-  id: number;
-  userId: number;
-  name: string;
-  keyType: string | null;
-  publicKey: string;
-  fingerprint: string;       // SHA256:... — globally unique, maps a key to its Obliance user
-  createdAt: string;
-  lastUsedAt: string | null;
-}
-
-export interface BastionGrant {
-  id: string;                // uuid, also the session id
-  userId: number;
-  deviceId: number;
-  tenantId: number;
-  tier: BastionTier;
-  targetUser: string | null; // 'obli' (T1) or the agent user / root (T0)
-  status: BastionGrantStatus;
-  sourceIp: string | null;
-  publicKeyFp: string | null;
-  sshdPort: number | null;
-  error: string | null;
-  createdAt: string;
-  expiresAt: string | null;
-  closedAt: string | null;
-}
-
-export interface BastionIpAllow {
-  id: number;
-  cidr: string;
-  label: string | null;
-  createdBy: number | null;
   createdAt: string;
 }
 
@@ -2114,7 +923,7 @@ export interface SetTeamPermissionsRequest {
     scope: 'group' | 'device' | 'ungrouped';
     scopeId: number;
     level: 'ro' | 'rw';
-    capabilities?: Capability[];
+    capabilities?: DeviceCapability[];
   }>;
 }
 
@@ -2137,13 +946,6 @@ export interface AppConfigData {
   allow_2fa: string;
   force_2fa: string;
   otp_smtp_server_id: string | null;
-  agent_auto_approve: string;
-  default_push_interval: string;
-  fast_poll_interval: string;
-  remote_fast_poll_interval: string;
-  task_retrieve_delay_seconds: string;
-  remote_session_timeout_minutes: string;
-  catchup_window_days: string;
   inventory_retention_days: string;
   app_name: string;
   default_language: string;
@@ -2156,12 +958,6 @@ export interface AppConfigData {
   device_keys_login?: string;
   device_keys_require_attestation?: string;
   device_keys_strict_session?: string;
-  /** Platform-wide ObliReach automatic install / update by the Obliance
-   *  agent ('true' / 'false', default 'true'). */
-  oblireach_auto_install?: string;
-  /** ObliReach: install of the Microsoft Edge WebView2 runtime of the chat
-   *  window (ObliReachWebView2Mode, default 'proactive'). */
-  oblireach_webview2_install?: string;
 }
 
 export interface ObligateConfig {
@@ -2232,11 +1028,11 @@ export interface UserPermissions {
   canCreate: boolean;
   teams: number[];
   permissions: Record<string, PermissionLevel>;
-  /** Tenant-scoped capabilities aggregated across all the user's teams.
-   *  Used by the client to gate non-device-scoped pages (e.g. the
-   *  /admin/supervision tabs: 'supervision_remote', 'supervision_history',
-   *  'manage_reports'). Always empty for platform admins — they bypass. */
-  tenantCapabilities: string[];
+  /** Tenant capabilities of the user's role in the active tenant (the
+   *  permission set's, capabilities.ts). Used by the client to gate the
+   *  pages that are not device-scoped (e.g. Supervision: 'supervision:read').
+   *  Always empty for platform admins — they bypass. */
+  tenantCapabilities: TenantCapability[];
 }
 
 export interface UserTenantAssignment {
@@ -2303,121 +1099,15 @@ export interface NotificationPluginMeta {
   configFields: NotificationConfigField[];
 }
 
-// ─── SCENARIOS ──────────────────────────────────────────────────────────────
-
-export type ScenarioTriggerType = 'session_login' | 'machine_boot' | 'agent_approved' | 'group_join' | 'schedule_failure' | 'schedule_cron' | 'manual' | 'agent_back_online' | 'metric_warning' | 'metric_critical' | 'metric_custom';
-export type ScenarioStatus = 'draft' | 'active' | 'disabled';
-export type ScenarioRunStatus = 'pending' | 'running' | 'success' | 'failure' | 'cancelled' | 'timeout';
-export type ScenarioStepRunStatus = 'pending' | 'check_running' | 'check_passed' | 'resolve_running' | 'recheck_running' | 'recheck_passed' | 'failed' | 'skipped' | 'success';
-
-// ─── SCENARIO V2 — GRAPH BUILDER ─────────────────────────────────────────────
-// Replacement of the linear v1 step model. A scenario is now a directed
-// graph of nodes connected by edges. The engine walks the graph from the
-// trigger node, evaluating each edge's `condition` against the previous
-// node's output to pick the next hop.
+// ─── AUTOMATION NOTIFICATION BINDINGS ────────────────────────────────────────
 //
-// `type` discriminates the executor; the shape of `config` per type lives
-// in the matching `ScenarioNodeConfig*` interfaces below. See
-// server/src/services/scenarioGraph.service.ts for the executor table.
-
-export type ScenarioNodeType =
-  // Triggers (start of the graph — exactly one per scenario)
-  | 'trigger_manual'
-  | 'trigger_session_login'
-  | 'trigger_machine_boot'
-  | 'trigger_agent_approved'
-  | 'trigger_group_join'
-  | 'trigger_schedule_failure'
-  | 'trigger_schedule_cron'
-  | 'trigger_agent_back_online'
-  | 'trigger_metric_warning'
-  | 'trigger_metric_critical'
-  | 'trigger_metric_custom'
-  // Actions
-  | 'run_script'
-  | 'run_command'
-  | 'send_notification'
-  | 'wait'
-  | 'tag_device'
-  | 'move_device_to_group'
-  // Logic
-  | 'branch_exit_code'
-  | 'branch_on_device'
-  // Gating — pacing primitives applied to whatever flows through them.
-  // Cooldown is shared across upstream triggers (a manual fire 1h after
-  // a boot trigger fired sees the same window) and persisted per
-  // (scenario, device, cooldown node) in `scenario_cooldown_state`.
-  | 'cooldown'
-  // Terminators
-  | 'end_success'
-  | 'end_failure';
-
-export interface ScenarioNode {
-  id: number;
-  uuid: string;
-  scenarioId: number;
-  type: ScenarioNodeType;
-  label: string | null;
-  config: Record<string, unknown>;
-  positionX: number;
-  positionY: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** Discriminated condition for an edge. Evaluated against the previous
- *  node's output. The first matching edge (sorted by sortOrder) wins. */
-export type ScenarioEdgeCondition =
-  | { kind: 'always' }
-  | { kind: 'default' }                      // taken only if no other edge matches
-  | { kind: 'exit_code_eq';  value: number }
-  | { kind: 'exit_code_in';  values: number[] }
-  | { kind: 'exit_code_neq'; value: number };
-
-export interface ScenarioEdge {
-  id: number;
-  uuid: string;
-  scenarioId: number;
-  sourceNodeId: number;
-  sourceHandle: string | null;
-  targetNodeId: number;
-  condition: ScenarioEdgeCondition;
-  sortOrder: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-/** Per-node trace recorded as the engine walks the graph. Powers the live
- *  graph viewer (lights up nodes as they execute) and the post-run audit. */
-export interface ScenarioNodeRun {
-  id: string;
-  runId: string;
-  nodeId: number;
-  nodeType: ScenarioNodeType;
-  status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
-  commandId: string | null;
-  exitCode: number | null;
-  stdout: string | null;
-  stderr: string | null;
-  errorMessage: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  createdAt: string;
-}
-
-export interface ScenarioTriggerConfig {
-  groupIds?: number[];
-  scheduleId?: number;
-}
-
-export interface ScenarioRetryPolicy {
-  maxRetries: number;
-  retryDelaySeconds: number;
-}
+// The channels an automation notifies, and how (the client's
+// NotificationChannelBindings picker). The RMM automations that sent them
+// are removed.
 
 /**
- * - 'per_device': dispatch immediately for each device that traverses
- *   the node. One message per device, regardless of success/failure.
+ * - 'per_device': dispatch immediately for each device the automation acts
+ *   on. One message per device, regardless of success/failure.
  * - 'summary':    wait until every fanned-out device has finished and
  *   send a single recap (OK: N / Failed: M).
  *
@@ -2430,346 +1120,4 @@ export type AutomationNotificationMode = 'per_device' | 'summary' | 'on_error';
 export interface AutomationNotificationBinding {
   channelId: number;
   mode: AutomationNotificationMode;
-}
-
-export type CustomSectionRenderMode = 'terminal' | 'html';
-
-export interface CustomSection {
-  id: number;
-  tenantId: number;
-  /** Master-only fan-out: extra tenants where this custom section is
-   *  visible in read-only. Null when local. */
-  targetTenantIds?: number[] | null;
-  name: string;
-  description: string | null;
-  command: string;
-  platform: 'all' | 'windows' | 'linux' | 'macos';
-  runtime: 'bash' | 'sh' | 'powershell' | 'cmd';
-  usePty: boolean;
-  /**
-   * How the device tab renders the streamed output.
-   *  - 'terminal' (default): live xterm console, ideal for htop/top/long-running CLIs.
-   *  - 'html'             : the script writes a full HTML document to stdout
-   *                         (e.g. PowerShell `ConvertTo-Html`). The client
-   *                         accumulates the bytes and renders them in a
-   *                         sandboxed iframe, turning the section into a
-   *                         styled dashboard panel.
-   */
-  renderMode: CustomSectionRenderMode;
-  /** HTML-mode only — when true, the client re-runs the script every
-   *  `autoRefreshIntervalSeconds` after the previous run exits, so the
-   *  panel behaves as a self-updating dashboard. Ignored for terminal mode. */
-  autoRefreshEnabled: boolean;
-  /** Cooldown between consecutive auto-refresh runs (seconds). The
-   *  cycle is "run → wait this many seconds → run", measured from
-   *  when the previous run exits, so a slow script doesn't overlap. */
-  autoRefreshIntervalSeconds: number;
-  targetType: 'all' | 'group' | 'device';
-  targetIds: number[];
-  createdBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface Scenario {
-  id: number;
-  uuid: string;
-  tenantId: number;
-  /** Master-only fan-out: extra tenants where this scenario is visible
-   *  in read-only. Null/undefined when the scenario is local to its
-   *  owner tenant (the common case). */
-  targetTenantIds?: number[] | null;
-  name: string;
-  description: string | null;
-  triggerType: ScenarioTriggerType;
-  triggerConfig: ScenarioTriggerConfig;
-  /**
-   * 'self'   — event triggers run on the originating device only (the
-   *            sane default for session_login / machine_boot / agent_approved
-   *            / group_join). targetIds is ignored.
-   * 'all'    — every device in the tenant (rarely useful with event triggers).
-   * 'group'  — devices that belong to one of `targetIds` or any descendant.
-   * 'device' — devices whose id is in `targetIds`.
-   */
-  targetType: 'self' | 'all' | 'group' | 'device' | string;
-  targetIds: number[];
-  status: ScenarioStatus;
-  retryPolicy: ScenarioRetryPolicy;
-  timeoutSeconds: number;
-  notifyOnSuccess: boolean;
-  notifyOnFailure: boolean;
-  notificationChannels: AutomationNotificationBinding[];
-  /** When true, the scenario runs on devices currently in privacy mode.
-   *  When false (default), privacy-mode devices are skipped at fan-out
-   *  time so an automation policy doesn't quietly override a user's
-   *  privacy choice. Flipping this on is gated by the action-restriction
-   *  matrix (`scenario.bypass_privacy_mode`, default `restricted`). */
-  bypassPrivacyMode: boolean;
-  variables: Record<string, string>;
-  steps?: ScenarioStep[];
-  /** Populated by the list endpoint (cheap COUNT subquery). The detail
-   *  endpoint returns the full `steps` array instead. Kept for
-   *  backwards-compat with v1-only scenarios that haven't been migrated
-   *  to the graph model. */
-  stepCount?: number;
-  /** v2 list-only — count of action/logic nodes (excludes triggers and
-   *  end_* terminators). Replaces stepCount as the primary "size" badge
-   *  for graphs. */
-  nodeCount?: number;
-  /** v2 list-only — number of runs currently in 'pending' or 'running'
-   *  status. Drives the Stop button + live spinner on the overview. */
-  activeRunCount?: number;
-  /** v2 graph — set by the detail endpoint. Mutually exclusive with `steps`
-   *  in practice (after Phase 1B auto-migration, every scenario carries
-   *  nodes/edges and `steps` is empty). */
-  nodes?: ScenarioNode[];
-  edges?: ScenarioEdge[];
-  /** Per-trigger-type counts aggregated from scenario_nodes by the list
-   *  endpoint — drives the multi-trigger badges on the scenario card.
-   *  Keys match the trigger names without the `trigger_` prefix
-   *  (e.g. `manual: 1, schedule_cron: 2`). */
-  triggerCounts?: Partial<Record<ScenarioTriggerType, number>>;
-  createdBy: number | null;
-  updatedBy: number | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface ScenarioStep {
-  id: number;
-  scenarioId: number;
-  sortOrder: number;
-  name: string;
-  description: string | null;
-  checkScriptId: number | null;
-  resolveScriptId: number | null;
-  timeoutSeconds: number;
-  retryCount: number;
-  parameterOverrides: Record<string, string>;
-  checkScript?: Pick<Script, 'id' | 'name' | 'platform' | 'runtime'>;
-  resolveScript?: Pick<Script, 'id' | 'name' | 'platform' | 'runtime'>;
-}
-
-export interface ScenarioRun {
-  id: string;
-  tenantId: number;
-  scenarioId: number;
-  deviceId: number;
-  triggerType: ScenarioTriggerType;
-  triggerSource: string | null;
-  status: ScenarioRunStatus;
-  currentStep: number;
-  variables: Record<string, string>;
-  startedAt: string | null;
-  finishedAt: string | null;
-  errorMessage: string | null;
-  retryAttempt: number;
-  createdAt: string;
-  scenario?: Pick<Scenario, 'id' | 'name'>;
-  device?: { id: number; hostname: string; displayName: string | null; osType: string };
-  stepRuns?: ScenarioStepRun[];
-  /** v2 graph runs — populated by getRunById alongside stepRuns. The
-   *  history modal prefers this when non-empty (v1 step rows never
-   *  exist for v2 scenarios). */
-  nodeRuns?: ScenarioRunNodeRun[];
-}
-
-/** Trace row attached to a v2 ScenarioRun by getRunById — one entry
- *  per node visit in the run, with its captured stdout/stderr. */
-export interface ScenarioRunNodeRun {
-  id: string;
-  runId: string;
-  nodeId: number;
-  nodeType: string;
-  nodeLabel: string | null;
-  status: string;
-  exitCode: number | null;
-  stdout: string | null;
-  stderr: string | null;
-  errorMessage: string | null;
-  startedAt: string;
-  finishedAt: string | null;
-}
-
-export interface ScenarioStepRun {
-  id: string;
-  runId: string;
-  stepId: number;
-  sortOrder: number;
-  status: ScenarioStepRunStatus;
-  checkExitCode: number | null;
-  checkStdout: string | null;
-  checkStderr: string | null;
-  checkStartedAt: string | null;
-  checkFinishedAt: string | null;
-  resolveExitCode: number | null;
-  resolveStdout: string | null;
-  resolveStderr: string | null;
-  resolveStartedAt: string | null;
-  resolveFinishedAt: string | null;
-  recheckExitCode: number | null;
-  recheckStdout: string | null;
-  recheckStderr: string | null;
-  recheckStartedAt: string | null;
-  recheckFinishedAt: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  retryAttempt: number;
-  step?: ScenarioStep;
-}
-
-// ─── VIRTUALIZATION (Hyper-V, extensible) ─────────────────────────────────────
-//
-// Generic virtualization-host model so we can add ESXi / Proxmox / KVM later
-// without reshaping the schema. A device becomes a "virtualization host" when
-// the agent detects a hypervisor role; the VMs it hosts are reported as
-// VirtualMachine rows. Today only `hyperv` is implemented agent-side.
-
-export type VirtualizationHostType = 'hyperv' | 'esxi' | 'proxmox' | 'kvm';
-
-// Normalised lifecycle state across hypervisors. Hyper-V's native states map:
-//   Running→running, Off→off, Saved→saved, Paused→paused,
-//   Starting/Stopping/…→transitioning.
-export type VmState = 'running' | 'off' | 'saved' | 'paused' | 'transitioning' | 'unknown';
-
-// Actions a viewer can request on a VM. The server maps each to a restriction
-// key (hyperv.<action>) + a required capability before enqueueing the agent
-// command. `power off` (stop) is intentionally non-destructive-tier; delete is
-// the double-admin one.
-export type VmAction =
-  | 'start'
-  | 'stop'        // power off (hard)
-  | 'shutdown'    // graceful guest shutdown (needs integration services)
-  | 'restart'
-  | 'save'        // save state
-  | 'pause'
-  | 'resume'
-  | 'checkpoint_create'
-  | 'checkpoint_apply'
-  | 'checkpoint_delete'
-  | 'edit'        // vCPU / memory / etc.
-  | 'create'
-  | 'delete';
-
-export interface VmCheckpoint {
-  name: string;
-  /** ISO timestamp the checkpoint was taken, if known. */
-  createdAt: string | null;
-  /** Parent checkpoint name (checkpoint tree), if any. */
-  parentName: string | null;
-}
-
-export interface VirtualMachine {
-  id: number;
-  tenantId: number;
-  /** devices.id of the host this VM runs on. */
-  hostDeviceId: number;
-  hostType: VirtualizationHostType;
-  /** Hypervisor-native VM id (Hyper-V VMId GUID). Stable across renames. */
-  vmId: string;
-  name: string;
-  state: VmState;
-  /** Raw hypervisor state string for display/debug (e.g. "Running", "Off"). */
-  rawState: string | null;
-  cpuCount: number | null;
-  /** Assigned memory in bytes (demand for dynamic memory). */
-  memoryBytes: number | null;
-  uptimeSeconds: number | null;
-  /** Number of checkpoints/snapshots. */
-  checkpointCount: number | null;
-  /** Checkpoint details for the management modal. Populated by the agent
-   *  enumeration; may be empty even when checkpointCount > 0 on older
-   *  agents that only reported the count. */
-  checkpoints: VmCheckpoint[];
-  /** Guest IP addresses reported via integration services, if any. Often
-   *  empty: needs a guest agent / running VM. */
-  ipAddresses: string[];
-  /** MAC address per virtual NIC, canonical "00:15:5D:01:02:03" form.
-   *  Unlike ipAddresses this comes from the hypervisor, not the guest, so it
-   *  is present for every VM regardless of integration services. Empty only
-   *  for a never-started VM with a dynamic MAC (Hyper-V assigns it at first
-   *  boot), or when reported by an agent predating MAC collection. */
-  macAddresses: string[];
-  /** Hyper-V VM generation (1 or 2), null for other hypervisors. */
-  generation: number | null;
-  notes: string | null;
-  // ── Live consumption + richer info (best-effort) ──
-  /** Host-CPU usage attributed to this VM, percent. */
-  cpuUsagePercent: number | null;
-  /** Memory the guest is actively demanding (dynamic memory), bytes. */
-  memoryDemandBytes: number | null;
-  dynamicMemory: boolean;
-  /** Integration-services heartbeat status string. */
-  heartbeat: string | null;
-  integrationServicesVersion: string | null;
-  /** VM configuration version. */
-  configVersion: string | null;
-  /** Operational status text ("Operating normally", …). */
-  statusText: string | null;
-  /** Guest OS name (KVP), if the guest reports it. */
-  guestOs: string | null;
-  automaticStart: string | null;
-  automaticStop: string | null;
-  updatedAt: string;
-  /** Joined for the tenant-wide grid: the host device's display name. */
-  hostName?: string;
-  /** Joined for the tenant-wide grid: the host device's tags, so the grid can
-   *  filter VMs by their host's tags. */
-  hostTags?: string[];
-}
-
-// ─── BACKUP (Veeam B&R, extensible) ───────────────────────────────────────────
-//
-// Generic backup-host model so we can add other products later without
-// reshaping the schema. A device becomes a "backup host" when the agent
-// detects a backup product (today only `veeam` = Veeam Backup & Replication
-// on the VBR server). The jobs it manages are reported as BackupJob rows.
-
-export type BackupHostType = 'veeam';
-
-// Normalised job lifecycle state. Veeam's GetLastState() maps:
-//   Working→running, Idle/Stopped→idle, Starting/Stopping→transitioning,
-//   Pausing/Postprocessing→transitioning. Disabled schedule → disabled.
-export type BackupJobState = 'running' | 'idle' | 'transitioning' | 'disabled' | 'unknown';
-
-// Last run outcome. Veeam GetLastResult(): Success / Warning / Failed / None.
-export type BackupJobResult = 'success' | 'warning' | 'failed' | 'none';
-
-// Actions a viewer can request on a job. Each maps server-side to a required
-// capability + a restriction key before enqueueing the agent command.
-export type BackupJobAction = 'start' | 'stop' | 'retry' | 'enable' | 'disable';
-
-export interface BackupJob {
-  id: number;
-  tenantId: number;
-  /** devices.id of the VBR host running this job. */
-  hostDeviceId: number;
-  hostType: BackupHostType;
-  /** Veeam VBR job Id (GUID) — stable across renames. */
-  jobId: string;
-  name: string;
-  /** Backup / Replica / BackupCopy / Agent / … (raw Veeam JobType). */
-  jobType: string | null;
-  state: BackupJobState;
-  rawState: string | null;
-  lastResult: BackupJobResult;
-  /** Whether the job's schedule is enabled. */
-  scheduleEnabled: boolean;
-  lastRunStart: string | null;
-  lastRunEnd: string | null;
-  nextRun: string | null;
-  /** Live progress % when the job is running, else null. */
-  progressPercent: number | null;
-  processedBytes: number | null;
-  transferredBytes: number | null;
-  /** Last run duration in seconds. */
-  durationSeconds: number | null;
-  repository: string | null;
-  description: string | null;
-  updatedAt: string;
-  /** Joined for the tenant-wide grid: the host device's display name. */
-  hostName?: string;
-  /** Joined for the tenant-wide grid: the host device's tags, so the grid can
-   *  filter jobs by their host's tags. */
-  hostTags?: string[];
 }

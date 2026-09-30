@@ -396,22 +396,6 @@
     "defaultMonitorSettings": "Paramètres de moniteur par défaut",
     "toggleSecretVisibility": "Afficher / masquer",
     "defs": {
-      "pushInterval": {
-        "label": "Intervalle d'envoi",
-        "description": "Fréquence à laquelle l'agent envoie ses métriques au serveur"
-      },
-      "scanInterval": {
-        "label": "Intervalle de scan",
-        "description": "Fréquence à laquelle l'agent scanne automatiquement l'inventaire, les mises à jour et la conformité. 0 = désactivé."
-      },
-      "fastPollInterval": {
-        "label": "Intervalle d'interrogation rapide",
-        "description": "Fréquence à laquelle l'agent interroge le serveur quand des commandes sont en attente"
-      },
-      "maxMissedPushes": {
-        "label": "Envois manqués max",
-        "description": "Nombre d'envois manqués avant de marquer l'appareil hors ligne"
-      },
       "notificationCooldown": {
         "label": "Délai entre alertes",
         "description": "Délai minimal entre deux alertes répétées pour le même appareil"
@@ -420,17 +404,9 @@
         "label": "Conservation de l'inventaire",
         "description": "Durée de conservation de l'historique des instantanés d'inventaire"
       },
-      "autoApproveDevices": {
-        "label": "Approbation automatique des appareils",
-        "description": "Approuver automatiquement les nouveaux appareils à leur enregistrement"
-      },
       "tfaTrustHours": {
         "label": "Durée de « Faire confiance à cette IP » (2FA)",
         "description": "Durée pendant laquelle le choix « Faire confiance à cette IP » évite la demande de code 2FA à un utilisateur depuis la même IP, après un code valide. 0 = confiance par IP désactivée (code toujours demandé)."
-      },
-      "oblireachAutoInstall": {
-        "label": "Installation automatique d'ObliReach",
-        "description": "L'agent Obliance installe ObliReach et le maintient à la version fournie par ce serveur (Windows x64, macOS, Linux x64). Désactivé : ObliReach est laissé en l'état (jamais désinstallé). Le mode confidentialité est respecté."
       }
     }
   },
@@ -599,24 +575,6 @@
       "failedLoad": "Impossible de charger les accès aux tenants",
       "saved": "Accès aux tenants enregistrés",
       "failedSave": "Échec de l'enregistrement des accès aux tenants"
-    },
-    "capabilities": {
-      "execute": {
-        "label": "Exécution",
-        "description": "Scripts, analyses, services, installation/désinstallation"
-      },
-      "remote": {
-        "label": "Distant",
-        "description": "Sessions Reach, RDP et shell SSH"
-      },
-      "files": {
-        "label": "Fichiers",
-        "description": "Parcourir, envoyer, télécharger et modifier des fichiers"
-      },
-      "power": {
-        "label": "Alimentation",
-        "description": "Redémarrage, arrêt, mise en veille, redémarrage de l'agent"
-      }
     },
     "restrictions": {
       "scopeHint": "Définir les appareils / groupes auxquels cette restriction s'applique",
@@ -974,9 +932,6 @@
     "refused": "Refusé",
     "update_error": "Erreur de mise à jour"
   },
-  "commands": {
-    "unsupportedOnAgent": "Non supporté par cette version d'agent"
-  },
   "groupPanel": {
     "title": "Groupes",
     "allDevices": "Tous les appareils",
@@ -1066,13 +1021,10 @@
     "scopeGroup": "Groupe d'appareils",
     "scopeTenant": "Tout le tenant",
     "sectionLabels": {
-      "compliance": "Conformité",
       "hardware": "Matériel",
       "inventory_detail": "Détail par serveur",
       "network": "Réseau",
-      "scripts_history": "Historique des scripts",
-      "software": "Logiciels",
-      "updates": "Mises à jour"
+      "software": "Logiciels"
     },
     "sections": "Sections",
     "status": {
@@ -1084,12 +1036,9 @@
     "timezone": "Fuseau horaire",
     "title": "Rapports",
     "types": {
-      "compliance": "Conformité",
       "custom": "Personnalisé",
       "fleet": "Vue d'ensemble du parc",
-      "scripts": "Exécutions de scripts",
-      "software": "Inventaire logiciel",
-      "updates": "Mises à jour"
+      "software": "Inventaire logiciel"
     },
     "updated": "Rapport mis à jour",
     "viewOutputs": "Voir les fichiers générés",
@@ -1104,7 +1053,17 @@
   "permissionSets": {
     "confirmDelete": "Supprimer le jeu de permissions « {{name}} » ? Cette action est irréversible.",
     "defaultSet": "Jeu par défaut",
-    "rename": "Renommer"
+    "rename": "Renommer",
+    "capabilities": {
+      "supervision_read": "Supervision · Rapports",
+      "agent_config_keys": "Configuration des agents · Clés API",
+      "agent_config_approval": "Configuration des agents · Approuver / refuser des agents",
+      "devices_manage": "Gestion des appareils",
+      "groups_manage": "Gestion des groupes",
+      "reports": "Rapports",
+      "settings": "Paramètres",
+      "users_manage": "Gestion des utilisateurs"
+    }
   },
   "notificationCenter": {
     "title": "Centre de notifications",

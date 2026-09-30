@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import { isMasterTenant } from '@obliance/shared';
+import type { DeviceCapability } from '@obliance/shared';
 import { db } from '../db';
 import { permissionService } from './permission.service';
 
@@ -38,7 +39,7 @@ export function parseRequestDeviceId(raw: unknown): number | null {
 export async function resolveRequestDevice(
   req: Request,
   rawDeviceId: unknown,
-  opts: { capability?: string; capabilityError?: string } = {},
+  opts: { capability?: DeviceCapability; capabilityError?: string } = {},
 ): Promise<RequestDeviceOutcome> {
   const notFound = { ok: false as const, status: 404 as const, error: 'Device not found' };
   const deviceId = parseRequestDeviceId(rawDeviceId);

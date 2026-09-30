@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID, knownTenantCapabilities } from '@obliance/shared';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 
@@ -45,12 +45,14 @@ export function normaliseTenantRole(role: unknown): string {
 
 type Caps = { all: true } | { all: false; set: Set<string> };
 
+/** Capabilities of a tenant role. Stored values outside the shared
+ *  vocabulary grant nothing (userHasTenantCapability), so they are not
+ *  compared either. */
 async function capsOfRole(role: string): Promise<Caps | null> {
   if (role === 'admin') return { all: true };
   const row = await db('permission_sets').where({ slug: role }).first('capabilities') as { capabilities: unknown } | undefined;
   if (!row) return null; // unknown slug: no capability (userHasTenantCapability)
-  const raw = typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : row.capabilities;
-  return { all: false, set: new Set(Array.isArray(raw) ? raw.map(String) : []) };
+  return { all: false, set: new Set<string>(knownTenantCapabilities(row.capabilities)) };
 }
 
 async function membershipRole(userId: number, tenantId: number): Promise<string | null> {

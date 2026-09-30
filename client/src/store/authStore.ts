@@ -1,15 +1,15 @@
 import { create } from 'zustand';
-import type { User } from '@obliance/shared';
+import type { TenantCapability, User } from '@obliance/shared';
 
 export type PermissionLevel = 'ro' | 'rw';
 
 export interface UserPermissions {
   canCreate: boolean;
   permissions: Record<string, PermissionLevel>;
-  /** Tenant-scoped capabilities aggregated across all the user's teams.
-   *  Examples: 'supervision_remote', 'supervision_history', 'manage_reports'.
+  /** Tenant capabilities of the user's role in the active tenant (its
+   *  permission set's), e.g. 'supervision:read'.
    *  Empty for platform admins (they bypass the check). */
-  tenantCapabilities?: string[];
+  tenantCapabilities?: TenantCapability[];
 }
 import { authApi, type LoginResult } from '../api/auth.api';
 import { connectSocket, disconnectSocket } from '../socket/socketClient';

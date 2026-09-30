@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { knownDeviceCapabilities } from '@obliance/shared';
 
 export const createTeamSchema = z.object({
   name: z.string().min(1).max(255),
@@ -21,30 +22,6 @@ export const setTeamMembersSchema = z.object({
   memberIds: z.array(z.number().int().positive()),
 });
 
-// Mirror of `Capability` in shared/types.ts. Adding a new cap requires
-// updating BOTH this enum AND `VALID_CAPABILITIES` in team.service.ts;
-// rowToPermission() uses that set as a defensive filter on read so
-// stale DB values don't trip the validator on the GET → toggle → PUT
-// round-trip (this is the bug fix from the team-permission "Validation
-// failed" investigation).
-export const CAPABILITY_VALUES = [
-  'monitor', 'execute', 'remote', 'files', 'power',
-  'supervision:read',
-  'agent_config:custom_sections',
-  'agent_config:discovery',
-  'agent_config:keys',
-  'agent_config:approval',
-  // Hyper-V (device-scoped). view = see the VM list on hosts the team can
-  // reach; power = start/stop/restart/save; manage = checkpoints, edit,
-  // create, delete (each further gated by the action-restriction matrix).
-  'hyperv:view',
-  'hyperv:power',
-  'hyperv:manage',
-  // Veeam backups (device-scoped). view = read job list; control = run actions.
-  'veeam:view',
-  'veeam:control',
-] as const;
-
 export const setTeamPermissionsSchema = z.object({
   permissions: z.array(
     z.object({
@@ -55,7 +32,10 @@ export const setTeamPermissionsSchema = z.object({
       // verify the (scope, scope_id) pairing makes sense.
       scopeId: z.number().int().nonnegative(),
       level: z.enum(['ro', 'rw']),
-      capabilities: z.array(z.enum(CAPABILITY_VALUES)).optional(),
+      // Device capabilities of the row (shared capabilities.ts). A value
+      // outside that vocabulary (a removed capability, sent back by an
+      // older client or kept in a pending approval) is dropped, not refused.
+      capabilities: z.array(z.string()).transform(knownDeviceCapabilities).optional(),
     }),
   ),
 });

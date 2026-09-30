@@ -114,7 +114,7 @@ export function describeRestrictionChanges(changes: Array<{ key: string; from: u
   return `Edit the action restrictions matrix (${changes.length} change${changes.length > 1 ? 's' : ''}) — ${lines.join('; ')}`;
 }
 
-/** Team permission rows ("group "Servers" (#5): rw [power, execute]"). */
+/** Team permission rows ("group "Servers" (#5): rw [monitor]"). */
 export async function permissionList(tenantId: number, perms: unknown): Promise<string> {
   if (!Array.isArray(perms) || !perms.length) return 'none (every permission removed)';
   const out: string[] = [];

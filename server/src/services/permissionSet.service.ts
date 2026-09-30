@@ -1,10 +1,12 @@
 import { db } from '../db';
+import type { TenantCapability } from '@obliance/shared';
+import { TENANT_CAPABILITIES, TENANT_CAPABILITY_LABELS, knownTenantCapabilities } from '@obliance/shared';
 
 interface PermissionSetRow {
   id: number;
   name: string;
   slug: string;
-  capabilities: string | string[];
+  capabilities: unknown;
   is_default: boolean;
   created_at: Date;
 }
@@ -13,59 +15,27 @@ export interface PermissionSet {
   id: number;
   name: string;
   slug: string;
-  capabilities: string[];
+  capabilities: TenantCapability[];
   isDefault: boolean;
   createdAt: string;
 }
 
 interface CapabilityDef {
-  key: string;
+  key: TenantCapability;
   label: string;
 }
 
-// Capabilities surfaced in the PermissionSets matrix. Two layers:
-//   - tenant-wide gates wired to the runtime check
-//     (`permission.service.userHasTenantCapability`). Toggling these
-//     in the matrix actually grants/denies the corresponding feature.
-//   - legacy app-level entries (monitoring / devices.manage / etc.)
-//     that pre-date the runtime wiring. They stay in the list so the
-//     existing seeded sets keep their shape, but ticking them today
-//     doesn't gate anything — keep an eye out and either wire them
-//     or remove them in a future pass.
-const AVAILABLE_CAPABILITIES: CapabilityDef[] = [
-  // ── Tenant-wide gates (wired to runtime) ────────────────────────
-  { key: 'supervision:read',             label: 'Supervision · Remote sessions / History / Reports' },
-  { key: 'agent_config:custom_sections', label: 'Agent config · Custom sections' },
-  { key: 'agent_config:discovery',       label: 'Agent config · Network discovery' },
-  { key: 'agent_config:keys',            label: 'Agent config · API keys' },
-  { key: 'agent_config:approval',        label: 'Agent config · Approve / refuse / add agents' },
-  { key: 'cve:read',                     label: 'Vulnerabilities · View CVE matches on the fleet' },
-
-  // ── Legacy app-level entries (display-only for now) ─────────────
-  { key: 'monitoring',      label: 'Monitoring' },
-  { key: 'devices.manage',  label: 'Device Management' },
-  { key: 'groups.manage',   label: 'Group Management' },
-  { key: 'scripts.manage',  label: 'Script Management' },
-  { key: 'scripts.execute', label: 'Execute Commands' },
-  { key: 'compliance',      label: 'Compliance' },
-  { key: 'remote',          label: 'Remote Access' },
-  { key: 'files',           label: 'File Management' },
-  { key: 'power',           label: 'Power Control' },
-  { key: 'updates',         label: 'Update Management' },
-  { key: 'reports',         label: 'Reports' },
-  { key: 'settings',        label: 'Settings' },
-  { key: 'users.manage',    label: 'User Management' },
-];
+// The PermissionSets matrix lists the shared tenant capabilities, each one
+// checked at runtime (requireTenantCapability). A set may still store
+// capabilities removed since (the seeded sets carry the RMM ones): a set is
+// returned without them, and a write stores only the shared ones.
 
 function rowToPermissionSet(row: PermissionSetRow): PermissionSet {
-  const caps = typeof row.capabilities === 'string'
-    ? JSON.parse(row.capabilities)
-    : row.capabilities;
   return {
     id: row.id,
     name: row.name,
     slug: row.slug,
-    capabilities: caps,
+    capabilities: knownTenantCapabilities(row.capabilities),
     isDefault: row.is_default,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
   };
@@ -84,25 +54,25 @@ export const permissionSetService = {
     return row ? rowToPermissionSet(row) : null;
   },
 
-  async create(data: { name: string; slug: string; capabilities: string[] }): Promise<PermissionSet> {
+  async create(data: { name: string; slug: string; capabilities: unknown }): Promise<PermissionSet> {
     const [row] = await db('permission_sets')
       .insert({
         name: data.name,
         slug: data.slug,
-        capabilities: JSON.stringify(data.capabilities),
+        capabilities: JSON.stringify(knownTenantCapabilities(data.capabilities)),
         is_default: false,
       })
       .returning('*') as PermissionSetRow[];
     return rowToPermissionSet(row);
   },
 
-  async update(id: number, data: { name?: string; capabilities?: string[] }): Promise<PermissionSet | null> {
+  async update(id: number, data: { name?: string; capabilities?: unknown }): Promise<PermissionSet | null> {
     const existing = await db('permission_sets').where({ id }).first() as PermissionSetRow | undefined;
     if (!existing) return null;
 
     const update: Record<string, unknown> = {};
     if (data.name !== undefined) update.name = data.name;
-    if (data.capabilities !== undefined) update.capabilities = JSON.stringify(data.capabilities);
+    if (data.capabilities !== undefined) update.capabilities = JSON.stringify(knownTenantCapabilities(data.capabilities));
 
     if (Object.keys(update).length > 0) {
       await db('permission_sets').where({ id }).update(update);
@@ -122,6 +92,6 @@ export const permissionSetService = {
   },
 
   getAvailableCapabilities(): CapabilityDef[] {
-    return AVAILABLE_CAPABILITIES;
+    return TENANT_CAPABILITIES.map((key) => ({ key, label: TENANT_CAPABILITY_LABELS[key] }));
   },
 };

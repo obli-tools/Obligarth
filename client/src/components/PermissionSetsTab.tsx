@@ -10,18 +10,25 @@ import { MEDIA, useIsCoarsePointer, useMediaQuery } from '@/hooks/useMediaQuery'
 import apiClient from '@/api/client';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
+import type { TenantCapability } from '@obliance/shared';
 
 interface PermissionSet {
  id: number;
  name: string;
  slug: string;
- capabilities: string[];
+ capabilities: TenantCapability[];
  isDefault: boolean;
 }
 
+/** A row of the matrix (GET /permission-sets/capabilities), English label. */
 interface CapabilityDef {
- key: string;
+ key: TenantCapability;
  label: string;
+}
+
+/** Translation key of a capability label (':' and '.' are i18next separators). */
+function capabilityLabelKey(key: TenantCapability): string {
+ return `permissionSets.capabilities.${key.replace(/[:.]/g, '_')}`;
 }
 
 function slugify(name: string): string {
@@ -71,7 +78,7 @@ export function PermissionSetsTab() {
  fetchData();
  }, [fetchData]);
 
- const toggleCapability = async (set: PermissionSet, capKey: string) => {
+ const toggleCapability = async (set: PermissionSet, capKey: TenantCapability) => {
  const has = set.capabilities.includes(capKey);
  const updated = has
  ? set.capabilities.filter((c) => c !== capKey)
@@ -293,7 +300,7 @@ export function PermissionSetsTab() {
  } hover:bg-bg-hover hover:[--table-sticky-bg:rgb(var(--c-bg-hover))] transition-colors`}
  >
  <td className="px-3 py-2 text-text-primary whitespace-nowrap font-medium text-xs">
- {cap.label}
+ {t(capabilityLabelKey(cap.key), cap.label)}
  </td>
  {sets.map((set) => {
  const checked = set.capabilities.includes(cap.key);
@@ -302,7 +309,7 @@ export function PermissionSetsTab() {
  <button
  onClick={() => toggleCapability(set, cap.key)}
  aria-pressed={checked}
- aria-label={`${cap.label} — ${set.name}`}
+ aria-label={`${t(capabilityLabelKey(cap.key), cap.label)} — ${set.name}`}
  // Touch: 20px box inside an invisible 40px hit area.
  className={`relative w-5 h-5 rounded border inline-flex items-center justify-center transition-colors coarse:after:absolute coarse:after:-inset-2.5 coarse:after:content-[''] ${
  checked

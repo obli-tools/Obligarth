@@ -1,5 +1,6 @@
 import { db } from '../db';
-import type { PermissionLevel, UserPermissions } from '@obliance/shared';
+import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obliance/shared';
+import { knownDeviceCapabilities, knownTenantCapabilities } from '@obliance/shared';
 
 export const permissionService = {
   /**
@@ -108,19 +109,14 @@ export const permissionService = {
   },
 
   /**
-   * Check if user has a specific capability on a device.
-   * Admins always have all capabilities.
-   * Checks both direct device permissions and inherited group permissions.
-   */
-  /**
    * Tenant-wide capability check — resolves the user's per-tenant role
    * (`user_tenants.role`, now a permission_set slug) and looks up the
    * matching `permission_sets.capabilities`. Tenant admins bypass the
    * check entirely. Tenant role drives WHAT the user can do; team
    * membership (handled by canUseCapability) drives WHERE they can
-   * do it.
+   * do it. Stored values outside the shared vocabulary never match.
    */
-  async userHasTenantCapability(userId: number, tenantId: number, capability: string): Promise<boolean> {
+  async userHasTenantCapability(userId: number, tenantId: number, capability: TenantCapability): Promise<boolean> {
     const ut = await db('user_tenants')
       .where({ user_id: userId, tenant_id: tenantId })
       .first() as { role: string } | undefined;
@@ -128,40 +124,43 @@ export const permissionService = {
     if (ut.role === 'admin') return true;
     const set = await db('permission_sets').where({ slug: ut.role }).first() as { capabilities: unknown } | undefined;
     if (!set) return false;
-    const caps = typeof set.capabilities === 'string' ? JSON.parse(set.capabilities) : set.capabilities;
-    return Array.isArray(caps) && caps.includes(capability);
+    return knownTenantCapabilities(set.capabilities).includes(capability);
   },
 
   /**
    * Bulk variant — returns every capability granted to the user on a
    * given tenant via their permission_set. Used by /auth/me so the
    * client can render gates without round-trips. Tenant admins get
-   * the union of every defined capability (open-all).
+   * the union of the capabilities of every set. Only the shared
+   * vocabulary's capabilities are returned.
    */
-  async listUserTenantCapabilities(userId: number, tenantId: number): Promise<string[]> {
+  async listUserTenantCapabilities(userId: number, tenantId: number): Promise<TenantCapability[]> {
     const ut = await db('user_tenants')
       .where({ user_id: userId, tenant_id: tenantId })
       .first() as { role: string } | undefined;
     if (!ut) return [];
     if (ut.role === 'admin') {
-      // Union of every defined cap so the client renders all gates as
-      // open. The matrix can grow without us having to enumerate the
-      // exhaustive list here.
+      // Union of the capabilities of every set, so the client renders
+      // their gates as open.
       const all = await db('permission_sets').select('capabilities') as Array<{ capabilities: unknown }>;
-      const set = new Set<string>();
+      const set = new Set<TenantCapability>();
       for (const row of all) {
-        const caps = typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : row.capabilities;
-        if (Array.isArray(caps)) for (const c of caps) set.add(String(c));
+        for (const c of knownTenantCapabilities(row.capabilities)) set.add(c);
       }
       return [...set];
     }
     const set = await db('permission_sets').where({ slug: ut.role }).first() as { capabilities: unknown } | undefined;
     if (!set) return [];
-    const caps = typeof set.capabilities === 'string' ? JSON.parse(set.capabilities) : set.capabilities;
-    return Array.isArray(caps) ? caps.map(String) : [];
+    return knownTenantCapabilities(set.capabilities);
   },
 
-  async canUseCapability(userId: number, deviceId: number, isAdmin: boolean, capability: string): Promise<boolean> {
+  /**
+   * Check if user has a specific capability on a device.
+   * Admins always have all capabilities.
+   * Checks both direct device permissions and inherited group permissions.
+   * Stored values outside the shared vocabulary never match.
+   */
+  async canUseCapability(userId: number, deviceId: number, isAdmin: boolean, capability: DeviceCapability): Promise<boolean> {
     if (isAdmin) return true;
 
     const deviceRow = await db('devices').where({ id: deviceId }).select('group_id').first();
@@ -174,8 +173,7 @@ export const permissionService = {
       .select('tp.capabilities');
 
     for (const row of directPerms) {
-      const caps = typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : (row.capabilities ?? []);
-      if (caps.includes(capability)) return true;
+      if (knownDeviceCapabilities(row.capabilities).includes(capability)) return true;
     }
 
     // Check group permissions (via closure table)
@@ -187,8 +185,7 @@ export const permissionService = {
         .select('tp.capabilities');
 
       for (const row of groupPerms) {
-        const caps = typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : (row.capabilities ?? []);
-        if (caps.includes(capability)) return true;
+        if (knownDeviceCapabilities(row.capabilities).includes(capability)) return true;
       }
     }
 
@@ -205,13 +202,10 @@ export const permissionService = {
    * queries per chunk instead of 1-3 per device, so a fleet-wide target
    * set stays cheap.
    */
-  async devicesLackingCapability(userId: number, deviceIds: number[], capability: string): Promise<number[]> {
+  async devicesLackingCapability(userId: number, deviceIds: number[], capability: DeviceCapability): Promise<number[]> {
     const ids = [...new Set(deviceIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
     if (ids.length === 0) return [];
-    const hasCap = (raw: unknown): boolean => {
-      const caps = typeof raw === 'string' ? JSON.parse(raw) : (raw ?? []);
-      return Array.isArray(caps) && caps.includes(capability);
-    };
+    const hasCap = (raw: unknown): boolean => knownDeviceCapabilities(raw).includes(capability);
     const granted = new Set<number>();
     const CHUNK = 5000;
     for (let i = 0; i < ids.length; i += CHUNK) {

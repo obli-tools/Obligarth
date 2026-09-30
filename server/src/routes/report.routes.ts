@@ -5,12 +5,10 @@ import fs from 'fs';
 
 const router = Router();
 
-// Reports were previously gated by the legacy `manage_reports` cap;
-// the new sidebar reorg consolidates Reports / History / Remote
-// sessions under a single `supervision:read` capability so admins
-// don't have to grant three separate flags. Old `manage_reports`
-// rows are filtered out by the team.service VALID_CAPABILITIES set
-// and replaced by migration 090's seeding rule.
+// Reports: holders of the `reports` tenant capability, or of
+// `supervision:read`, which opens the Supervision page (it holds the
+// reports). A stored legacy value such as `manage_reports` grants
+// nothing (shared capabilities.ts).
 router.use(requireAnyTenantCapability('reports', 'supervision:read'));
 
 router.get('/', async (req, res, next) => {

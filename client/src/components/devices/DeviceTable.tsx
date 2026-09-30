@@ -98,8 +98,8 @@ export function DeviceTable({
  const tagsBtnRef = useRef<HTMLButtonElement>(null);
  const batchBtnRef = useRef<HTMLButtonElement>(null);
  const { isAdmin, permissions } = useAuthStore();
- // Unlocked when admin OR the user has a team_permission row carrying
- // `agent_config:approval`. Drives both the approval-status chip row
+ // Unlocked when admin OR the user holds the `agent_config:approval`
+ // tenant capability. Drives both the approval-status chip row
  // (Approuvés / En attente / Refusés / Suspendus) and the per-row
  // Approve / Refuse / Bulk-approve buttons that are gated below.
  // Server-side enforcement is in device.routes.ts approve/refuse/bulk.

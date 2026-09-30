@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import { getIO } from '../socket';
 import { auditService } from './audit.service';
 import { isMasterTenant } from '@obliance/shared';
+import type { TenantCapability } from '@obliance/shared';
 
 // Two-step approval service — creates pending requests, handles approve/deny,
 // and executes the approved actions. Designed so the existing handlers only
@@ -148,7 +149,7 @@ export async function requirePlatformAdmin(requesterId: number): Promise<void> {
 }
 
 /** Platform admin, or holder of `capability` in the approval's tenant. */
-export async function requireTenantCapability(requesterId: number, tenantId: number, capability: string): Promise<{ isPlatformAdmin: boolean }> {
+export async function requireTenantCapability(requesterId: number, tenantId: number, capability: TenantCapability): Promise<{ isPlatformAdmin: boolean }> {
   const r = await activeRequester(requesterId);
   if (r.isPlatformAdmin) return r;
   const { permissionService } = await import('./permission.service');

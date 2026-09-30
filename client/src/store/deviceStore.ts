@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Device, DeviceStatus, FleetSummary, DeviceMetrics } from '@obliance/shared';
+import type { Device, DeviceStatus, FleetSummary } from '@obliance/shared';
 import { SocketEvents } from '@obliance/shared';
 import { deviceApi } from '../api/device.api';
 import { registerSocketListener } from '../socket/socketListeners';
@@ -16,10 +16,6 @@ interface DeviceStore {
   fetchDevice: (id: number) => Promise<Device | null>;
   addDevice: (device: Device) => void;
   updateDevice: (id: number, data: Partial<Device>) => void;
-  /** Apply a metrics push in ONE Map clone (metrics + lastSeenAt together).
-   *  Two back-to-back updates would be two full 2000-entry Map clones per
-   *  event; at 200 events/s that's the client-side firehose. */
-  applyMetricsPush: (id: number, metrics: DeviceMetrics) => void;
   removeDevice: (id: number) => void;
 
   // Getters
@@ -82,16 +78,6 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
     });
   },
 
-  applyMetricsPush: (id, metrics) => {
-    set((state) => {
-      const existing = state.devices.get(id);
-      if (!existing) return state; // unknown device → no clone, no re-render
-      const devices = new Map(state.devices);
-      devices.set(id, { ...existing, latestMetrics: metrics, lastSeenAt: new Date().toISOString() });
-      return { devices };
-    });
-  },
-
   removeDevice: (id) => {
     set((state) => {
       const devices = new Map(state.devices);
@@ -133,13 +119,6 @@ registerSocketListener(SocketEvents.DEVICE_UPDATED, (data: any) => {
   // Strip the id keys from the patch; keep everything else.
   const { id: _id, deviceId: _deviceId, ...patch } = data;
   updateDevice(id, patch);
-});
-
-// Single Map clone for metrics + lastSeenAt (the very fact that we got
-// metrics means the agent just talked, so lastSeenAt advances and the
-// device record's "last seen" stays current).
-registerSocketListener(SocketEvents.DEVICE_METRICS_PUSHED, (data: { deviceId: number; metrics: DeviceMetrics }) => {
-  useDeviceStore.getState().applyMetricsPush(data.deviceId, data.metrics);
 });
 
 registerSocketListener(SocketEvents.DEVICE_ONLINE, (data: { deviceId: number; device?: Partial<Device> }) => {

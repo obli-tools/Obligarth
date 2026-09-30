@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { UserRole } from '@obliance/shared';
+import type { TenantCapability, UserRole } from '@obliance/shared';
 import { AppError } from './errorHandler';
 import { permissionService } from '../services/permission.service';
 
@@ -103,11 +103,11 @@ export function requireDeviceWriteParam(paramName = 'id') {
 
 /**
  * Tenant-scoped capability check — admin always passes; non-admin must
- * have the named capability on at least one of their team_permissions
- * rows. Used by /admin/supervision tab routes (reports, history) where
- * access is page-level, not device-level.
+ * hold the named capability through the permission set of their role in
+ * the tenant (a tenant administrator holds them all). For routes where
+ * access is page-level, not device-level (reports, settings, users…).
  */
-export function requireTenantCapability(capability: string) {
+export function requireTenantCapability(capability: TenantCapability) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     try {
       if (req.session.role === 'admin') return next();
@@ -130,7 +130,7 @@ export function requireTenantCapability(capability: string) {
  * `agent_config:approval` (enroll), since both flows need to list the
  * available keys.
  */
-export function requireAnyTenantCapability(...capabilities: string[]) {
+export function requireAnyTenantCapability(...capabilities: TenantCapability[]) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     try {
       if (req.session.role === 'admin') return next();

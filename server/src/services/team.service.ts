@@ -1,5 +1,6 @@
 import { db } from '../db';
-import type { UserTeam, TeamPermission } from '@obliance/shared';
+import type { UserTeam, TeamPermission, DeviceCapability } from '@obliance/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, knownDeviceCapabilities } from '@obliance/shared';
 
 interface TeamRow {
   id: number;
@@ -39,35 +40,14 @@ function rowToTeam(row: TeamRow): UserTeam {
   };
 }
 
-// Whitelist of capabilities accepted by the validator. Older installs
-// have rows with legacy values (pre-rename, before the enum was
-// stabilised); those values would round-trip from GET → toggle → PUT
-// and trip the Zod validator on /teams/:id/permissions, surfacing as
-// "Validation failed" with no recoverable UX. We silently drop them on
-// read so the toggle UI can re-save without 400-ing.
-//
-// MUST stay in sync with `CAPABILITY_VALUES` in
-// validators/team.schema.ts AND `Capability` in shared/types.ts —
-// the three are the same list expressed three ways.
-const VALID_CAPABILITIES = new Set([
-  'monitor', 'execute', 'remote', 'files', 'power',
-  'supervision:read',
-  'agent_config:custom_sections',
-  'agent_config:discovery',
-  'agent_config:keys',
-  'agent_config:approval',
-  'hyperv:view',
-  'hyperv:power',
-  'hyperv:manage',
-  'veeam:view',
-  'veeam:control',
-]);
-
+// Rows may hold values outside the shared device capabilities (removed
+// capabilities, older installs): they are dropped on read, so the team
+// editor's GET → edit → PUT round trip never sends them back. A row stored
+// without capabilities holds the defaults.
 function rowToPermission(row: any): TeamPermission {
-  const rawCaps = row.capabilities
-    ? (typeof row.capabilities === 'string' ? JSON.parse(row.capabilities) : row.capabilities)
-    : (row.level === 'rw' ? ['monitor', 'execute'] : ['monitor']);
-  const caps = (Array.isArray(rawCaps) ? rawCaps : []).filter((c: any) => typeof c === 'string' && VALID_CAPABILITIES.has(c));
+  const caps = row.capabilities
+    ? knownDeviceCapabilities(row.capabilities)
+    : [...DEFAULT_DEVICE_CAPABILITIES];
   return {
     id: row.id,
     tenantId: row.tenant_id,
@@ -182,7 +162,7 @@ export const teamService = {
 
   async setPermissions(
     teamId: number,
-    permissions: Array<{ scope: 'group' | 'device' | 'ungrouped'; scopeId: number; level: 'ro' | 'rw'; capabilities?: string[] }>,
+    permissions: Array<{ scope: 'group' | 'device' | 'ungrouped'; scopeId: number; level: 'ro' | 'rw'; capabilities?: DeviceCapability[] }>,
   ): Promise<TeamPermission[]> {
     // Resolve tenant_id from the team
     const team = await db('user_teams').where({ id: teamId }).select('tenant_id').first();
@@ -198,7 +178,7 @@ export const teamService = {
             scope: p.scope,
             scope_id: p.scopeId,
             level: p.level,
-            capabilities: JSON.stringify(p.capabilities ?? (p.level === 'rw' ? ['monitor', 'execute'] : ['monitor'])),
+            capabilities: JSON.stringify(p.capabilities ?? DEFAULT_DEVICE_CAPABILITIES),
           })),
         );
       }

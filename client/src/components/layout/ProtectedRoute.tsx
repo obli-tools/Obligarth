@@ -1,4 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
+import type { TenantCapability } from '@obliance/shared';
 import { useAuthStore } from '@/store/authStore';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 
@@ -14,7 +15,7 @@ interface ProtectedRouteProps {
    *  feature explicitly via permission_sets (e.g. Supervision,
    *  Agent config tabs). When both `requiredRole` and
    *  `requiredCapabilities` are passed, the role check wins. */
-  requiredCapabilities?: string[];
+  requiredCapabilities?: TenantCapability[];
 }
 
 export function ProtectedRoute({ requiredRole, requiredCapabilities }: ProtectedRouteProps) {

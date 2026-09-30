@@ -24,12 +24,12 @@ import type {
  User,
  UserTeam,
  TeamPermission,
- Capability,
+ DeviceCapability,
  DeviceGroupTreeNode,
  Device,
  UserTenantAssignment,
 } from '@obliance/shared';
-import { isMasterTenant } from '@obliance/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, isMasterTenant } from '@obliance/shared';
 import { usersApi, isPendingApproval } from '@/api/users.api';
 import { isStepUpHandled } from '@/api/client';
 import { teamsApi } from '@/api/teams.api';
@@ -40,16 +40,14 @@ import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
-import { ToggleSwitch as SharedToggleSwitch } from '@/components/common/ToggleSwitch';
 import { IconButton } from '@/components/common/IconButton';
 import { ActionMenu, type ActionMenuItem } from '@/components/common/ActionMenu';
 import { MasterDetail } from '@/components/common/MasterDetail';
 import { Drawer } from '@/components/common/Drawer';
 import { Modal } from '@/components/common/Modal';
 import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedTabs';
-import { Tip } from '@/components/common/Tip';
 import { useConfirm } from '@/components/common/ConfirmDialog';
-import { MEDIA, matchesMedia, useCanHover, useIsCoarsePointer, useMediaQuery } from '@/hooks/useMediaQuery';
+import { MEDIA, matchesMedia, useIsCoarsePointer, useMediaQuery } from '@/hooks/useMediaQuery';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
 // `NotificationsPage` is now rendered from /policies (see PoliciesPage).
@@ -454,13 +452,14 @@ export function AdminUsersPage() {
 
  // ── Permissions management ──
 
- const addPermission = async (scope: PermissionScope, scopeId: number, level: PermissionLevel, capabilities?: Capability[]) => {
+ const addPermission = async (scope: PermissionScope, scopeId: number, level: PermissionLevel) => {
  if (!selectedTeamId) return;
  const existing = teamPermissions.find((p) => p.scope === scope && p.scopeId === scopeId);
- const defaultCaps: Capability[] = level === 'rw' ? ['monitor', 'execute'] : ['monitor'];
+ // A row keeps its capabilities when its level changes; a new row gets the defaults.
+ const defaultCaps: DeviceCapability[] = [...DEFAULT_DEVICE_CAPABILITIES];
  if (existing) {
  const newPerms = teamPermissions.map((p) =>
- p.id === existing.id ? { ...p, level, capabilities: capabilities ?? p.capabilities ?? defaultCaps } : p,
+ p.id === existing.id ? { ...p, level, capabilities: p.capabilities ?? defaultCaps } : p,
  );
  try {
  await teamsApi.setPermissions(selectedTeamId, {
@@ -478,7 +477,7 @@ export function AdminUsersPage() {
  } else {
  const newPerms = [
  ...teamPermissions.map((p) => ({ scope: p.scope, scopeId: p.scopeId, level: p.level, capabilities: p.capabilities ?? defaultCaps })),
- { scope, scopeId, level, capabilities: capabilities ?? defaultCaps },
+ { scope, scopeId, level, capabilities: defaultCaps },
  ];
  try {
  await teamsApi.setPermissions(selectedTeamId, { permissions: newPerms });
@@ -488,13 +487,6 @@ export function AdminUsersPage() {
  toast.error(msg ? `${t('users.teams.failedAddPermission')}: ${msg}` : t('users.teams.failedAddPermission'));
  }
  }
- };
-
- const toggleCapability = async (perm: TeamPermission, cap: Capability) => {
- const caps: Capability[] = [...(perm.capabilities ?? [])];
- const idx = caps.indexOf(cap);
- if (idx >= 0) caps.splice(idx, 1); else caps.push(cap);
- await addPermission(perm.scope, perm.scopeId, perm.level, caps);
  };
 
  const removePermission = async (permId: number) => {
@@ -1084,7 +1076,6 @@ export function AdminUsersPage() {
  addPermission={addPermission}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  {tree.map((node) => (
  <PermTreeNode
@@ -1100,7 +1091,6 @@ export function AdminUsersPage() {
  addPermission={addPermission}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  ))}
  {/* Ungrouped devices */}
@@ -1116,7 +1106,6 @@ export function AdminUsersPage() {
  addPermission={addPermission}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  );
  })}
@@ -1255,93 +1244,17 @@ interface PermTreeNodeProps {
  assignedGroupIds: Set<number>;
  coveredGroupIds: Set<number>;
  coveredByGroupId: Map<number, number>;
- addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel, capabilities?: Capability[]) => Promise<void>;
+ addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel) => Promise<void>;
  removePermission: (permId: number) => Promise<void>;
  togglePermissionLevel: (perm: TeamPermission) => Promise<void>;
- toggleCapability: (perm: TeamPermission, cap: Capability) => Promise<void>;
-}
-
-// Capability catalog — grouped by logical category. Oblihub-style matrix.
-const CAPABILITY_CATEGORIES: Array<{
- name: string;
- capabilities: Array<{ key: Capability; label: string; description: string }>;
-}> = [
- {
- name: 'Execution',
- capabilities: [
- { key: 'execute', label: 'Execute', description: 'Scripts, scans, services, install/uninstall' },
- ],
- },
- {
- name: 'Access',
- capabilities: [
- { key: 'remote', label: 'Remote', description: 'Reach, RDP, SSH shell sessions' },
- { key: 'files', label: 'Files', description: 'Browse, upload, download, edit files' },
- ],
- },
- {
- name: 'Power',
- capabilities: [
- { key: 'power', label: 'Power', description: 'Reboot, shutdown, sleep, restart agent' },
- ],
- },
-];
-
-/** Compact iOS-style toggle switch. Defers to the shared component which
- * uses pixel-precise inline geometry — the previous Tailwind-only version
- * rendered the thumb outside the track on some browsers because the
- * `translate-x-4` (16 px) + `w-3` (12 px) thumb math left almost no
- * visual padding from the track edge and rounding amplified the drift.
- */
-function ToggleSwitch({ on, onChange, title }: { on: boolean; onChange: () => void; title?: string }) {
- // Bigger switch on touch screens (16×32 is too small to hit reliably).
- const coarse = useIsCoarsePointer();
- return (
- <SharedToggleSwitch
- checked={on}
- onChange={() => onChange()}
- size={coarse ? 'md' : 'sm'}
- title={title}
- />
- );
-}
-
-function CapabilityIcons({ perm, onToggle }: { perm: TeamPermission; onToggle: (cap: Capability) => void }) {
- const { t } = useTranslation();
- const canHover = useCanHover();
- if (perm.level === 'ro') return null; // RO only gets monitor, no toggles
- const caps = perm.capabilities ?? [];
- return (
- // Wraps under the name on phones and on touch (tablet panes are too
- // narrow for the enlarged toggles on one line).
- <span className="flex items-center gap-3 shrink-0 max-md:flex-wrap max-md:shrink max-md:min-w-0 max-md:gap-y-2 coarse:flex-wrap coarse:shrink coarse:min-w-0 coarse:gap-y-2">
- {CAPABILITY_CATEGORIES.map((cat) => (
- <span key={cat.name} className="flex items-center gap-1.5">
- {cat.capabilities.map(({ key, label, description }) => {
- const desc = `${t(`users.capabilities.${key}.label`, label)} — ${t(`users.capabilities.${key}.description`, description)}`;
- return (
- // Mouse: native title over the switch + label, as before.
- // Touch: tap the label for the description popover.
- <span key={key} className="flex items-center gap-1" title={canHover ? desc : undefined}>
- <ToggleSwitch on={caps.includes(key)} onChange={() => onToggle(key)} />
- <Tip content={desc} disabled={canHover}>
- <span className="text-[10px] uppercase tracking-wider text-text-muted">{t(`users.capabilities.${key}.label`, label)}</span>
- </Tip>
- </span>
- );
- })}
- </span>
- ))}
- </span>
- );
 }
 
 /**
  * Right-hand controls of a permission-tree row (group / device / ungrouped).
- * Assigned rows: RO/RW level + capability toggles + remove — on phones and
- * on touch screens (tablet panes are 450-550 px wide, too narrow for the
- * enlarged controls) they move to their own wrapping line under the name
- * (`contents` keeps the mouse desktop single-row layout untouched).
+ * Assigned rows: RO/RW level + remove — on phones and on touch screens
+ * (tablet panes are 450-550 px wide, too narrow for the enlarged controls)
+ * they move to their own wrapping line under the name (`contents` keeps the
+ * mouse desktop single-row layout untouched).
  * Unassigned rows: RO / RW add buttons.
  */
 function PermControls({
@@ -1350,14 +1263,12 @@ function PermControls({
  onAdd,
  removePermission,
  togglePermissionLevel,
- toggleCapability,
 }: {
  perm: TeamPermission | undefined;
  isCovered: boolean;
  onAdd: (level: PermissionLevel) => void;
  removePermission: (permId: number) => Promise<void>;
  togglePermissionLevel: (perm: TeamPermission) => Promise<void>;
- toggleCapability: (perm: TeamPermission, cap: Capability) => Promise<void>;
 }) {
  const { t } = useTranslation();
  if (perm) {
@@ -1374,7 +1285,6 @@ function PermControls({
  >
  {perm.level === 'rw' ? <><Pencil size={10} className="inline mr-0.5" />{t('users.teams.rwLabel')}</> : <><Eye size={10} className="inline mr-0.5" />{t('users.teams.roLabel')}</>}
  </button>
- <CapabilityIcons perm={perm} onToggle={(cap) => toggleCapability(perm, cap)} />
  <IconButton
  label={t('users.teams.removePermission', 'Remove permission')}
  icon={<Trash2 size={11} />}
@@ -1416,7 +1326,6 @@ function PermTreeNode({
  addPermission,
  removePermission,
  togglePermissionLevel,
- toggleCapability,
 }: PermTreeNodeProps) {
  const { t } = useTranslation();
  // Narrower indentation per level on phones (deep trees ate the name).
@@ -1460,7 +1369,6 @@ function PermTreeNode({
  onAdd={(level) => addPermission('group', node.id, level)}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  </div>
 
@@ -1481,7 +1389,6 @@ function PermTreeNode({
  addPermission={addPermission}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  ))}
  {(devicesByGroup.get(node.id) ?? []).map((device) => {
@@ -1497,7 +1404,6 @@ function PermTreeNode({
  addPermission={addPermission}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  );
  })}
@@ -1512,18 +1418,16 @@ interface PermDeviceRowProps {
  depth: number;
  perm: TeamPermission | undefined;
  isCovered: boolean;
- addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel, capabilities?: Capability[]) => Promise<void>;
+ addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel) => Promise<void>;
  removePermission: (permId: number) => Promise<void>;
  togglePermissionLevel: (perm: TeamPermission) => Promise<void>;
- toggleCapability: (perm: TeamPermission, cap: Capability) => Promise<void>;
 }
 
 interface PermUngroupedRowProps {
  perm: TeamPermission | undefined;
- addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel, capabilities?: Capability[]) => Promise<void>;
+ addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel) => Promise<void>;
  removePermission: (permId: number) => Promise<void>;
  togglePermissionLevel: (perm: TeamPermission) => Promise<void>;
- toggleCapability: (perm: TeamPermission, cap: Capability) => Promise<void>;
 }
 
 // "Ungrouped" pseudo-group row — sits above the real group tree and
@@ -1536,7 +1440,6 @@ function PermUngroupedRow({
  addPermission,
  removePermission,
  togglePermissionLevel,
- toggleCapability,
 }: PermUngroupedRowProps) {
  const { t } = useTranslation();
  return (
@@ -1552,7 +1455,6 @@ function PermUngroupedRow({
  onAdd={(level) => addPermission('ungrouped', 0, level)}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  </div>
  );
@@ -1566,7 +1468,6 @@ function PermDeviceRow({
  addPermission,
  removePermission,
  togglePermissionLevel,
- toggleCapability,
 }: PermDeviceRowProps) {
  const md = useMediaQuery(MEDIA.md);
  return (
@@ -1587,7 +1488,6 @@ function PermDeviceRow({
  onAdd={(level) => addPermission('device', device.id, level)}
  removePermission={removePermission}
  togglePermissionLevel={togglePermissionLevel}
- toggleCapability={toggleCapability}
  />
  </div>
  );

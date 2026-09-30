@@ -17,9 +17,6 @@ import { DeviceFilterSelect } from '@/components/devices/DeviceFilterSelect';
 
 const REPORT_TYPE_LABELS: Record<ReportType, string> = {
  fleet: 'Fleet Overview',
- compliance: 'Compliance',
- scripts: 'Script Executions',
- updates: 'Updates',
  software: 'Software Inventory',
  custom: 'Custom',
 };
@@ -35,16 +32,13 @@ const REPORT_FORMAT_LABELS: Record<ReportFormat, string> = {
 const REPORT_SECTION_LABELS: Record<ReportSection, string> = {
  hardware: 'Hardware',
  software: 'Software',
- updates: 'Updates',
- compliance: 'Compliance',
- scripts_history: 'Script History',
  network: 'Network',
  inventory_detail: 'Detailed per-server',
 };
 
-const REPORT_TYPES: ReportType[] = ['fleet', 'compliance', 'scripts', 'updates', 'software', 'custom'];
+const REPORT_TYPES: ReportType[] = ['fleet', 'software', 'custom'];
 const REPORT_FORMATS: ReportFormat[] = ['pdf', 'csv', 'excel', 'html', 'json'];
-const REPORT_SECTIONS: ReportSection[] = ['hardware', 'network', 'inventory_detail', 'software', 'updates', 'compliance', 'scripts_history'];
+const REPORT_SECTIONS: ReportSection[] = ['hardware', 'network', 'inventory_detail', 'software'];
 
 // Cron presets offered by the report schedule picker.
 const COMMON_CRONS = [
@@ -80,7 +74,7 @@ const defaultForm: ReportFormData = {
  format: 'pdf',
  scopeType: 'tenant',
  scopeId: null,
- sections: ['hardware', 'software', 'updates'],
+ sections: ['hardware', 'software'],
  runMode: 'cron',
  scheduleCron: '',
  timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
@@ -138,7 +132,9 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  const confirm = useConfirm();
  const coarse = useIsCoarsePointer();
 
- const typeLabel = (type: ReportType) => t(`reports.types.${type}`, REPORT_TYPE_LABELS[type]);
+ // A type stored before the RMM types were removed (compliance, scripts,
+ // updates) shows as its raw value.
+ const typeLabel = (type: ReportType) => t(`reports.types.${type}`, REPORT_TYPE_LABELS[type] ?? type);
 
  const load = useCallback(async () => {
  setIsLoading(true);

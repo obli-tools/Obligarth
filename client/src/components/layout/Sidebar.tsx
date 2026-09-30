@@ -245,9 +245,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const inDrawer = variant === 'drawer';
   const location = useLocation();
   const { user, isAdmin, permissions } = useAuthStore();
-  // Tenant capabilities — Capability enum from @obliance/shared.
-  // We use them to surface admin-tenant pages to non-admin users who
-  // have been granted a specific page-gate capability:
+  // Tenant capabilities (TenantCapability, shared capabilities.ts) of the
+  // user's role in the active tenant. We use them to surface admin-tenant
+  // pages to non-admin users who have been granted a specific page-gate
+  // capability:
   //   - supervision:read         → Supervision (Reports)
   //   - agent_config:keys / agent_config:approval → Agent config (API keys)
   // Admins implicitly have all capabilities (the sidebar ORs role and
@@ -488,8 +489,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     ...(admin ? [{ label: t('nav.users'), path: '/admin/users', icon: <Users size={18} /> } as NavItem] : []),
     // Security — audit log + approvals + 2FA, admin only.
     ...(admin ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: pendingApprovalsCount } as NavItem] : []),
-    // Supervision — reports. Visible if platform admin OR the user has the
-    // `supervision:read` capability on at least one team_permission row.
+    // Supervision — reports. Visible if platform admin OR the user holds the
+    // `supervision:read` tenant capability.
     ...(admin || hasSupervisionCap
       ? [{ label: t('nav.supervision'), path: '/admin/supervision', icon: <Laptop size={18} /> } as NavItem]
       : []),

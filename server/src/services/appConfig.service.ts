@@ -33,20 +33,6 @@ export function moduleConfigKey(key: string): ModuleConfigKey | undefined {
 
 const OBLIGATE_CONFIG_KEY = 'obligate_config';
 
-/**
- * Keys of the removed RMM that the shared AppConfigData type still declares:
- * the agent (automatic approval, push / fast-poll intervals, command poll
- * delay), remote sessions and script schedules. Never returned; their rows,
- * seeded by migration 001, stay until the future base migration.
- */
-type RetiredConfigKey =
-  | 'agent_auto_approve' | 'default_push_interval' | 'fast_poll_interval'
-  | 'remote_fast_poll_interval' | 'task_retrieve_delay_seconds'
-  | 'remote_session_timeout_minutes' | 'catchup_window_days';
-
-/** The platform settings getAll() returns. */
-export type PlatformConfig = Omit<AppConfigData, RetiredConfigKey>;
-
 // ── Obligate settings helpers ─────────────────────────────────────────────
 // The browser-facing /authorize client_id is always the public id
 // sha256(api key) (obligateService.authorizeClientId): Obligate refuses the
@@ -90,7 +76,11 @@ export const appConfigService = {
       .merge({ value });
   },
 
-  async getAll(): Promise<PlatformConfig> {
+  /** The platform settings. The rows of the removed RMM's keys (the agent's
+   *  automatic approval, push / fast-poll intervals and command poll delay,
+   *  remote sessions, script schedules), seeded by migration 001, are never
+   *  returned; they stay until the future base migration. */
+  async getAll(): Promise<AppConfigData> {
     const rows = await db('app_config').select('key', 'value');
     const map = Object.fromEntries(rows.map((r: { key: string; value: string }) => [r.key, r.value]));
 
@@ -100,7 +90,7 @@ export const appConfigService = {
       try { return (JSON.parse(map[key]) as { url?: string }).url || null; } catch { return null; }
     };
 
-    const data: PlatformConfig = {
+    const data: AppConfigData = {
       allow_2fa: map['allow_2fa'] ?? 'false',
       force_2fa: map['force_2fa'] ?? 'false',
       otp_smtp_server_id: map['otp_smtp_server_id'] ?? null,
