@@ -6,7 +6,7 @@ import { deviceService } from '../services/device.service';
 import { commandService } from '../services/command.service';
 import { maintenanceService } from '../services/maintenance.service';
 import { obligateService } from '../services/obligate.service';
-import { distFilePath, getDistFileInfo } from '../services/oblireachAutoInstall.service';
+import { distFilePath, getDistFileInfo } from '../services/agentDist';
 import { db } from '../db';
 import { isMasterTenant } from '@obliance/shared';
 
@@ -139,12 +139,6 @@ const ALLOWED_AGENT_BINARIES: Record<string, string> = {
   'obliance-tray-darwin-arm64':     'obliance-tray-darwin-arm64',
   'obliance-tray-linux-amd64':      'obliance-tray-linux-amd64',
   'obliance-tray-linux-arm64':      'obliance-tray-linux-arm64',
-  // Oblireach agent (remote desktop streaming)
-  'oblireach-agent.msi':            'oblireach-agent.msi',
-  'oblireach-agent.exe':            'oblireach-agent.exe',
-  'oblireach-agent-linux-amd64':    'oblireach-agent-linux-amd64',
-  'oblireach-agent-darwin-amd64':   'oblireach-agent-darwin-amd64',
-  'oblireach-agent-darwin-arm64':   'oblireach-agent-darwin-arm64',
   // Hyper-V VM interactive console helper (FreeRDP + H.264) — downloaded
   // on-demand only on Hyper-V hosts (it's ~130 MB with its DLL bundle).
   'vmconsole.zip':                  'vmconsole.zip',
@@ -168,7 +162,7 @@ export async function agentDownload(req: Request, res: Response): Promise<void> 
     return;
   }
 
-  // Same folder as the ObliReach auto-install target (agent/dist).
+  // agent/dist (services/agentDist.ts).
   const filePath = distFilePath(binaryName);
 
   if (!fs.existsSync(filePath)) {
@@ -178,9 +172,9 @@ export async function agentDownload(req: Request, res: Response): Promise<void> 
 
   // SHA-256 so the agent can verify integrity after download. Computed once
   // per file content (streamed, cached on mtime + size, re-checked here on
-  // every request): a fleet fetching the same build (ObliReach auto-install,
-  // agent updates) no longer reads + hashes the whole file synchronously on
-  // each download. Fallback: the former synchronous computation.
+  // every request): a fleet fetching the same build (agent updates) no
+  // longer reads + hashes the whole file synchronously on each download.
+  // Fallback: the former synchronous computation.
   let hash: string | null = null;
   try { hash = (await getDistFileInfo(binaryName, { fresh: true }))?.sha256 ?? null; } catch { hash = null; }
   if (!hash) {

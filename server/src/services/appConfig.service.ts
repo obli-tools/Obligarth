@@ -2,9 +2,9 @@ import { db } from '../db';
 import type { AppConfigData, DeviceNotificationTypes, ObligateConfig } from '@obliance/shared';
 
 // ── Platform settings of the modules ────────────────────────────────────────
-// A module's own app_config keys (registerConfigKey; modules/rmm.ts for the
-// RMM's): listed by getAll() after the core's, in registration order, and
-// written through PUT /api/admin/config/:key (settingsWrite.service).
+// A module's own app_config keys (registerConfigKey): listed by getAll()
+// after the core's, in registration order, and written through
+// PUT /api/admin/config/:key (settingsWrite.service).
 
 export interface ModuleConfigKey {
   key: string;

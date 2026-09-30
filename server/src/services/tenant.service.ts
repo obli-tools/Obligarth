@@ -151,9 +151,9 @@ export const tenantService = {
 
   async removeUser(tenantId: number, userId: number): Promise<void> {
     // The user's teams of that tenant go too (teams are mono-tenant): a team
-    // membership left behind kept its device grants and capabilities
-    // (remote shells, file explorer) on the tenant's devices. Same rule as the
-    // Obligate callback's tenant reconciliation.
+    // membership left behind kept its device grants and capabilities on the
+    // tenant's devices. Same rule as the Obligate callback's tenant
+    // reconciliation.
     await db.transaction(async (trx) => {
       const teamIds = await trx('team_memberships')
         .join('user_teams', 'user_teams.id', 'team_memberships.team_id')

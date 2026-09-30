@@ -10,8 +10,8 @@ let io: SocketIOServer;
 // ── Module handlers ─────────────────────────────────────────────────────────
 // The core keeps the handshake (identity from the session cookie only), the
 // rooms and the live-session helpers. A module's own events are installed by
-// its handler on every connection, in registration order, once the rooms are
-// joined (modules/rmm.ts registers the RMM's).
+// its handler (registerSocketHandler) on every connection, in registration
+// order, once the rooms are joined.
 
 /** A socket's express session as the store holds it. */
 export type LiveSession = { userId?: number; currentTenantId?: number };
@@ -156,8 +156,7 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
     // The handshake identity (user, tenant) is frozen for the socket's life,
     // but the session behind it can end (sign-out: a desktop client may keep
     // its socket while the next user signs in behind it) or switch tenant.
-    // An action that reaches a machine (a chat window on someone's desktop,
-    // the file explorer on its disks) re-reads the LIVE session first.
+    // An action that reaches a machine re-reads the LIVE session first.
     // Resolves undefined when the store is unreachable, null when the
     // session is gone.
     const readSession = (): Promise<LiveSession | null | undefined> =>

@@ -2,7 +2,6 @@ import { Router } from 'express';
 import dns from 'dns/promises';
 import { deviceService, getAgentVersion } from '../services/device.service';
 import { customMetricService } from '../services/customMetric.service';
-import { customSectionService } from '../services/customSection.service';
 import { commandService } from '../services/command.service';
 import { requireRole, requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
@@ -1113,15 +1112,6 @@ router.get('/:id/change-events/summary', requireDeviceRead(), async (req, res, n
   } catch (err) { next(err); }
 });
 
-// GET /api/devices/:id/custom-sections — list sections that apply to this device
-router.get('/:id/custom-sections', requireDeviceRead(), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const sections = await customSectionService.listForDevice(deviceId, req.tenantId!);
-    res.json({ data: sections });
-  } catch (err) { next(err); }
-});
-
 // GET /api/devices/:id/services
 router.get('/:id/services', requireDeviceRead(), async (req, res, next) => {
   try {
@@ -1273,11 +1263,11 @@ router.post('/:id/privacy-mode/disable', requireRole('admin'), async (req, res, 
     const device = await deviceService.getDeviceById(id, req.tenantId!);
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
-    // If a privacy-gate password is set, refuse here. Callers must use
-    // /api/devices/:id/privacy/disable-with-password which verifies the
-    // password on the agent first.
+    // A privacy password set on the device: refused here (the agent does not
+    // check the password on a raw disable) — privacy mode is then lifted on
+    // the device itself.
     if ((device as any).privacyPasswordSet) {
-      return next(new AppError(423, 'Privacy password is set — use /privacy/disable-with-password'));
+      return next(new AppError(423, 'A privacy password is set on this device — privacy mode can only be disabled on the device'));
     }
 
     const { applyRestriction } = await import('../services/restriction.service');

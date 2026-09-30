@@ -6,8 +6,6 @@ import { SocketEvents } from '@obliance/shared';
 import { logger } from '../utils/logger';
 import { commandService } from './command.service';
 import { deviceService } from './device.service';
-import { processService } from './process.service';
-import { fileExplorerService } from './fileExplorer.service';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -75,7 +73,6 @@ interface AgentAck {
   commandType: string;
   success: boolean;
   result?: any;
-  sessionToken?: string;
   error?: string;
 }
 
@@ -118,7 +115,7 @@ class AgentHubService {
     // batched UPDATE. The agent doesn't send proactive heartbeats over WS,
     // so without this the "last seen" pill drifts past 5 min on a device
     // whose only contact path is the WS command channel — even though it's
-    // demonstrably reachable (admin can run commands, browse files).
+    // demonstrably reachable (admin can run commands).
     //
     // Liveness: a channel with no pong, no message and no byte moving on
     // its socket for AGENT_CHANNEL_MAX_MISSED rounds is dead (NAT / proxy /
@@ -190,7 +187,7 @@ class AgentHubService {
     // (updating/update_error/offline) back to online — but if that push path
     // breaks (post-update zombie, firewall flapping, etc.) while the WS stays
     // up, the device would be stuck in update_error/offline in the UI even
-    // though realtime features (explorer, tunnels) keep working via WS.
+    // though commands keep working via WS.
     // So on connect: refresh last_push_at and reset stuck transient statuses.
     try {
       const prev = await db('devices')
@@ -234,24 +231,13 @@ class AgentHubService {
     ws.on('message', async (data: Buffer) => {
       conn.alive = true;
       try {
-        const msg = JSON.parse(data.toString()) as AgentHeartbeat | AgentAck | AgentPrivacyNotify | { type: string; streamId?: string; data?: string; code?: number };
+        const msg = JSON.parse(data.toString()) as AgentHeartbeat | AgentAck | AgentPrivacyNotify | { type: string };
         if ((msg as any).type === 'heartbeat') {
           await this._handleHeartbeat(conn, msg as AgentHeartbeat);
         } else if ((msg as any).type === 'ack') {
           await this._handleAck(conn, msg as AgentAck);
         } else if ((msg as any).type === 'privacy_mode_changed') {
           await this._handlePrivacyChange(conn, msg as AgentPrivacyNotify);
-        } else if ((msg as any).type === 'custom_section_output' || (msg as any).type === 'custom_section_closed') {
-          const streamId = (msg as any).streamId as string;
-          if (streamId) {
-            const { customSectionStreamService } = await import('./customSectionStream.service');
-            customSectionStreamService.handleAgentMessage(
-              conn.deviceId,
-              (msg as any).type,
-              streamId,
-              msg,
-            );
-          }
         } else if ((msg as any).type === 'metrics_sample') {
           // Live-mode lightweight metrics (cpu/ram/disks) streamed over
           // WS while a user is watching this device's detail page.
@@ -393,12 +379,7 @@ class AgentHubService {
     }
   }
 
-  /**
-   * Handle an ack message received from an agent on the command channel.
-   * All command types are now handled:
-   *   - All acks → update command_queue row + emit COMMAND_RESULT to tenant room
-   *   - open_remote_tunnel failure → additionally mark session failed
-   */
+  /** The agent reports a privacy-mode switch: stored on the device and emitted. */
   private async _handlePrivacyChange(conn: AgentConn, msg: AgentPrivacyNotify): Promise<void> {
     try {
       await db('devices').where({ id: conn.deviceId }).update({
@@ -415,6 +396,11 @@ class AgentHubService {
     }
   }
 
+  /**
+   * Handle an ack message received from an agent on the command channel:
+   * a request() answer, a Rewind process snapshot, or a queued command
+   * (command_queue row updated + COMMAND_RESULT emitted to the tenant room).
+   */
   private async _handleAck(conn: AgentConn, msg: AgentAck): Promise<void> {
     if (msg.type !== 'ack') return;
 
@@ -432,35 +418,24 @@ class AgentHubService {
     }
 
     // Ephemeral process list — never touches the command_queue path (rewind
-    // dispatches carry no DB row; live-poll dispatches have random ids). Handle
-    // BOTH success and failure here and always return, so a failed ack can't
-    // fall through and insert a phantom command_queue row / emit a spurious
-    // COMMAND_RESULT. onProcessAck persists for rewind dispatches and no-ops for
-    // live-viewer polls; calling it with [] on failure just releases the pending
-    // entry immediately (instead of leaking until the 90s TTL).
+    // dispatches carry no DB row). Handle BOTH success and failure here and
+    // always return, so a failed ack can't fall through and insert a phantom
+    // command_queue row / emit a spurious COMMAND_RESULT. onProcessAck
+    // persists for rewind dispatches and no-ops for any other id; calling it
+    // with [] on failure just releases the pending entry immediately (instead
+    // of leaking until the 90s TTL).
     if (msg.commandType === 'list_processes') {
       let processes: any[] = [];
       if (msg.success && msg.result) {
         try {
           const parsed = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
           const arr = parsed?.processes ?? parsed;
-          if (Array.isArray(arr)) {
-            processes = arr;
-            processService.broadcast(conn.deviceId, conn.tenantId, processes);
-          }
+          if (Array.isArray(arr)) processes = arr;
         } catch { /* ignore malformed process data */ }
       }
       import('./rewindCollector.service')
         .then(({ rewindCollector }) => rewindCollector.onProcessAck(msg.id, conn.deviceId, conn.tenantId, processes))
         .catch(() => { /* best-effort */ });
-      return;
-    }
-
-    // File explorer commands — relay to requesting browser socket, skip DB
-    const fileExplorerCmds = ['list_directory', 'create_directory', 'rename_file', 'delete_file', 'download_file', 'upload_file'];
-    if (msg.commandType && fileExplorerCmds.includes(msg.commandType)) {
-      const result = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
-      fileExplorerService.handleResult(msg.id, msg.success ? 'success' : 'failure', result ?? { error: msg.error }, msg.commandType);
       return;
     }
 
@@ -474,27 +449,6 @@ class AgentHubService {
       }]);
     } catch (e) {
       logger.error(e, 'Failed to process WS command ack');
-    }
-
-    // Special handling: open_remote_tunnel failure → mark session failed,
-    // also when it is already 'active' (a shell tunnel dials the relay BEFORE
-    // spawning the shell, so a ConPTY failure arrives after pairing), with
-    // the agent's error text in end_reason. Only this agent's own sessions —
-    // an agent cannot fail another device's session by echoing a token back.
-    if (msg.commandType === 'open_remote_tunnel' && !msg.success && msg.sessionToken) {
-      try {
-        // Lazy import: remote.service imports this module.
-        const { remoteService } = await import('./remote.service');
-        const updated = await remoteService.failSessionFromCommandAck(msg.sessionToken, conn.deviceId, msg.error);
-        if (updated) {
-          logger.error(
-            { sessionId: updated.id, error: msg.error, deviceId: conn.deviceId },
-            'open_remote_tunnel failed (command channel)',
-          );
-        }
-      } catch (err) {
-        logger.error(err, 'open_remote_tunnel failure ack handling failed');
-      }
     }
   }
 

@@ -2,7 +2,7 @@ import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
 import { isMasterTenant, SocketEvents } from '@obliance/shared';
-import { commandService } from './command.service';
+import { commandService, PRIVACY_BLOCKED_COMMANDS } from './command.service';
 import {
   activeRequester, auditAs, refuse, requirePlatformAdmin,
   type ApprovalExecution, type BatchCommandPayload,
@@ -22,11 +22,8 @@ const DEVICE_ADMIN_ONLY: ReadonlySet<string> = new Set([
 /** Commands the legacy (Go 1.20) agent cannot run — same list as POST
  *  /api/commands (LEGACY_INCOMPATIBLE there). */
 const LEGACY_INCOMPATIBLE: ReadonlySet<string> = new Set([
-  'open_remote_tunnel', 'close_remote_tunnel',
-  'install_oblireach',
   'install_software', 'uninstall_software', 'check_software_compliance',
   'enable_privacy_mode',
-  'upload_file', 'download_file',
   'update_agent',
 ]);
 
@@ -35,25 +32,12 @@ const LEGACY_INCOMPATIBLE: ReadonlySet<string> = new Set([
  *  veeam.routes). */
 function commandCapability(action: string, params: Record<string, any> | undefined): string {
   if (['reboot', 'shutdown', 'sleep', 'restart_agent', 'uninstall_agent'].includes(action)) return 'power';
-  if (['open_remote_tunnel', 'close_remote_tunnel'].includes(action)) return 'remote';
-  if (['list_directory', 'create_directory', 'rename_file', 'delete_file', 'download_file', 'upload_file'].includes(action)) return 'files';
   if (action === 'hyperv_control') {
     const vm = String(params?.action ?? '');
     return ['start', 'stop', 'shutdown', 'restart', 'save', 'pause', 'resume'].includes(vm) ? 'hyperv:power' : 'hyperv:manage';
   }
   if (action === 'veeam_control') return 'veeam:control';
   return 'execute';
-}
-
-/** A remote session request (open_<protocol>_session). */
-export function isRemoteSessionStart(action: string): boolean {
-  return /^open_[a-z]+_session$/.test(action);
-}
-
-/** A remote session is opened live by its requester (browser tunnel): an
- *  approval cannot start it afterwards. */
-export async function refuseRemoteSessionStart(): Promise<void> {
-  refuse('A remote session cannot be started from an approval — the requester must open it again (lower the remote.session_start restriction to "sensitive" to allow it with a code)');
 }
 
 /**
@@ -105,9 +89,8 @@ export async function executeUpdateAllAgents(x: ApprovalExecution): Promise<stri
  * Device commands (POST /api/commands, /api/devices/batch, privacy mode,
  * airgap, Hyper-V, Veeam…): the approval executor of every 'batch_command'
  * action no other executor took. Enqueued as the requester on the devices
- * still in the tenant. A privacy-gated command on a device in privacy mode
- * needs the requester's live unlock (commandService.enqueue attaches it; the
- * token itself is never kept in the request).
+ * still in the tenant; a privacy-blocked command skips the devices now in
+ * privacy mode.
  */
 export async function executeDeviceCommands(x: ApprovalExecution): Promise<string | void> {
   const payload = x.payload as BatchCommandPayload;
@@ -129,14 +112,14 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
   const errors: string[] = [];
   // The device-state gates of the direct routes, re-applied now (the state
   // may have changed while the request waited):
-  //  - a privacy password set on the device: disable_privacy_mode goes
-  //    through /privacy/disable-with-password (the agent itself does not
-  //    check the password on a raw disable);
+  //  - a privacy password set on the device: disable_privacy_mode is lifted
+  //    on the device itself (the agent does not check the password on a raw
+  //    disable);
   //  - the legacy (Go 1.20) agent lacks these handlers (POST /api/commands
   //    LEGACY_INCOMPATIBLE): the command would hang forever.
   devices = devices.filter((d) => {
     if (action === 'disable_privacy_mode' && d.privacy_password_set) {
-      errors.push(`${d.hostname}: a privacy password is set on it — use "disable with password"`);
+      errors.push(`${d.hostname}: a privacy password is set on it — privacy mode can only be disabled on the device`);
       return false;
     }
     if (d.agent_flavor === 'legacy' && LEGACY_INCOMPATIBLE.has(action)) {
@@ -154,7 +137,7 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
   if (!devices.length) refuse(`Nothing was sent — ${errors.join('; ')}`);
   // Rights may have changed while the request waited: a requester that is
   // not a platform admin still needs, on each device, the capability the
-  // route required (power / remote / files / Hyper-V / Veeam / execute).
+  // route required (power / Hyper-V / Veeam / execute).
   if (!requester.isPlatformAdmin) {
     if (DEVICE_ADMIN_ONLY.has(action)) refuse(`Only a platform administrator can run '${action}'`);
     const { permissionService } = await import('./permission.service');
@@ -172,9 +155,8 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
     }
   }
   const params: Record<string, any> = { ...(rawParams ?? {}) };
-  delete params.unlockToken; // requests filed before the token was kept out
+  delete params.unlockToken; // a privacy unlock token of an old request: never sent on
   const targets = devices;
-  const { privacyGateService } = await import('./privacyGate.service');
   const doneIds: number[] = [];
   if (action === 'update_agent') {
     // Queued without expiry, one per device (an update already waiting
@@ -184,9 +166,8 @@ async function deviceCommands(tenantId: number, userId: number, action: string, 
     doneIds.push(...targets.map((d) => d.id));
   }
   for (const d of action === 'update_agent' ? [] : targets) {
-    if (d.privacy_mode_enabled && privacyGateService.isBlockedByPrivacy(action)
-      && !privacyGateService.get(userId, d.id, privacyGateService.featureForCommand(action))) {
-      errors.push(`${d.hostname}: privacy mode is active and the requester's unlock has expired`);
+    if (d.privacy_mode_enabled && PRIVACY_BLOCKED_COMMANDS.has(action)) {
+      errors.push(`${d.hostname}: privacy mode is active on it`);
       continue;
     }
     try {

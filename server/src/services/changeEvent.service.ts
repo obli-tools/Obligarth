@@ -56,9 +56,9 @@ import { logger } from '../utils/logger';
  *   - `audit_logs` is admin-only (`routes/audit.routes.ts` mounts
  *     `requireRole('admin')` on the whole router), so `config_change` is
  *     dropped for non-admins.
- *   - `remote_sessions` hides other users' sessions from plain users
- *     (`remoteService.getSessions`), so non-admins only see sessions they
- *     started.
+ *   - `remote_sessions` hides other users' sessions from plain users (the
+ *     rule of the former remote sessions list), so non-admins only see
+ *     sessions they started.
  * The kinds actually served are echoed back in `kinds` so the caller can tell
  * "no events" apart from "not allowed to see that kind".
  *
@@ -445,8 +445,8 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
         const q = scope('remote_sessions', 'rs', deviceId, tenantId)
           .leftJoin('users as u', 'u.id', 'rs.started_by')
           .whereBetween('rs.started_at', [from, to]);
-        // Mirrors remoteService.getSessions: a plain user must not see other
-        // users' sessions on a shared device.
+        // The rule of the former remote sessions list: a plain user must not
+        // see other users' sessions on a shared device.
         if (!ctx.callerIsAdmin) q.where('rs.started_by', ctx.callerUserId);
         return q;
       },

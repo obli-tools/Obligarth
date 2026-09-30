@@ -81,7 +81,7 @@ export async function deviceKeySession(req: Request, res: Response, next: NextFu
 
     // Dead key status of `st` (and revocation of a still-active key that
     // failed a permanent check, so the audit says why): THE shared rule
-    // (also the Socket.io handshake and the remote tunnel upgrade).
+    // (also the Socket.io handshake).
     const dead = (keyId: string, st: Awaited<ReturnType<typeof dk.keyStatusCached>>): Promise<boolean> =>
       dk.deadKeyStatus(keyId, st, policy.requireAttestation, req);
 

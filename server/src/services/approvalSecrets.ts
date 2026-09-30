@@ -7,9 +7,9 @@
 //
 //  - The routes decide, from what the SERVER knows to be secret, that an
 //    action carries one (`carriesSecret` of restrictionService.enforce): the
-//    password fields of the privacy-password commands, the Obligate API key /
-//    inbound secret, the own password change, the parameters a script
-//    DECLARES secret. Such an action asks a fresh step-up (no trusted-IP
+//    secret fields a module declares for its device commands, the Obligate
+//    API key / inbound secret, the own password change, the parameters a
+//    script DECLARES secret. Such an action asks a fresh step-up (no trusted-IP
 //    shortcut) at the 'restricted' level instead of a second administrator —
 //    the rule P1 applied to the admin password reset. The name of a field
 //    the CALLER added never decides it: a junk `token` key must not turn a
@@ -29,7 +29,7 @@ const SECRET_KEY = /(password|passwd|passphrase|^pwd$|^pass$|secret|token|apikey
  *  `keyId`, `tokenIds`…) are not. */
 export function isSecretKey(key: string): boolean {
   // Dotted keys are map keys, not field names (restriction action keys such
-  // as 'command.set_privacy_password'): never a credential.
+  // as 'command.reboot'): never a credential.
   if (key.includes('.')) return false;
   const n = key.toLowerCase().replace(/[_\-\s]/g, '');
   if (/(id|ids)$/.test(n)) return false;
@@ -82,8 +82,7 @@ export function scrubSecrets<T>(value: T): { clean: T; removed: string[] } {
 
 /** Command types whose payload carries a secret, and its fields: declared by
  *  the module that owns the command (registerSecretCommandFields; e.g. the
- *  privacy-password commands of privacyGate.routes, the agent
- *  reconfiguration key). Fixed by the server: never inferred from the
+ *  agent reconfiguration key). Fixed by the server: never inferred from the
  *  caller's field names. */
 const SECRET_COMMAND_FIELDS = new Map<string, readonly string[]>();
 

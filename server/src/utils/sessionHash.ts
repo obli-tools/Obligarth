@@ -4,7 +4,7 @@ import crypto from 'crypto';
 // sha256 of its id (the raw id is the session cookie's secret part and is
 // never kept outside the session store). Used to close the live channels of
 // a session a revocation deleted (userSessions.service closeSessionChannels,
-// socket.ts, remote.service). No project import: safe for socket.ts.
+// socket.ts). No project import: safe for socket.ts.
 
 /** sha256 (hex) of an express-session id. */
 export function sessionHash(sid: string): string {

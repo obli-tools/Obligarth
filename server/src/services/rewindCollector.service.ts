@@ -8,14 +8,13 @@ import { agentHub, type HubCommand } from './agentHub.service';
  *
  * Periodically snapshots the running processes of each online device so the
  * Rewind tab can show "what was running / what was eating CPU at 14:30 last
- * Tuesday". ZERO agent change: it reuses the existing `list_processes` command
- * (the same one the live process view polls), pushed over the agent WS command
- * channel; the ACK is captured in agentHub._handleAck -> onProcessAck() and
- * stored as ONE jsonb row (top-N processes) in device_process_history.
+ * Tuesday". ZERO agent change: it reuses the existing `list_processes` command,
+ * pushed over the agent WS command channel; the ACK is captured in
+ * agentHub._handleAck -> onProcessAck() and stored as ONE jsonb row (top-N
+ * processes) in device_process_history.
  *
  * Ephemeral, in-memory correlation (no command_queue rows): each dispatch id is
- * tracked in `pending`; only ids we dispatched get persisted, so the 5s live
- * poll (which also flows through _handleAck) is never written to history.
+ * tracked in `pending`; only ids we dispatched get persisted.
  *
  * Only WS-connected agents are probed — HTTP-poll / legacy agents simply get no
  * process history (they still get metric + service rewind). Deliberately gentle
@@ -100,10 +99,10 @@ class RewindCollector {
   }
 
   /** Called from agentHub._handleAck for every list_processes ACK. No-op unless
-   *  this id was one WE dispatched (live-poll acks are ignored). Best-effort. */
+   *  this id was one WE dispatched. Best-effort. */
   async onProcessAck(commandId: string, _deviceId: number, _tenantId: number, processes: any[]): Promise<void> {
     const p = this.pending.get(commandId);
-    if (!p) return; // not a rewind capture (e.g. live viewer poll)
+    if (!p) return; // not a rewind capture
     this.pending.delete(commandId);
     try {
       if (!Array.isArray(processes) || !processes.length) return;

@@ -804,8 +804,9 @@ const EXECUTORS: Partial<Record<ScenarioNodeType, (ctx: ExecutorContext) => Prom
   },
 
   // ── run_command — fires a typed command (reboot, shutdown, install_updates,
-  // start/stop/restart_service, kill_process, …). The agent's command
-  // dispatcher handles each type; on ack the engine resumes the graph.
+  // start/stop/restart_service, …; commandService.enqueue refuses the
+  // retired ones). The agent's command dispatcher handles each type; on ack
+  // the engine resumes the graph.
   // Same source_type pattern as run_script, so the unified ack handler
   // routes it correctly without extra wiring.
   run_command: async ({ run, node, nodeRunId }) => {

@@ -1,11 +1,7 @@
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { registerBootTask, registerStartTask, registerStopTask, registerUpgradeHandler } from '../lifecycle';
-import { registerSocketHandler, requireSocketMessageSize } from '../socket';
 import { exemptFromApiLimiter } from '../middleware/rateLimiter';
-import { onSessionsKilled } from '../services/userSessions.service';
-import { onTrustRevoked } from '../services/tfaTrust.service';
-import { registerConfigKey } from '../services/appConfig.service';
 import { registerSettingsWrite } from '../services/settingsWrite.service';
 import { registerAuditResourceName } from '../services/audit.service';
 import {
@@ -19,30 +15,16 @@ import { registerDashboardStat } from '../services/obligate.service';
 import { deviceService } from '../services/device.service';
 import { scheduleService } from '../services/schedule.service';
 import { commandService } from '../services/command.service';
-import { remoteService } from '../services/remote.service';
-import { endBastionConnectionsForUser, startSshBastion } from '../services/sshBastion/sshBastion.service';
 import { complianceService } from '../services/compliance.service';
 import { softwareComplianceService } from '../services/softwareCompliance.service';
-import { clearExplorerStepUpsOfUser } from '../services/fileExplorerGate.service';
-import { remoteTunnelUpgrade, closeRemoteTunnelServer } from '../services/remoteTunnel.upgrade';
 import { agentChannelUpgrade, closeAgentChannelServer } from '../services/agentHub.upgrade';
-import { oblireachChannelUpgrade, closeOblireachChannelServer } from '../services/oblireachHub.upgrade';
-import { installProcessSocketHandlers } from '../services/process.socket';
-import { installFileExplorerSocketHandlers } from '../services/fileExplorer.socket';
-import { installCustomSectionSocketHandlers } from '../services/customSection.socket';
-import { installChatSocketHandlers } from '../services/oblireachChat.socket';
-import { WEBVIEW2_MODE_KEY, WEBVIEW2_MODES, noteWebView2Mode, parseWebView2Mode } from '../services/oblireachWebView2.service';
-import { editableExtensionsWrite } from '../services/fileExplorerSettings.service';
 import { globalThresholdsWrite } from '../services/thresholdSettings.service';
-import {
-  executeDeviceCommands, executeUpdateAllAgents, isRemoteSessionStart, refuseRemoteSessionStart,
-} from '../services/commandApproval';
+import { executeDeviceCommands, executeUpdateAllAgents } from '../services/commandApproval';
 import { executeChangeGroup, executeDeviceRequest, executeTransferTenant } from '../services/deviceApproval';
 import { executeSoftwareRemediation, isSoftwareRemediation } from '../services/softwareComplianceApproval';
 import {
   executeManualScriptRun, executeSettingChange, isManualScriptRun,
 } from '../services/automationApproval';
-import type { ObliReachWebView2Mode } from '@obliance/shared';
 
 // =============================================================================
 // RMM MODULES (Obliance heritage) — TO BE REMOVED.
@@ -56,12 +38,6 @@ import type { ObliReachWebView2Mode } from '@obliance/shared';
 //                diskHealth, rewind, metrics, agent update rollout)
 //   [devices]    agent-managed device jobs and actions of device.service
 //                (to adapt: the device registry itself stays)
-//   [remote]     remote sessions and tunnels (remote.service)
-//   [oblireach]  ObliReach channel, chat, WebView2
-//   [bastion]    SSH bastion (services/sshBastion)
-//   [explorer]   file explorer
-//   [sections]   custom sections
-//   [processes]  live process list
 //   [scripts]    scripts and schedules
 //   [scenarios]  scenarios
 //   [compliance] compliance policies and presets
@@ -164,22 +140,6 @@ export function registerRmmModules(): void {
     setInterval(() => deviceService.cleanOrphans(), 4 * 60 * 60 * 1000);
   });
 
-  // [remote] No relay survives a restart: sessions the previous run left
-  // 'active' are closed (awaited: before the jobs below and the port).
-  registerStartTask('remote.orphanedSessions', () => remoteService.closeOrphanedSessionsAtBoot()
-    .catch((err) => logger.error(err, 'Closing remote sessions left active by the previous run failed')));
-
-  // [remote] Clean up stale remote sessions (waiting/connecting with no
-  // activity) every 2 min.
-  registerStartTask('remote.staleSessions', () => {
-    remoteService.cleanupStaleSessions();                                    // run once at startup
-    setInterval(() => remoteService.cleanupStaleSessions(), 2 * 60 * 1000); // then every 2 min
-  });
-
-  // [bastion] SSH Bastion (ObliJump) — opt-in via .env; binds its own port
-  // only when SSH_BASTION_ENABLED=true. No-op otherwise.
-  registerStartTask('bastion.start', () => { startSshBastion(); });
-
   // [compliance] Sync built-in preset rules to existing policies (auto-update
   // on deploy), then scheduled compliance checks — every 6h, skip devices
   // checked within the window (first run 1 min after startup).
@@ -244,64 +204,11 @@ export function registerRmmModules(): void {
   });
 
   // ── Raw WebSocket upgrades (lifecycle.ts dispatcher) ─────────────────────
-  // [remote] /api/remote/tunnel/<token> (browser) and /api/remote/agent-tunnel/<token>.
-  registerUpgradeHandler('remote.tunnels', remoteTunnelUpgrade);
-  registerStopTask('remote.tunnels', closeRemoteTunnelServer);
   // [agent] /api/agent/ws — agent command channel.
   registerUpgradeHandler('agent.channel', agentChannelUpgrade);
   registerStopTask('agent.channel', closeAgentChannelServer);
-  // [oblireach] /api/oblireach/ws — ObliReach agent command channel.
-  registerUpgradeHandler('oblireach.channel', oblireachChannelUpgrade);
-  registerStopTask('oblireach.channel', closeOblireachChannelServer);
 
-  // ── Socket.io handlers (socket.ts) ───────────────────────────────────────
-  registerSocketHandler('processes', installProcessSocketHandlers);        // [processes]
-  registerSocketHandler('explorer', installFileExplorerSocketHandlers);    // [explorer]
-  registerSocketHandler('sections', installCustomSectionSocketHandlers);   // [sections]
-  registerSocketHandler('oblireach.chat', installChatSocketHandlers);      // [oblireach]
-  // [explorer] File uploads travel in Socket.io messages (base64): 150 MB.
-  requireSocketMessageSize(150 * 1024 * 1024);
-
-  // ── End of sessions (userSessions.service) ───────────────────────────────
-  // Connections that outlive a session: remote sessions the user started or
-  // whose browser relay a session attached (browser relay, ObliReach, VM
-  // console), and authenticated SSH bastion connections.
-  onSessionsKilled({ // [remote]
-    name: 'remote',
-    label: 'remote sessions',
-    forUser: (userId, reason) => remoteService.closeSessionsForUser(userId, reason),
-    forSessions: (hashes, reason) => remoteService.closeSessionsForSessionHashes(hashes, reason),
-  });
-  onSessionsKilled({ // [bastion]
-    name: 'bastion',
-    label: 'bastion connections',
-    forUser: (userId) => endBastionConnectionsForUser(userId),
-  });
-
-  // [explorer] The file explorer's step-up grants of a user go with the
-  // user's trusted IPs (tfaTrust.service revokeAllForUser).
-  onTrustRevoked((userId) => { clearExplorerStepUpsOfUser(userId); });
-
-  // ── Platform settings (appConfig / settingsWrite) ────────────────────────
-  // [oblireach] Automatic install / update by the Obliance agent
-  // (platform-wide; absent = on). Tenant / group / device: settings key
-  // 'oblireachAutoInstall'.
-  registerConfigKey({
-    key: 'oblireach_auto_install',
-    type: 'boolean',
-    read: (v) => (v === 'false' ? 'false' : 'true'),
-  });
-  // [oblireach] Install of the Microsoft Edge WebView2 runtime of the chat
-  // window (proactive | on_demand | disabled; absent = proactive; no
-  // per-tenant switch). A write is applied at once by the ObliReach hub.
-  registerConfigKey({
-    key: WEBVIEW2_MODE_KEY,
-    type: 'enum',
-    values: WEBVIEW2_MODES,
-    read: (v) => parseWebView2Mode(v),
-    afterWrite: (v) => noteWebView2Mode(v as ObliReachWebView2Mode),
-  });
-  registerSettingsWrite(editableExtensionsWrite);  // [explorer]   PUT /api/admin/config/editable-extensions
+  // ── Platform settings (settingsWrite) ────────────────────────────────────
   registerSettingsWrite(globalThresholdsWrite);    // [thresholds] PUT /api/admin/config/global-thresholds
 
   // ── Audit: names of the resources (audit.service) ────────────────────────
@@ -315,7 +222,6 @@ export function registerRmmModules(): void {
   registerApprovalExecutor(isManualScriptRun, executeManualScriptRun);         // [scripts] POST /api/scripts/:id/execute
   registerApprovalExecutor('change_group', executeChangeGroup);                // [devices] bulk group change
   registerApprovalExecutor('transfer_tenant', executeTransferTenant);          // [devices] bulk tenant transfer
-  registerApprovalExecutor(isRemoteSessionStart, refuseRemoteSessionStart);    // [remote] never from an approval
   registerApprovalExecutor(isSoftwareRemediation, executeSoftwareRemediation); // [software] manual remediation
   registerApprovalExecutor('update_all_agents', executeUpdateAllAgents);       // [agent] dashboard "update all agents"
   registerDefaultApprovalExecutor(executeDeviceCommands);                      // [agent] device commands
@@ -343,21 +249,10 @@ export function registerRmmModules(): void {
     // [software]
     { key: 'software.remediate_install',   label: 'Install software (manual)', category: 'Software' },
     { key: 'software.remediate_uninstall', label: 'Uninstall software (manual)', category: 'Software' },
-    // [explorer] Listing is a low-risk read; upload/delete/rename are destructive.
-    { key: 'command.list_directory',       label: 'Browse file explorer',     category: 'File Explorer' },
-    { key: 'command.upload_file',          label: 'Upload a file to the device', category: 'File Explorer' },
-    { key: 'command.download_file',        label: 'Download a file from the device', category: 'File Explorer' },
-    { key: 'command.delete_file',          label: 'Delete a file on the device', category: 'File Explorer' },
-    { key: 'command.rename_file',          label: 'Rename a file on the device', category: 'File Explorer' },
-    { key: 'command.create_directory',     label: 'Create a directory on the device', category: 'File Explorer' },
-    // [remote] Remote sessions (any protocol — SSH, CMD, PowerShell, ObliReach).
-    { key: 'remote.session_start',         label: 'Start a remote session (SSH / CMD / PowerShell / ObliReach)', category: 'Remote' },
     // [agent] Services — start is low-risk, stop/restart impact the host.
     { key: 'command.start_service',        label: 'Start a service',          category: 'Services' },
     { key: 'command.stop_service',         label: 'Stop a service',           category: 'Services' },
     { key: 'command.restart_service',      label: 'Restart a service',        category: 'Services' },
-    // [processes]
-    { key: 'command.kill_process',         label: 'Kill a process',           category: 'Processes' },
     // [scripts] Manual execution from the UI (schedules are un-gated).
     { key: 'script.execute_manual',        label: 'Manually execute a script', category: 'Scripts' },
     // [scenarios] [scripts] Bypass-privacy toggles on automations — flipping
@@ -409,12 +304,6 @@ export function registerRmmModules(): void {
     // Manual script execution defaults to sensitive — scripts can do anything
     // on the target host, so a fresh TOTP confirm is a sane default.
     'script.execute_manual':        'sensitive',
-    // File explorer is gated at the menu-entry point (list_directory) only,
-    // so a user enters a code ONCE when opening the explorer and then browses
-    // / downloads / uploads freely without re-prompting. Individual
-    // destructive operations stay None by default — admins can opt in per
-    // action from the matrix if they want a double-gate.
-    'command.list_directory':       'sensitive',
     // Privacy-mode bypass on automations — restricted by default so two
     // admins must sign off before an automation can sweep across a device
     // whose user has opted into privacy. Migration 102 seeds the same.
@@ -433,17 +322,13 @@ export function registerRmmModules(): void {
     'hyperv.vm_edit':              'sensitive',
     'hyperv.vm_create':            'sensitive',
     'hyperv.vm_delete':            'restricted',
-    // Remote sessions / services / processes are intentionally NOT defaulted
-    // — admins opt in from the matrix once they have TOTP deployed across
-    // privileged accounts, otherwise a fresh install could softlock itself.
+    // Services are intentionally NOT defaulted — admins opt in from the
+    // matrix once they have TOTP deployed across privileged accounts,
+    // otherwise a fresh install could softlock itself.
   });
 
   // ── Secrets of the device commands (approvalSecrets) ─────────────────────
   // Never kept in an approval: such a command asks a fresh step-up instead.
-  registerSecretCommandFields('set_privacy_password', ['password']);                 // [privacy]
-  registerSecretCommandFields('change_privacy_password', ['oldPassword', 'newPassword']); // [privacy]
-  registerSecretCommandFields('remove_privacy_password', ['password']);              // [privacy]
-  registerSecretCommandFields('verify_privacy_password', ['password']);              // [privacy]
   registerSecretCommandFields('reconfigure_agent', ['apiKey']);                      // [agent]
 
   // ── Rate limiter exemptions (apiLimiter) ─────────────────────────────────
@@ -452,8 +337,6 @@ export function registerRmmModules(): void {
   // inventory, compliance results, scan data, and metrics at their natural
   // cadence. Security is provided by the API key itself.
   exemptFromApiLimiter('/api/agent/');
-  // [oblireach] Oblireach agent pushes (same auth, same frequency).
-  exemptFromApiLimiter('/api/oblireach/');
   // Passive heartbeats (token authenticated, triggered by external systems):
   // no route serves this path any more; kept so the limiter counts nothing new.
   exemptFromApiLimiter('/api/heartbeat/');

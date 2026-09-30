@@ -39,16 +39,6 @@ export const config = {
   disable2faForce: process.env.DISABLE_2FA_FORCE === 'true',
   minPushInterval: parseInt(process.env.MIN_PUSH_INTERVAL || '10', 10),
   customDir: process.env.CUSTOM_DIR || './custom',
-  // Remote access
-  remoteTunnelPath: '/api/remote/tunnel',
-  // SSH Bastion (ObliJump) — opt-in via .env, like the Oblihub stacks. The
-  // ssh2 server only binds when enabled; SSH_BASTION_PORT must NOT be 22 (that
-  // stays the host sshd). This port is the one guarded by the IP whitelist,
-  // anti-bruteforce and honeypot.
-  sshBastion: {
-    enabled: process.env.SSH_BASTION_ENABLED === 'true',
-    port: parseInt(process.env.SSH_BASTION_PORT || '2222', 10),
-  },
   // Device-bound 2FA (docs/mobile/device-bound-2fa.md §9). Parsed and
   // validated by services/deviceKey/deviceKey.service.ts.
   deviceKeys: {

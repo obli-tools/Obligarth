@@ -15,7 +15,7 @@ export function clientIp(req: Request): string {
 }
 
 /** Effective "Trust this IP" window for a tenant, in ms (0 = IP trust
- *  disabled). Also drives the SSH bastion "SSH" button authorization. */
+ *  disabled). */
 export async function trustWindowMs(tenantId?: number): Promise<number> {
   if (!tenantId) return DEFAULT_TRUST_WINDOW_MS;
   try {

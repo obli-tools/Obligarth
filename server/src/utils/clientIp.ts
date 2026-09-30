@@ -5,8 +5,8 @@ import os from 'os';
 import type { IncomingMessage } from 'http';
 
 /**
- * The one way to know a client's IP (audit, "trust this IP" 2FA window, SSH
- * button whitelist, agent address) — not the rate-limit key, see below.
+ * The one way to know a client's IP (audit, "trust this IP" 2FA window,
+ * agent address) — not the rate-limit key, see below.
  *
  * `X-Forwarded-For` is a list the CLIENT can pre-fill: only the entries added
  * by proxies we trust are meaningful. Like Express's `trust proxy`, the list
@@ -45,7 +45,7 @@ export const DEFAULT_TRUSTED_PROXIES = 'loopback, self, 172.16.0.0/12';
 
 /** IPv4 subnets of this process's interfaces (Docker plumbing). In the host
  *  network namespace (docker0 present) only Docker bridges count, never the
- *  real LAN interfaces — same rule as the SSH bastion's infra detection. */
+ *  real LAN interfaces. */
 function ownSubnets(): string[] {
   const ifaces = os.networkInterfaces();
   const hostNetns = 'docker0' in ifaces;
@@ -142,8 +142,8 @@ export interface ResolvedClient {
    * one of our proxies / Docker plumbing, or a private address that itself
    * forwarded on behalf of someone else (X-Forwarded-For entries remain) —
    * typically an edge proxy missing from TRUSTED_PROXIES. Never grant or
-   * honour an IP-based trust (2FA window, SSH button) for it, and never
-   * record it as a device's public address.
+   * honour an IP-based trust (2FA window) for it, and never record it as a
+   * device's public address.
    */
   relay: boolean;
   /** Relay reached before the hop cap: likely a proxy to add to TRUSTED_PROXIES. */

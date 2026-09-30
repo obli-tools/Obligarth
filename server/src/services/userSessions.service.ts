@@ -18,16 +18,16 @@ import { sessionHash, sessionRoom } from '../utils/sessionHash';
 // session back when it ends. middleware/sessionUserGuard.ts re-reads the
 // user on every request (its cache entry is dropped here), so such a
 // resurrected row dies on its next use. Connections that outlive the
-// session are closed too: the modules close theirs (remote sessions the user
-// started, SSH bastion connections…) through their onSessionsKilled hooks.
+// session are closed too: the modules close theirs through their
+// onSessionsKilled hooks.
 
 // ── Hooks of the modules ────────────────────────────────────────────────────
 
 /** What a module closes when sessions end (onSessionsKilled). */
 export interface SessionsKilledHook {
-  /** Key of its count in the log line ('remote', 'bastion'). */
+  /** Key of its count in the log line. */
   name: string;
-  /** What it closes, for the failure log ('remote sessions'). */
+  /** What it closes, for the failure log. */
   label: string;
   /** Every session of this user was deleted (killSessionsForUser): returns
    *  how many of its channels it closed. */
@@ -78,21 +78,19 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
 
 // ── Per-session live channels (device-bound 2FA revocation, §6.7) ──────────
 //
-// Socket.io authenticates once, at the handshake, and a remote relay once, at
-// its upgrade: deleting a session row does not close what that session
-// already opened. Each socket joins `sess:<sha256(sid)>` at the handshake
-// (socket.ts) and a module's channel records the same hash (e.g. each browser
-// relay of remote.service), so a revocation that deletes session rows closes
-// exactly their channels, never the other sessions of the same user.
+// Socket.io authenticates once, at the handshake, and a module's raw channel
+// once, at its upgrade: deleting a session row does not close what that
+// session already opened. Each socket joins `sess:<sha256(sid)>` at the
+// handshake (socket.ts) and a module's channel records the same hash, so a
+// revocation that deletes session rows closes exactly their channels, never
+// the other sessions of the same user.
 
 export { sessionHash, sessionRoom };
 
 /**
  * Closes the live channels of these (already deleted) sessions: their
- * Socket.io connections, and what the modules' hooks close for them (e.g.
- * the remote sessions whose browser relay they attached or that they
- * started: shell, ObliReach, VM console). Never throws. Returns the modules'
- * counts by hook name.
+ * Socket.io connections, and what the modules' hooks close for them. Never
+ * throws. Returns the modules' counts by hook name.
  */
 export async function closeSessionChannels(sids: ReadonlyArray<string>, reason: string): Promise<Record<string, number>> {
   const list = [...new Set(sids.filter((x) => typeof x === 'string' && x.length > 0))];

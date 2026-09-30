@@ -1,17 +1,74 @@
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
+import { AppError } from '../middleware/errorHandler';
 import { SocketEvents } from '@obliance/shared';
-import { privacyGateService } from './privacyGate.service';
-import { redactCommandPayload, redactCommandResult } from './remoteSessionSecurity';
 import type { Command, CommandAck, CommandType, CommandPriority } from '@obliance/shared';
 
-// Sync-wait map used by privacy-password routes and anywhere else that
-// needs to block on the agent's ack for a specific command.
+// Sync-wait map for callers that need to block on the agent's ack for a
+// specific command (waitForResult).
 const pendingWaiters = new Map<string, (payload: { status: string; result: any }) => void>();
 
 /** Values of the PG enum command_type (isKnownCommandType). */
 let knownTypes: { at: number; set: Set<string> } | null = null;
+
+/**
+ * Command types of the features this server no longer has: remote sessions
+ * and tunnels (shell, RDP, ObliReach, VM console), ObliReach install, SSH
+ * bastion jumps, file explorer, live process list, custom sections, privacy
+ * password. They stay values of the PG enum command_type (the schema is
+ * unchanged) but are never queued: isKnownCommandType answers false and
+ * enqueue refuses them.
+ */
+const RETIRED_COMMAND_TYPES: ReadonlySet<string> = new Set([
+  'open_remote_tunnel', 'close_remote_tunnel', 'list_wts_sessions', 'open_vm_console', 'close_vm_console',
+  'install_oblireach',
+  'ssh_jump_grant', 'ssh_jump_revoke',
+  'list_directory', 'create_directory', 'rename_file', 'delete_file', 'download_file', 'upload_file',
+  'list_processes', 'kill_process',
+  'start_custom_section', 'stop_custom_section', 'resize_custom_section',
+  'set_privacy_password', 'change_privacy_password', 'remove_privacy_password', 'verify_privacy_password',
+]);
+
+/** Commands a device in privacy mode refuses (the agent enforces it too):
+ *  the routes refuse them up front instead of queuing a command that fails. */
+export const PRIVACY_BLOCKED_COMMANDS: ReadonlySet<string> = new Set(['run_script']);
+
+/**
+ * Command-payload fields that are credentials meant for the AGENT only: the
+ * API key carried by `reconfigure_agent` and, in rows written before remote
+ * access and the privacy password were removed, the relay key, the URL that
+ * embeds it and the privacy unlock token. They stay in command_queue (the
+ * agent reads the raw row) but are stripped from every user-facing view.
+ */
+const COMMAND_SECRET_KEYS = new Set(['sessionToken', 'serverWsUrl', 'unlockToken', 'apiKey', 'viewerToken']);
+
+/** Copy of a command payload with agent-only secrets removed (never mutates). */
+export function redactCommandPayload(payload: unknown): Record<string, unknown> {
+  if (typeof payload === 'string') {
+    // jsonb comes back parsed from pg; a legacy text value may not.
+    try {
+      const parsed = JSON.parse(payload);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return redactCommandPayload(parsed);
+    } catch { /* not JSON — cannot carry a keyed secret */ }
+    return payload as unknown as Record<string, unknown>;
+  }
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return (payload ?? {}) as Record<string, unknown>;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload as Record<string, unknown>)) {
+    if (COMMAND_SECRET_KEYS.has(key)) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+/** Copy of a command RESULT with the same agent-only secrets removed (the
+ *  unlock token a verify_privacy_password answer carried included). */
+export function redactCommandResult(result: unknown): Record<string, unknown> {
+  return redactCommandPayload(result);
+}
 
 class CommandService {
   rowToCommand(row: any): Command {
@@ -28,8 +85,8 @@ class CommandService {
       tenantId: row.tenant_id,
       type: row.type,
       // User-facing view (REST + COMMAND_* socket events): agent-only secrets
-      // (relay token / URL, privacy unlock token, reconfigure API key) are
-      // stripped. The agent never reads this — it gets raw command_queue rows.
+      // (COMMAND_SECRET_KEYS) are stripped. The agent never reads this — it
+      // gets raw command_queue rows.
       payload: redactCommandPayload(row.payload || {}),
       status: row.status,
       priority: row.priority,
@@ -37,8 +94,8 @@ class CommandService {
       ackedAt: row.acked_at,
       finishedAt: row.finished_at,
       expiresAt: row.expires_at,
-      // Agent-only secrets of a result (the privacy unlock token) too — rows
-      // written before they were kept out of command_queue included.
+      // Agent-only secrets of a result too — rows written before they were
+      // kept out of command_queue included.
       result: redactCommandResult(row.result || {}),
       retryCount: row.retry_count,
       maxRetries: row.max_retries,
@@ -64,6 +121,12 @@ class CommandService {
     sourceId?: string;
     createdBy?: number;
   }): Promise<Command> {
+    // A removed feature's command is never queued, whoever asks (a raw
+    // command, a batch, an approval, a scenario node).
+    if (RETIRED_COMMAND_TYPES.has(data.type)) {
+      throw new AppError(400, `Command type '${data.type}' is no longer supported`);
+    }
+
     // Agent updates wait for their device (no expiry) and exist at most once
     // per device: agentUpdateRollout owns them, whatever the caller. A
     // scenario's update keeps the node's timeout; when an update is already
@@ -97,18 +160,7 @@ class CommandService {
       ? new Date(Date.now() + data.expiresInSeconds * 1000)
       : null;
 
-    // Auto-inject privacy unlock token for privacy-gated commands if the
-    // caller has an active unlock session on this device for the matching
-    // feature. Applies to every command enqueued via this service (files,
-    // processes, scripts, remote, etc.), not just /api/commands.
-    let payload = data.payload || {};
-    if (data.createdBy && privacyGateService.isBlockedByPrivacy(data.type)) {
-      const feature = privacyGateService.featureForCommand(data.type);
-      const token = privacyGateService.get(data.createdBy, data.deviceId, feature);
-      if (token) {
-        payload = { ...payload, unlockToken: token };
-      }
-    }
+    const payload = data.payload || {};
 
     const [row] = await db('command_queue').insert({
       device_id: data.deviceId,
@@ -136,9 +188,8 @@ class CommandService {
   }
 
   /**
-   * Wait for a specific command to be acked. Used by sync operations like
-   * privacy-password verification where the caller needs the agent's result
-   * immediately. Resolves on terminal ack, rejects on timeout.
+   * Wait for a specific command to be acked, for a caller that needs the
+   * agent's result immediately. Resolves on terminal ack, rejects on timeout.
    */
   waitForResult(commandId: string, timeoutMs = 10000): Promise<{ status: string; result: any }> {
     return new Promise((resolve, reject) => {
@@ -166,9 +217,8 @@ class CommandService {
     for (const ack of acks) {
       if (!UUID_RE.test(ack.commandId)) continue;
 
-      // What is stored and broadcast never carries an agent-only secret (the
-      // unlock token of verify_privacy_password): the sync waiter below gets
-      // the raw result, nothing else does.
+      // What is stored and broadcast never carries an agent-only secret: the
+      // sync waiter below gets the raw result, nothing else does.
       const storedResult = JSON.stringify(redactCommandResult(ack.result || {}));
       const updates: any = {
         status: ack.status,
@@ -180,8 +230,8 @@ class CommandService {
       const isTerminal = ['success', 'failure', 'timeout'].includes(ack.status);
       if (isTerminal) updates.finished_at = new Date();
 
-      // Sync waiters (privacy-password routes, etc.) resolve as soon as the
-      // terminal ack is received.
+      // Sync waiters (waitForResult) resolve as soon as the terminal ack is
+      // received.
       if (isTerminal) {
         const waiter = pendingWaiters.get(ack.commandId);
         if (waiter) waiter({ status: ack.status, result: ack.result });
@@ -232,23 +282,6 @@ class CommandService {
           }
         }
       } catch {}
-
-      // If a remote tunnel command failed, mark the session as failed so the UI
-      // stops waiting — also when it is already 'active' (shell tunnels dial the
-      // relay before spawning the shell), with the agent's error in end_reason.
-      // Only a session of the acking device.
-      if (isTerminal && ack.status === 'failure' && row && row.type === 'open_remote_tunnel' && Number(row.device_id) === Number(deviceId)) {
-        try {
-          const payload = typeof row.payload === 'string' ? JSON.parse(row.payload) : (row.payload || {});
-          if (payload.sessionToken) {
-            const r = (ack.result && typeof ack.result === 'object') ? ack.result as Record<string, unknown> : {};
-            const errText = typeof r.error === 'string' ? r.error : undefined;
-            // Lazy import: remote.service imports this module.
-            const { remoteService } = await import('./remote.service');
-            await remoteService.failSessionFromCommandAck(payload.sessionToken, deviceId, errText);
-          }
-        } catch {}
-      }
 
       // When install_update(s) starts running, mark the update(s) as "installing"
       if (!isTerminal && ack.status === 'ack_running' && row && (row.type === 'install_update' || row.type === 'install_updates')) {
@@ -675,12 +708,14 @@ class CommandService {
     }
   }
 
-  /** A command type the database knows (PG enum command_type). Unknown types
-   *  are refused at the API edge — before a restriction could file an
-   *  approval for an action string that means something else to an
-   *  executor. Cached (the enum only grows through migrations). */
+  /** A command type the database knows (PG enum command_type) and that is
+   *  not retired (RETIRED_COMMAND_TYPES). Unknown types are refused at the
+   *  API edge — before a restriction could file an approval for an action
+   *  string that means something else to an executor. Cached (the enum only
+   *  grows through migrations). */
   async isKnownCommandType(type: unknown): Promise<boolean> {
     if (typeof type !== 'string' || !/^[a-z][a-z0-9_]{0,63}$/.test(type)) return false;
+    if (RETIRED_COMMAND_TYPES.has(type)) return false;
     if (!knownTypes || Date.now() - knownTypes.at > 10 * 60_000) {
       const r = await db.raw(
         `SELECT e.enumlabel AS v FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = 'command_type'`,

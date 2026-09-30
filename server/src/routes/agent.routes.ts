@@ -24,7 +24,6 @@ import { complianceService } from '../services/compliance.service';
 import { softwareComplianceService } from '../services/softwareCompliance.service';
 import { networkDiscoveryService } from '../services/networkDiscovery.service';
 import { scenarioService } from '../services/scenario.service';
-import { nextObliReachStatus } from '../services/oblireachAutoInstall.service';
 import { SocketEvents } from '@obliance/shared';
 import { getIO } from '../socket';
 
@@ -250,26 +249,9 @@ router.post('/push', agentAuth, async (req, res, next) => {
         const cur = device.last_reboot_at ? new Date(device.last_reboot_at).getTime() : null;
         if (cur !== nr.getTime()) patch.last_reboot_at = nr;
       }
-      // ObliReach automatic install state reported by the agent (`oblireach`).
-      // Written only when the report changes; absent = keep (older agent),
-      // cleared when the agent stops reporting after a version change or is
-      // the legacy agent (which cannot run ObliReach).
-      const orNext = nextObliReachStatus({
-        report: body.oblireach,
-        stored: device.oblireach_status,
-        agentVersionChanged: !!agentVersion && agentVersion !== device.agent_version,
-        legacy: inferredFlavor === 'legacy',
-        nowIso: new Date().toISOString(),
-      });
-      if (orNext !== undefined) patch.oblireach_status = orNext === null ? null : JSON.stringify(orNext);
       if (Object.keys(patch).length > 0) {
         patch.updated_at = new Date();
         await db('devices').where({ id: device.id }).update(patch);
-      }
-      if (orNext !== undefined) {
-        try {
-          getIO().to(`tenant:${device.tenant_id}`).emit(SocketEvents.DEVICE_UPDATED, { deviceId: device.id, oblireachStatus: orNext });
-        } catch { /* socket not ready */ }
       }
 
       // Track identity fingerprint to detect duplicate machine_uuid across

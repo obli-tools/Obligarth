@@ -459,8 +459,7 @@ function safeJson(v: string): unknown {
  * 'credentials_changed'), 'unverified' while attestation is required (revoked
  * here, 'policy'), or its attestation chain revoked by Google since enrolment
  * (revoked here, 'attestation_revoked'). The caller checks the key's owner.
- * Used by deviceKeySession, the Socket.io handshake and the remote tunnel
- * upgrade (boundSessionDead).
+ * Used by deviceKeySession and the Socket.io handshake (boundSessionDead).
  */
 export async function deadKeyStatus(
   keyId: string, st: KeyStatus | null, requireAttestation: boolean, req?: Request,
@@ -482,8 +481,8 @@ export async function deadKeyStatus(
  * Must a session bound to `keyId` (sess.deviceKeyId) of user `userId` die?
  * false while the feature is off (bound sessions then behave as unbound) or
  * when the session is not bound; true when the key is another user's or dead
- * (deadKeyStatus). For the channels that authenticate once (Socket.io
- * handshake, remote tunnel upgrade) and never go through deviceKeySession.
+ * (deadKeyStatus). For the channels that authenticate once (the Socket.io
+ * handshake) and never go through deviceKeySession.
  */
 export async function boundSessionDead(keyId: unknown, userId: unknown, req?: Request): Promise<boolean> {
   if (keyId == null || keyId === '') return false;
@@ -729,7 +728,7 @@ export async function list(userId: number, currentKeyId?: string | null): Promis
 // ── Sessions ───────────────────────────────────────────────────────────────
 
 /** Deletes every session bound to the key (sess JSON, §5.3) and closes the
- *  live channels those sessions opened (Socket.io, remote relays). */
+ *  live channels those sessions opened (Socket.io, the modules' channels). */
 export async function killSessionsForKey(keyId: string, reason = 'device_key_revoked'): Promise<number> {
   if (!isUuid(keyId)) return 0;
   const r = await db.raw(`DELETE FROM session WHERE (sess::jsonb ->> 'deviceKeyId') = ? RETURNING sid`, [keyId]) as
@@ -763,9 +762,9 @@ export interface RevokeOptions {
  * deleted, and — except for 'replaced', 'stale' and 'policy' — every
  * trusted IP of their users deleted. Then the status cache entries are
  * dropped, the live channels of the deleted sessions are closed (their
- * Socket.io connections, authenticated once at the handshake, and the remote
- * relays they started or attached: shell, ObliReach, VM console), and one
- * `device_key.revoked` audit row is written per key.
+ * Socket.io connections, authenticated once at the handshake, and what the
+ * modules' hooks close for them), and one `device_key.revoked` audit row is
+ * written per key.
  * Only active keys are affected; returns them.
  */
 export async function revoke(

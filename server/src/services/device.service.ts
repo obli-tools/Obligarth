@@ -10,7 +10,6 @@ import { appConfigService } from './appConfig.service';
 import { settingsService } from './settings.service';
 import { SETTINGS_KEYS } from '@obliance/shared';
 import { obligateService } from './obligate.service';
-import { buildObliReachDesired, obliReachHoldFrom, parseStoredObliReachStatus, switchOn } from './oblireachAutoInstall.service';
 import { agentUpdateRollout } from './agentUpdateRollout.service';
 
 // JSONB columns come back as either an already-parsed array (pg's default
@@ -288,7 +287,6 @@ class DeviceService {
       duplicateAgentIdAcknowledgedAt: row.duplicate_agent_id_acknowledged_at
         ? new Date(row.duplicate_agent_id_acknowledged_at).toISOString()
         : null,
-      oblireachStatus: parseStoredObliReachStatus(row.oblireach_status),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
@@ -1706,20 +1704,8 @@ class DeviceService {
       ) as { other: number; update_agent: number } | undefined;
     const pendingCommandCount = Number(pendingCounts?.other ?? 0);
 
-    // Open remote sessions of the device (index device_id, status), read once:
-    //   - a 'waiting' one → fast poll (the agent must open the tunnel);
-    //   - an ObliReach one connecting / active → `oblireach.hold` (the agent
-    //     defers a non-urgent ObliReach reinstall / downgrade).
-    const openSessions = await db('remote_sessions')
-      .where({ device_id: deviceId })
-      .whereIn('status', ['waiting', 'connecting', 'active'])
-      .select('status', 'protocol', 'started_at')
-      .limit(50) as Array<{ status: string; protocol: string; started_at: Date | string | null }>;
-    const hasRemoteSession = openSessions.some((s) => s.status === 'waiting');
-
     let nextPollIn = config.pushIntervalSeconds;
-    if (hasRemoteSession) nextPollIn = 3;
-    else if (pendingCommandCount > 0) nextPollIn = config.fastPollInterval;
+    if (pendingCommandCount > 0) nextPollIn = config.fastPollInterval;
 
     // Fetch pending commands to send (max 5 per push, marked 'sent'); the
     // device's agent update, if any, goes through the rollout gate.
@@ -1729,21 +1715,6 @@ class DeviceService {
     });
 
     const latestVersion = getAgentVersion();
-
-    // ObliReach automatic install target (omitted for the legacy agent or
-    // when this server ships no ObliReach build). Never fails the push.
-    let oblireach: Awaited<ReturnType<typeof buildObliReachDesired>> = null;
-    try {
-      oblireach = await buildObliReachDesired({
-        enabled: config.oblireachAutoInstall !== false,
-        osType: prev?.os_type ?? null,
-        osArch: prev?.os_arch ?? null,
-        agentFlavor: prev?.agent_flavor ?? null,
-        hold: obliReachHoldFrom(openSessions),
-      });
-    } catch (err) {
-      logger.error({ err, deviceId }, 'ObliReach auto-install target failed');
-    }
 
     return {
       config: {
@@ -1763,7 +1734,6 @@ class DeviceService {
       })),
       nextPollIn,
       ...(latestVersion ? { latestVersion } : {}),
-      ...(oblireach ? { oblireach } : {}),
     };
   }
 
@@ -1794,8 +1764,7 @@ class DeviceService {
       pushIntervalSeconds = device.push_interval_seconds || groupConfig.pushIntervalSeconds || 60;
     }
 
-    // Settings cascade (global/group/device), resolved once: scan-interval
-    // fallback + the ObliReach automatic install switch.
+    // Settings cascade (global/group/device): scan-interval fallback.
     let resolved: Awaited<ReturnType<typeof settingsService.resolveForDevice>> | null = null;
     try {
       resolved = await settingsService.resolveForDevice(tenantId, deviceId, device.group_id);
@@ -1813,22 +1782,15 @@ class DeviceService {
       scanIntervalSeconds = typeof scanSetting?.value === 'number' ? scanSetting.value : (globalCfg.scanIntervalSeconds ?? 3600);
     }
 
-    // Fast poll, task retrieve delay + the ObliReach switches from app_config (one read).
+    // Fast poll + task retrieve delay from app_config (one read).
     const cfgRows = await db('app_config')
-      .whereIn('key', ['fast_poll_interval', 'task_retrieve_delay_seconds', 'integrated_oblireach_enabled', 'oblireach_auto_install'])
+      .whereIn('key', ['fast_poll_interval', 'task_retrieve_delay_seconds'])
       .select('key', 'value') as Array<{ key: string; value: string | null }>;
     const cfg = new Map(cfgRows.map((r) => [r.key, r.value]));
     const fastPollValue = cfg.get('fast_poll_interval');
     if (fastPollValue) fastPollInterval = parseInt(fastPollValue);
     const taskDelayValue = cfg.get('task_retrieve_delay_seconds');
     const taskRetrieveDelaySeconds = taskDelayValue ? parseInt(taskDelayValue) : 10;
-
-    // ObliReach automatic install: ObliReach integration on AND the platform
-    // switch on AND the tenant → group → device setting on (all default on).
-    const orSetting = resolved?.[SETTINGS_KEYS.OBLIREACH_AUTO_INSTALL as keyof typeof resolved];
-    const oblireachAutoInstall = switchOn(cfg.get('integrated_oblireach_enabled'))
-      && switchOn(cfg.get('oblireach_auto_install'))
-      && switchOn(orSetting?.value);
 
     return {
       pushIntervalSeconds,
@@ -1839,7 +1801,6 @@ class DeviceService {
       sensorDisplayNames: device.sensor_display_names || {},
       notificationTypes: device.notification_types || {},
       remediationEnabled: device.compliance_remediation_enabled ?? true,
-      oblireachAutoInstall,
     };
   }
 
@@ -1916,7 +1877,7 @@ class DeviceService {
         if (new Date(device.last_push_at) < threshold) {
           // The HTTP push is stale, but if the agent's WS command channel
           // is still connected the device IS reachable (admins can run
-          // commands, browse files, etc.) — flipping it offline would lie
+          // commands) — flipping it offline would lie
           // to the dashboard. Refresh last_seen_at so the "5m ago" pill
           // stays accurate and skip the offline transition.
           if (agentHub.isConnected(device.id)) {
@@ -2160,12 +2121,8 @@ class DeviceService {
       }
     }
 
-    // Active remote sessions
-    const remoteQ = db('remote_sessions')
-      .whereIn('status', ['waiting', 'connecting', 'active'])
-      .count('id as count');
-    if (!isMaster) remoteQ.where({ tenant_id: tenantId });
-    const activeRemoteSessions = await remoteQ.first().then(r => parseInt(String((r as any)?.count ?? 0)));
+    // No remote access on this server: never an active remote session.
+    const activeRemoteSessions = 0;
 
     // Upcoming schedules (next 24h)
     const now = new Date();

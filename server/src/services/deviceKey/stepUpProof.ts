@@ -14,7 +14,6 @@ import { logger } from '../../utils/logger';
 // Every second-factor check of a signed-in user goes through here:
 //   - the restriction envelope, "sensitive" level (restriction.service.ts)
 //     {allowTrustedIp:true, allowDevice:true}
-//   - requireFreshTotp (sshBastion/stepUp.ts)  {allowTrustedIp:false}
 //   - TOTP management (twoFactor.controller.ts) {allowTrustedIp:false,
 //     requireNewStep:true}
 // The sign-in 2FA (twoFactor.controller verify) is not a step-up: it uses
@@ -84,7 +83,7 @@ export function hashSessionId(sessionId: string | undefined | null): string {
 /**
  * Atomically accepts TOTP `step` for the user, or refuses it (replay).
  *  - strict (sign-in, TOTP management, enrolment): step > totp_last_step.
- *  - stepup (envelope, requireFreshTotp): step > totp_last_step, OR same
+ *  - stepup (restriction envelope): step > totp_last_step, OR same
  *    session and step >= totp_last_step - STEPUP_REUSE_STEPS (a code typed
  *    once serves a loop of requests of that session, never another one).
  * totp_last_step never goes backwards.

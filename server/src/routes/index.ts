@@ -34,36 +34,23 @@ import complianceRoutes from './compliance.routes';
 import softwareComplianceRoutes from './softwareCompliance.routes';
 import softwareRepoRoutes from './softwareRepo.routes';
 import repoPublicRoutes from './repoPublic.routes';
-import remoteRoutes from './remote.routes';
 import reportRoutes from './report.routes';
 import agentRoutes from './agent.routes';
 import agentAdminRoutes from './agentAdmin.routes';
 import oblianceRoutes from './obliance.routes';
 import systemRoutes from './system.routes';
-import obliReachAgentRoutes, { obliReachDevicesRouter } from './oblireach-agent.routes';
 import licenseRoutes from './license.routes';
-import quickReplyTemplatesRoutes from './quickReplyTemplates.routes';
-import reachRoutes from './reach.routes';
-import processRoutes from './process.routes';
-import fileRoutes from './file.routes';
 import networkDiscoveryRoutes from './networkDiscovery.routes';
 import permissionSetsRoutes from './permissionSets.routes';
 import scenarioRoutes from './scenario.routes';
-import privacyGateRoutes from './privacyGate.routes';
-import customSectionRoutes from './customSection.routes';
 import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
 import restrictionRoutes from './restriction.routes';
-import oblireachDesktopRoutes from './oblireachDesktop.routes';
 import mobileAppRoutes from './mobileApp.routes';
 import cveRoutes from './cve.routes';
 import hypervRoutes from './hyperv.routes';
 import veeamRoutes from './veeam.routes';
-import sshBastionRoutes from './sshBastion.routes';
-import sshBastionProfileRoutes from './sshBastionProfile.routes';
 import { globalThresholdRoutes, tenantThresholdRoutes } from './thresholdSettings.routes';
-import fileExplorerSettingsRoutes from './fileExplorerSettings.routes';
-import { requireRole } from '../middleware/rbac';
 
 const router = Router();
 
@@ -72,15 +59,11 @@ router.use('/auth', authRoutes);
 router.use('/auth', obligateCallbackRoutes);  // sso-config, connected-apps, app-info (under /api/auth)
 router.use('/oblitools', oblitoolsRoutes); // ObliTools desktop manifest (auth required)
 router.use('/agent', agentRoutes);       // agent push endpoint (uses agentAuth middleware internally)
-router.use('/oblireach', obliReachAgentRoutes); // Oblireach agent push (agentAuth)
-router.use('/oblireach-desktop', oblireachDesktopRoutes); // Public: desktop app version + MSI download
 router.use('/mobile', mobileAppRoutes);    // Public: Android app version + APK download (/api/mobile/android/*)
 router.use('/repo', repoPublicRoutes);   // script-facing software repo (per-tenant access key auth)
 router.use('/agent-tools', agentToolsRoutes); // static smartctl binary for the disk-health collector (HMAC token)
 router.use('/obliance', oblianceRoutes);    // cross-app link endpoint (Bearer auth)
 router.use('/system', systemRoutes);       // system info / about (admin only, no tenant required)
-// SSH bastion administration — platform service, platform admins only.
-router.use('/ssh-bastion', requireAuth, requireRole('admin'), sshBastionRoutes);
 
 // ── Authenticated, no tenant required ───────────────────────────────────────
 // Device-bound 2FA (the account's phones) — before /profile. A 404 here tells
@@ -88,7 +71,6 @@ router.use('/ssh-bastion', requireAuth, requireRole('admin'), sshBastionRoutes);
 router.use('/profile/device-keys', requireAuth, deviceKeyRoutes);
 router.use('/profile/2fa', twoFactorRoutes); // must be before /profile (auth handled inside twoFactorRoutes)
 router.use('/profile', requireAuth, profileRoutes);
-router.use('/profile', requireAuth, sshBastionProfileRoutes); // SSH bastion: the user's keys, IP authorization, status
 router.use('/tenants', requireAuth, tenantRoutes);
 router.use('/tenant', requireAuth, tenantRoutes);
 // Metric thresholds of the current tenant (cascade layer 3), after the core
@@ -121,7 +103,6 @@ tenantRouter.use('/updates',     updateRoutes);
 tenantRouter.use('/compliance',  complianceRoutes);
 tenantRouter.use('/software-compliance', softwareComplianceRoutes);
 tenantRouter.use('/software-repo', softwareRepoRoutes);
-tenantRouter.use('/remote',      remoteRoutes);
 tenantRouter.use('/reports',     reportRoutes);
 tenantRouter.use('/groups',      groupsRoutes);
 tenantRouter.use('/settings',    settingsRoutes);
@@ -134,22 +115,14 @@ tenantRouter.use('/audit-log',   auditRoutes);
 tenantRouter.use('/restrictions', restrictionRoutes);
 // The modules' named platform settings, before the core settings router (its
 // PUT /:key would take their paths).
-tenantRouter.use('/admin/config', fileExplorerSettingsRoutes); // file explorer editable extensions
 tenantRouter.use('/admin/config', globalThresholdRoutes);      // metric thresholds, global default
 tenantRouter.use('/admin/config', adminRoutes);
 tenantRouter.use('/admin/smtp-servers', smtpRoutes);
 tenantRouter.use('/agent',       agentAdminRoutes);  // admin: API key management
-tenantRouter.use('/oblireach/devices', obliReachDevicesRouter);
-tenantRouter.use('/reach',           reachRoutes);        // Oblireach desktop client API
-tenantRouter.use('/processes',      processRoutes);
-tenantRouter.use('/files',          fileRoutes); // /api/files/:deviceId/files/*
 tenantRouter.use('/licenses',    licenseRoutes);
-tenantRouter.use('/quick-reply-templates', quickReplyTemplatesRoutes);
 tenantRouter.use('/network-discovery', networkDiscoveryRoutes);
 tenantRouter.use('/permission-sets', permissionSetsRoutes);
 tenantRouter.use('/scenarios',      scenarioRoutes);
-tenantRouter.use('/devices/:id/privacy', privacyGateRoutes);
-tenantRouter.use('/custom-sections', customSectionRoutes);
 tenantRouter.use('/cves',           cveRoutes);
 tenantRouter.use('/hyperv',         hypervRoutes);
 tenantRouter.use('/veeam',          veeamRoutes);

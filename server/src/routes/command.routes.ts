@@ -1,9 +1,8 @@
 import { Router } from 'express';
-import { commandService } from '../services/command.service';
+import { commandService, PRIVACY_BLOCKED_COMMANDS } from '../services/command.service';
 import { getAgentVersion } from '../services/device.service';
 import { agentHub } from '../services/agentHub.service';
 import { permissionService } from '../services/permission.service';
-import { privacyGateService } from '../services/privacyGate.service';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import type { CommandType, CommandPriority } from '@obliance/shared';
@@ -48,16 +47,12 @@ router.post('/', async (req, res, next) => {
     if (!device) return res.status(404).json({ error: 'Device not found' });
 
     // Legacy-agent compatibility gate. The Go 1.20 build that runs on
-    // Server 2008 R2 / 2012 lacks the WebSocket tunnel, ObliReach,
-    // software-compliance and file upload/download handlers — queuing
-    // these commands would silently hang forever. Refuse at the edge so
-    // the caller gets a clear error instead of a ghost command.
+    // Server 2008 R2 / 2012 lacks the software-compliance and privacy-mode
+    // handlers — queuing these commands would silently hang forever. Refuse
+    // at the edge so the caller gets a clear error instead of a ghost command.
     const LEGACY_INCOMPATIBLE: string[] = [
-      'open_remote_tunnel', 'close_remote_tunnel',
-      'install_oblireach',
       'install_software', 'uninstall_software', 'check_software_compliance',
       'enable_privacy_mode',
-      'upload_file', 'download_file',
       // The legacy Go 1.20 agent has no self-update path (no MSI, deployed
       // via sc create) — it explicitly rejects update_agent. Refuse here so
       // the admin gets a clear error instead of a ghost command.
@@ -73,11 +68,11 @@ router.post('/', async (req, res, next) => {
       return next(new AppError(409, 'The agent of a device that is not approved, suspended or being uninstalled cannot be updated.'));
     }
 
-    // If a privacy-gate password is set, refuse the raw disable_privacy_mode
-    // command. Clients must use /api/devices/:id/privacy/disable-with-password
-    // which verifies the password via the agent before sending the command.
+    // A privacy password set on the device: the raw disable_privacy_mode is
+    // refused (the agent does not check the password on it) — privacy mode is
+    // then lifted on the device itself.
     if (type === 'disable_privacy_mode' && device.privacy_password_set) {
-      return next(new AppError(423, 'Privacy password is set — use /privacy/disable-with-password'));
+      return next(new AppError(423, 'A privacy password is set on this device — privacy mode can only be disabled on the device'));
     }
 
     // Permission check — non-admins need write access to the device.
@@ -96,39 +91,21 @@ router.post('/', async (req, res, next) => {
 
       // Determine required capability based on command type
       const POWER_COMMANDS = ['reboot', 'shutdown', 'sleep', 'restart_agent', 'uninstall_agent'];
-      const REMOTE_COMMANDS = ['open_remote_tunnel', 'close_remote_tunnel'];
-      const FILE_COMMANDS = ['list_directory', 'create_directory', 'rename_file', 'delete_file', 'download_file', 'upload_file'];
 
       let requiredCap = 'execute'; // default for scripts, scans, etc.
       if (POWER_COMMANDS.includes(type)) requiredCap = 'power';
-      else if (REMOTE_COMMANDS.includes(type)) requiredCap = 'remote';
-      else if (FILE_COMMANDS.includes(type)) requiredCap = 'files';
 
       const allowed = await permissionService.canUseCapability(req.session.userId!, deviceId, false, requiredCap);
       if (!allowed) return next(new AppError(403, `Capability '${requiredCap}' not permitted for your team`));
     }
 
-    // ObliReach never runs under privacy mode: installing / updating it
-    // starts it. Agents 4.5.81+ refuse it themselves; older ones did not.
-    if (type === 'install_oblireach' && device.privacy_mode_enabled) {
-      return next(new AppError(423, 'Privacy mode is active — ObliReach cannot be installed or updated'));
+    // A device in privacy mode refuses the privacy-blocked commands (even
+    // from an admin): refused here rather than queued to fail.
+    if (device.privacy_mode_enabled && PRIVACY_BLOCKED_COMMANDS.has(type)) {
+      return next(new AppError(423, `Privacy mode is active on this device — '${type}' is blocked`));
     }
 
-    // If the device is in privacy mode and this command is privacy-gated,
-    // check for an active unlock session owned by this user. If one exists,
-    // attach the agent unlock token to the payload so the agent lets it
-    // through. If none, refuse with 403 (even admins).
     let effectivePayload = payload;
-    if (device.privacy_mode_enabled && privacyGateService.isBlockedByPrivacy(type)) {
-      const feature = privacyGateService.featureForCommand(type);
-      const token = req.session.userId
-        ? privacyGateService.get(req.session.userId, deviceId, feature)
-        : null;
-      if (!token) {
-        return next(new AppError(423, `Privacy mode is active — unlock required for feature '${feature}'`));
-      }
-      effectivePayload = { ...payload, unlockToken: token };
-    }
 
     // Force-update: stamp the server's current agent version into the payload
     // when the caller didn't supply one, so the agent applies exactly the
@@ -151,15 +128,12 @@ router.post('/', async (req, res, next) => {
     const { applyRestriction } = await import('../services/restriction.service');
     const { commandCarriesSecret, scrubSecrets } = await import('../services/approvalSecrets');
     const { fields } = await import('../services/approvalDescribe');
-    // The privacy unlock token (a credential the agent accepts) never sits
-    // in an approval: the executor enqueues as the requester, and
-    // commandService.enqueue attaches the requester's LIVE unlock then.
-    // A command whose type carries a password (privacy password commands)
-    // asks a fresh code at the 'restricted' level — decided by the TYPE, never
-    // by the names of the payload fields (a junk `token` key is simply dropped
-    // from the approval by approvalService.create).
-    const { unlockToken: _unlockToken, ...rawParams } = (effectivePayload ?? {}) as Record<string, unknown>;
-    const approvalParams = scrubSecrets(rawParams).clean;
+    // A command whose type carries a secret (the fields its module declared,
+    // registerSecretCommandFields) asks a fresh code at the 'restricted'
+    // level — decided by the TYPE, never by the names of the payload fields
+    // (a junk `token` key is simply dropped from the approval by
+    // approvalService.create).
+    const approvalParams = scrubSecrets((effectivePayload ?? {}) as Record<string, unknown>).clean;
     const shownParams = Object.keys(approvalParams).length ? ` (${fields(approvalParams)})` : '';
     const approved = await applyRestriction(res, {
       req,
