@@ -204,7 +204,7 @@ router.post('/:id/execute', async (req, res, next) => {
     // what the SCRIPT declares (type 'secret' or a credential name chosen by
     // its author); the approval keeps only the declared parameters.
     const { applyRestriction } = await import('../services/restriction.service');
-    const { scriptParamsForApproval } = await import('../services/approvalSecrets');
+    const { scriptParamsForApproval } = await import('../services/automationApproval');
     const { deviceList, fields } = await import('../services/approvalDescribe');
     const { declared, secretNames } = await scriptParamsForApproval(scriptId, parameterValues);
     const approved = await applyRestriction(res, {

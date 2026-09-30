@@ -1,8 +1,7 @@
 import type { Request } from 'express';
-import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey, type MetricThresholds, type ObliReachWebView2Mode } from '@obliance/shared';
+import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey } from '@obliance/shared';
 import { AppError } from '../middleware/errorHandler';
-import { appConfigService } from './appConfig.service';
-import { WEBVIEW2_MODES, WEBVIEW2_MODE_KEY, noteWebView2Mode } from './oblireachWebView2.service';
+import { appConfigService, moduleConfigKey } from './appConfig.service';
 
 // ── Platform settings writes (/api/admin/config, tenant.manage_settings) ───
 //
@@ -11,27 +10,26 @@ import { WEBVIEW2_MODES, WEBVIEW2_MODE_KEY, noteWebView2Mode } from './oblireach
 // requester, who must still be an active platform administrator). The
 // Obligate API key and inbound secret never reach an approval: such a write
 // asks a step-up instead (restriction.service, approvalSecrets.ts).
+//
+// A module adds its own settings: plain keys through PUT /:key
+// (appConfig.service registerConfigKey) and named writes on their own path
+// (registerSettingsWrite, e.g. PUT /global-thresholds), both gated and
+// replayed like the core's.
 
+/** The core's keys of PUT /:key (a module's keys: appConfig.service registerConfigKey). */
 export const CONFIG_KEYS = [
   'allow_2fa', 'force_2fa', 'otp_smtp_server_id',
   'obligate_enabled',
   // Device-bound 2FA platform settings (docs/mobile/device-bound-2fa.md §9, [D15]).
   ...DEVICE_KEY_SETTING_KEYS,
-  // ObliReach automatic install / update by the Obliance agent (platform-wide;
-  // absent = on). Tenant / group / device: settings key 'oblireachAutoInstall'.
-  'oblireach_auto_install',
-  // ObliReach: install of the Microsoft Edge WebView2 runtime of the chat
-  // window (platform-wide; absent = 'proactive'; no per-tenant switch).
-  'oblireach_webview2_install',
 ] as const;
 
 const BOOLEAN_KEYS: ReadonlySet<string> = new Set<string>(DEVICE_KEY_SETTING_KEYS);
-/** Plain 'true' / 'false' switches stored as is in app_config. */
-const PLAIN_BOOLEAN_KEYS: ReadonlySet<string> = new Set<string>(['oblireach_auto_install']);
-/** Keys with a fixed list of values (stored as is). */
-const ENUM_KEYS: Readonly<Record<string, readonly string[]>> = {
-  oblireach_webview2_install: WEBVIEW2_MODES,
-};
+
+/** A key PUT /:key accepts: the core's, or a module's. */
+function isConfigKey(key: string): boolean {
+  return (CONFIG_KEYS as readonly string[]).includes(key) || !!moduleConfigKey(key);
+}
 
 export type SettingsWriteCtx = {
   byUserId?: number | null;
@@ -41,9 +39,41 @@ export type SettingsWriteCtx = {
   viaApproval?: boolean;
 };
 
+/** What a settings write files in an approval (prepareSettingsApproval). */
+export type PreparedSettingsWrite = {
+  body: Record<string, unknown>; description: string; carriesSecret: boolean; otherChanges: boolean;
+};
+
+/**
+ * A module's named settings write (its own path under /api/admin/config,
+ * served by the module's router behind gateSettingsWrite): how an approval
+ * keeps it (prepare: validated, AppError 400, before anything is filed) and
+ * how an approved request replays it (apply).
+ */
+export interface SettingsWriteDef {
+  method: 'PUT' | 'PATCH';
+  path: string;
+  prepare: (raw: Record<string, unknown>) => Promise<PreparedSettingsWrite>;
+  apply: (body: Record<string, unknown>, ctx: SettingsWriteCtx) => Promise<void>;
+}
+
+const namedWrites: SettingsWriteDef[] = [];
+
+export function registerSettingsWrite(def: SettingsWriteDef): void {
+  if (!/^\/[a-z0-9-]+$/.test(def.path)) throw new Error(`Invalid settings write path: ${def.path}`);
+  if (namedWrites.some((w) => w.method === def.method && w.path === def.path)) {
+    throw new Error(`Settings write ${def.method} ${def.path} registered twice`);
+  }
+  namedWrites.push(def);
+}
+
+function namedWrite(method: string, path: string): SettingsWriteDef | undefined {
+  return namedWrites.find((w) => w.method === method && w.path === path);
+}
+
 /** PUT /:key */
 export async function writeConfigKey(key: string, value: unknown, ctx: SettingsWriteCtx = {}): Promise<void> {
-  if (!(CONFIG_KEYS as readonly string[]).includes(key)) throw new AppError(400, `Unknown config key: ${key}`);
+  if (!isConfigKey(key)) throw new AppError(400, `Unknown config key: ${key}`);
   if (value === undefined) throw new AppError(400, 'Missing value');
   if (BOOLEAN_KEYS.has(key)) {
     // Device keys: read as === 'true' everywhere — only 'true' / 'false' are stored.
@@ -57,18 +87,21 @@ export async function writeConfigKey(key: string, value: unknown, ctx: SettingsW
     });
     return;
   }
-  if (PLAIN_BOOLEAN_KEYS.has(key)) {
+  const mod = moduleConfigKey(key);
+  if (mod?.type === 'boolean') {
     const v = String(value);
     if (v !== 'true' && v !== 'false') throw new AppError(400, `${key} must be 'true' or 'false'`);
     await appConfigService.set(key, v);
+    mod.afterWrite?.(v);
     return;
   }
-  if (ENUM_KEYS[key]) {
+  if (mod?.type === 'enum') {
+    const values = mod.values ?? [];
     const v = String(value);
-    if (!ENUM_KEYS[key].includes(v)) throw new AppError(400, `${key} must be one of: ${ENUM_KEYS[key].join(', ')}`);
+    if (!values.includes(v)) throw new AppError(400, `${key} must be one of: ${values.join(', ')}`);
     await appConfigService.set(key, v);
-    // Applied at once by the ObliReach hub (no cache delay).
-    if (key === WEBVIEW2_MODE_KEY) noteWebView2Mode(v as ObliReachWebView2Mode);
+    // Applied at once by the module (no cache delay).
+    mod.afterWrite?.(v);
     return;
   }
   await appConfigService.set(key, String(value));
@@ -114,52 +147,6 @@ export function obligatePatch(body: Record<string, unknown>): ObligatePatch {
   return patch;
 }
 
-/** PUT /editable-extensions */
-export async function writeEditableExtensions(extensions: unknown): Promise<string[]> {
-  if (!Array.isArray(extensions)) throw new AppError(400, 'extensions must be an array of strings');
-  return appConfigService.setEditableExtensions(extensions as string[]);
-}
-
-/**
- * PUT /global-thresholds (cascade layer 2), stored as a JSON string under
- * app_config['metric_thresholds_global'], validated with the same Zod schema
- * as the group + tenant editors. null / {} clears it. Returns the stored value.
- */
-export async function writeGlobalThresholds(thresholds: unknown): Promise<MetricThresholds | null> {
-  const { metricThresholdsSchema } = await import('../validators/group.schema');
-  // Previous value — a change of a per-metric alerts switch (`notify`)
-  // triggers a silent re-baseline of every device (only the currently
-  // alerting ones are actually re-evaluated).
-  const beforeRaw = await appConfigService.get('metric_thresholds_global');
-  let before: MetricThresholds | null = null;
-  if (beforeRaw) {
-    try { before = JSON.parse(beforeRaw) as MetricThresholds; } catch { before = null; }
-  }
-  const afterSave = async (after: MetricThresholds | null) => {
-    const { invalidateGlobalThresholdCache } = await import('./threshold.service');
-    invalidateGlobalThresholdCache();
-    const { metricAlertRebaseline } = await import('./metricAlertRebaseline.service');
-    if (metricAlertRebaseline.notifyChanged(before, after)) {
-      metricAlertRebaseline.schedule({ kind: 'all' }, 'global notify switch');
-    }
-  };
-  // Treat null/undefined/{} as "clear" — drop the row so the resolver falls
-  // through to the system default below it.
-  if (thresholds == null || (typeof thresholds === 'object' && Object.keys(thresholds as object).length === 0)) {
-    await appConfigService.set('metric_thresholds_global', '');
-    await afterSave(null);
-    return null;
-  }
-  const parsed = metricThresholdsSchema.safeParse(thresholds);
-  if (!parsed.success) {
-    const issues = parsed.error.errors.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
-    throw new AppError(400, `Invalid thresholds — ${issues}`);
-  }
-  await appConfigService.set('metric_thresholds_global', JSON.stringify(parsed.data));
-  await afterSave(parsed.data as MetricThresholds);
-  return parsed.data as MetricThresholds;
-}
-
 /**
  * A settings write as a two-step approval may keep it (gateSettingsWrite),
  * validated BEFORE anything is filed (AppError 400, as the direct write):
@@ -172,9 +159,7 @@ export async function writeGlobalThresholds(thresholds: unknown): Promise<Metric
  *  - `otherChanges`: a non-secret field actually changes (Obligate address,
  *    switch, client-id form, inbound secret cleared).
  */
-export async function prepareSettingsApproval(method: string, path: string, rawBody: unknown): Promise<{
-  body: Record<string, unknown>; description: string; carriesSecret: boolean; otherChanges: boolean;
-}> {
+export async function prepareSettingsApproval(method: string, path: string, rawBody: unknown): Promise<PreparedSettingsWrite> {
   const { change, short } = await import('./approvalDescribe');
   const raw = (rawBody && typeof rawBody === 'object' && !Array.isArray(rawBody)) ? rawBody as Record<string, unknown> : {};
   const m = String(method).toUpperCase();
@@ -207,43 +192,24 @@ export async function prepareSettingsApproval(method: string, path: string, rawB
     const otherChanges = parts.some((x) => !!x);
     return { body, carriesSecret, otherChanges, description: join('Obligate SSO settings', parts) };
   }
-  if (m === 'PUT' && path === '/editable-extensions') {
-    if (!Array.isArray(raw.extensions)) throw new AppError(400, 'extensions must be an array of strings');
-    const exts = (raw.extensions as unknown[]).map(String);
-    return {
-      body: { extensions: exts }, carriesSecret: false, otherChanges: true,
-      description: `File explorer editable extensions → ${short(exts, 400)} (${exts.length})`,
-    };
-  }
-  if (m === 'PUT' && path === '/global-thresholds') {
-    const t = raw.thresholds;
-    const clear = t == null || (typeof t === 'object' && Object.keys(t as object).length === 0);
-    if (!clear) {
-      const { metricThresholdsSchema } = await import('../validators/group.schema');
-      const parsed = metricThresholdsSchema.safeParse(t);
-      if (!parsed.success) {
-        const issues = parsed.error.errors.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
-        throw new AppError(400, `Invalid thresholds — ${issues}`);
-      }
-    }
-    return {
-      body: { thresholds: clear ? null : t }, carriesSecret: false, otherChanges: true,
-      description: clear ? 'Global metric thresholds cleared (system defaults apply)' : `Global metric thresholds → ${short(t, 600)}`,
-    };
-  }
+  // A module's named write (registerSettingsWrite).
+  const named = namedWrite(m, path);
+  if (named) return named.prepare(raw);
   const key = /^\/([a-z0-9_]+)$/.exec(path);
   if (m === 'PUT' && key) {
     const k = key[1];
-    if (!(CONFIG_KEYS as readonly string[]).includes(k)) throw new AppError(400, `Unknown config key: ${k}`);
+    if (!isConfigKey(k)) throw new AppError(400, `Unknown config key: ${k}`);
     if (raw.value === undefined) throw new AppError(400, 'Missing value');
-    const isBool = BOOLEAN_KEYS.has(k) || PLAIN_BOOLEAN_KEYS.has(k);
+    const mod = moduleConfigKey(k);
+    const isBool = BOOLEAN_KEYS.has(k) || mod?.type === 'boolean';
+    const enumValues = mod?.type === 'enum' ? (mod.values ?? []) : null;
     if (isBool && String(raw.value) !== 'true' && String(raw.value) !== 'false') {
       throw new AppError(400, `${k} must be 'true' or 'false'`);
     }
-    if (ENUM_KEYS[k] && !ENUM_KEYS[k].includes(String(raw.value))) {
-      throw new AppError(400, `${k} must be one of: ${ENUM_KEYS[k].join(', ')}`);
+    if (enumValues && !enumValues.includes(String(raw.value))) {
+      throw new AppError(400, `${k} must be one of: ${enumValues.join(', ')}`);
     }
-    const value = isBool || ENUM_KEYS[k] ? String(raw.value) : raw.value;
+    const value = isBool || enumValues ? String(raw.value) : raw.value;
     const before = await appConfigService.get(k);
     return {
       body: { value }, carriesSecret: false, otherChanges: true,
@@ -262,8 +228,8 @@ export async function applySettingsRequest(method: string, path: string, body: u
   const m = String(method).toUpperCase();
   if (m === 'PATCH' && path === '/agent-global') { await appConfigService.setAgentGlobal(agentGlobalPatch(b)); return; }
   if (m === 'PUT' && path === '/obligate') { await appConfigService.patchObligateConfig(obligatePatch(b)); return; }
-  if (m === 'PUT' && path === '/editable-extensions') { await writeEditableExtensions(b.extensions); return; }
-  if (m === 'PUT' && path === '/global-thresholds') { await writeGlobalThresholds(b.thresholds); return; }
+  const named = namedWrite(m, path);
+  if (named) { await named.apply(b, ctx); return; }
   const key = /^\/([a-z0-9_]+)$/.exec(path);
   if (m === 'PUT' && key) { await writeConfigKey(key[1], b.value, ctx); return; }
   throw new AppError(400, `settings write ${m} ${path} cannot be replayed from an approval`);

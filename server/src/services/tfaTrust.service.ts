@@ -29,6 +29,15 @@ export async function trustWindowMs(tenantId?: number): Promise<number> {
   }
 }
 
+/** A module's own step-up grants of a user, dropped with the user's IP
+ *  trusts (revokeAllForUser): registered by the module (onTrustRevoked). */
+type TrustRevokedHook = (userId: number) => void | Promise<void>;
+const trustRevokedHooks: TrustRevokedHook[] = [];
+
+export function onTrustRevoked(hook: TrustRevokedHook): void {
+  trustRevokedHooks.push(hook);
+}
+
 export const tfaTrustService = {
   /** Is this (user, ip) currently trusted? Falls back to false on DB error. */
   async isTrusted(userId: number, ip: string): Promise<boolean> {
@@ -64,8 +73,10 @@ export const tfaTrustService = {
    *  password-reset, or click "Log out everywhere"). */
   async revokeAllForUser(userId: number): Promise<void> {
     try { await db('tfa_trusted_sessions').where({ user_id: userId }).delete(); } catch {}
-    // The file explorer's step-up grants of this user go with them.
-    try { (await import('./fileExplorerGate.service')).clearExplorerStepUpsOfUser(userId); } catch {}
+    // The modules' step-up grants of this user go with them.
+    for (const hook of trustRevokedHooks) {
+      try { await hook(userId); } catch {}
+    }
   },
 
   /** Revoke one trust entry (the current IP, e.g. "forget this device"). */

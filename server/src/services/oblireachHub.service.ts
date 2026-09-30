@@ -2,7 +2,8 @@ import type { WebSocket } from 'ws';
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import type { ObliReachWebView2Status } from '@obliance/shared';
-import { getIO, chatOfDevice, chatEndedByUser, chatRelayAllowed, chatUnavailable, chatIsEnded } from '../socket';
+import { getIO } from '../socket';
+import { chatOfDevice, chatEndedByUser, chatRelayAllowed, chatUnavailable, chatIsEnded } from './oblireachChat.socket';
 import { takeOrQueue, toWire } from './oblireachQueue';
 import {
   buildObliReachUpdateCommand, claimAutoUpdate, pruneOrUpdateGate, releaseAutoUpdate,

@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import crypto from 'crypto';
 import { db } from '../db';
-import { obligateService, type ObligateRoster } from '../services/obligate.service';
+import { obligateService, moduleDashboardStats, type ObligateDashboardStat, type ObligateRoster } from '../services/obligate.service';
 import { tenantService } from '../services/tenant.service';
 import { appConfigService } from '../services/appConfig.service';
 import { permissionSetService } from '../services/permissionSet.service';
@@ -780,19 +780,17 @@ router.get('/app-info', async (req, res) => {
  */
 router.get('/dashboard-stats', async (req, res) => {
   try {
-    // Three fleet-wide counters, nothing else (the Bearer secret may be public).
+    // Fleet-wide counters, nothing else (the Bearer secret may be public):
+    // the devices, then the modules' counters (registerDashboardStat).
     if (!(await obligateService.verifyInboundBearer(req.headers.authorization))) { res.status(401).json({ success: false }); return; }
 
-    const [totalDevices, onlineDevices, pendingCommands] = await Promise.all([
-      db('devices').where({ approval_status: 'approved' }).count('id as c').first(),
-      db('devices').where({ approval_status: 'approved', status: 'online' }).count('id as c').first(),
-      db('command_queue').where({ status: 'pending' }).count('id as c').first(),
-    ]);
-    res.json({ success: true, data: { stats: [
-      { label: 'Devices', value: Number((totalDevices as any)?.c ?? 0), color: '#58a6ff' },
-      { label: 'Online', value: Number((onlineDevices as any)?.c ?? 0), color: '#2ea043' },
-      { label: 'Pending Commands', value: Number((pendingCommands as any)?.c ?? 0), color: '#d29922' },
-    ] } });
+    const counters: ObligateDashboardStat[] = [
+      { label: 'Devices', color: '#58a6ff', count: async () => Number(((await db('devices').where({ approval_status: 'approved' }).count('id as c').first()) as any)?.c ?? 0) },
+      { label: 'Online', color: '#2ea043', count: async () => Number(((await db('devices').where({ approval_status: 'approved', status: 'online' }).count('id as c').first()) as any)?.c ?? 0) },
+      ...moduleDashboardStats(),
+    ];
+    const values = await Promise.all(counters.map((s) => s.count()));
+    res.json({ success: true, data: { stats: counters.map((s, i) => ({ label: s.label, value: values[i], color: s.color })) } });
   } catch { res.json({ success: true, data: null }); }
 });
 

@@ -1,5 +1,3 @@
-import { db } from '../db';
-
 // ── Secrets never sit in an approval ───────────────────────────────────────
 //
 // A two-step approval (pending_approvals) keeps its `payload` for up to 30
@@ -40,7 +38,7 @@ export function isSecretKey(key: string): boolean {
 
 /** A value that actually carries something (booleans, null and '' do not:
  *  `privacyPasswordSet: true`, `apiKey: ''` "keep the current one"). */
-function hasValue(v: unknown): boolean {
+export function hasValue(v: unknown): boolean {
   if (v === null || v === undefined || typeof v === 'boolean') return false;
   if (typeof v === 'string') return v.length > 0;
   if (typeof v === 'number') return true;
@@ -82,45 +80,22 @@ export function scrubSecrets<T>(value: T): { clean: T; removed: string[] } {
   return { clean: walk(value, [], 0) as T, removed };
 }
 
-/** Command types whose payload carries a secret, and its fields (the
- *  privacy-password commands of privacyGate.routes, the agent reconfiguration
- *  key). Fixed by the server: never inferred from the caller's field names. */
-export const SECRET_COMMAND_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
-  set_privacy_password: ['password'],
-  change_privacy_password: ['oldPassword', 'newPassword'],
-  remove_privacy_password: ['password'],
-  verify_privacy_password: ['password'],
-  reconfigure_agent: ['apiKey'],
-});
+/** Command types whose payload carries a secret, and its fields: declared by
+ *  the module that owns the command (registerSecretCommandFields; e.g. the
+ *  privacy-password commands of privacyGate.routes, the agent
+ *  reconfiguration key). Fixed by the server: never inferred from the
+ *  caller's field names. */
+const SECRET_COMMAND_FIELDS = new Map<string, readonly string[]>();
+
+export function registerSecretCommandFields(type: string, fields: readonly string[]): void {
+  if (SECRET_COMMAND_FIELDS.has(type)) throw new Error(`Secret fields of command '${type}' registered twice`);
+  SECRET_COMMAND_FIELDS.set(type, Object.freeze([...fields]));
+}
 
 /** Does this command (type + payload) carry one of its secret fields? */
 export function commandCarriesSecret(type: string, payload: unknown): boolean {
-  const names = SECRET_COMMAND_FIELDS[type];
+  const names = SECRET_COMMAND_FIELDS.get(type);
   if (!names || !payload || typeof payload !== 'object') return false;
   const p = payload as Record<string, unknown>;
   return names.some((n) => hasValue(p[n]));
-}
-
-/**
- * A manual script run's parameter values, as an approval may keep them:
- *  - `declared`: only the parameters the SCRIPT declares (a value the caller
- *    adds under another name never reaches the request);
- *  - `secretNames`: the declared parameters that carry a value and are
- *    secret — type 'secret', or a credential name chosen by the script's
- *    author (e.g. `ApiToken` typed 'string'). A run with any of them cannot
- *    wait for an approval: the value would sit in it.
- */
-export async function scriptParamsForApproval(scriptId: number, parameterValues: unknown): Promise<{ declared: Record<string, unknown>; secretNames: string[] }> {
-  const declared: Record<string, unknown> = {};
-  const secretNames: string[] = [];
-  if (!parameterValues || typeof parameterValues !== 'object' || Array.isArray(parameterValues)) return { declared, secretNames };
-  const params = await db('script_parameters').where({ script_id: scriptId }).select('name', 'type') as Array<{ name: string; type: string }>;
-  const values = parameterValues as Record<string, unknown>;
-  for (const p of params) {
-    if (!Object.prototype.hasOwnProperty.call(values, p.name)) continue;
-    const v = values[p.name];
-    if ((p.type === 'secret' || isSecretKey(p.name)) && hasValue(v)) { secretNames.push(p.name); continue; }
-    declared[p.name] = v;
-  }
-  return { declared, secretNames };
 }

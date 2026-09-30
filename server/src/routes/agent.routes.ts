@@ -47,7 +47,7 @@ router.get('/installer/windows-x86.msi', agentInstallerWindowsMsiX86);
 
 // GET /api/agent/ws
 // This endpoint is normally upgraded to a WebSocket by the Node.js upgrade
-// handler (index.ts) BEFORE reaching Express.  If it reaches Express it means
+// handler (services/agentHub.upgrade.ts) BEFORE reaching Express.  If it reaches Express it means
 // the reverse proxy (Nginx) did NOT forward the Upgrade header — the upgrade
 // handler never fired.  Return a clear 426 Upgrade Required so the agent log
 // shows a meaningful error instead of falling through to requireAuth (401).

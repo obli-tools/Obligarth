@@ -42,72 +42,25 @@ export interface RestrictionEntry {
 
 export type RestrictionMap = Record<string, RestrictionEntry>;
 
-// Canonical list of actions that can be restricted. The UI renders this list
-// plus any extra keys that exist in the tenant's map (forward-compat).
-export const RESTRICTABLE_ACTIONS: { key: string; label: string; category: string }[] = [
-  { key: 'command.reboot',               label: 'Reboot a device',          category: 'Power' },
-  { key: 'command.shutdown',             label: 'Shutdown a device',        category: 'Power' },
-  { key: 'command.sleep',                label: 'Sleep a device',           category: 'Power' },
-  { key: 'command.restart_agent',        label: 'Restart agent',            category: 'Power' },
-  { key: 'command.update_agent',         label: 'Update agent',             category: 'Power' },
-  { key: 'command.uninstall_agent',      label: 'Uninstall agent',          category: 'Power' },
-  { key: 'command.enable_airgap',        label: 'Enable airgap',            category: 'Isolation' },
-  { key: 'command.disable_airgap',       label: 'Disable airgap',           category: 'Isolation' },
-  { key: 'command.enable_privacy_mode',  label: 'Enable privacy mode',      category: 'Isolation' },
-  { key: 'command.disable_privacy_mode', label: 'Disable privacy mode',     category: 'Isolation' },
-  { key: 'device.delete',                label: 'Delete device (record)',   category: 'Device' },
-  { key: 'device.bulk_group_change',     label: 'Bulk change group',        category: 'Device' },
-  { key: 'device.transfer_tenant',       label: 'Transfer device to another tenant', category: 'Device' },
-  { key: 'software.remediate_install',   label: 'Install software (manual)', category: 'Software' },
-  { key: 'software.remediate_uninstall', label: 'Uninstall software (manual)', category: 'Software' },
-  // File Explorer — listing is a low-risk read; upload/delete/rename are destructive.
-  { key: 'command.list_directory',       label: 'Browse file explorer',     category: 'File Explorer' },
-  { key: 'command.upload_file',          label: 'Upload a file to the device', category: 'File Explorer' },
-  { key: 'command.download_file',        label: 'Download a file from the device', category: 'File Explorer' },
-  { key: 'command.delete_file',          label: 'Delete a file on the device', category: 'File Explorer' },
-  { key: 'command.rename_file',          label: 'Rename a file on the device', category: 'File Explorer' },
-  { key: 'command.create_directory',     label: 'Create a directory on the device', category: 'File Explorer' },
-  // Remote sessions (any protocol — SSH, CMD, PowerShell, ObliReach).
-  { key: 'remote.session_start',         label: 'Start a remote session (SSH / CMD / PowerShell / ObliReach)', category: 'Remote' },
-  // Services — start is low-risk, stop/restart impact the host.
-  { key: 'command.start_service',        label: 'Start a service',          category: 'Services' },
-  { key: 'command.stop_service',         label: 'Stop a service',           category: 'Services' },
-  { key: 'command.restart_service',      label: 'Restart a service',        category: 'Services' },
-  // Processes.
-  { key: 'command.kill_process',         label: 'Kill a process',           category: 'Processes' },
-  // Scripts — manual execution from the UI (schedules are un-gated).
-  { key: 'script.execute_manual',        label: 'Manually execute a script', category: 'Scripts' },
-  // Bypass-privacy toggles on automations — flipping these on lets an
-  // automation run on a device whose user has explicitly enabled privacy
-  // mode. Default is "restricted" (double admin approval) so an admin
-  // can't single-handedly override a user's privacy choice.
-  { key: 'scenario.bypass_privacy_mode', label: 'Allow a scenario to run on privacy-mode devices', category: 'Automations' },
-  { key: 'schedule.bypass_privacy_mode', label: 'Allow a schedule to run on privacy-mode devices', category: 'Automations' },
-  // Hyper-V / virtualization. Power actions on a VM are low-risk (a guest
-  // reboot is no worse than rebooting a physical box); checkpoints, edits and
-  // especially create/delete escalate. delete = double-admin by default.
-  { key: 'hyperv.vm_start',             label: 'Start a VM',                     category: 'Hyper-V' },
-  { key: 'hyperv.vm_stop',              label: 'Power off a VM (hard)',          category: 'Hyper-V' },
-  { key: 'hyperv.vm_shutdown',          label: 'Shut down a VM (graceful)',      category: 'Hyper-V' },
-  { key: 'hyperv.vm_restart',           label: 'Restart a VM',                   category: 'Hyper-V' },
-  { key: 'hyperv.vm_save',              label: 'Save / pause / resume a VM',     category: 'Hyper-V' },
-  { key: 'hyperv.vm_checkpoint',        label: 'Create a VM checkpoint',         category: 'Hyper-V' },
-  { key: 'hyperv.vm_checkpoint_apply',  label: 'Apply / restore a VM checkpoint',category: 'Hyper-V' },
-  { key: 'hyperv.vm_checkpoint_delete', label: 'Delete a VM checkpoint',         category: 'Hyper-V' },
-  { key: 'hyperv.vm_edit',              label: 'Edit VM settings (vCPU / RAM / …)', category: 'Hyper-V' },
-  { key: 'hyperv.vm_create',            label: 'Create a VM',                    category: 'Hyper-V' },
-  { key: 'hyperv.vm_delete',            label: 'Delete a VM',                    category: 'Hyper-V' },
-  // Veeam / backups. start / retry / enable ensure backups run (benign);
-  // stop interrupts a running job and disable silently turns off scheduled
-  // backups (real data-loss risk) → default-gated with 2FA.
-  { key: 'veeam.job_start',             label: 'Start a backup job',             category: 'Backups' },
-  { key: 'veeam.job_stop',              label: 'Stop a running backup job',      category: 'Backups' },
-  { key: 'veeam.job_retry',             label: 'Retry a backup job',             category: 'Backups' },
-  { key: 'veeam.job_enable',            label: 'Enable a backup job schedule',   category: 'Backups' },
-  { key: 'veeam.job_disable',           label: 'Disable a backup job schedule',  category: 'Backups' },
-  // Tenant config surfaces — editing these pages changes who can do what.
-  // Defaults live in DEFAULT_RESTRICTIONS below; we don't auto-seed the
-  // management ones so fresh installs without TOTP don't lock admins out.
+// ── Catalog of the restrictable actions ─────────────────────────────────────
+// The UI renders this list plus any extra keys that exist in the tenant's
+// map (forward-compat). A module lists its own actions
+// (registerRestrictableActions; modules/rmm.ts for the RMM's): the matrix
+// shows the modules' actions first, in registration order, then the core's
+// tenant-configuration actions.
+
+export interface RestrictableAction {
+  key: string;
+  label: string;
+  category: string;
+}
+
+type DefaultLevel = 'restricted' | 'sensitive';
+
+// Tenant config surfaces — editing these pages changes who can do what.
+// Defaults live in CORE_DEFAULT_RESTRICTIONS below; we don't auto-seed the
+// management ones so fresh installs without TOTP don't lock admins out.
+const CORE_RESTRICTABLE_ACTIONS: readonly RestrictableAction[] = [
   { key: 'tenant.manage_restrictions',   label: 'Edit the Restrictions matrix', category: 'Tenant config' },
   { key: 'tenant.manage_users',          label: 'Create / edit / delete users', category: 'Tenant config' },
   { key: 'tenant.manage_teams',          label: 'Create / edit / delete teams', category: 'Tenant config' },
@@ -119,62 +72,44 @@ export const RESTRICTABLE_ACTIONS: { key: string; label: string; category: strin
 
 /**
  * Recommended default levels for fresh tenants (and tenants that never
- * customised anything). Keys listed as 'none' are omitted from the stored
- * map so the UI shows them blank and the admin can opt in later.
+ * customised anything); the migrations seed the same. Keys listed as 'none'
+ * are omitted from the stored map so the UI shows them blank and the admin
+ * can opt in later.
  */
-export const DEFAULT_RESTRICTIONS: Record<string, 'restricted' | 'sensitive'> = {
-  'command.reboot':               'sensitive',
-  'command.shutdown':             'sensitive',
-  // sleep + restart_agent + update_agent = none (not listed). update_agent
-  // sits at 'none' on purpose — pushing an agent update is frictionless by
-  // default (admins can opt into approval/TOTP from the matrix), unlike
-  // uninstall_agent which defaults to 'restricted'.
-  'command.uninstall_agent':      'restricted',
-  'command.enable_airgap':        'sensitive',
-  'command.disable_airgap':       'restricted',
-  // enable_privacy_mode = none
-  'command.disable_privacy_mode': 'sensitive',
-  'device.delete':                'sensitive',
-  'device.bulk_group_change':     'sensitive',
-  'device.transfer_tenant':       'sensitive',
-  'software.remediate_install':   'sensitive',
-  'software.remediate_uninstall': 'sensitive',
-  // Manual script execution defaults to sensitive — scripts can do anything
-  // on the target host, so a fresh TOTP confirm is a sane default.
-  'script.execute_manual':        'sensitive',
-  // File explorer is gated at the menu-entry point (list_directory) only,
-  // so a user enters a code ONCE when opening the explorer and then browses
-  // / downloads / uploads freely without re-prompting. Individual
-  // destructive operations stay None by default — admins can opt in per
-  // action from the matrix if they want a double-gate.
-  'command.list_directory':       'sensitive',
+const CORE_DEFAULT_RESTRICTIONS: Readonly<Record<string, DefaultLevel>> = {
   // Clearing the audit log deletes accountability — always require a
   // second admin to approve. Doesn't need TOTP.
   'audit.clear':                  'restricted',
-  // Privacy-mode bypass on automations — restricted by default so two
-  // admins must sign off before an automation can sweep across a device
-  // whose user has opted into privacy. Migration 102 seeds the same.
-  'scenario.bypass_privacy_mode': 'restricted',
-  'schedule.bypass_privacy_mode': 'restricted',
-  // Veeam: stopping a running backup and disabling a backup schedule are the
-  // risky ones (incomplete/no backup) → 2FA. start/retry/enable stay un-gated.
-  'veeam.job_stop':              'sensitive',
-  'veeam.job_disable':           'sensitive',
-  // Hyper-V defaults follow the product owner's spec: power actions are
-  // un-gated (none), checkpoint-restore/delete + edit + create require a
-  // fresh 2FA (sensitive), and deleting a VM needs a second admin
-  // (restricted). Plain checkpoint creation is non-destructive → none.
-  'hyperv.vm_checkpoint_apply':  'sensitive',
-  'hyperv.vm_checkpoint_delete': 'sensitive',
-  'hyperv.vm_edit':              'sensitive',
-  'hyperv.vm_create':            'sensitive',
-  'hyperv.vm_delete':            'restricted',
-  // Remote sessions / services / processes / tenant-config management
-  // (users/teams/permissions/settings/profile/restrictions-config) are
-  // intentionally NOT defaulted — admins opt in from the matrix once they
-  // have TOTP deployed across privileged accounts, otherwise a fresh
-  // install could softlock itself.
+  // Tenant-config management (users/teams/permissions/settings/profile/
+  // restrictions-config) is intentionally NOT defaulted — admins opt in from
+  // the matrix once they have TOTP deployed across privileged accounts,
+  // otherwise a fresh install could softlock itself.
 };
+
+const moduleActions: RestrictableAction[] = [];
+const moduleDefaults: Record<string, DefaultLevel> = {};
+
+/** A module's restrictable actions and their recommended default levels. */
+export function registerRestrictableActions(actions: readonly RestrictableAction[], defaults: Readonly<Record<string, DefaultLevel>> = {}): void {
+  for (const a of actions) {
+    if (!isActionKey(a.key)) throw new Error(`Invalid restrictable action key: ${a.key}`);
+    if (moduleActions.some((m) => m.key === a.key) || CORE_RESTRICTABLE_ACTIONS.some((c) => c.key === a.key)) {
+      throw new Error(`Restrictable action '${a.key}' registered twice`);
+    }
+    moduleActions.push({ key: a.key, label: a.label, category: a.category });
+  }
+  Object.assign(moduleDefaults, defaults);
+}
+
+/** The matrix catalog: the modules' actions, then the core's. */
+export function restrictableActions(): RestrictableAction[] {
+  return [...moduleActions, ...CORE_RESTRICTABLE_ACTIONS];
+}
+
+/** Recommended default levels: the modules', then the core's. */
+export function defaultRestrictions(): Record<string, DefaultLevel> {
+  return { ...moduleDefaults, ...CORE_DEFAULT_RESTRICTIONS };
+}
 
 function normalizeEntry(raw: any): RestrictionEntry | null {
   if (raw === 'restricted' || raw === 'sensitive') {

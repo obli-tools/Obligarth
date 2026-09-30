@@ -767,7 +767,7 @@ class RemoteService {
 
   // Called when browser WebSocket connects for a session. `meta.sessionHash`:
   // the express session of the upgrade (none for the in-process bastion).
-  // `meta.isWebSocket`: a real browser WebSocket (index.ts) — it is told
+  // `meta.isWebSocket`: a real browser WebSocket (remoteTunnel.upgrade.ts) — it is told
   // {"type":"waiting"} while the agent has not paired, and if it leaves
   // before the agent pairs and does not come back within 15 s the session
   // is ended (it used to stay 'waiting', and a late agent then streamed —

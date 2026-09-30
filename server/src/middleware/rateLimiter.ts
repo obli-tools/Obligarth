@@ -1,5 +1,17 @@
 import rateLimit from 'express-rate-limit';
 
+// Path prefixes of machine-to-machine endpoints, never counted by apiLimiter:
+// declared by the module that serves them (exemptFromApiLimiter;
+// modules/rmm.ts for the RMM's). Only for endpoints authenticated otherwise
+// (API key, token), polled at their own cadence: counting them would eat the
+// shared budget of the login page, limiting them adds nothing to their auth.
+const exemptPrefixes: string[] = [];
+
+export function exemptFromApiLimiter(prefix: string): void {
+  if (!prefix.startsWith('/api/') || !prefix.endsWith('/')) throw new Error(`Invalid limiter exemption: ${prefix}`);
+  if (!exemptPrefixes.includes(prefix)) exemptPrefixes.push(prefix);
+}
+
 // Global API limiter — protects unauthenticated / public endpoints only.
 //
 // IMPORTANT: This limiter runs AFTER session middleware (see app.ts) so that
@@ -28,16 +40,8 @@ export const apiLimiter = rateLimit({
     req.path === '/health' ||
     // Auth state probe — returns 401 for unauthenticated callers, no info leak.
     req.path === '/api/auth/me' ||
-    // ── Machine-to-machine endpoints ───────────────────────────────────────
-    // All /api/agent/* paths are API-key authenticated (X-API-Key header).
-    // Rate-limiting them would cause false positives when agents post inventory,
-    // compliance results, scan data, and metrics at their natural cadence.
-    // Security is provided by the API key itself; rate-limiting adds no value here.
-    req.path.startsWith('/api/agent/') ||
-    // Oblireach agent pushes (same auth, same frequency).
-    req.path.startsWith('/api/oblireach/') ||
-    // Passive heartbeats (token authenticated, triggered by external systems).
-    req.path.startsWith('/api/heartbeat/') ||
+    // ── Machine-to-machine endpoints (declared by their modules) ──────────
+    exemptPrefixes.some((p) => req.path.startsWith(p)) ||
     // Android app update check + APK download (public, docs/obli-mobile.md §6).
     // Shells poll without a session, often from shared carrier-NAT IPs; counting
     // them would eat the shared 500/5 min budget of the login page. Read-only,

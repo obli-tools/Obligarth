@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
-import { restrictionService, RESTRICTABLE_ACTIONS, sanitizeMap, diffMaps } from '../services/restriction.service';
+import { restrictionService, restrictableActions, sanitizeMap, diffMaps } from '../services/restriction.service';
 import { auditService } from '../services/audit.service';
 
 const router = Router();
@@ -13,7 +13,7 @@ router.use(requireAuth, requireRole('admin'));
 router.get('/', async (req, res, next) => {
   try {
     const map = await restrictionService.getMap(req.tenantId!);
-    res.json({ data: { map, actions: RESTRICTABLE_ACTIONS } });
+    res.json({ data: { map, actions: restrictableActions() } });
   } catch (err) { next(err); }
 });
 
@@ -53,7 +53,7 @@ router.put('/', async (req, res, next) => {
       details: { keys: Object.keys(incoming), changed: changes.map((c) => c.key) },
     });
     const map = await restrictionService.getMap(req.tenantId!);
-    res.json({ data: { map, actions: RESTRICTABLE_ACTIONS } });
+    res.json({ data: { map, actions: restrictableActions() } });
   } catch (err) { next(err); }
 });
 

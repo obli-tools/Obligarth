@@ -1,12 +1,10 @@
 import { clientIp } from '../utils/clientIp';
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { requireTenant } from '../middleware/tenant';
 import { tenantService } from '../services/tenant.service';
 import { permissionService } from '../services/permission.service';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
-import type { MetricThresholds } from '@obliance/shared';
 
 const router = Router();
 
@@ -249,87 +247,6 @@ router.delete('/:id/members/:uid', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
-});
-
-// ── Tenant metric-threshold default (cascade layer 3) ────────────────
-// Scope: a tenant admin may edit only their own current tenant. The
-// platform admin sitting on the master tenant may edit any tenant
-// (their `currentTenantId` is the one being edited and the master
-// god-view is implicit). We don't accept `:id` from the URL so a child
-// tenant admin can't aim a payload at a sibling tenant — the row
-// being edited is always `req.tenantId`.
-//
-// `requireTenant` is applied per-handler here because the parent
-// router is mounted as just `requireAuth` in routes/index.ts (the
-// existing /tenants endpoints don't need a tenant context to resolve
-// — locate-device walks all of them). We don't want to flip the
-// whole router to requireTenant and risk breaking those.
-router.get('/current/thresholds', requireTenant, async (req, res, next) => {
-  try {
-    const tenantId = req.tenantId!;
-    const row = await db('tenants').where({ id: tenantId }).first('metric_thresholds_default') as { metric_thresholds_default: unknown } | undefined;
-    let value: unknown = row?.metric_thresholds_default ?? null;
-    if (typeof value === 'string') {
-      try { value = JSON.parse(value); } catch { value = null; }
-    }
-    res.json({ success: true, data: { thresholds: value } });
-  } catch (err) { next(err); }
-});
-
-router.put('/current/thresholds', requireTenant, async (req, res, next) => {
-  try {
-    if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
-    const tenantId = req.tenantId!;
-    const { metricThresholdsSchema } = await import('../validators/group.schema');
-    const { thresholds } = req.body as { thresholds?: unknown };
-    // Previous value — a change of a per-metric alerts switch (`notify`)
-    // triggers a silent re-baseline of the tenant's devices.
-    const beforeRow = await db('tenants').where({ id: tenantId }).first('metric_thresholds_default') as { metric_thresholds_default: unknown } | undefined;
-    let before: MetricThresholds | null = null;
-    if (typeof beforeRow?.metric_thresholds_default === 'string') {
-      try { before = JSON.parse(beforeRow.metric_thresholds_default) as MetricThresholds; } catch { before = null; }
-    } else if (beforeRow?.metric_thresholds_default && typeof beforeRow.metric_thresholds_default === 'object') {
-      before = beforeRow.metric_thresholds_default as MetricThresholds;
-    }
-    const afterSave = async (after: MetricThresholds | null) => {
-      const { invalidateTenantThresholdCache } = await import('../services/threshold.service');
-      invalidateTenantThresholdCache(tenantId);
-      const { metricAlertRebaseline } = await import('../services/metricAlertRebaseline.service');
-      if (metricAlertRebaseline.notifyChanged(before, after)) {
-        metricAlertRebaseline.schedule({ kind: 'tenant', tenantId }, 'tenant notify switch');
-      }
-    };
-    if (thresholds == null || (typeof thresholds === 'object' && Object.keys(thresholds as object).length === 0)) {
-      await db('tenants').where({ id: tenantId }).update({ metric_thresholds_default: null });
-      await afterSave(null);
-      res.json({ success: true, data: { thresholds: null } });
-      return;
-    }
-    const parsed = metricThresholdsSchema.safeParse(thresholds);
-    if (!parsed.success) {
-      const issues = parsed.error.errors.map((e) => `${e.path.join('.') || '<root>'}: ${e.message}`).join('; ');
-      throw new AppError(400, `Invalid thresholds — ${issues}`);
-    }
-    await db('tenants').where({ id: tenantId }).update({ metric_thresholds_default: JSON.stringify(parsed.data) });
-    await afterSave(parsed.data);
-    res.json({ success: true, data: { thresholds: parsed.data } });
-  } catch (err) { next(err); }
-});
-
-// ── Resolved tenant defaults (read-only) ────────────────────────────
-// Effective values (with the origin of each value) resolved up to and
-// including the tenant layer. `?scope=parent` stops above the tenant:
-// what the tenant itself inherits (global + system) — used by the tenant
-// thresholds tab so its placeholders / greyed alerts switches never echo
-// the tenant's own saved values.
-router.get('/current/thresholds-resolved', requireTenant, async (req, res, next) => {
-  try {
-    const { thresholdService } = await import('../services/threshold.service');
-    const resolved = req.query.scope === 'parent'
-      ? await thresholdService.resolveGlobal()
-      : await thresholdService.resolveForTenant(req.tenantId!);
-    res.json({ success: true, data: resolved });
-  } catch (err) { next(err); }
 });
 
 export default router;

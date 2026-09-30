@@ -19,8 +19,9 @@ const router = Router();
 // never from the caller's field names): at the 'restricted' level it asks a
 // fresh code instead of a second administrator, and only for the secret
 // itself — the SSO gateway address, switch and client-id form (the trust
-// root) still need the second administrator.
-async function gateSettingsWrite(req: Request, res: Response, next: NextFunction) {
+// root) still need the second administrator. Also the gate of the modules'
+// named settings writes (their routers, mounted before this one).
+export async function gateSettingsWrite(req: Request, res: Response, next: NextFunction) {
   try {
     const { applyRestriction, restrictionService } = await import('../services/restriction.service');
     const { prepareSettingsApproval } = await import('../services/settingsWrite.service');
@@ -53,7 +54,9 @@ async function gateSettingsWrite(req: Request, res: Response, next: NextFunction
 // GET is available to all authenticated users (needed for profile page to check allow_2fa)
 router.get('/', requireAuth, appConfigController.getAll);
 
-// Specific named routes MUST come before /:key (otherwise /:key captures them first)
+// Specific named routes MUST come before /:key (otherwise /:key captures them
+// first). The modules' named settings (routes/index.ts, mounted before this
+// router on /admin/config) are served before it.
 
 // Agent global defaults — admin only
 router.get('/agent-global', requireAuth, requireRole('admin'), appConfigController.getAgentGlobal);
@@ -62,19 +65,6 @@ router.patch('/agent-global', requireAuth, requireRole('admin'), gateSettingsWri
 // Obligate SSO gateway config — admin only
 router.get('/obligate', requireAuth, requireRole('admin'), appConfigController.getObligateConfig);
 router.put('/obligate', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.setObligateConfig);
-
-// File explorer editable extensions — read by all auth'd users (needed
-// by the file explorer UI), write admin only. Cross-tenant global setting.
-router.get('/editable-extensions', requireAuth, appConfigController.getEditableExtensions);
-router.put('/editable-extensions', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.setEditableExtensions);
-
-// Global metric-threshold default (cascade layer 2). Cross-tenant —
-// only the platform admin sitting on the master tenant can edit. Read
-// is admin-only because the response shape is for the editor; the
-// resolver inside threshold.service.ts reads it directly without
-// going through this endpoint.
-router.get('/global-thresholds', requireAuth, requireRole('admin'), appConfigController.getGlobalThresholds);
-router.put('/global-thresholds', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.setGlobalThresholds);
 
 // Generic key setter — must be LAST among PUT routes
 router.put('/:key', requireAuth, requireRole('admin'), gateSettingsWrite, appConfigController.set);

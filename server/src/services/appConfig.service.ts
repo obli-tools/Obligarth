@@ -1,6 +1,35 @@
 import { db } from '../db';
 import type { AppConfigData, DeviceNotificationTypes, ObligateConfig } from '@obliance/shared';
-import { parseWebView2Mode } from './oblireachWebView2.service';
+
+// ── Platform settings of the modules ────────────────────────────────────────
+// A module's own app_config keys (registerConfigKey; modules/rmm.ts for the
+// RMM's): listed by getAll() after the core's, in registration order, and
+// written through PUT /api/admin/config/:key (settingsWrite.service).
+
+export interface ModuleConfigKey {
+  key: string;
+  /** 'boolean': 'true' / 'false' only; 'enum': one of `values`. Stored as is. */
+  type: 'boolean' | 'enum';
+  values?: readonly string[];
+  /** The value getAll() returns, from the stored one (undefined when absent). */
+  read: (stored: string | undefined) => string;
+  /** Called once a new value is stored (e.g. a cache refreshed at once). */
+  afterWrite?: (value: string) => void;
+}
+
+const moduleConfigKeys: ModuleConfigKey[] = [];
+
+export function registerConfigKey(def: ModuleConfigKey): void {
+  if (!/^[a-z0-9_]+$/.test(def.key)) throw new Error(`Invalid config key: ${def.key}`);
+  if (moduleConfigKeys.some((k) => k.key === def.key)) throw new Error(`Config key '${def.key}' registered twice`);
+  if (def.type === 'enum' && !def.values?.length) throw new Error(`Config key '${def.key}' has no values`);
+  moduleConfigKeys.push(def);
+}
+
+/** A module's config key, if this is one. */
+export function moduleConfigKey(key: string): ModuleConfigKey | undefined {
+  return moduleConfigKeys.find((k) => k.key === key);
+}
 
 const AGENT_GLOBAL_CONFIG_KEY = 'agent_global_config';
 const OBLIGATE_CONFIG_KEY     = 'obligate_config';
@@ -35,19 +64,6 @@ function obligatePublicView(s: ObligateStored, enabled: boolean): ObligateConfig
     inboundSecretFromEnv: !!envSecret,
   };
 }
-const EDITABLE_EXT_KEY        = 'file_explorer_editable_extensions';
-
-const DEFAULT_EDITABLE_EXTENSIONS = [
-  'txt', 'md', 'log', 'json', 'xml', 'yaml', 'yml', 'ini', 'conf', 'cfg',
-  'env', 'properties', 'toml', 'csv', 'tsv',
-  'js', 'ts', 'jsx', 'tsx', 'py', 'go', 'rs', 'java', 'c', 'cpp', 'h',
-  'cs', 'rb', 'php', 'html', 'htm', 'css', 'scss', 'sass', 'less',
-  'sh', 'bash', 'zsh', 'fish', 'bat', 'cmd', 'ps1', 'psm1', 'psd1',
-  'sql', 'vue', 'svelte', 'astro', 'lua', 'pl', 'r', 'swift',
-  'kt', 'scala', 'clj', 'cljs', 'ex', 'exs', 'erl', 'hs', 'dart', 'zig',
-  'dockerfile', 'gitignore', 'editorconfig', 'htaccess',
-];
-
 export interface AgentGlobalConfig {
   checkIntervalSeconds: number | null;
   scanIntervalSeconds: number | null;  // 0 = disabled, >0 = run all scans every N seconds
@@ -87,7 +103,7 @@ export const appConfigService = {
       try { return (JSON.parse(map[key]) as { url?: string }).url || null; } catch { return null; }
     };
 
-    return {
+    const data: AppConfigData = {
       allow_2fa: map['allow_2fa'] ?? 'false',
       force_2fa: map['force_2fa'] ?? 'false',
       otp_smtp_server_id: map['otp_smtp_server_id'] ?? null,
@@ -108,11 +124,12 @@ export const appConfigService = {
       device_keys_login: map['device_keys_login'] ?? 'true',
       device_keys_require_attestation: map['device_keys_require_attestation'] ?? 'true',
       device_keys_strict_session: map['device_keys_strict_session'] ?? 'true',
-      // ObliReach automatic install / update (absent = on).
-      oblireach_auto_install: map['oblireach_auto_install'] === 'false' ? 'false' : 'true',
-      // ObliReach: WebView2 runtime install (proactive | on_demand | disabled; absent = proactive).
-      oblireach_webview2_install: parseWebView2Mode(map['oblireach_webview2_install']),
     };
+    // The modules' keys (registerConfigKey), after the core's.
+    for (const def of moduleConfigKeys) {
+      (data as unknown as Record<string, string>)[def.key] = def.read(map[def.key]);
+    }
+    return data;
   },
 
   // ── Obligate SSO gateway ────────────────────────────────────────────────
@@ -210,32 +227,6 @@ export const appConfigService = {
     const updated: AgentGlobalConfig = { ...current, ...patch };
     await this.set(AGENT_GLOBAL_CONFIG_KEY, JSON.stringify(updated));
     return updated;
-  },
-
-  /** File explorer editable extensions (global, cross-tenant). */
-  async getEditableExtensions(): Promise<string[]> {
-    const raw = await this.get(EDITABLE_EXT_KEY);
-    if (!raw) return DEFAULT_EDITABLE_EXTENSIONS;
-    try {
-      const arr = JSON.parse(raw);
-      if (Array.isArray(arr) && arr.every((x) => typeof x === 'string')) return arr;
-    } catch {}
-    return DEFAULT_EDITABLE_EXTENSIONS;
-  },
-
-  async setEditableExtensions(extensions: string[]): Promise<string[]> {
-    // Normalise: lowercase, strip leading dots, dedupe, keep non-empty only.
-    const cleaned = Array.from(new Set(
-      extensions
-        .map((e) => String(e).trim().toLowerCase().replace(/^\./, ''))
-        .filter((e) => e.length > 0),
-    ));
-    await this.set(EDITABLE_EXT_KEY, JSON.stringify(cleaned));
-    return cleaned;
-  },
-
-  getDefaultEditableExtensions(): string[] {
-    return [...DEFAULT_EDITABLE_EXTENSIONS];
   },
 
   /**

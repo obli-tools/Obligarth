@@ -60,6 +60,9 @@ import cveRoutes from './cve.routes';
 import hypervRoutes from './hyperv.routes';
 import veeamRoutes from './veeam.routes';
 import sshBastionRoutes from './sshBastion.routes';
+import sshBastionProfileRoutes from './sshBastionProfile.routes';
+import { globalThresholdRoutes, tenantThresholdRoutes } from './thresholdSettings.routes';
+import fileExplorerSettingsRoutes from './fileExplorerSettings.routes';
 import { requireRole } from '../middleware/rbac';
 
 const router = Router();
@@ -85,8 +88,13 @@ router.use('/ssh-bastion', requireAuth, requireRole('admin'), sshBastionRoutes);
 router.use('/profile/device-keys', requireAuth, deviceKeyRoutes);
 router.use('/profile/2fa', twoFactorRoutes); // must be before /profile (auth handled inside twoFactorRoutes)
 router.use('/profile', requireAuth, profileRoutes);
+router.use('/profile', requireAuth, sshBastionProfileRoutes); // SSH bastion: the user's keys, IP authorization, status
 router.use('/tenants', requireAuth, tenantRoutes);
 router.use('/tenant', requireAuth, tenantRoutes);
+// Metric thresholds of the current tenant (cascade layer 3), after the core
+// tenant router, on both of its mount points.
+router.use('/tenants', requireAuth, tenantThresholdRoutes);
+router.use('/tenant', requireAuth, tenantThresholdRoutes);
 router.use('/live-alerts', requireAuth, liveAlertsRoutes);
 
 // ── Authenticated + tenant scoped ────────────────────────────────────────────
@@ -124,6 +132,10 @@ tenantRouter.use('/maintenance', maintenanceRoutes);
 tenantRouter.use('/approvals',   approvalRoutes);
 tenantRouter.use('/audit-log',   auditRoutes);
 tenantRouter.use('/restrictions', restrictionRoutes);
+// The modules' named platform settings, before the core settings router (its
+// PUT /:key would take their paths).
+tenantRouter.use('/admin/config', fileExplorerSettingsRoutes); // file explorer editable extensions
+tenantRouter.use('/admin/config', globalThresholdRoutes);      // metric thresholds, global default
 tenantRouter.use('/admin/config', adminRoutes);
 tenantRouter.use('/admin/smtp-servers', smtpRoutes);
 tenantRouter.use('/agent',       agentAdminRoutes);  // admin: API key management

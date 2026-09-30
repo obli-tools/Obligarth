@@ -353,6 +353,29 @@ export interface ObligateUserAssertion {
   };
 }
 
+// ── Counters of the Obligate dashboard card (GET /api/auth/dashboard-stats) ─
+// The core counts the devices; a module adds its own counters after them
+// (registerDashboardStat; modules/rmm.ts for the RMM's). A fleet-wide count
+// only: the route answers a Bearer secret that may be public.
+
+export interface ObligateDashboardStat {
+  label: string;
+  color: string;
+  count: () => Promise<number>;
+}
+
+const dashboardStats: ObligateDashboardStat[] = [];
+
+export function registerDashboardStat(stat: ObligateDashboardStat): void {
+  if (dashboardStats.some((s) => s.label === stat.label)) throw new Error(`Dashboard stat '${stat.label}' registered twice`);
+  dashboardStats.push(stat);
+}
+
+/** The modules' counters, in registration order. */
+export function moduleDashboardStats(): readonly ObligateDashboardStat[] {
+  return dashboardStats;
+}
+
 export const obligateService = {
   /**
    * Check if Obligate is configured and reachable.

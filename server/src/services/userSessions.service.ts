@@ -18,8 +18,33 @@ import { sessionHash, sessionRoom } from '../utils/sessionHash';
 // session back when it ends. middleware/sessionUserGuard.ts re-reads the
 // user on every request (its cache entry is dropped here), so such a
 // resurrected row dies on its next use. Connections that outlive the
-// session are closed too: remote sessions the user started (browser relay,
-// ObliReach, bastion jumps) and authenticated SSH bastion connections.
+// session are closed too: the modules close theirs (remote sessions the user
+// started, SSH bastion connections…) through their onSessionsKilled hooks.
+
+// ── Hooks of the modules ────────────────────────────────────────────────────
+
+/** What a module closes when sessions end (onSessionsKilled). */
+export interface SessionsKilledHook {
+  /** Key of its count in the log line ('remote', 'bastion'). */
+  name: string;
+  /** What it closes, for the failure log ('remote sessions'). */
+  label: string;
+  /** Every session of this user was deleted (killSessionsForUser): returns
+   *  how many of its channels it closed. */
+  forUser?: (userId: number, reason: string) => number | Promise<number>;
+  /** These sessions (sha256 of their ids) were deleted (closeSessionChannels):
+   *  returns how many of its channels it closed. */
+  forSessions?: (sessionHashes: string[], reason: string) => number | Promise<number>;
+}
+
+const hooks: SessionsKilledHook[] = [];
+
+/** Registers a module's hook, run after the core closed the sessions and
+ *  their sockets (in registration order; a failure is logged, never thrown). */
+export function onSessionsKilled(hook: SessionsKilledHook): void {
+  if (hooks.some((h) => h.name === hook.name)) throw new Error(`Session hook '${hook.name}' registered twice`);
+  hooks.push(hook);
+}
 
 export async function killSessionsForUser(userId: number, reason: string): Promise<number> {
   if (!Number.isInteger(userId) || userId <= 0) return 0;
@@ -37,21 +62,17 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   try {
     getIO().in(`user:${userId}`).disconnectSockets(true);
   } catch { /* Socket.io not initialised (CLI) */ }
-  let remote = 0;
-  let bastion = 0;
-  try {
-    const { remoteService } = await import('./remote.service');
-    remote = await remoteService.closeSessionsForUser(userId, reason);
-  } catch (err) {
-    logger.warn({ err, userId }, 'remote sessions of a removed user not closed');
+  const closed: Record<string, number> = {};
+  for (const hook of hooks) {
+    if (!hook.forUser) continue;
+    closed[hook.name] = 0;
+    try {
+      closed[hook.name] = await hook.forUser(userId, reason);
+    } catch (err) {
+      logger.warn({ err, userId }, `${hook.label} of a removed user not closed`);
+    }
   }
-  try {
-    const { endBastionConnectionsForUser } = await import('./sshBastion/sshBastion.service');
-    bastion = endBastionConnectionsForUser(userId);
-  } catch (err) {
-    logger.warn({ err, userId }, 'bastion connections of a removed user not closed');
-  }
-  logger.info({ userId, reason, count, remote, bastion }, 'user sessions killed');
+  logger.info({ userId, reason, count, ...closed }, 'user sessions killed');
   return count;
 }
 
@@ -60,32 +81,37 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
 // Socket.io authenticates once, at the handshake, and a remote relay once, at
 // its upgrade: deleting a session row does not close what that session
 // already opened. Each socket joins `sess:<sha256(sid)>` at the handshake
-// (socket.ts) and each browser relay records the same hash (remote.service),
-// so a revocation that deletes session rows closes exactly their channels,
-// never the other sessions of the same user.
+// (socket.ts) and a module's channel records the same hash (e.g. each browser
+// relay of remote.service), so a revocation that deletes session rows closes
+// exactly their channels, never the other sessions of the same user.
 
 export { sessionHash, sessionRoom };
 
 /**
  * Closes the live channels of these (already deleted) sessions: their
- * Socket.io connections, and the remote sessions whose browser relay they
- * attached or that they started (shell, ObliReach, VM console). Never throws.
+ * Socket.io connections, and what the modules' hooks close for them (e.g.
+ * the remote sessions whose browser relay they attached or that they
+ * started: shell, ObliReach, VM console). Never throws. Returns the modules'
+ * counts by hook name.
  */
-export async function closeSessionChannels(sids: ReadonlyArray<string>, reason: string): Promise<{ remote: number }> {
+export async function closeSessionChannels(sids: ReadonlyArray<string>, reason: string): Promise<Record<string, number>> {
   const list = [...new Set(sids.filter((x) => typeof x === 'string' && x.length > 0))];
-  if (list.length === 0) return { remote: 0 };
+  const closed: Record<string, number> = {};
+  for (const hook of hooks) if (hook.forSessions) closed[hook.name] = 0;
+  if (list.length === 0) return closed;
   const hashes = list.map(sessionHash);
   try {
     const io = getIO();
     for (const h of hashes) io.in(`sess:${h}`).disconnectSockets(true);
   } catch { /* Socket.io not initialised (CLI) */ }
-  let remote = 0;
-  try {
-    const { remoteService } = await import('./remote.service');
-    remote = await remoteService.closeSessionsForSessionHashes(hashes, reason);
-  } catch (err) {
-    logger.warn({ err }, 'remote sessions of revoked sessions not closed');
+  for (const hook of hooks) {
+    if (!hook.forSessions) continue;
+    try {
+      closed[hook.name] = await hook.forSessions(hashes, reason);
+    } catch (err) {
+      logger.warn({ err }, `${hook.label} of revoked sessions not closed`);
+    }
   }
-  logger.info({ sessions: list.length, remote, reason }, 'live channels of deleted sessions closed');
-  return { remote };
+  logger.info({ sessions: list.length, ...closed, reason }, 'live channels of deleted sessions closed');
+  return closed;
 }

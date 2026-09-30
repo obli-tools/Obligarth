@@ -100,7 +100,7 @@ export async function scenarioDenialFor(
 const EPOCH_KEY = 'scenario_accountability_since';
 let epochMs: number | null = null;
 
-/** Called at boot, before the HTTP server accepts requests (index.ts). */
+/** Called at boot, before the HTTP server accepts requests (boot task of modules/rmm.ts). */
 export async function initScenarioAccountability(): Promise<void> {
   await db('app_config').insert({ key: EPOCH_KEY, value: new Date().toISOString() }).onConflict('key').ignore();
   const row = await db('app_config').where({ key: EPOCH_KEY }).first('value') as { value: string | null } | undefined;

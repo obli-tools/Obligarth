@@ -30,6 +30,20 @@ function rowToTenant(row: TenantRow): Tenant {
   };
 }
 
+// Tables whose `target_tenant_ids` (int[]) name the tenants a master-owned row
+// is fanned out to. The module that owns such a table registers it
+// (registerTenantFanoutTable; modules/rmm.ts for the RMM's): deleting a
+// tenant strips its id from every registered table.
+const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
+const fanoutTables: string[] = [];
+
+export function registerTenantFanoutTable(table: string): void {
+  // Inlined in the SQL of delete(): an identifier only.
+  if (!IDENT_RE.test(table)) throw new Error(`Invalid fan-out table name: ${table}`);
+  if (fanoutTables.includes(table)) throw new Error(`Fan-out table '${table}' registered twice`);
+  fanoutTables.push(table);
+}
+
 export const tenantService = {
   async getAll(): Promise<Tenant[]> {
     const rows = await db('tenants').select<TenantRow[]>('*').orderBy('id');
@@ -64,15 +78,13 @@ export const tenantService = {
 
   async delete(id: number): Promise<void> {
     // Strip the tenant id from any master-owned fan-out array before
-    // dropping the row. Without this, scripts/scenarios/schedules/
-    // compliance policies that targeted this tenant would carry a
-    // dangling id forever — and the cross-tenant read scope would
-    // perform a wasted `id = ANY(...)` test against the dead value.
-    // CASCADE on tenant_id covers the owner side; the array side is
-    // application-level and has to be cleaned explicitly.
+    // dropping the row (registerTenantFanoutTable). Without this, the rows
+    // that targeted this tenant would carry a dangling id forever — and the
+    // cross-tenant read scope would perform a wasted `id = ANY(...)` test
+    // against the dead value. CASCADE on tenant_id covers the owner side;
+    // the array side is application-level and has to be cleaned explicitly.
     await db.transaction(async (trx) => {
-      const FANOUT_TABLES = ['scripts', 'scenarios', 'script_schedules', 'compliance_policies'] as const;
-      for (const table of FANOUT_TABLES) {
+      for (const table of fanoutTables) {
         const has = await trx.schema.hasColumn(table, 'target_tenant_ids');
         if (!has) continue;
         await trx.raw(

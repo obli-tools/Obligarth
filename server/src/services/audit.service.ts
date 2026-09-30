@@ -59,6 +59,32 @@ function rowToAudit(r: any): AuditLogRow {
   };
 }
 
+// ── Resource names ──────────────────────────────────────────────────────────
+// The owner of a `resource_type` names its resources: `column` of `table`
+// whose id is the row's resource_path. The core registers its own below; a
+// module registers its types (registerAuditResourceName) — removing the
+// module removes the subquery on its table.
+
+const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
+const RESOURCE_TYPE_RE = /^[a-z][a-z0-9_]*$/;
+const resourceNames: Array<{ resourceType: string; table: string; column: string }> = [];
+
+export function registerAuditResourceName(resourceType: string, table: string, column = 'name'): void {
+  // Inlined in the SQL below: identifiers and the type literal are checked.
+  if (!RESOURCE_TYPE_RE.test(resourceType) || !IDENT_RE.test(table) || !IDENT_RE.test(column)) {
+    throw new Error(`Invalid audit resource name source: ${resourceType} → ${table}.${column}`);
+  }
+  if (resourceNames.some((r) => r.resourceType === resourceType)) {
+    throw new Error(`Audit resource type '${resourceType}' registered twice`);
+  }
+  resourceNames.push({ resourceType, table, column });
+}
+
+registerAuditResourceName('team', 'user_teams');
+registerAuditResourceName('user', 'users', 'username');
+registerAuditResourceName('group', 'device_groups');
+registerAuditResourceName('tenant', 'tenants');
+
 /** Resolves the human-readable name for an audit row's resource via
  *  correlated subqueries.
  *
@@ -71,20 +97,18 @@ function rowToAudit(r: any): AuditLogRow {
  *  failed and the page went red. Subqueries dodge the issue: each
  *  branch is only executed when the WHERE predicate is true, and we
  *  compare `id::text = resource_path` (cast the PK, not the path).
- *  With LIMIT 100 + indexed PK lookups this stays cheap. */
-const RESOURCE_NAME_SELECT = db.raw(`
+ *  With LIMIT 100 + indexed PK lookups this stays cheap. The types are
+ *  distinct, so at most one branch names a row. */
+function resourceNameSelect() {
+  if (!resourceNames.length) return db.raw('NULL::text as resource_name');
+  const branches = resourceNames.map((r) =>
+    `(SELECT ${r.column} FROM ${r.table} WHERE al.resource_type = '${r.resourceType}' AND ${r.table}.id::text = al.resource_path)`);
+  return db.raw(`
   COALESCE(
-    (SELECT name     FROM scripts                   WHERE al.resource_type = 'script'          AND scripts.id::text                   = al.resource_path),
-    (SELECT name     FROM scenarios                 WHERE al.resource_type = 'scenario'        AND scenarios.id::text                 = al.resource_path),
-    (SELECT name     FROM user_teams                WHERE al.resource_type = 'team'            AND user_teams.id::text                = al.resource_path),
-    (SELECT username FROM users                     WHERE al.resource_type = 'user'            AND users.id::text                     = al.resource_path),
-    (SELECT name     FROM device_groups             WHERE al.resource_type = 'group'           AND device_groups.id::text             = al.resource_path),
-    (SELECT name     FROM agent_api_keys            WHERE al.resource_type = 'api_key'         AND agent_api_keys.id::text            = al.resource_path),
-    (SELECT name     FROM tenants                   WHERE al.resource_type = 'tenant'          AND tenants.id::text                   = al.resource_path),
-    (SELECT name     FROM script_schedules          WHERE al.resource_type = 'schedule'        AND script_schedules.id::text          = al.resource_path),
-    (SELECT name     FROM software_compliance_lists WHERE al.resource_type = 'software_policy' AND software_compliance_lists.id::text = al.resource_path)
+    ${branches.join(',\n    ')}
   ) as resource_name
 `);
+}
 
 function clientIpFromReq(req: Request | undefined): string | undefined {
   if (!req) return undefined;
@@ -158,7 +182,7 @@ export const auditService = {
         'al.*',
         'u.username',
         db.raw('COALESCE(d.display_name, d.hostname) as device_name'),
-        RESOURCE_NAME_SELECT,
+        resourceNameSelect(),
       )
       .orderBy('al.created_at', 'desc')
       .limit(limit);
@@ -231,7 +255,7 @@ export const auditService = {
         'u.username',
         db.raw('COALESCE(d.display_name, d.hostname) as device_name'),
         'ten.name as tenant_name',
-        RESOURCE_NAME_SELECT,
+        resourceNameSelect(),
       )
       .orderBy('al.created_at', 'desc')
       .limit(limit)

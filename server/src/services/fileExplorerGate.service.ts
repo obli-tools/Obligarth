@@ -38,7 +38,7 @@ import type { RestrictionLevel } from './restriction.service';
  * Grants live in memory (lost at a restart: the client is simply asked again).
  *   - Browsing (`command.list_directory`, the explorer's entry gate and the
  *     only explorer key restricted by default): one code when the explorer
- *     opens (DEFAULT_RESTRICTIONS, migration 067), then 15 min of inactivity,
+ *     opens (default restrictions of modules/rmm.ts, migration 067), then 15 min of inactivity,
  *     2 h at most.
  *   - Any other explorer action marked sensitive by an admin (upload, delete,
  *     rename...) is a double gate: one confirmation = ONE operation (a
