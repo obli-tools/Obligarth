@@ -21,7 +21,7 @@ import { logger } from '../utils/logger';
 // Drop zone (see mobile/release/README.md), written by the release script:
 //   mobile/release/manifest.json     required (placeholder committed: versionCode 0)
 //   mobile/release/RELEASE_NOTES.md  optional
-//   mobile/release/obligarth.apk      optional (gitignored) — missing → available:false / 404
+//   mobile/release/obligarth.apk     optional (gitignored) — missing → available:false / 404
 //
 // process.cwd() is the server directory both in dev (server/) and in Docker
 // (WORKDIR /app/server), same convention as app.ts → <root>/mobile/release.

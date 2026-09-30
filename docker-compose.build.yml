@@ -68,6 +68,8 @@ services:
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
       # Public URL of this instance (e-mail links, trusted SSO origin, phone enrolment) — see .env.example
       APP_URL: ${APP_URL:-}
+      # Product name: TOTP issuer, notification and e-mail prefix — see .env.example
+      APP_NAME: ${APP_NAME:-Obligarth}
       # Initial administrator — empty password: a random one, printed once in
       # the server logs. See .env.example.
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
