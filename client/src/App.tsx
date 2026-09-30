@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { Toaster } from 'react-hot-toast';
 import { useNativeTopOffset } from '@/hooks/useNativeTopOffset';
 import { useAuthStore } from '@/store/authStore';
@@ -11,8 +11,7 @@ import { ForgotPasswordPage } from '@/pages/ForgotPasswordPage';
 import { ResetPasswordPage } from '@/pages/ResetPasswordPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { DeviceListPage } from '@/pages/DeviceListPage';
-import { DeviceDetailPage } from '@/pages/DeviceDetailPage';
-import { SchedulesPage } from '@/pages/SchedulesPage';
+import { DeviceSummaryPage } from '@/pages/DeviceSummaryPage';
 import { PoliciesPage } from '@/pages/PoliciesPage';
 import { SupervisionPage } from '@/pages/SupervisionPage';
 import { GroupDetailPage } from '@/pages/GroupDetailPage';
@@ -21,9 +20,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { AdminDevicesPage } from '@/pages/AdminDevicesPage';
 import { ProfilePage } from '@/pages/ProfilePage';
-import { ImportExportPage } from '@/pages/ImportExportPage';
 import { AdminTenantsPage } from '@/pages/AdminTenantsPage';
-import { CustomSectionsPage } from '@/pages/CustomSectionsPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
 import { SecurityPage } from '@/pages/SecurityPage';
@@ -52,13 +49,11 @@ export default function App() {
  <Route element={<ProtectedRoute />}>
  <Route path="/enroll" element={<EnrollmentPage />} />
  <Route element={<AppLayout />}>
- {/* Main RMM */}
+ {/* Main */}
  <Route path="/" element={<DashboardPage />} />
  <Route path="/devices" element={<DeviceListPage />} />
- <Route path="/devices/:id" element={<DeviceDetailPage />} />
- <Route path="/automations" element={<SchedulesPage />} />
- {/* Legacy alias — redirect old /schedules URLs to /automations */}
- <Route path="/schedules" element={<Navigate to="/automations" replace />} />
+ {/* Minimal device record (registry fields) until the MDM device page. */}
+ <Route path="/devices/:id" element={<DeviceSummaryPage />} />
  <Route path="/policies" element={<PoliciesPage />} />
  {/* Groups */}
  <Route path="/group/:id" element={<GroupDetailPage />} />
@@ -72,7 +67,6 @@ export default function App() {
  <Route element={<ProtectedRoute requiredRole="admin" />}>
  <Route path="/settings" element={<SettingsPage />} />
  <Route path="/admin/users" element={<AdminUsersPage />} />
- <Route path="/admin/import-export" element={<ImportExportPage />} />
  <Route path="/admin/tenants" element={<AdminTenantsPage />} />
  {/* Renamed: /workspace replaces /admin/tenants in the new sidebar
      ("Workspace" reads more like "the platform partition" than
@@ -88,18 +82,14 @@ export default function App() {
  <Route path="/admin/supervision" element={<SupervisionPage />} />
  </Route>
 
- {/* Agent config tabs — admin OR users with any of the
-     agent_config:* capabilities. Each inner page also gates the
-     specific feature it surfaces (key management vs approval vs
-     discovery vs custom sections). */}
+ {/* Agent config — admin OR users with the agent_config:keys or
+     agent_config:approval capability (the same pair the server
+     accepts for the enrolment keys). */}
  <Route element={<ProtectedRoute requiredCapabilities={[
- 'agent_config:custom_sections',
- 'agent_config:discovery',
  'agent_config:keys',
  'agent_config:approval',
  ]} />}>
  <Route path="/admin/devices" element={<AdminDevicesPage />} />
- <Route path="/admin/custom-sections" element={<CustomSectionsPage />} />
  <Route path="/admin/approvals" element={<ApprovalsPage />} />
  </Route>
  </Route>

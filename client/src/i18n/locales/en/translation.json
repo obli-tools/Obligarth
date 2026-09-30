@@ -349,6 +349,7 @@
     "notEnoughHistory": "Not enough history — data after 24h",
     "agentsOnlineOffline": "agents online / offline",
     "groupViewSub": "online · alerts · compliance · updates",
+    "groupViewStatusSub": "online · offline · alerts",
     "noVersionsReported": "No version reported",
     "devicesManaged": "devices managed",
     "allDevices": "All devices",
@@ -1961,6 +1962,17 @@
       "reinstallHint": "ObliReach v{{version}} is installed but not connected — click to reinstall it",
       "reinstallLabel": "(reinstall)"
     }
+  },
+  "deviceSummary": {
+    "back": "Back to devices",
+    "notFound": "Device not found",
+    "switchingTenant": "Switching to {{tenant}}…",
+    "os": "Operating system",
+    "group": "Group",
+    "ungrouped": "Ungrouped",
+    "status": "Status",
+    "lastSeen": "Last seen",
+    "tenant": "Tenant"
   },
   "updates": {
     "title": "Updates",

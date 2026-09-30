@@ -17,7 +17,7 @@ export function AppLayout() {
   useSocket();
 
   // ── Tenant-switch safety net ──────────────────────────────────────────────
-  // Tenant-scoped pages (device detail, group detail, scenario edit, etc.)
+  // Tenant-scoped pages (device record, group detail, etc.)
   // hold an ID in the URL that only resolves under the active tenant. When
   // the user switches tenants, that ID becomes a 404 ("Device not found")
   // because the row is invisible behind the tenant filter. Sending the user
@@ -34,9 +34,10 @@ export function AppLayout() {
     if (previous == null) return;                  // app boot — keep deep link
     if (currentTenantId == null) return;           // logout / mid-fetch
     if (previous === currentTenantId) return;       // unchanged — no-op
-    // The "open device on another tenant" CTA in DeviceDetailPage explicitly
-    // wants the URL to survive the tenant switch — it sets this flag right
-    // before calling setCurrentTenant. Honour it once and clear it.
+    // The device record (DeviceSummaryPage) switches to the tenant of a device
+    // opened from another one and wants the URL to survive the switch — it
+    // sets this flag right before calling setCurrentTenant. Honour it once and
+    // clear it.
     if (sessionStorage.getItem('skipTenantSwitchRedirect') === '1') {
       sessionStorage.removeItem('skipTenantSwitchRedirect');
       return;

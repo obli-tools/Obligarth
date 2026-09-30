@@ -13,7 +13,7 @@ import { IconButton } from '@/components/common/IconButton';
 import { useConfirm } from '@/components/common/ConfirmDialog';
 import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { downloadUrl } from '@/utils/download';
-import { DeviceFilterSelect } from './CompliancePage';
+import { DeviceFilterSelect } from '@/components/devices/DeviceFilterSelect';
 
 const REPORT_TYPE_LABELS: Record<ReportType, string> = {
  fleet: 'Fleet Overview',

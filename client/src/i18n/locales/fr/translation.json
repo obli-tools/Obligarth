@@ -349,6 +349,7 @@
     "notEnoughHistory": "Pas assez d'historique — données après 24h",
     "agentsOnlineOffline": "agents en ligne / hors ligne",
     "groupViewSub": "online · alerts · conformité · MAJ",
+    "groupViewStatusSub": "en ligne · hors ligne · alertes",
     "noVersionsReported": "Aucune version reportée",
     "devicesManaged": "appareils gérés",
     "allDevices": "Voir tous les appareils",
@@ -1961,6 +1962,17 @@
       "reinstallHint": "ObliReach v{{version}} est installé mais pas connecté : un clic le réinstalle",
       "reinstallLabel": "(réinstaller)"
     }
+  },
+  "deviceSummary": {
+    "back": "Retour aux appareils",
+    "notFound": "Appareil introuvable",
+    "switchingTenant": "Bascule vers {{tenant}}…",
+    "os": "Système d'exploitation",
+    "group": "Groupe",
+    "ungrouped": "Sans groupe",
+    "status": "Statut",
+    "lastSeen": "Vu en dernier",
+    "tenant": "Tenant"
   },
   "updates": {
     "title": "Mises à jour",

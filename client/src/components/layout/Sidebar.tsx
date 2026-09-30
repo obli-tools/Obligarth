@@ -8,7 +8,6 @@ import {
   LogOut,
   Server,
   ArrowLeftRight,
-  CalendarClock,
   Building2,
   ChevronDown,
   ChevronRight,
@@ -249,15 +248,13 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // Tenant capabilities — Capability enum from @obliance/shared.
   // We use them to surface admin-tenant pages to non-admin users who
   // have been granted a specific page-gate capability:
-  //   - supervision:read         → Supervision (Reports + History + Remote sessions)
-  //   - agent_config:*           → Agent config (API keys)
+  //   - supervision:read         → Supervision (Reports)
+  //   - agent_config:keys / agent_config:approval → Agent config (API keys)
   // Admins implicitly have all capabilities (the sidebar ORs role and
   // cap so the menu still appears for admins regardless of cap state).
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
   const hasSupervisionCap = tenantCaps.has('supervision:read');
-  const hasAnyAgentConfigCap =
-    tenantCaps.has('agent_config:custom_sections') ||
-    tenantCaps.has('agent_config:discovery') ||
+  const hasAgentConfigCap =
     tenantCaps.has('agent_config:keys') ||
     tenantCaps.has('agent_config:approval');
   const { toggleSidebarFloating, toggleSidebarCollapsed } = useUiStore();
@@ -475,8 +472,11 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const navItems: NavItem[] = [
     { label: t('nav.dashboard'),                  path: '/',           icon: <LayoutDashboard size={18} /> },
     { label: t('nav.devices'),                    path: '/devices',    icon: <Monitor size={18} /> },
-    { label: t('nav.automations', 'Automations'), path: '/automations', icon: <CalendarClock size={18} /> },
-    { label: t('nav.policies'),                   path: '/policies',   icon: <ShieldCheck size={18} /> },
+    // Policies only holds the admin-only Notifications tab for now: hidden
+    // for the other users, for whom the page would be empty.
+    ...(admin
+      ? [{ label: t('nav.policies'),              path: '/policies',   icon: <ShieldCheck size={18} /> } as NavItem]
+      : []),
   ];
 
   // Admin-tier section. Each item is conditionally added based on
@@ -488,16 +488,14 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     ...(admin ? [{ label: t('nav.users'), path: '/admin/users', icon: <Users size={18} /> } as NavItem] : []),
     // Security — audit log + approvals + 2FA, admin only.
     ...(admin ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: pendingApprovalsCount } as NavItem] : []),
-    // Supervision — reports + history + remote sessions. Visible if
-    // platform admin OR the user has the `supervision:read`
-    // capability on at least one team_permission row.
+    // Supervision — reports. Visible if platform admin OR the user has the
+    // `supervision:read` capability on at least one team_permission row.
     ...(admin || hasSupervisionCap
       ? [{ label: t('nav.supervision'), path: '/admin/supervision', icon: <Laptop size={18} /> } as NavItem]
       : []),
-    // Agent config — the API keys page. The entry shows as soon as ANY
-    // agent_config:* sub-cap is granted (or the user is admin), including
-    // custom_sections / discovery, whose tabs are gone.
-    ...(admin || hasAnyAgentConfigCap
+    // Agent config — the API keys page, for admins and holders of
+    // agent_config:keys or agent_config:approval (same gate as the route).
+    ...(admin || hasAgentConfigCap
       ? [{ label: t('nav.agentConfig', 'Agent config'), path: '/admin/devices', icon: <Key size={18} /> } as NavItem]
       : []),
     // Workspace + Settings — platform admin on master tenant only.

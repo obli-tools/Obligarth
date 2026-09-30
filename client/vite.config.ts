@@ -25,7 +25,7 @@ export default defineConfig({
     // non-updatable Android System WebView (Android app, docs/obli-mobile.md)
     // could fail to PARSE the single bundle: white screen, no way to recover.
     // Lower buys nothing: the Tailwind layout already needs flex `gap` (Chrome 84).
-    // 'esnext' was set for @novnc/novnc (top-level await), no longer imported.
+    // 'esnext' was set for @novnc/novnc (top-level await), since removed.
     // If a top-level await ever comes back, the build fails loudly: then add
     // `esbuild: { supported: { 'top-level-await': true } }` (Chrome 89+)
     // instead of going back to 'esnext'.
@@ -37,7 +37,7 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3001',
         changeOrigin: true,
-        ws: true, // proxy WebSocket upgrades (needed for remote tunnels)
+        ws: true, // proxy WebSocket upgrades as well
       },
       '/socket.io': {
         target: 'http://localhost:3001',

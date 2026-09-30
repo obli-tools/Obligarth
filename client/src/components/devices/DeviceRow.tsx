@@ -1,5 +1,5 @@
-import { memo, type MouseEvent, type ReactNode } from 'react';
-import { Eye, FolderOpen, User, RotateCcw, ShieldOff, MapPin, WifiOff, Wifi, Network, Calendar, ShieldCheck, History, Building2, Copy } from 'lucide-react';
+import { memo, type MouseEvent } from 'react';
+import { Eye, FolderOpen, User, MapPin, Wifi, Network, Calendar, ShieldCheck, History, Building2 } from 'lucide-react';
 import type { Device } from '@obliance/shared';
 import { DeviceStatusBadge } from './DeviceStatusBadge';
 import { OsIcon } from './OsIcon';
@@ -8,8 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/authStore';
 import { anonymize, anonymizeIp } from '@/utils/anonymize';
 import { shortenOsName } from '@/utils/osLabel';
-import { Tip } from '@/components/common/Tip';
-import { useCanHover, useMediaQuery } from '@/hooks/useMediaQuery';
+import { useMediaQuery } from '@/hooks/useMediaQuery';
 
 interface DeviceRowProps {
   device: Device;
@@ -44,47 +43,11 @@ function formatLastSeen(lastSeenAt: string | null): { text: string; color: strin
   return { text: `${days}d`, color: 'text-red-400' };
 }
 
-function metricColor(pct: number): string {
-  if (pct > 80) return 'bg-red-400';
-  if (pct >= 50) return 'bg-yellow-400';
-  return 'bg-green-400';
-}
-
-function MiniBar({ label, value }: { label: string; value: number | undefined }) {
-  const pct = value ?? 0;
-  const hasValue = value != null;
-  return (
-    <div className="flex items-center gap-1">
-      <span className="text-[10px] text-text-muted/60 w-6 text-right max-md:w-auto">{label}</span>
-      <span className={clsx(
-        'text-[10px] text-text-muted w-6 text-right tabular-nums max-md:w-auto',
-        // Without the bar (phone) the value itself carries the severity.
-        hasValue && pct > 80 && 'max-md:text-red-400',
-        hasValue && pct >= 50 && pct <= 80 && 'max-md:text-yellow-400',
-      )}>
-        {hasValue ? `${Math.round(pct)}%` : '\u2014'}
-      </span>
-      {/* Phone: label + value only (three 48px bars do not fit next to the
-          status badge on a 360px row). The stacked tablet row has the
-          whole width for them on its second line. */}
-      <div className="w-12 h-1.5 rounded-full bg-bg-tertiary overflow-hidden max-md:hidden" title={`${label}: ${hasValue ? Math.round(pct) + '%' : 'N/A'}`}>
-        {hasValue && (
-          <div
-            className={clsx('h-full rounded-full transition-all', metricColor(pct))}
-            style={{ width: `${Math.min(pct, 100)}%` }}
-          />
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Stacked row = line 1 wraps into a "name" line and a "status + metrics"
-// line. The historic single line carries ~560px of fixed content next to
-// the name (3 metric bars, badge, last seen, eye, icons), so it is kept only
-// where there is room for it: desktop with a mouse. Tablet widths (< 1024)
-// and touch screens below xl (landscape tablets: pinned 280px sidebar, no
-// hover) get the stacked row; phones (< 768) add the max-md: tweaks below.
+// Stacked row = line 1 wraps into a "name" line and a "status" line. The
+// single line is kept only where there is room for it: desktop with a
+// mouse. Tablet widths (< 1024) and touch screens below xl (landscape
+// tablets: pinned 280px sidebar, no hover) get the stacked row; phones
+// (< 768) add the max-md: tweaks below.
 // One shared MediaQueryList for every row (hooks/useMediaQuery).
 const STACKED_ROW_QUERY = '(max-width: 1023.98px), (pointer: coarse) and (max-width: 1279.98px)';
 
@@ -102,19 +65,12 @@ export const DeviceRow = memo(function DeviceRow({
 }: DeviceRowProps) {
   const { t } = useTranslation();
   const { isAdmin } = useAuthStore();
-  // Mouse: the historic title= tooltips. Touch: the same text in a <Tip>
-  // (tap to reveal — docs/obli-mobile.md §5.2).
-  const canHover = useCanHover();
   const stacked = useMediaQuery(STACKED_ROW_QUERY);
   // When the parent doesn't pass a visibleFields set, fall back to "show
   // everything that was visible before D.1 landed" so legacy callers keep
   // their previous look.
   const fieldOn = (key: string): boolean =>
-    visibleFields ? visibleFields.has(key) : ['ipLocal', 'os', 'agentVersion', 'group', 'lastUser'].includes(key);
-  const metrics = device.latestMetrics;
-  const cpuPct = metrics?.cpu?.percent;
-  const ramPct = metrics?.memory?.percent;
-  const diskPct = metrics?.disks?.length ? metrics.disks[0].percent : undefined;
+    visibleFields ? visibleFields.has(key) : ['ipLocal', 'os', 'group', 'lastUser'].includes(key);
 
   const lastSeen = formatLastSeen(device.lastSeenAt);
   const displayLabel = device.displayName || device.hostname;
@@ -183,8 +139,8 @@ export const DeviceRow = memo(function DeviceRow({
       className={clsx(
         // Desktop with a mouse: the historic fixed 72px two-line row.
         // Stacked (tablet / touch < xl / phone): the row grows with its
-        // content — line 1 wraps into a "name" line and a "status +
-        // metrics" line, and the line-2 fields wrap (docs/obli-mobile.md §4).
+        // content — line 1 wraps into a "name" line and a "status" line,
+        // and the line-2 fields wrap (docs/obli-mobile.md §4).
         'min-h-[72px] px-4 py-2 hover:bg-bg-tertiary cursor-pointer transition-colors flex flex-col justify-center max-md:px-3',
         !stacked && 'md:h-[72px]',
         isSelected && 'bg-accent/10',
@@ -245,98 +201,15 @@ export const DeviceRow = memo(function DeviceRow({
           </span>
         )}
 
-        {/* State indicators: their meaning used to live only in title=
-            (unreachable on touch) — <Tip> = hover on desktop, tap on touch. */}
-        {device.rebootPending && (
-          <RowTip content={t('devices.row.rebootPending', 'Reboot pending')}>
-            <RotateCcw className="w-3.5 h-3.5 text-orange-400 flex-shrink-0" />
-          </RowTip>
-        )}
-        {device.privacyModeEnabled && (
-          <RowTip content={t('devices.row.privacyMode', 'Privacy mode')}>
-            <ShieldOff className="w-3.5 h-3.5 text-rose-400 flex-shrink-0" />
-          </RowTip>
-        )}
-        {device.airgapEnabled && (
-          <RowTip content={t('devices.row.airgap', 'Airgap')}>
-            <WifiOff className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-          </RowTip>
-        )}
-        {device.duplicateAgentIdSuspected && (
-          <RowTip content={t('duplicateAgentId.rowBadgeTitle', 'Duplicate agent ID suspected — multiple machines may share this UUID')}>
-            <Copy className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
-          </RowTip>
-        )}
-        {device.agentFlavor === 'legacy' && (
-          <RowTip content={t('devices.row.legacyHint', 'Legacy Go 1.20 agent — no remote shell, ObliReach, software compliance, or auto-update')}>
-            <span
-              className="text-[9px] px-1 rounded border border-amber-400/40 bg-amber-400/10 text-amber-400 font-semibold uppercase tracking-wider flex-shrink-0"
-            >
-              Legacy
-            </span>
-          </RowTip>
-        )}
-
         {/* Spacer on the single-line row; on the stacked row it becomes a
             line break (full-width, zero-height item) between the name line
-            and the status / metrics line. */}
+            and the status line. */}
         <div className={stacked ? 'order-2 flex-none w-full h-0' : 'flex-1'} />
 
-        {/* Metrics row — CPU / RAM / Disk + custom metrics. This block
-            used to be gated on `mode === 'monitoring'` (the original
-            split between /devices and /admin/devices), but the two
-            pages were unified so the device row should ALWAYS surface
-            health at a glance. Without this fix, custom metrics —
-            which the user explicitly drives via script schedules —
-            silently disappeared from every list view. */}
-        {(
-          <div className={clsx('flex items-center gap-3 max-md:gap-x-2.5 max-md:gap-y-0.5', stacked ? 'order-4 flex-shrink min-w-0 flex-wrap gap-y-1' : 'flex-shrink-0')}>
-            <MiniBar label="CPU" value={cpuPct} />
-            <MiniBar label="RAM" value={ramPct} />
-            <MiniBar label="Disk" value={diskPct} />
-            {device.customMetrics && device.customMetrics.length > 0 && (
-              <div className={clsx('flex items-center gap-1', stacked ? 'flex-shrink min-w-0 flex-wrap' : 'flex-shrink-0')}>
-                {device.customMetrics.slice(0, 3).map((m) => {
-                  const color =
-                    m.status === 'critical' ? 'border-red-400/40 text-red-400' :
-                    m.status === 'warning'  ? 'border-yellow-400/40 text-yellow-400' :
-                    m.status === 'error'    ? 'border-gray-400/40 text-gray-400' :
-                                               'border-cyan-400/40 text-cyan-400';
-                  const metricLabel = `${m.name}: ${m.value}${m.unit ? ' ' + m.unit : ''}`;
-                  const chip = (
-                    <span
-                      key={m.scheduleId}
-                      title={canHover ? metricLabel : undefined}
-                      className={clsx('inline-flex items-center gap-1 px-1.5 py-0.5 rounded border bg-bg-tertiary/60 text-[10px] font-mono max-md:min-w-0', color)}
-                    >
-                      {/* Phone: the metric name is shown in the chip (the
-                          title tooltip does not exist on touch). */}
-                      <span className="md:hidden truncate max-w-[96px] opacity-80 font-sans">{m.name}</span>
-                      <span className="font-semibold">{m.value}</span>
-                      {m.unit && <span className="opacity-70">{m.unit}</span>}
-                    </span>
-                  );
-                  // Touch (tablet rows hide the name): tap reveals "name: value".
-                  return canHover ? chip : <RowTip key={m.scheduleId} content={metricLabel}>{chip}</RowTip>;
-                })}
-                {device.customMetrics.length > 3 && (() => {
-                  const rest = device.customMetrics.slice(3).map((m) => `${m.name}: ${m.value}${m.unit ? ' ' + m.unit : ''}`).join('\n');
-                  const more = (
-                    <span className="text-[10px] text-text-muted" title={canHover ? rest : undefined}>
-                      +{device.customMetrics.length - 3}
-                    </span>
-                  );
-                  return canHover ? more : <RowTip content={<span className="whitespace-pre-line">{rest}</span>}>{more}</RowTip>;
-                })()}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Stacked tablet row: the status / metrics line is indented like
-            the line-2 fields (phone rows use the full width). */}
+        {/* Stacked tablet row: the status line is indented like the line-2
+            fields (phone rows use the full width). */}
         <span className={clsx('flex', stacked && 'order-3', stacked && (showCheckbox ? 'md:ml-[68px]' : 'md:ml-[40px]'))}>
-          <DeviceStatusBadge status={device.status} approvalStatus={device.approvalStatus} scheduleAlert={device.scheduleAlert} size="sm" updateAvailable={device.updateAvailable} />
+          <DeviceStatusBadge status={device.status} approvalStatus={device.approvalStatus} size="sm" />
         </span>
 
         <span className={clsx('text-xs flex-shrink-0 tabular-nums w-8 text-right max-md:w-auto', stacked && 'order-1', lastSeen.color)}>
@@ -394,19 +267,6 @@ export const DeviceRow = memo(function DeviceRow({
           ),
           fieldOn('os') && (
             <span key="os" className="truncate max-w-[180px]" title={osFullTextRaw}>{osFullText || '\u2014'}</span>
-          ),
-          fieldOn('agentVersion') && (
-            <span key="agent" className="inline-flex items-center gap-1">
-              v{device.agentVersion || '?'}
-              {device.updateAvailable && (
-                <span
-                  className="text-[9px] px-1 rounded border border-blue-400/40 bg-blue-400/10 text-blue-400 font-semibold uppercase tracking-wider"
-                  title={t('deviceStatus.updateAvailable') || 'Update available'}
-                >
-                  {t('devices.majPill') || 'MAJ'}
-                </span>
-              )}
-            </span>
           ),
           fieldOn('group') && (
             <span key="group" className="inline-flex items-center gap-1">
@@ -486,23 +346,6 @@ function Line2Fields({ nodes, className }: { nodes: Array<React.ReactNode | fals
         </span>
       ))}
     </div>
-  );
-}
-
-/** Small state icon with its explanation in a <Tip> (hover on desktop, tap
- *  on touch — docs/obli-mobile.md §5.2). On touch the tap is kept from
- *  reaching the row (which would navigate) and gets a larger hit area. */
-function RowTip({ content, children }: { content: ReactNode; children: ReactNode }) {
-  const canHover = useCanHover();
-  return (
-    <span
-      className="inline-flex flex-shrink-0"
-      onClick={canHover ? undefined : (e) => e.stopPropagation()}
-    >
-      <Tip content={content} className="relative coarse:after:absolute coarse:after:-inset-2 coarse:after:content-['']">
-        {children}
-      </Tip>
-    </span>
   );
 }
 

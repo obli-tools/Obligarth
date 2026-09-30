@@ -105,7 +105,7 @@
    (mid-dark slate, softer than Operator's near-black) so a second server can
    be told apart at a glance without switching to a light theme. It is a DARK
    theme for every light/dark decision (logo, native controls via
-   color-scheme, xterm / graph editor, system bars). Dim changes NEUTRALS
+   color-scheme, system bars). Dim changes NEUTRALS
    ONLY: the accent lines below are copied verbatim from Obli Operator and
    must never diverge (Obliance red #e03a3a). Every token is a plain RGB
    triplet (no alpha), same rule as Daylight.
@@ -430,9 +430,9 @@
    text-xs / text-sm utilities on the fields would otherwise win.
    Opt out with the `keep-font-size` class (e.g. dense code editors). */
 @media (pointer: coarse) and (max-width: 767px) {
-  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not(.xterm-helper-textarea):not(.keep-font-size),
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="color"]):not([type="file"]):not(.keep-font-size),
   select:not(.keep-font-size),
-  textarea:not(.xterm-helper-textarea):not(.keep-font-size) {
+  textarea:not(.keep-font-size) {
     font-size: 16px !important;
   }
 }

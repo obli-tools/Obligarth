@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef, type FormEvent } from 'react';
+import { useState, useEffect, type FormEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { User, Save, KeyRound, Bell, CheckCircle2, AlertTriangle, QrCode, Mail, Palette, Monitor, Camera, Trash2, MessageCircle, X } from 'lucide-react';
+import { User, Save, KeyRound, Bell, CheckCircle2, AlertTriangle, QrCode, Mail, Palette, Camera, Trash2 } from 'lucide-react';
 import { profileApi } from '@/api/profile.api';
 import { appConfigApi } from '@/api/appConfig.api';
 import { twoFactorApi, type TwoFactorStatus } from '@/api/twoFactor.api';
@@ -13,13 +13,10 @@ import { applyTheme, loadSavedTheme, type AppTheme } from '@/utils/theme';
 import { anonymize } from '@/utils/anonymize';
 import { SUPPORTED_LANGUAGES, setLanguage } from '@/i18n';
 import toast from 'react-hot-toast';
-import { SshKeysSection } from '@/components/profile/SshKeysSection';
 import { DeviceKeysSection, TRUSTED_IPS_CHANGED_EVENT } from '@/components/deviceKeys/DeviceKeysSection';
 import { TotpMobileActions } from '@/components/profile/TotpMobileActions';
 import { PageContainer } from '@/components/common/PageContainer';
-import { IconButton } from '@/components/common/IconButton';
 import { useConfirm } from '@/components/common/ConfirmDialog';
-import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { openExternal } from '@/utils/openExternal';
 import { isStepUpHandled } from '@/api/client';
 
@@ -32,7 +29,6 @@ const TOUCH_HIT = "coarse:after:absolute coarse:after:-inset-2.5 coarse:after:co
 
 export function ProfilePage() {
  const { t } = useTranslation();
- const coarse = useIsCoarsePointer();
  const { user: sessionUser, requires2faSetup } = useAuthStore();
  const [obligateUrl, setObligateUrl] = useState<string | null>(null);
  // SSO (Obligate) account: its e-mail address is Obligate's, resynced at each
@@ -181,63 +177,6 @@ export function ProfilePage() {
  }
  };
 
- const [preferredCodec, setPreferredCodec] = useState<string>(sessionUser?.preferences?.preferredCodec || 'h264');
- const [quickReplies, setQuickReplies] = useState<string[]>(sessionUser?.preferences?.quickReplies || []);
- const [newReply, setNewReply] = useState('');
- // Latest list, read by the (touch) undo toast — its closure would
- // otherwise hold the list as it was when that removal happened.
- const quickRepliesRef = useRef(quickReplies);
- quickRepliesRef.current = quickReplies;
-
- const handleAddReply = async () => {
- if (!newReply.trim() || quickReplies.length >= 50) return;
- const updated = [...quickReplies, newReply.trim()];
- quickRepliesRef.current = updated;
- setQuickReplies(updated);
- setNewReply('');
- try { await profileApi.update({ preferences: { quickReplies: updated } }); } catch {}
- };
-
- const handleRemoveReply = async (idx: number) => {
- const removed = quickReplies[idx];
- const updated = quickReplies.filter((_, i) => i !== idx);
- quickRepliesRef.current = updated;
- setQuickReplies(updated);
- try { await profileApi.update({ preferences: { quickReplies: updated } }); } catch {}
- // Touch: removal is one tap away from an accidental tap — offer an undo.
- if (coarse && removed !== undefined) {
- toast((tt) => (
- <span className="flex items-center gap-3">
- <span>{t('profile.quickReplies.removed', 'Quick reply removed')}</span>
- <button
- type="button"
- className="rounded px-3 py-2 text-sm font-medium text-accent hover:bg-accent/10"
- onClick={async () => {
- toast.dismiss(tt.id);
- // Re-insert only this reply into the CURRENT list (other
- // removals / additions made since then are kept).
- const restored = [...quickRepliesRef.current];
- restored.splice(Math.min(idx, restored.length), 0, removed);
- quickRepliesRef.current = restored;
- setQuickReplies(restored);
- try { await profileApi.update({ preferences: { quickReplies: restored } }); } catch {}
- }}
- >
- {t('profile.quickReplies.undo', 'Undo')}
- </button>
- </span>
- ), { duration: 6000 });
- }
- };
-
- const handleCodecChange = async (codec: string) => {
- setPreferredCodec(codec);
- try {
- await profileApi.update({ preferences: { preferredCodec: codec as any } });
- toast.success('Codec preference saved');
- } catch {}
- };
-
  const handleLanguageChange = async (code: string) => {
  setPreferredLanguage(code);
  setLanguage(code);
@@ -267,7 +206,6 @@ export function ProfilePage() {
  </a>
  </div>
  <DeviceKeysSection ssoAccount />
- <SshKeysSection />
  </div>
  );
  }
@@ -549,78 +487,6 @@ export function ProfilePage() {
  </div>
  </div>
 
- {/* Remote Desktop codec preference */}
- <div>
- <h2 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
- <Monitor size={18} className="text-accent" />
- Remote Desktop
- </h2>
- <div className="bg-bg-secondary rounded-xl p-5 space-y-3">
- <div>
- <label className="text-sm text-text-muted mb-1 block">Preferred video codec</label>
- <select
- value={preferredCodec}
- onChange={e => handleCodecChange(e.target.value)}
- className="w-full sm:w-64 px-3 py-2 rounded-lg bg-bg-tertiary border border-transparent text-text-primary text-sm"
- >
- <option value="h264">H.264 (OpenH264) — Best default</option>
- <option value="h265">H.265 (HEVC) — Better compression</option>
- <option value="vp9">VP9 — Good compression</option>
- <option value="av1">AV1 — Best compression, heavy CPU</option>
- <option value="jpeg">JPEG — Fallback, low quality</option>
- </select>
- <p className="text-xs text-text-muted mt-1">
- If the selected codec is unavailable on the remote agent, it will automatically fall back to JPEG.
- </p>
- </div>
- </div>
- </div>
-
- {/* Quick Replies section */}
- <div>
- <h2 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
- <MessageCircle size={18} className="text-accent" />
- Quick Replies
- </h2>
- <div className="bg-bg-secondary rounded-xl p-5 space-y-3">
- <p className="text-xs text-text-muted">
- Personal quick reply messages for the support chat. These are available alongside your tenant's global templates.
- </p>
- {quickReplies.length === 0 && (
- <p className="text-xs text-text-muted italic">No quick replies yet.</p>
- )}
- {quickReplies.map((reply, i) => (
- <div key={i} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-2">
- {/* Below lg the full text wraps (no hover tooltip to read a truncated reply). */}
- <span className="flex-1 min-w-0 text-sm text-text-primary lg:truncate max-lg:break-words">{reply}</span>
- <IconButton
- label={t('common.delete')}
- icon={<X size={14} />}
- size="xs"
- variant="plain"
- showTooltip={false}
- onClick={() => handleRemoveReply(i)}
- className="p-0 shrink-0 hover:text-red-400"
- />
- </div>
- ))}
- {quickReplies.length < 50 && (
- <div className="flex gap-2">
- <input
- value={newReply}
- onChange={e => setNewReply(e.target.value)}
- onKeyDown={e => e.key === 'Enter' && handleAddReply()}
- placeholder="Type a quick reply..."
- maxLength={500}
- enterKeyHint="done"
- className="min-w-0 flex-1 px-3 py-2 text-sm bg-bg-tertiary rounded-lg text-text-primary"
- />
- <Button onClick={handleAddReply} disabled={!newReply.trim()} size="sm">Add</Button>
- </div>
- )}
- </div>
- </div>
-
  {/* Security / 2FA section */}
  {/* A user who already has a factor always keeps access to it (replace /
      disable), even when the admin turned "Allow 2FA" off afterwards. */}
@@ -848,7 +714,6 @@ export function ProfilePage() {
 
  <TrustedIpsSection />
  <DeviceKeysSection />
- <SshKeysSection />
  </PageContainer>
  );
 }

@@ -2,8 +2,6 @@ export interface SystemInfo {
   appVersion:    string;
   clientVersion: string;
   nodeVersion:   string;
-  agentVersion:  string;
-  oblireachVersion: string;
   uptimeSeconds: number;
   memory: {
     processRssMb:  number;

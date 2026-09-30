@@ -19,7 +19,6 @@ export const LINE2_FIELDS: Line2FieldDef[] = [
   { key: 'ipPublic',     label: 'IP WAN',           defaultVisible: false },
   { key: 'macAddress',   label: 'MAC',              defaultVisible: false },
   { key: 'os',           label: 'OS',               defaultVisible: true  },
-  { key: 'agentVersion', label: 'Version agent',    defaultVisible: true  },
   { key: 'group',        label: 'Groupe',           defaultVisible: true  },
   { key: 'lastUser',     label: 'Dernier user',     defaultVisible: true  },
   { key: 'geoCity',      label: 'Géolocalisation',  defaultVisible: false },

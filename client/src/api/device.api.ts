@@ -1,6 +1,5 @@
 import apiClient from './client';
-import type { Device, FleetSummary, AgentApiKey, ServiceInfo, DeviceMetricsHistory,
-  RewindRange, RewindSeries, RewindSnapshot } from '@obliance/shared';
+import type { Device, FleetSummary, AgentApiKey } from '@obliance/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 
@@ -23,9 +22,6 @@ export interface GroupStats {
   warning: number;
   critical: number;
   total: number;
-  complianceScore: number | null;
-  policyCount: number;
-  pendingUpdates: number;
 }
 
 export interface FleetTimeseriesPoint {
@@ -33,7 +29,6 @@ export interface FleetTimeseriesPoint {
   total: number;
   online: number;
   offline: number;
-  pendingUpdates: number;
   stale72: number;
 }
 
@@ -43,63 +38,7 @@ export interface FleetHourlyPoint {
   total: number;
   online: number;
   offline: number;
-  pendingUpdates: number;
   stale72: number;
-}
-
-export interface BatchResult {
-  dispatched: number;
-  queued?: number;
-  skipped?: number;
-  /** 202: the action waits for a second administrator. */
-  approvalId?: number;
-  status?: 'pending_approval';
-}
-
-export interface UpdateAllAgentsPreview {
-  /** Outdated eligible agents in the scope (queued now or already queued). */
-  targets: number;
-  online: number;
-  offline: number;
-  /** …of which already have an update waiting / in flight. */
-  alreadyQueued: number;
-  latestVersion: string;
-  /** Master tenant: every tenant's agents. */
-  allTenants: boolean;
-  /** Tenant the figures were computed for: sent back with the action, which
-   *  the server refuses if the session's tenant changed meanwhile. */
-  scopeTenantId: number;
-  /** Agent updates still waiting in the scope ("stop the rollout"). */
-  pendingInScope: number;
-  /** Rollout pace (fleet-wide cap per minute). */
-  ratePerMinute: number;
-}
-
-/** The scope the admin confirmed (from the preview). */
-export interface UpdateAllAgentsScope {
-  scopeTenantId: number;
-  allTenants: boolean;
-  expectedTargets?: number;
-}
-
-export interface AgentVersionRow {
-  version: string;
-  count: number;
-  isLatest: boolean;
-}
-
-export interface DiskSaturationDevice {
-  deviceId: number;
-  hostname: string;
-  displayName: string | null;
-  pct: number;
-  mountpoint: string;
-}
-
-export interface DiskSaturationResult {
-  count: number;
-  threshold: number;
-  top: DiskSaturationDevice[];
 }
 
 export const deviceApi = {
@@ -121,9 +60,6 @@ export const deviceApi = {
     /** Filter rows whose last_seen_at is older than this threshold (in hours).
      *  Used by the dashboard "Injoignables 72h" hero card click-through. */
     staleHours?: number;
-    /** Filter to only devices with at least one available device_update. Used
-     *  by the dashboard "MAJ en attente" hero card click-through. */
-    pendingUpdates?: boolean;
     /** Lot C 3-tier OS filter: marketing name. Single string OR array
      *  for multi-select (axios serialises arrays as repeated query params,
      *  which the server collapses with whereIn). */
@@ -149,49 +85,6 @@ export const deviceApi = {
     const res = await apiClient.get<ApiResponse<Array<{ tag: string; count: number }>>>('/devices/tags');
     return res.data.data ?? [];
   },
-  /** Live-metrics control — kicks the agent to push immediately
-   *  (`mode='push_now'`, used by the manual refresh button) or to
-   *  enter fast-push mode for a short window (`mode='live'`, used
-   *  while the device detail page is open). Returns false if the
-   *  agent's WS channel isn't connected. */
-  async requestLiveMetrics(deviceId: number, mode: 'push_now' | 'live' = 'push_now', windowSec?: number): Promise<{ sent: boolean; mode: string; windowSec?: number }> {
-    const res = await apiClient.post<ApiResponse<{ sent: boolean; mode: string; windowSec?: number }>>(
-      `/devices/${deviceId}/live-metrics`,
-      { mode, windowSec },
-    );
-    return res.data.data ?? { sent: false, mode };
-  },
-  async listCustomMetrics(id: number): Promise<import('@obliance/shared').DeviceCustomMetric[]> {
-    const res = await apiClient.get<ApiResponse<import('@obliance/shared').DeviceCustomMetric[]>>(`/devices/${id}/custom-metrics`);
-    return res.data.data ?? [];
-  },
-  async getDiskHealth(id: number): Promise<import('@obliance/shared').SmartDisk[]> {
-    const res = await apiClient.get<ApiResponse<import('@obliance/shared').SmartDisk[]>>(`/devices/${id}/disk-health`);
-    return res.data.data ?? [];
-  },
-
-  // ── Privacy gate ─────────────────────────────────────────────────────
-  async setPrivacyPassword(id: number, password: string): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy/password`, { action: 'set', password });
-  },
-  async changePrivacyPassword(id: number, oldPassword: string, newPassword: string): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy/password`, { action: 'change', password: oldPassword, newPassword });
-  },
-  async removePrivacyPassword(id: number, password: string): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy/password`, { action: 'remove', password });
-  },
-  async unlockPrivacyFeature(id: number, password: string, feature: string): Promise<{ ttlSeconds: number }> {
-    const res = await apiClient.post<ApiResponse<{ unlocked: boolean; feature: string; ttlSeconds: number }>>(`/devices/${id}/privacy/unlock`, { password, feature });
-    return { ttlSeconds: res.data.data?.ttlSeconds ?? 900 };
-  },
-  async disablePrivacyWithPassword(id: number, password: string): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy/disable-with-password`, { password });
-  },
-  async listPrivacyUnlocks(id: number): Promise<Array<{ feature: string; expiresAt: number }>> {
-    const res = await apiClient.get<ApiResponse<Array<{ feature: string; expiresAt: number }>>>(`/devices/${id}/privacy/unlocks`);
-    return res.data.data ?? [];
-  },
-
   async export(format: 'csv' | 'xlsx' | 'pdf', params?: {
     groupId?: number; includeSubgroups?: boolean; status?: string; search?: string;
     approvalStatus?: string; osType?: string; sortBy?: string; sortOrder?: 'asc' | 'desc';
@@ -222,42 +115,12 @@ export const deviceApi = {
     const res = await apiClient.get<ApiResponse<FleetHourlyPoint[]>>('/devices/fleet-hourly', { params: { hours } });
     return res.data.data ?? [];
   },
-  async getAgentVersions(): Promise<AgentVersionRow[]> {
-    const res = await apiClient.get<ApiResponse<AgentVersionRow[]>>('/devices/agent-versions');
-    return res.data.data ?? [];
-  },
   async getOsFacets(): Promise<Array<{ osType: string; osName: string | null; osVersion: string | null; count: number }>> {
     const res = await apiClient.get<ApiResponse<Array<{ osType: string; osName: string | null; osVersion: string | null; count: number }>>>('/devices/os-facets');
     return res.data.data ?? [];
   },
-  async getDiskSaturated(threshold = 85): Promise<DiskSaturationResult> {
-    const res = await apiClient.get<ApiResponse<DiskSaturationResult>>('/devices/disk-saturated', { params: { threshold } });
-    return res.data.data ?? { count: 0, threshold, top: [] };
-  },
   async getById(id: number): Promise<Device> {
     const res = await apiClient.get<ApiResponse<Device>>(`/devices/${id}`);
-    return res.data.data!;
-  },
-  /** Windowed CPU/RAM avg·peak·min + disk usage/delta over 24h/7d/30d. */
-  async getMetricsHistory(id: number): Promise<DeviceMetricsHistory> {
-    const res = await apiClient.get<ApiResponse<DeviceMetricsHistory>>(`/devices/${id}/metrics/history`);
-    return res.data.data!;
-  },
-  // ── Rewind (time-machine) ──────────────────────────────────────────────────
-  async getRewindRange(id: number): Promise<RewindRange> {
-    const res = await apiClient.get<ApiResponse<RewindRange>>(`/devices/${id}/rewind/range`);
-    return res.data.data!;
-  },
-  async getRewindSeries(id: number, from: Date, to: Date): Promise<RewindSeries> {
-    const res = await apiClient.get<ApiResponse<RewindSeries>>(`/devices/${id}/rewind/series`, {
-      params: { from: from.toISOString(), to: to.toISOString() },
-    });
-    return res.data.data!;
-  },
-  async getRewindSnapshotAt(id: number, ts: Date): Promise<RewindSnapshot> {
-    const res = await apiClient.get<ApiResponse<RewindSnapshot>>(`/devices/${id}/rewind/at`, {
-      params: { ts: ts.toISOString() },
-    });
     return res.data.data!;
   },
   /** Resolve which tenant a device lives in. Used when the user follows a
@@ -280,7 +143,7 @@ export const deviceApi = {
       return null;
     }
   },
-  async update(id: number, data: Partial<Pick<Device, 'displayName' | 'description' | 'groupId' | 'tags' | 'customFields' | 'displayConfig' | 'pushIntervalSeconds' | 'scanIntervalSeconds' | 'overrideGroupSettings' | 'maxMissedPushes' | 'notificationTypes' | 'sensorDisplayNames' | 'complianceRemediationEnabled' | 'purchaseDate' | 'warrantyExpiry' | 'warrantyVendor' | 'warrantyStatus' | 'expectedLifetimeYears' | 'lifecycleStatus' | 'thresholdsOverride'>>): Promise<Device> {
+  async update(id: number, data: Partial<Pick<Device, 'displayName' | 'description' | 'groupId' | 'tags' | 'customFields' | 'overrideGroupSettings' | 'notificationTypes' | 'purchaseDate' | 'warrantyExpiry' | 'warrantyVendor' | 'warrantyStatus' | 'expectedLifetimeYears' | 'lifecycleStatus'>>): Promise<Device> {
     const res = await apiClient.patch<ApiResponse<Device>>(`/devices/${id}`, data);
     return res.data.data!;
   },
@@ -307,28 +170,6 @@ export const deviceApi = {
   },
   async unsuspend(id: number): Promise<Device> {
     const res = await apiClient.post<ApiResponse<Device>>(`/devices/${id}/unsuspend`);
-    return res.data.data!;
-  },
-  /** update_agent also returns `queued` (offline devices: run when they come
-   *  back) and `skipped`; a 'restricted' action answers a pending approval. */
-  async batch(params: { groupId?: number; deviceIds?: number[]; action: string }): Promise<BatchResult> {
-    const res = await apiClient.post<ApiResponse<BatchResult>>('/devices/batch', params);
-    return res.data.data ?? { dispatched: 0 };
-  },
-  /** Dashboard "update all agents": what it would target now (outdated,
-   *  approved, modern agents; master tenant = every tenant). Admin only. */
-  async getUpdateAllAgentsPreview(): Promise<UpdateAllAgentsPreview> {
-    const res = await apiClient.get<ApiResponse<UpdateAllAgentsPreview>>('/devices/update-all-agents/preview');
-    return res.data.data!;
-  },
-  async updateAllAgents(scope: UpdateAllAgentsScope): Promise<(UpdateAllAgentsPreview & { queued: number }) | { approvalId: number; status: 'pending_approval' }> {
-    const res = await apiClient.post<ApiResponse<(UpdateAllAgentsPreview & { queued: number }) | { approvalId: number; status: 'pending_approval' }>>('/devices/update-all-agents', scope);
-    return res.data.data!;
-  },
-  /** "Stop the rollout": cancels the agent updates still waiting in the
-   *  confirmed scope (updates already handed to an agent go on). */
-  async cancelAllAgentUpdates(scope: UpdateAllAgentsScope): Promise<{ cancelled: number; allTenants: boolean }> {
-    const res = await apiClient.post<ApiResponse<{ cancelled: number; allTenants: boolean }>>('/devices/update-all-agents/cancel', scope);
     return res.data.data!;
   },
   async batchChangeGroup(deviceIds: number[], groupId: number | null): Promise<{ updated: number; changed: number }> {
@@ -363,29 +204,6 @@ export const deviceApi = {
     const res = await apiClient.get<ApiResponse<any[]>>('/devices/transfer/candidates');
     return res.data.data ?? [];
   },
-  async disablePrivacyMode(id: number): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy-mode/disable`);
-  },
-  async enablePrivacyMode(id: number): Promise<void> {
-    await apiClient.post(`/devices/${id}/privacy-mode/enable`);
-  },
-  enableAirgap: (deviceId: number) => apiClient.post(`/devices/${deviceId}/airgap/enable`),
-  disableAirgap: (deviceId: number) => apiClient.post(`/devices/${deviceId}/airgap/disable`),
-  async initiateUninstall(id: number): Promise<Device> {
-    const res = await apiClient.post<ApiResponse<Device>>(`/devices/${id}/uninstall`);
-    return res.data.data!;
-  },
-  async cancelUninstall(id: number): Promise<Device> {
-    const res = await apiClient.post<ApiResponse<Device>>(`/devices/${id}/cancel-uninstall`);
-    return res.data.data!;
-  },
-  /** Admin clicks "I see this, dismiss the warning" on the duplicate-agent-id
-   *  banner. The server trims the identity-fingerprints buffer so the next
-   *  push starts from a clean slate — if alternation continues, the flag
-   *  re-fires automatically once enough new evidence accumulates. */
-  async acknowledgeDuplicateAgentId(id: number): Promise<void> {
-    await apiClient.post(`/devices/${id}/duplicate-id/acknowledge`);
-  },
 
   // API Keys
   async listKeys(): Promise<AgentApiKey[]> {
@@ -401,16 +219,5 @@ export const deviceApi = {
   },
   async deleteKey(id: number): Promise<void> {
     await apiClient.delete(`/agent/keys/${id}`);
-  },
-
-  // Services
-  async getServices(deviceId: number): Promise<ServiceInfo[]> {
-    const res = await apiClient.get<ApiResponse<ServiceInfo[]>>(`/devices/${deviceId}/services`);
-    return res.data.data ?? [];
-  },
-
-  // Installer URLs
-  getInstallerUrl(platform: 'linux' | 'windows' | 'macos' | 'freebsd', apiKey: string): string {
-    return `${window.location.origin}/api/agent/installer/${platform}?key=${encodeURIComponent(apiKey)}`;
   },
 };

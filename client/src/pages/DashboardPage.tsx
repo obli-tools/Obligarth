@@ -1,35 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  RefreshCw, ArrowRight, Package, Clock, FolderOpen, ScreenShare,
-  AlertTriangle, AlertCircle, HardDrive, ShieldCheck, FolderTree, Wifi, WifiOff, Box,
-  Building2, Server, LayoutDashboard, Database, Download,
+  RefreshCw, ArrowRight, Clock, FolderOpen,
+  AlertTriangle, AlertCircle, FolderTree, Wifi, WifiOff,
+  Building2,
 } from 'lucide-react';
-import { useAuthStore } from '@/store/authStore';
 import { useDeviceStore } from '@/store/deviceStore';
 import { MASTER_TENANT_ID } from '@obliance/shared';
 import {
   deviceApi,
   type GroupStats, type FleetTimeseriesPoint, type FleetHourlyPoint,
-  type AgentVersionRow, type DiskSaturationResult, type UpdateAllAgentsPreview,
 } from '@/api/device.api';
-import { isStepUpHandled } from '@/api/client';
-import { useTenantStore } from '@/store/tenantStore';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
-import { getSocket } from '@/socket/socketClient';
-import { hypervApi } from '@/api/hyperv.api';
-import { HyperVVmTable } from '@/components/hyperv/HyperVVmTable';
-import { EditVmModal, CheckpointModal } from '@/components/hyperv/HyperVModals';
-import { veeamApi } from '@/api/veeam.api';
-import { BackupJobTable } from '@/components/veeam/BackupJobTable';
-import type { VirtualMachine, VmAction, BackupJob, BackupJobAction, DeviceStatus } from '@obliance/shared';
-import { mergeById } from '@/utils/mergeById';
-import toast from 'react-hot-toast';
 import { PageContainer } from '@/components/common/PageContainer';
-import { SegmentedTabs } from '@/components/common/SegmentedTabs';
 import { Tip } from '@/components/common/Tip';
-import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
 import { useMediaQuery, MEDIA } from '@/hooks/useMediaQuery';
 
 // ── Sparkline (filled area + line) ───────────────────────────────────────────
@@ -307,170 +292,6 @@ function MiniStat({ icon, label, value, sub, color = 'text-text-primary', to }: 
   return to ? <Link to={to} className="block hover:opacity-90 transition-opacity">{body}</Link> : body;
 }
 
-// ── Top versions agent (horizontal bars) ─────────────────────────────────────
-
-function AgentVersionsCard({ rows, updatesAvailable, onUpdateAll, updatingAll, onStopRollout, pendingRollout = 0 }: {
-  rows: AgentVersionRow[];
-  updatesAvailable: number;
-  /** Admin + eligible outdated agents not yet queued in scope: "Update all
-   *  agents" (master tenant = every tenant's agents, any other tenant = its
-   *  own). */
-  onUpdateAll?: () => void;
-  updatingAll?: boolean;
-  /** Admin + agent updates still waiting in scope: "Stop the rollout". */
-  onStopRollout?: () => void;
-  pendingRollout?: number;
-}) {
-  const { t } = useTranslation();
-  const max = Math.max(...rows.map(r => r.count), 1);
-  return (
-    <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)] flex flex-col gap-3">
-      <div>
-        <div className="text-[15px] font-semibold text-text-primary">{t('dashboard.topAgentVersions', 'Top versions agent')}</div>
-        <div className="text-[11px] font-mono text-text-muted tracking-wider">{t('dashboard.agentVersionsSub', 'distribution du parc')}</div>
-      </div>
-      {updatesAvailable > 0 && (
-        <Link
-          to="/devices?status=outdated"
-          className="flex items-center gap-1.5 -mx-1.5 px-1.5 py-1 rounded text-[12px] font-mono text-blue-400 hover:bg-bg-hover transition-colors"
-        >
-          <Download size={13} className="shrink-0" />
-          <span>{t('dashboard.devicesWithUpdates', { count: updatesAvailable }) || `${updatesAvailable} device(s) with an update available`}</span>
-        </Link>
-      )}
-      {(onUpdateAll || onStopRollout) && (
-        <div className="flex flex-wrap items-center gap-2">
-          {onUpdateAll && (
-            <button
-              type="button"
-              onClick={onUpdateAll}
-              disabled={updatingAll}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-blue-500/15 hover:bg-blue-500/25 text-blue-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors coarse:min-h-10"
-            >
-              {updatingAll ? <RefreshCw size={13} className="animate-spin shrink-0" /> : <Download size={13} className="shrink-0" />}
-              {t('dashboard.updateAllAgents', 'Update all agents')}
-            </button>
-          )}
-          {onStopRollout && (
-            <button
-              type="button"
-              onClick={onStopRollout}
-              disabled={updatingAll}
-              title={t('dashboard.stopRolloutHint', 'Cancel the agent updates still waiting (updates already handed to an agent go on)')}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 disabled:opacity-40 disabled:cursor-not-allowed transition-colors coarse:min-h-10"
-            >
-              <Clock size={13} className="shrink-0" />
-              {t('dashboard.stopRollout', { count: pendingRollout, defaultValue: 'Stop the rollout ({{count}} waiting)' })}
-            </button>
-          )}
-        </div>
-      )}
-      {rows.length === 0 ? (
-        <div className="text-text-muted text-sm py-4">{t('dashboard.noVersionsReported', 'Aucune version reportée')}</div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          {rows.slice(0, 5).map(r => {
-            const pct = (r.count / max) * 100;
-            return (
-              <div key={r.version} className="flex items-center gap-3">
-                <span className={`text-[12px] font-mono w-20 truncate ${r.isLatest ? 'text-green-400' : 'text-text-secondary'}`}>
-                  v{r.version}
-                </span>
-                <div className="flex-1 h-2 bg-white/[0.04] rounded overflow-hidden">
-                  <div className="h-full rounded" style={{ width: `${pct}%`, background: r.isLatest ? '#1edd8a' : '#4f7bff' }} />
-                </div>
-                <span className="text-[11px] font-mono text-text-muted w-8 text-right">{r.count}</span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Conformité gauge ─────────────────────────────────────────────────────────
-
-function ComplianceGauge({ score }: { score: number | null }) {
-  const { t } = useTranslation();
-  const pct = score == null ? 0 : Math.max(0, Math.min(100, score));
-  const color = pct >= 90 ? '#1edd8a' : pct >= 70 ? '#f5a623' : '#e03a3a';
-  const dasharray = `${pct} 100`;
-  return (
-    <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)] flex flex-col gap-2">
-      <div>
-        <div className="text-[15px] font-semibold text-text-primary">{t('dashboard.averageCompliance', 'Conformité moyenne')}</div>
-        <div className="text-[11px] font-mono text-text-muted tracking-wider">{t('dashboard.averageComplianceSub', 'policies actives')}</div>
-      </div>
-      <div className="flex items-center justify-center pt-2 pb-1">
-        <svg viewBox="0 0 42 28" className="w-32">
-          <path d="M3 25 A18 18 0 0 1 39 25" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="3.5" strokeLinecap="round" pathLength="100" />
-          <path d="M3 25 A18 18 0 0 1 39 25" fill="none" stroke={color} strokeWidth="3.5" strokeLinecap="round" pathLength="100" strokeDasharray={dasharray} />
-          <text x="21" y="22" textAnchor="middle" fill="rgb(var(--c-text-primary))" fontSize="9" fontWeight="700" fontFamily="Rajdhani">
-            {score == null ? '—' : `${Math.round(pct)}%`}
-          </text>
-        </svg>
-      </div>
-      <Link to="/policies" className="text-center text-[11px] font-mono text-text-muted hover:text-accent transition-colors">
-        {t('dashboard.viewPolicies', 'Voir les policies')} →
-      </Link>
-    </div>
-  );
-}
-
-// ── Disques saturés ──────────────────────────────────────────────────────────
-
-function DiskSaturationCard({ data }: { data: DiskSaturationResult }) {
-  const { t } = useTranslation();
-  return (
-    <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)] flex flex-col gap-3">
-      <div className="flex items-baseline justify-between gap-3">
-        <div>
-          <div className="text-[15px] font-semibold text-text-primary">{t('dashboard.diskSaturated', 'Disques saturés')}</div>
-          <div className="text-[11px] font-mono text-text-muted tracking-wider">{t('dashboard.diskSaturatedSub', 'au-dessus du seuil par appareil')}</div>
-        </div>
-        <div className={`font-display text-[30px] font-semibold ${data.count > 0 ? 'text-amber-400' : 'text-text-muted'} leading-none`}>{data.count}</div>
-      </div>
-      {data.top.length === 0 ? (
-        <div className="text-text-muted text-[12px] font-mono">{t('dashboard.diskSaturatedNone', 'Aucun disque critique')}</div>
-      ) : (
-        <div className="flex flex-col gap-1.5">
-          {data.top.map(d => (
-            <Link key={d.deviceId} to={`/devices/${d.deviceId}`}
-              className="flex items-center gap-2 text-[12px] hover:bg-bg-hover rounded-md px-2 py-1 -mx-2 transition-colors">
-              <HardDrive size={12} className="text-text-muted shrink-0" />
-              <span className="text-text-secondary truncate flex-1">{anonymize(d.displayName ?? d.hostname)}</span>
-              <span className="font-mono text-amber-400">{d.pct}%</span>
-            </Link>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Sessions remote 24h ──────────────────────────────────────────────────────
-
-function RemoteSessionsCard({ active }: { active: number }) {
-  const { t } = useTranslation();
-  return (
-    <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)] flex flex-col gap-3">
-      <div>
-        <div className="text-[15px] font-semibold text-text-primary">{t('dashboard.remoteSessions', 'Sessions remote')}</div>
-        <div className="text-[11px] font-mono text-text-muted tracking-wider">{t('dashboard.remoteSessionsSub', 'live · ObliReach + tunnels')}</div>
-      </div>
-      <div className="flex items-baseline gap-3">
-        <span className={`font-display text-[40px] font-semibold leading-none ${active > 0 ? 'text-accent' : 'text-text-muted'}`}>{active}</span>
-        <span className="text-[12px] font-mono text-text-muted">{t('dashboard.remoteSessionsCount', 'en cours')}</span>
-      </div>
-      <Link to="/admin/supervision"
-        className="text-[11px] font-mono text-text-muted hover:text-accent transition-colors flex items-center gap-1">
-        <ScreenShare size={11} /> {t('dashboard.supervision', 'Supervision')} →
-      </Link>
-    </div>
-  );
-}
-
 // ── Vue par groupe (recursive cards) ─────────────────────────────────────────
 
 function GroupCard({ group, children, depth = 0 }: { group: GroupStats; children?: React.ReactNode; depth?: number }) {
@@ -481,15 +302,6 @@ function GroupCard({ group, children, depth = 0 }: { group: GroupStats; children
   const reachable = group.online + group.warning + group.critical;
   const upPct = group.total > 0 ? Math.round((reachable / group.total) * 100) : 0;
   const barColor = upPct >= 95 ? 'bg-green-400' : upPct >= 70 ? 'bg-amber-400' : 'bg-accent';
-
-  // Conformité — green ≥90 / amber ≥70 / red <70 / muted if no policy
-  const complianceColor =
-    group.complianceScore == null ? 'text-text-muted' :
-    group.complianceScore >= 90   ? 'text-green-400' :
-    group.complianceScore >= 70   ? 'text-amber-400' :
-                                    'text-accent';
-  // MAJ — amber if any pending, muted otherwise
-  const updatesColor = group.pendingUpdates > 0 ? 'text-amber-400' : 'text-text-muted';
   const onlineColor =
     upPct >= 95 ? 'text-green-400' :
     upPct >= 70 ? 'text-amber-400' :
@@ -570,32 +382,6 @@ function GroupCard({ group, children, depth = 0 }: { group: GroupStats; children
               <AlertCircle size={13} /> {group.critical}
             </Link>
           )}
-          {/* Unlabelled icons: their meaning is in a <Tip> (hover on
-              desktop, tap on touch) instead of a title= only. */}
-          <Tip
-            content={
-              group.complianceScore == null
-                ? t('dashboard.tooltipNoCompliance', 'Aucune policy de conformité appliquée')
-                : t('dashboard.tooltipCompliance', 'Conformité : {{pct}}% sur {{count}} policy(ies)', { pct: Math.round(group.complianceScore), count: group.policyCount })
-            }
-          >
-            <div className={`flex items-center gap-1 font-mono text-[12px] ${complianceColor}`}>
-              <ShieldCheck size={13} />
-              {group.complianceScore != null ? `${Math.round(group.complianceScore)}%` : '—'}
-            </div>
-          </Tip>
-          <Tip
-            content={
-              group.pendingUpdates === 0
-                ? t('dashboard.tooltipNoUpdates', 'Aucune MAJ en attente')
-                : t('dashboard.tooltipUpdates', '{{count}} appareil(s) avec MAJ en attente', { count: group.pendingUpdates })
-            }
-          >
-            <div className={`flex items-center gap-1 font-mono text-[12px] ${updatesColor}`}>
-              <Box size={13} />
-              {group.pendingUpdates}
-            </div>
-          </Tip>
         </div>
       </div>
       {children && (
@@ -666,210 +452,26 @@ function OsConnectivityCard({ data }: {
 
 export function DashboardPage() {
   const { t } = useTranslation();
-  // Shared dialogs instead of window.confirm / window.prompt (no-ops in the
-  // Android WebView — docs/obli-mobile.md §5.6).
-  const confirm = useConfirm();
-  const prompt = usePrompt();
-  const { fetchDevices, summary, fetchSummary, devices } = useDeviceStore();
-
-  // Real-time host status (online/offline/...) by host device id, fed from the
-  // device store (kept live by its DEVICE_ONLINE/OFFLINE/UPDATED listeners). Passed
-  // to the Hyper-V / Veeam grids so each host's drawer header shows its state.
-  const hostStatusById = useMemo(() => {
-    const m = new Map<number, DeviceStatus>();
-    devices.forEach((d) => m.set(d.id, d.status));
-    return m;
-  }, [devices]);
-  const isAdmin = useAuthStore((s) => s.isAdmin)();
+  const { summary, fetchSummary } = useDeviceStore();
   const [isLoading, setIsLoading] = useState(true);
   const [groupStats, setGroupStats] = useState<GroupStats[]>([]);
   const [series, setSeries] = useState<FleetTimeseriesPoint[]>([]);
   const [hourlySeries, setHourlySeries] = useState<FleetHourlyPoint[]>([]);
-  const [versions, setVersions] = useState<AgentVersionRow[]>([]);
-  const [disks, setDisks] = useState<DiskSaturationResult>({ count: 0, threshold: 0, top: [] });
   const [activityRange, setActivityRange] = useState<ActivityRange>('14j');
-  // Hyper-V tenant grid (Dashboard tab). The tab only appears when the
-  // tenant has at least one VM reported by a Hyper-V host.
-  const [dashTab, setDashTab] = useState<'overview' | 'hyperv' | 'veeam'>('overview');
-  const [hyperVms, setHyperVms] = useState<VirtualMachine[]>([]);
-  const [hvBusyVmId, setHvBusyVmId] = useState<string | null>(null);
-  const [hvModal, setHvModal] = useState<{ kind: 'edit' | 'checkpoints'; vm: VirtualMachine } | null>(null);
-  const [hvRefreshing, setHvRefreshing] = useState(false);
-  // mergeById keeps row identity for unchanged VMs so idle polls don't re-render
-  // the grid (no flicker); only genuinely changed rows update.
-  const loadHyperVms = useCallback(() => {
-    hypervApi.listForTenant()
-      .then((fresh) => setHyperVms((prev) => mergeById(prev, fresh, (v) => v.vmId)))
-      .catch(() => setHyperVms([]));
-  }, []);
-  useEffect(() => { loadHyperVms(); }, [loadHyperVms]);
-  // Stable signature of the distinct host ids so the live-ping interval only
-  // resets when the set of hosts changes, not on every metric tick.
-  const hvHostIdsKey = useMemo(
-    () => [...new Set(hyperVms.map((v) => v.hostDeviceId))].sort((a, b) => a - b).join(','),
-    [hyperVms],
-  );
-  // Live updates while the Hyper-V tab is open: merge the server's per-host
-  // broadcast into the tenant grid, and ping each host every 5s so changes
-  // made directly on a host surface quickly. Capped to avoid hammering very
-  // large fleets; for >25 hosts we rely on the broadcast + manual refresh.
-  useEffect(() => {
-    if (dashTab !== 'hyperv') return;
-    const socket = getSocket();
-    const onUpdate = (p: { hostDeviceId: number; vms: VirtualMachine[] }) => {
-      setHyperVms((prev) => {
-        const nameByHost = new Map(prev.map((v) => [v.hostDeviceId, v.hostName]));
-        const others = prev.filter((v) => v.hostDeviceId !== p.hostDeviceId);
-        const incoming = p.vms.map((v) => v.hostName ? v : { ...v, hostName: nameByHost.get(v.hostDeviceId) });
-        // Preserve identity for unchanged rows → no flicker, and a no-op when
-        // the broadcast carries nothing new.
-        return mergeById(prev, [...others, ...incoming], (v) => v.vmId);
-      });
-    };
-    socket?.on('HYPERV_VMS_UPDATED', onUpdate);
-    const ping = () => {
-      const hosts = hvHostIdsKey ? hvHostIdsKey.split(',').map(Number) : [];
-      if (hosts.length > 0 && hosts.length <= 25) hosts.forEach((h) => hypervApi.live(h).catch(() => {}));
-    };
-    ping();
-    const iv = setInterval(ping, 5000);
-    return () => { socket?.off('HYPERV_VMS_UPDATED', onUpdate); clearInterval(iv); };
-  }, [dashTab, hvHostIdsKey]);
-
-  // Dashboard Hyper-V refresh: ping every host over the ephemeral WS channel
-  // (instant re-enumerate) — the result streams back via HYPERV_VMS_UPDATED.
-  const handleHvRefresh = useCallback(() => {
-    const hosts = hvHostIdsKey ? hvHostIdsKey.split(',').map(Number) : [];
-    setHvRefreshing(true);
-    Promise.all(hosts.map((h) => hypervApi.live(h).catch(() => {})))
-      .finally(() => setTimeout(() => { loadHyperVms(); setHvRefreshing(false); }, 1200));
-  }, [hvHostIdsKey, loadHyperVms]);
-  // Run adapter for the modals — bound to the modal VM's host device.
-  const runHvForVm = useCallback((vm: VirtualMachine) =>
-    async (vmId: string, action: VmAction, params?: Record<string, unknown>) => {
-      const out = await hypervApi.action(vm.hostDeviceId, vmId, action, params);
-      if (out && out.status === 'pending_approval') {
-        toast.success(t('hyperv.pendingApproval') || 'Action saved — awaiting second admin approval', { duration: 6000 });
-      } else {
-        toast.success(t('hyperv.actionQueued') || 'Action sent to host');
-      }
-      setTimeout(loadHyperVms, 2500);
-      return out;
-    }, [loadHyperVms, t]);
-  const handleHvAction = async (vm: VirtualMachine, action: VmAction) => {
-    if (action === 'delete' && !(await confirm({
-      message: t('hyperv.confirmDelete', { name: vm.name }) || `Delete VM "${vm.name}"? Irreversible.`,
-      danger: true,
-    }))) return;
-    let params: Record<string, unknown> | undefined;
-    if (action === 'checkpoint_create') {
-      const name = await prompt({ message: t('hyperv.checkpointNamePrompt') || 'Checkpoint name (optional):' });
-      // Cancel aborts (the old window.prompt went on with an unnamed checkpoint).
-      if (name === null) return;
-      params = name ? { checkpointName: name } : undefined;
-    }
-    setHvBusyVmId(vm.vmId);
-    try {
-      const out = await hypervApi.action(vm.hostDeviceId, vm.vmId, action, params);
-      if (out && out.status === 'pending_approval') {
-        toast.success(t('hyperv.pendingApproval') || 'Action saved — awaiting second admin approval', { duration: 6000 });
-      } else {
-        toast.success(t('hyperv.actionQueued') || 'Action sent to host');
-      }
-      setTimeout(loadHyperVms, 2500);
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error || (t('common.error') || 'Failed'));
-    } finally {
-      setHvBusyVmId(null);
-    }
-  };
-
-  // Veeam tenant grid (Dashboard tab). The tab only appears when the tenant
-  // has at least one backup job reported by a Veeam B&R host.
-  const [veeamJobs, setVeeamJobs] = useState<BackupJob[]>([]);
-  const [veeamBusyJobId, setVeeamBusyJobId] = useState<string | null>(null);
-  const [veeamRefreshing, setVeeamRefreshing] = useState(false);
-  const loadVeeamJobs = useCallback(() => {
-    veeamApi.listForTenant()
-      .then((fresh) => setVeeamJobs((prev) => mergeById(prev, fresh, (j) => j.jobId)))
-      .catch(() => setVeeamJobs([]));
-  }, []);
-  useEffect(() => { loadVeeamJobs(); }, [loadVeeamJobs]);
-  const veeamHostIdsKey = useMemo(
-    () => [...new Set(veeamJobs.map((j) => j.hostDeviceId))].sort((a, b) => a - b).join(','),
-    [veeamJobs],
-  );
-  // Live updates while the Veeam tab is open: merge the server's per-host
-  // broadcast into the tenant grid + ping each host every 5s. Capped to 25
-  // hosts to avoid hammering very large fleets.
-  useEffect(() => {
-    if (dashTab !== 'veeam') return;
-    const socket = getSocket();
-    const onUpdate = (p: { hostDeviceId: number; jobs: BackupJob[] }) => {
-      setVeeamJobs((prev) => {
-        const nameByHost = new Map(prev.map((j) => [j.hostDeviceId, j.hostName]));
-        const others = prev.filter((j) => j.hostDeviceId !== p.hostDeviceId);
-        const incoming = p.jobs.map((j) => j.hostName ? j : { ...j, hostName: nameByHost.get(j.hostDeviceId) });
-        return mergeById(prev, [...others, ...incoming], (j) => j.jobId);
-      });
-    };
-    socket?.on('VEEAM_JOBS_UPDATED', onUpdate);
-    const ping = () => {
-      const hosts = veeamHostIdsKey ? veeamHostIdsKey.split(',').map(Number) : [];
-      if (hosts.length > 0 && hosts.length <= 25) hosts.forEach((h) => veeamApi.live(h).catch(() => {}));
-    };
-    ping();
-    const iv = setInterval(ping, 5000);
-    return () => { socket?.off('VEEAM_JOBS_UPDATED', onUpdate); clearInterval(iv); };
-  }, [dashTab, veeamHostIdsKey]);
-
-  const handleVeeamRefresh = useCallback(() => {
-    const hosts = veeamHostIdsKey ? veeamHostIdsKey.split(',').map(Number) : [];
-    setVeeamRefreshing(true);
-    Promise.all(hosts.map((h) => veeamApi.live(h).catch(() => {})))
-      .finally(() => setTimeout(() => { loadVeeamJobs(); setVeeamRefreshing(false); }, 1200));
-  }, [veeamHostIdsKey, loadVeeamJobs]);
-  const handleVeeamAction = async (job: BackupJob, action: BackupJobAction) => {
-    if (action === 'stop' && !(await confirm({
-      message: t('veeam.confirmStop', { name: job.name }) || `Stop the running job "${job.name}"? The backup will be incomplete.`,
-      danger: true,
-      confirmLabel: t('common.confirm', 'Confirm'),
-    }))) return;
-    setVeeamBusyJobId(job.jobId);
-    try {
-      const out = await veeamApi.action(job.hostDeviceId, job.jobId, action);
-      if (out && out.status === 'pending_approval') {
-        toast.success(t('veeam.pendingApproval') || 'Action saved — awaiting second admin approval', { duration: 6000 });
-      } else {
-        toast.success(t('veeam.actionQueued') || 'Action sent to host');
-      }
-      setTimeout(loadVeeamJobs, 2500);
-    } catch (e: any) {
-      toast.error(e?.response?.data?.error || (t('common.error') || 'Failed'));
-    } finally {
-      setVeeamBusyJobId(null);
-    }
-  };
 
   useEffect(() => {
     const load = async () => {
       setIsLoading(true);
       await Promise.all([
-        fetchDevices(),
         fetchSummary(),
         deviceApi.getGroupStats().then(setGroupStats).catch(() => {}),
         deviceApi.getFleetTimeseries(30).then(setSeries).catch(() => {}),
         deviceApi.getFleetHourly(24).then(setHourlySeries).catch(() => {}),
-        deviceApi.getAgentVersions().then(setVersions).catch(() => {}),
-        // Lot D.2: pass 0 as the floor so per-device thresholds resolved
-        // server-side dictate the alert level — a kiosk with warn=70 shows up
-        // at 70 %, a 10 TB server with warn=90 only at 90 %.
-        deviceApi.getDiskSaturated(0).then(setDisks).catch(() => {}),
       ]);
       setIsLoading(false);
     };
     load();
-  }, [fetchDevices, fetchSummary]);
+  }, [fetchSummary]);
 
   // Derived KPIs
   const total       = summary?.total ?? 0;
@@ -897,154 +499,11 @@ export function DashboardPage() {
   const offlineRaw  = summary?.offline ?? 0;
   const offline     = offlineRaw + updateError;
   const pending     = summary?.pending ?? 0;
-  const pendingUpd  = summary?.pendingUpdates ?? 0;
   const stale       = summary?.staleDevices ?? 0;
-  const upToDate    = summary?.agentUpToDate ?? 0;
-  const outdated    = summary?.agentOutdated ?? 0;
-  // Devices the server flagged as having an agent update available. Computed
-  // from the live device set (the summary doesn't carry this count), so it
-  // tracks the same `updateAvailable` flag surfaced on /devices rows.
-  const updatesAvailable = useMemo(() => {
-    let n = 0;
-    devices.forEach((d) => { if (d.updateAvailable) n += 1; });
-    return n;
-  }, [devices]);
-  const latestVer   = summary?.latestAgentVersion ?? '';
-
-  // "Update all agents" (admin): every OUTDATED agent of the scope — every
-  // tenant from the master tenant, this tenant's only elsewhere. Driven by
-  // the server's preview (eligible agents only: legacy, unapproved and
-  // suspended ones never count), re-read before the confirmation and after
-  // each action. The confirmed scope is sent back with the action: the
-  // server refuses it if the session's tenant changed meanwhile (another
-  // tab). Offline agents are updated when they come back; the rollout is
-  // paced server-side and can be stopped.
-  const currentTenantId = useTenantStore((s) => s.currentTenantId);
-  const [updatingAll, setUpdatingAll] = useState(false);
-  const [rollout, setRollout] = useState<UpdateAllAgentsPreview | null>(null);
-  const loadRollout = useCallback(async (): Promise<UpdateAllAgentsPreview | null> => {
-    if (!isAdmin) { setRollout(null); return null; }
-    try {
-      const p = await deviceApi.getUpdateAllAgentsPreview();
-      setRollout(p);
-      return p;
-    } catch {
-      return null;
-    }
-  }, [isAdmin]);
-  useEffect(() => { loadRollout(); }, [loadRollout, currentTenantId]);
-  const rolloutNew = rollout ? Math.max(0, rollout.targets - rollout.alreadyQueued) : 0;
-  const rolloutError = (err: unknown) => {
-    if (isStepUpHandled(err)) return;
-    const code = (err as any)?.response?.data?.code;
-    if (code === 'scope_changed' || code === 'targets_changed' || code === 'scope_required') {
-      toast.error(t('dashboard.updateAllAgentsScopeChanged', 'The selected tenant or the number of agents changed since the confirmation — check the figures and try again.'), { duration: 8000 });
-      loadRollout();
-      return;
-    }
-    toast.error(t('common.error', 'Something went wrong'));
-  };
-  const handleUpdateAllAgents = async () => {
-    // The button spins while the server works, not while the question is open.
-    setUpdatingAll(true);
-    const p = await loadRollout();
-    setUpdatingAll(false);
-    if (!p) { toast.error(t('common.error', 'Something went wrong')); return; }
-    const newCount = Math.max(0, p.targets - p.alreadyQueued);
-    try {
-      if (newCount === 0) {
-        toast.success(p.alreadyQueued > 0
-          ? t('dashboard.updateAllAgentsAllQueued', { count: p.alreadyQueued, defaultValue: 'Every outdated agent already has an update queued ({{count}})' })
-          : t('dashboard.updateAllAgentsNone', 'No agent to update — the eligible agents already run the current version (legacy agents and suspended devices are not touched)'), { duration: 6000 });
-        return;
-      }
-      const rate = Math.max(1, p.ratePerMinute);
-      const ok = await confirm({
-        title: t('dashboard.updateAllAgents', 'Update all agents'),
-        message: (
-          <div className="space-y-2">
-            <p>{t('dashboard.updateAllAgentsConfirm', { count: newCount, version: p.latestVersion, defaultValue: 'Update the agent of {{count}} outdated device(s) to v{{version}}?' })}</p>
-            <p>{p.allTenants
-              ? t('dashboard.updateAllAgentsScopeAll', "Scope: every tenant's agents.")
-              : t('dashboard.updateAllAgentsScopeTenant', "Scope: this tenant's agents only.")}</p>
-            {p.offline > 0 && (
-              <p>{t('dashboard.updateAllAgentsOffline', { count: p.offline, defaultValue: '{{count}} of them are offline: they will be updated as soon as they come back online.' })}</p>
-            )}
-            {p.alreadyQueued > 0 && (
-              <p>{t('dashboard.updateAllAgentsAlreadyQueued', { count: p.alreadyQueued, defaultValue: '{{count}} already have an update queued.' })}</p>
-            )}
-            <p className="text-xs text-text-muted">
-              {t('dashboard.updateAllAgentsNotTouched', 'Agents already up to date, legacy agents and suspended devices are not touched.')}{' '}
-              {t('dashboard.updateAllAgentsPace', {
-                rate,
-                minutes: Math.max(1, Math.ceil(p.online / rate)),
-                online: p.online,
-                defaultValue: 'Progressive rollout: at most {{rate}} agents per minute (all tenants together), about {{minutes}} min for the {{online}} agents online now. It can be stopped from this card.',
-              })}
-            </p>
-          </div>
-        ),
-        confirmLabel: t('dashboard.updateAllAgentsConfirmButton', { count: newCount, defaultValue: 'Update {{count}} agent(s)' }),
-      });
-      if (!ok) return;
-      setUpdatingAll(true);
-      const r = await deviceApi.updateAllAgents({ scopeTenantId: p.scopeTenantId, allTenants: p.allTenants, expectedTargets: p.targets });
-      if ('status' in r && r.status === 'pending_approval') {
-        toast.success(t('dashboard.updateAllAgentsPendingApproval', "Request saved — awaiting a second administrator's approval"), { duration: 6000 });
-        return;
-      }
-      const res = r as UpdateAllAgentsPreview & { queued: number };
-      const parts = [t('dashboard.updateAllAgentsQueued', { count: res.queued, defaultValue: 'Agent update queued for {{count}} device(s)' })];
-      if (res.alreadyQueued > 0) parts.push(t('dashboard.updateAllAgentsAlreadyQueuedShort', { count: res.alreadyQueued, defaultValue: '{{count}} already queued' }));
-      if (res.offline > 0) parts.push(t('dashboard.updateAllAgentsOfflineShort', { count: res.offline, defaultValue: '{{count}} offline: updated when they come back online' }));
-      toast.success(parts.join(' · '), { duration: 8000 });
-      fetchSummary();
-    } catch (err) {
-      rolloutError(err);
-    } finally {
-      setUpdatingAll(false);
-      loadRollout();
-    }
-  };
-  const handleStopRollout = async () => {
-    const p = await loadRollout();
-    if (!p) { toast.error(t('common.error', 'Something went wrong')); return; }
-    if (p.pendingInScope === 0) return;
-    const ok = await confirm({
-      title: t('dashboard.stopRolloutTitle', 'Stop the agent rollout'),
-      message: (
-        <div className="space-y-2">
-          <p>{t('dashboard.stopRolloutConfirm', { count: p.pendingInScope, defaultValue: 'Cancel the {{count}} agent update(s) still waiting?' })}</p>
-          <p>{p.allTenants
-            ? t('dashboard.updateAllAgentsScopeAll', "Scope: every tenant's agents.")
-            : t('dashboard.updateAllAgentsScopeTenant', "Scope: this tenant's agents only.")}</p>
-          <p className="text-xs text-text-muted">
-            {t('dashboard.stopRolloutNote', 'Every waiting agent update of the scope is cancelled, whatever queued it (this card, a device page, a bulk action). Updates already handed to an agent go on.')}
-          </p>
-        </div>
-      ),
-      confirmLabel: t('dashboard.stopRolloutButton', { count: p.pendingInScope, defaultValue: 'Cancel {{count}} update(s)' }),
-      danger: true,
-    });
-    if (!ok) return;
-    setUpdatingAll(true);
-    try {
-      const r = await deviceApi.cancelAllAgentUpdates({ scopeTenantId: p.scopeTenantId, allTenants: p.allTenants });
-      toast.success(t('dashboard.stopRolloutDone', { count: r.cancelled, defaultValue: '{{count}} waiting agent update(s) cancelled' }), { duration: 6000 });
-    } catch (err) {
-      rolloutError(err);
-    } finally {
-      setUpdatingAll(false);
-      loadRollout();
-    }
-  };
-  const remoteSess  = summary?.activeRemoteSessions ?? 0;
-  const upcoming    = summary?.upcomingSchedules ?? 0;
   const deltas      = summary?.deltas;
 
   const onlinePct  = total > 0 ? Math.round((connected / total) * 100) : 0;
   const offlinePct = total > 0 ? Math.round((offline / total) * 100) : 0;
-  const updPct     = total > 0 ? Math.round((pendingUpd / total) * 100) : 0;
   const stalePct   = total > 0 ? Math.round((stale / total) * 100) : 0;
 
   // OS donut data — each slice carries the /devices?os=<family> URL so the
@@ -1146,60 +605,14 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Tab bar — same segmented control as /automations. The Hyper-V and
-          Backups tabs only show when the tenant has at least one VM / backup
-          job reported by a host. */}
-      {(hyperVms.length > 0 || veeamJobs.length > 0) && (
-        <SegmentedTabs
-          value={dashTab}
-          onChange={setDashTab}
-          ariaLabel={t('dashboard.title', 'Tableau de bord')}
-          tabs={[
-            { id: 'overview' as const, label: t('dashboard.tabOverview', 'Vue d’ensemble'), icon: <LayoutDashboard size={16} /> },
-            { id: 'hyperv' as const, label: `Hyper-V (${hyperVms.length})`, icon: <Server size={16} />, hidden: hyperVms.length === 0 },
-            { id: 'veeam' as const, label: `${t('veeam.tabLabel') || 'Backups'} (${veeamJobs.length})`, icon: <Database size={16} />, hidden: veeamJobs.length === 0 },
-          ]}
-        />
-      )}
-
-      {dashTab === 'hyperv' ? (
-        <>
-          <HyperVVmTable
-            vms={hyperVms}
-            busyVmId={hvBusyVmId}
-            showHost
-            searchable
-            hostStatusById={hostStatusById}
-            onRefresh={handleHvRefresh}
-            refreshing={hvRefreshing}
-            onAction={handleHvAction}
-            onEdit={(vm) => setHvModal({ kind: 'edit', vm })}
-            onCheckpoints={(vm) => setHvModal({ kind: 'checkpoints', vm })}
-          />
-          {hvModal?.kind === 'edit' && <EditVmModal vm={hvModal.vm} run={runHvForVm(hvModal.vm)} onClose={() => { setHvModal(null); setTimeout(loadHyperVms, 2500); }} />}
-          {hvModal?.kind === 'checkpoints' && <CheckpointModal vm={hvModal.vm} run={runHvForVm(hvModal.vm)} onClose={() => { setHvModal(null); setTimeout(loadHyperVms, 2500); }} />}
-        </>
-      ) : dashTab === 'veeam' ? (
-        <BackupJobTable
-          jobs={veeamJobs}
-          busyJobId={veeamBusyJobId}
-          showHost
-          searchable
-          hostStatusById={hostStatusById}
-          onRefresh={handleVeeamRefresh}
-          refreshing={veeamRefreshing}
-          onAction={handleVeeamAction}
-        />
-      ) : (
-      <>
-      {/* Hero row — featured Total + 4 KPIs with deltas. Each card is a Link
+      {/* Hero row — featured Total + 3 KPIs with deltas. Each card is a Link
           to the matching filtered /devices view so the user can drill into
           the underlying agents in one click. */}
       {/* `items-stretch` is grid's default but we add `h-full` on each
           Link wrapper too: without it the inner card shrinks to its
           content height and the row looks ragged when "Appareils
           total" carries a sparkline + 4-day grid the others don't. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5 items-stretch">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 items-stretch">
         <Link to="/devices" className="h-full block hover:opacity-95 transition-opacity">
           <HeroFeatured
             label={t('dashboard.totalDevices', 'Appareils total')}
@@ -1255,22 +668,6 @@ export function DashboardPage() {
             subStats={updateError > 0 ? [
               { label: t('dashboard.subStatUpdateError', 'en erreur MAJ'), value: updateError, color: 'text-orange-400' },
             ] : undefined}
-          />
-        </Link>
-
-        <Link to="/devices?pendingUpdates=1" className="h-full block hover:opacity-95 transition-opacity">
-          <HeroCard
-            label={t('dashboard.pendingUpdates', 'MAJ en attente')}
-            value={pendingUpd}
-            color="text-amber-400"
-            delta={deltas?.pendingUpdatesVsWeek == null ? null : -deltas.pendingUpdatesVsWeek}
-            deltaText={
-              deltas?.pendingUpdatesVsWeek == null ? `${updPct}% ${t('dashboard.toPatch', 'à patcher')}`
-                : deltas.pendingUpdatesVsWeek === 0 ? t('dashboard.stableThisWeek', 'stable cette semaine')
-                : `${Math.abs(deltas.pendingUpdatesVsWeek)} ${t('dashboard.thisWeek', 'cette semaine')}`
-            }
-            barPct={updPct}
-            barColor="#f5a623"
           />
         </Link>
 
@@ -1378,9 +775,8 @@ export function DashboardPage() {
         </div>
       </div>
 
-      {/* Mini-stats row — preserved metrics: Critical / Pending approval /
-          Sessions actives / Schedules 24h / Agent version. Compact format. */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      {/* Mini-stats row — Critical / Pending approval. Compact format. */}
+      <div className="grid grid-cols-2 gap-3">
         <MiniStat
           icon={<AlertCircle size={15} />}
           label={t('dashboard.critical', 'Critical')}
@@ -1395,41 +791,6 @@ export function DashboardPage() {
           color={pending > 0 ? 'text-amber-400' : 'text-text-primary'}
           to="/devices?status=pending"
         />
-        <MiniStat
-          icon={<ScreenShare size={15} />}
-          label={t('dashboard.activeSessions', 'Sessions actives')}
-          value={remoteSess}
-          color={remoteSess > 0 ? 'text-accent' : 'text-text-primary'}
-          to="/admin/supervision"
-        />
-        <MiniStat
-          icon={<Clock size={15} />}
-          label={t('dashboard.upcomingSchedules', 'Schedules 24h')}
-          value={upcoming}
-          to="/automations"
-        />
-        <MiniStat
-          icon={<Package size={15} />}
-          label={t('dashboard.agentVersion', "Version d'agent")}
-          value={latestVer ? `v${latestVer}` : '—'}
-          sub={`${upToDate} / ${upToDate + outdated} à jour`}
-          color={outdated > 0 ? 'text-amber-400' : 'text-green-400'}
-        />
-      </div>
-
-      {/* Secondary metrics row */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
-        <AgentVersionsCard
-          rows={versions}
-          updatesAvailable={updatesAvailable}
-          onUpdateAll={isAdmin && rolloutNew > 0 ? handleUpdateAllAgents : undefined}
-          updatingAll={updatingAll}
-          onStopRollout={isAdmin && (rollout?.pendingInScope ?? 0) > 0 ? handleStopRollout : undefined}
-          pendingRollout={rollout?.pendingInScope ?? 0}
-        />
-        <ComplianceGauge score={summary?.complianceScore ?? null} />
-        <DiskSaturationCard data={disks} />
-        <RemoteSessionsCard active={remoteSess} />
       </div>
 
       {/* Vue par groupe — hierarchical, root → children indented by depth.
@@ -1444,7 +805,7 @@ export function DashboardPage() {
                 {t('dashboard.groupView', 'Vue par groupe')}
               </div>
               <div className="text-[11px] font-mono text-text-muted tracking-wider">
-                {t('dashboard.groupViewSub', 'online · alerts · conformité · MAJ')}
+                {t('dashboard.groupViewStatusSub') || 'online · offline · alerts'}
               </div>
             </div>
           </div>
@@ -1487,8 +848,6 @@ export function DashboardPage() {
           </div>
         )}
       </div>
-      </>
-      )}
 
     </PageContainer>
   );

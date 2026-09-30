@@ -3,8 +3,8 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { useSessionState } from '@/hooks/useSessionState';
 import {
- Search, RefreshCw, ChevronRight, ChevronDown, X, RotateCcw, PowerOff, Trash2, Download,
- ShieldCheck, Loader2, MoreHorizontal, UserX, SortAsc, SortDesc, FolderOpen, MousePointerClick, Check, ArrowRightLeft, FolderX, Tag, Building2,
+ Search, RefreshCw, ChevronRight, ChevronDown, X, Trash2, Download,
+ ShieldCheck, Loader2, MoreHorizontal, SortAsc, SortDesc, FolderOpen, MousePointerClick, Check, ArrowRightLeft, FolderX, Tag, Building2,
  SlidersHorizontal, Columns3, FolderTree,
 } from 'lucide-react';
 import { deviceApi } from '@/api/device.api';
@@ -14,14 +14,13 @@ import { groupsApi } from '@/api/groups.api';
 import { DeviceRow } from '@/components/devices/DeviceRow';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
-import type { Device, DeviceGroupTreeNode, CommandType } from '@obliance/shared';
+import type { Device, DeviceGroupTreeNode } from '@obliance/shared';
 import { useAuthStore } from '@/store/authStore';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import { anonymize } from '@/utils/anonymize';
 import { shortenOsName } from '@/utils/osLabel';
-import { isCommandSupported, unsupportedTooltip } from '@/utils/capabilities';
 import { cn } from '@/utils/cn';
 import { saveBlob } from '@/utils/download';
 import { useIsCoarsePointer, useLayoutMode, useMediaQuery } from '@/hooks/useMediaQuery';
@@ -44,7 +43,7 @@ interface OsFacet { osType: string; osName: string | null; osVersion: string | n
 type ApprovalFilter = '' | 'approved' | 'pending' | 'refused' | 'suspended';
 // Empty string = "no explicit sort" → server falls back to enrolment order
 // (devices.id ASC) and the table renders in tree-view mode (grouped).
-type SortField = '' | 'name' | 'status' | 'os' | 'lastSeen' | 'version' | 'group' | 'cpu' | 'ram' | 'disk';
+type SortField = '' | 'name' | 'status' | 'os' | 'lastSeen' | 'group';
 
 interface DeviceTableProps {
  mode: 'monitoring' | 'admin';
@@ -53,9 +52,6 @@ interface DeviceTableProps {
  /** Initial "stale since N hours" filter — seeded from the URL by dashboard
  * click-throughs (e.g. /devices?stale=72 from the "Injoignables 72h" hero). */
  initialStaleHours?: number;
- /** Initial "only devices with pending updates" filter — from the URL
- * ?pendingUpdates=1 dashboard click-through. */
- initialPendingUpdates?: boolean;
  /** Initial approval filter — admin sidebar deep-links here with
  * ?approvalStatus=pending so the page lands on the approval queue. */
  initialApprovalFilter?: string;
@@ -70,7 +66,7 @@ interface DeviceTableProps {
 }
 
 export function DeviceTable({
- mode, initialStatusFilter, initialOsFilter, initialStaleHours, initialPendingUpdates,
+ mode, initialStatusFilter, initialOsFilter, initialStaleHours,
  initialApprovalFilter,
  groupId: externalGroupId, onGroupChange, onOpenGroups, embedded = false,
 }: DeviceTableProps) {
@@ -153,7 +149,6 @@ export function DeviceTable({
  // the server query — no toggle UI here yet, the user clears them by
  // navigating away or removing the query param.
  const [staleHours, setStaleHours] = useSessionState<number | undefined>('obliance:devices:staleHours', initialStaleHours);
- const [pendingUpdatesOnly, setPendingUpdatesOnly] = useSessionState<boolean>('obliance:devices:pendingUpdatesOnly', !!initialPendingUpdates);
  // Lot C 3-tier OS filter: osType (existing chip) → osName → osVersion.
  // Each sub-filter is a Set<string> backing a multi-select popover so
  // admins can OR together several Windows versions or Linux distros in
@@ -395,7 +390,6 @@ export function DeviceTable({
  ungrouped: ungroupedOnly ? true : undefined,
  approvalStatus: approvalFilter || undefined,
  staleHours: staleHours,
- pendingUpdates: pendingUpdatesOnly || undefined,
  tags: tagFilters.size > 0 ? [...tagFilters] : undefined,
  // Master-only: narrow the god view to a tenant subset. Server
  // drops the param for non-master callers, so it's safe to send
@@ -423,13 +417,12 @@ export function DeviceTable({
  if (reset) setIsLoading(false);
  else setAppending(false);
  }
- }, [debouncedSearch, statusFilters, osFilters, osNameFilter, osVersionFilter, groupId, ungroupedOnly, approvalFilter, treeViewActive, sortBy, sortOrder, staleHours, pendingUpdatesOnly, tagFilters, tenantFilters, isMaster, t]);
+ }, [debouncedSearch, statusFilters, osFilters, osNameFilter, osVersionFilter, groupId, ungroupedOnly, approvalFilter, treeViewActive, sortBy, sortOrder, staleHours, tagFilters, tenantFilters, isMaster, t]);
 
  // Sync URL-driven filters when the parent prop changes (e.g. user clicks
  // a different dashboard hero card while /devices is already mounted —
  // react-router keeps the page but the search params change).
  useEffect(() => { setStaleHours(initialStaleHours); }, [initialStaleHours]);
- useEffect(() => { setPendingUpdatesOnly(!!initialPendingUpdates); }, [initialPendingUpdates]);
  useEffect(() => {
  setOsFilters(initialOsFilter ? new Set([initialOsFilter]) : new Set());
  }, [initialOsFilter]);
@@ -537,51 +530,23 @@ export function DeviceTable({
  };
  const handleSelectAllGroup = () => { setSelectAllGroup(true); setSelectedIds(new Set(devices.map(d => d.id))); };
 
- const handleBatchAction = async (action: string) => {
+ const handleBatchAction = async (action: 'approve' | 'delete') => {
  setBatchMenuOpen(false);
  // Confirmations come first: the shared dialog is async (window.confirm is
  // a no-op in the Android WebView — docs §5.6) and the batch button must
  // not show its spinner while the question is still open.
  if (action === 'delete') {
  if (!(await confirm({ message: t('devices.batch.confirmDelete'), danger: true }))) return;
- } else if (action === 'update_agent') {
- const count = selectAllGroup && groupId ? total : selectedIds.size;
- if (!(await confirm((t('devices.action.updateAgentConfirm', { count }) as string) || `Update the agent on ${count} device(s)?`))) return;
  }
  setIsBatchRunning(true);
  try {
  if (action === 'approve') {
  const ids = selectAllGroup && groupId ? undefined : Array.from(selectedIds);
  if (ids) { await Promise.all(ids.map(id => deviceApi.approve(id))); toast.success(t('devices.batch.approved', { count: ids.length })); }
- } else if (action === 'delete') {
+ } else {
  const ids = Array.from(selectedIds);
  await Promise.all(ids.map(id => deviceApi.delete(id)));
  toast.success(t('devices.batch.deleted', { count: ids.length }));
- } else {
- // Agents no longer self-update — pushing 'update_agent' force-applies
- // the latest MSI. The batch menu item is greyed unless every selected
- // device supports it, and the server additionally skips legacy agents
- // (they can't self-update), so the action is safe to fan out across a
- // whole group selection; the toast reports the real dispatched count
- // (update_agent is confirmed above).
- const result = await deviceApi.batch({
- groupId: selectAllGroup && groupId ? groupId : undefined,
- deviceIds: selectAllGroup && groupId ? undefined : Array.from(selectedIds),
- action,
- });
- if (result.status === 'pending_approval') {
- toast.success(t('devices.batch.pendingApproval', "Saved — awaiting a second administrator's approval"), { duration: 6000 });
- } else if (action === 'update_agent') {
- // Offline devices keep the update queued (no expiry) and run it
- // when they come back; the server skips legacy / up-to-date /
- // already-queued devices and paces the rollout.
- const parts = [t('devices.batch.updateAgentDispatched', { count: result.dispatched, defaultValue: 'Agent update queued for {{count}} online device(s)' })];
- if (result.queued) parts.push(t('devices.batch.updateAgentQueuedOffline', { count: result.queued, defaultValue: '{{count}} offline device(s): the update will run when they come back online' }));
- if (result.skipped) parts.push(t('devices.batch.updateAgentSkipped', { count: result.skipped, defaultValue: '{{count}} skipped (already up to date, legacy agent or update already queued)' }));
- toast.success(parts.join(' · '), { duration: 8000 });
- } else {
- toast.success(t('devices.batch.dispatched', { count: result.dispatched }));
- }
  }
  setSelectedIds(new Set()); setSelectAllGroup(false); await load(true);
  } catch { toast.error(t('common.error')); } finally { setIsBatchRunning(false); }
@@ -590,18 +555,6 @@ export function DeviceTable({
  const hasSelection = selectedIds.size > 0;
  const allChecked = devices.length > 0 && devices.every(d => selectedIds.has(d.id));
  const someChecked = selectedIds.size > 0 && !allChecked;
-
- // A batch command is only offered when EVERY selected device's agent can
- // run it. Legacy (Go 1.20) agents support a reduced command set; mixing
- // one into the selection greys out the unsupported actions so the admin
- // can't dispatch a command that would silently no-op on part of the fleet.
- // Devices not in the loaded set (whole-group "select all") resolve to
- // permissive — the server no-ops anything the agent can't honour.
- const everySupports = useCallback((cmd: CommandType): boolean =>
- Array.from(selectedIds).every((id) => {
- const d = devices.find((x) => x.id === id);
- return !d || isCommandSupported(d, cmd);
- }), [selectedIds, devices]);
 
  const hasFilters = debouncedSearch || statusFilters.size > 0 || osFilters.size > 0 || osNameFilter.size > 0 || osVersionFilter.size > 0 || tagFilters.size > 0;
 
@@ -613,9 +566,7 @@ export function DeviceTable({
  else { setSortBy(''); setSortOrder('asc'); }
  } else {
  setSortBy(field);
- // Metric sorts default to desc (highest first) — that's the useful
- // direction (see which machines are busiest). Alpha fields default asc.
- setSortOrder(['cpu', 'ram', 'disk', 'lastSeen', 'status'].includes(field) ? 'desc' : 'asc');
+ setSortOrder(defaultSortOrder(field));
  }
  };
 
@@ -1002,16 +953,10 @@ export function DeviceTable({
  );
 
  // Batch actions — one data list, rendered with the historic markup in
- // the popover (desktop) or a bottom sheet (phone). A disabled action
- // explains itself: title= with a mouse, a visible line on touch.
+ // the popover (desktop) or a bottom sheet (phone).
  const closeBatchMenuThen = (fn: () => void) => () => { setBatchMenuOpen(false); fn(); };
- const batchItems: Array<{ key: string; icon: ReactNode; label: string; onClick: () => void; cmd?: CommandType; danger?: boolean; show?: boolean }> = [
+ const batchItems: Array<{ key: string; icon: ReactNode; label: string; onClick: () => void; danger?: boolean; show?: boolean }> = [
  { key: 'approve', show: canManageApproval && approvalFilter === 'pending', icon: <ShieldCheck className="w-3.5 h-3.5 text-green-400" />, label: t('devices.batch.approve'), onClick: () => handleBatchAction('approve') },
- { key: 'restart_agent', cmd: 'restart_agent', icon: <RotateCcw className="w-3.5 h-3.5 text-blue-400" />, label: t('devices.batch.restartAgent'), onClick: () => handleBatchAction('restart_agent') },
- { key: 'reboot', cmd: 'reboot', icon: <RotateCcw className="w-3.5 h-3.5 text-orange-400" />, label: t('devices.batch.reboot'), onClick: () => handleBatchAction('reboot') },
- { key: 'shutdown', cmd: 'shutdown', icon: <PowerOff className="w-3.5 h-3.5 text-red-400" />, label: t('devices.batch.shutdown'), onClick: () => handleBatchAction('shutdown') },
- { key: 'scan_inventory', cmd: 'scan_inventory', icon: <Search className="w-3.5 h-3.5 text-text-muted" />, label: t('devices.batch.scanInventory'), onClick: () => handleBatchAction('scan_inventory') },
- { key: 'update_agent', cmd: 'update_agent', icon: <Download className="w-3.5 h-3.5 text-blue-400" />, label: t('devices.action.updateAgent') || 'Update agent', onClick: () => handleBatchAction('update_agent') },
  { key: 'change_group', icon: <FolderOpen className="w-3.5 h-3.5 text-accent" />, label: t('devices.batch.changeGroup', 'Change group'), onClick: closeBatchMenuThen(() => setChangeGroupOpen(true)) },
  // Tenant transfer is structurally an admin action: it
  // moves a device row's tenant_id, which only the
@@ -1020,34 +965,22 @@ export function DeviceTable({
  // they'd transfer TO, so leave this admin-only.
  { key: 'transfer', show: isAdmin(), icon: <ArrowRightLeft className="w-3.5 h-3.5 text-accent" />, label: t('devices.batch.transferTenant', 'Transfer to another tenant'), onClick: closeBatchMenuThen(() => setTransferOpen(true)) },
  { key: 'delete', show: isAdmin(), danger: true, icon: <Trash2 className="w-3.5 h-3.5" />, label: t('devices.batch.delete'), onClick: () => handleBatchAction('delete') },
- { key: 'uninstall_agent', show: isAdmin(), danger: true, cmd: 'uninstall_agent', icon: <UserX className="w-3.5 h-3.5" />, label: t('devices.batch.uninstall'), onClick: () => handleBatchAction('uninstall_agent') },
  ];
  const batchContent = (
  <>
- {batchItems.filter((i) => i.show !== false).map((i) => {
- const unsupported = i.cmd ? !everySupports(i.cmd) : false;
- return (
+ {batchItems.filter((i) => i.show !== false).map((i) => (
  <button
  key={i.key}
  onClick={i.onClick}
- disabled={unsupported}
- title={unsupported ? unsupportedTooltip(t) : undefined}
  className={clsx(
  'w-full flex items-center gap-2 px-3 py-2 text-xs text-left coarse:py-3 coarse:text-sm',
  i.danger ? 'text-red-400 hover:bg-red-400/10' : 'text-text-primary hover:bg-bg-tertiary',
- i.cmd && 'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent',
  )}
  >
  {i.icon}
- <span className="min-w-0 flex-1">
- {i.label}
- {unsupported && (
- <span className="block can-hover:hidden text-[11px] text-text-muted">{unsupportedTooltip(t)}</span>
- )}
- </span>
+ <span className="min-w-0 flex-1">{i.label}</span>
  </button>
- );
- })}
+ ))}
  </>
  );
 
@@ -1113,11 +1046,7 @@ export function DeviceTable({
  { field: 'status', label: t('sort.status', 'Status') },
  { field: 'lastSeen', label: t('sort.lastSeen', 'Last seen') },
  { field: 'os', label: t('sort.os', 'OS') },
- { field: 'version', label: t('sort.version', 'Agent version') },
  { field: 'group', label: t('sort.group', 'Group') },
- { field: 'cpu', label: 'CPU' },
- { field: 'ram', label: 'RAM' },
- { field: 'disk', label: t('sort.disk', 'Disk') },
  ];
 
  return (
@@ -1374,13 +1303,6 @@ export function DeviceTable({
  )}
  <SortLabel label={t('sort.name', 'Name')} field="name" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} />
  <div className="flex-1" />
- {mode === 'monitoring' && (
- <>
- <SortLabel label="CPU" field="cpu" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} className="w-14 justify-center" />
- <SortLabel label="RAM" field="ram" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} className="w-14 justify-center" />
- <SortLabel label={t('sort.disk', 'Disk')} field="disk" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} className="w-14 justify-center" />
- </>
- )}
  <SortLabel label={t('sort.status', 'Status')} field="status" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} className="w-20 justify-center" />
  <SortLabel label={t('sort.lastSeen', 'Last seen')} field="lastSeen" sortBy={sortBy} sortOrder={sortOrder} onClick={handleSort} className="w-12 justify-end" />
  <span className="w-6" />
@@ -1391,9 +1313,8 @@ export function DeviceTable({
  )}
  </div>
  ) : (
- /* Phone / tablet: the 10px header labels are no touch target
- (and CPU / RAM / Disk were unreachable in admin mode) — a
- native select lists every sort field + a direction toggle. */
+ /* Phone / tablet: the 10px header labels are no touch target —
+ a native select lists every sort field + a direction toggle. */
  <div className="flex items-center gap-2 px-3 py-2 bg-bg-tertiary/50 text-xs text-text-muted">
  {(isAdmin() || selectionMode) && (
  <StyledCheckbox checked={allChecked} indeterminate={someChecked} onChange={toggleAll} className="mr-1" />
@@ -1549,10 +1470,10 @@ export function DeviceTable({
  );
 }
 
-// Metric / recency sorts default to desc (highest / most recent first) —
-// that's the useful direction. Alpha fields default asc.
+// Recency / status sorts default to desc (most recent first) — that's the
+// useful direction. Alpha fields default asc.
 function defaultSortOrder(field: SortField): 'asc' | 'desc' {
- return ['cpu', 'ram', 'disk', 'lastSeen', 'status'].includes(field) ? 'desc' : 'asc';
+ return ['lastSeen', 'status'].includes(field) ? 'desc' : 'asc';
 }
 
 // ── Toolbar popover ─────────────────────────────────────────────────────────

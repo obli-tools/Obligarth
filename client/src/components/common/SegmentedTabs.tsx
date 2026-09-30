@@ -16,7 +16,7 @@ export interface SegmentedTabsProps<T extends string = string> {
   tabs: ReadonlyArray<SegmentedTab<T>>;
   value: T;
   onChange: (id: T) => void;
-  /** Stretch tabs to share the width (default true — the current look of PoliciesPage / UpdatesPage). */
+  /** Stretch tabs to share the width (default true — the look of the page tab bars). */
   fill?: boolean;
   /** md = px-4 py-2 text-sm (default, current tab bars) · sm = px-3 py-1.5 text-xs. */
   size?: 'sm' | 'md';
@@ -31,7 +31,7 @@ export interface SegmentedTabsProps<T extends string = string> {
 /**
  * The app's segmented tab bar (borderless bg-bg-secondary pill container,
  * accent active tab) — docs/obli-mobile.md §8. Identical on desktop to the hand-rolled bars
- * (PoliciesPage / UpdatesPage); when the tabs do not fit they scroll
+ * it replaced; when the tabs do not fit they scroll
  * horizontally (snap, hidden scrollbar) instead of overflowing, and the
  * active tab is kept in view.
  *
