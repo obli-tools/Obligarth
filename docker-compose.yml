@@ -1,0 +1,128 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obliance
+      POSTGRES_USER: obliance
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    # RMM ingestion tuning for a large fleet (2000+ devices ≈ 200 push/s).
+    # Stock Postgres (shared_buffers 128MB, max_connections 100, lazy autovacuum)
+    # collapses under the device-table write churn. Values below assume a host
+    # with ~8GB RAM — scale shared_buffers≈25% and effective_cache_size≈75% of
+    # host RAM. max_connections must stay above (server pool.max + session pool
+    # + headroom); keep it in sync with knexfile.ts pool.max.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_compression=on"
+      # Aggressive autovacuum: the devices table takes ~hundreds of row versions/s
+      # from the push firehose. Stock autovacuum falls behind → bloat → every UI
+      # SELECT on devices slows down. (A per-table override on `devices` is set by
+      # migration 118 for even tighter thresholds.)
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_analyze_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_vacuum_cost_delay=2ms"
+      - "-c"
+      - "autovacuum_naptime=15s"
+      - "-c"
+      - "autovacuum_max_workers=4"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # Expose on LAN so you can run migrations from your PC / pgAdmin.
+    # Remove this if you don't need external access.
+    #ports:
+    #  - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obliance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  server:
+    image: meejay/obliance-server:${OBLIANCE_VERSION:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://obliance:${DB_PASSWORD:-changeme}@postgres:5432/obliance
+      SESSION_SECRET: ${SESSION_SECRET:-change-this-in-production}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
+      # Public URL of this instance (e-mail links, trusted SSO origin) — see .env.example
+      APP_URL: ${APP_URL:-}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      # Proxies whose X-Forwarded-For entries are believed (client IP for audit,
+      # 2FA "trust this IP", SSH button). Default: loopback + this container's
+      # own networks + Docker's 172.16/12 pool. See .env.example.
+      TRUSTED_PROXIES: ${TRUSTED_PROXIES:-loopback, self, 172.16.0.0/12}
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-2}
+      # SSH bastion (off by default) — see .env.example
+      SSH_BASTION_ENABLED: ${SSH_BASTION_ENABLED:-false}
+      SSH_BASTION_PORT: ${SSH_BASTION_PORT:-2222}
+      # Device-bound 2FA (fingerprint validation from the Android app) — see .env.example
+      DEVICE_KEYS_DISABLED: ${DEVICE_KEYS_DISABLED:-false}
+      DEVICE_KEY_ORIGINS: ${DEVICE_KEY_ORIGINS:-}
+      DEVICE_KEY_APP_IDS: ${DEVICE_KEY_APP_IDS:-}
+      DEVICE_KEY_APP_SIGNERS: ${DEVICE_KEY_APP_SIGNERS:-}
+      DEVICE_KEY_BINDING_SECRET: ${DEVICE_KEY_BINDING_SECRET:-}
+      DEVICE_KEYS_SSO_ENABLED: ${DEVICE_KEYS_SSO_ENABLED:-false}
+      # Obligate: optional distinct inbound secret (empty = Settings value / the API key) — see .env.example
+      OBLIGATE_INBOUND_SECRET: ${OBLIGATE_INBOUND_SECRET:-}
+      # Delegated reads from sibling apps (empty = oblidesk only, platform-admin subjects refused) — see .env.example
+      OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-}
+      OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
+    # SSH bastion: uncomment to publish its port once SSH_BASTION_ENABLED=true.
+    # Publish it DIRECTLY (no TCP proxy in front): the bastion must see the real
+    # client IP, or the IP allow-list / bans / 3-strike rule become meaningless.
+    #ports:
+    #  - "${SSH_BASTION_PORT:-2222}:${SSH_BASTION_PORT:-2222}"
+    volumes:
+      # Persistent custom directory: scripts, SSH keys, etc.
+      # SSH keys: chmod 700 custom/.ssh && chmod 600 custom/.ssh/id_*
+      - ${CUSTOM_DIR:-./custom}:/custom
+    # 2000+ agents each hold a persistent WebSocket (1 fd) on the command
+    # channel; the stock container nofile soft limit (1024) starves Node.
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
+
+  client:
+    image: meejay/obliance-client:${OBLIANCE_VERSION:-latest}
+    restart: unless-stopped
+    # nginx worker_rlimit_nofile (65536) needs the container ulimit to allow it.
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${LISTEN_PORT:-3003}:80"
+volumes:
+  postgres_data:

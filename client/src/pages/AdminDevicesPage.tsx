@@ -1,0 +1,299 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+ Key, Plus, Trash2, Copy, ChevronRight, RefreshCw, FolderOpen, Edit, Wifi, TerminalSquare,
+} from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { Navigate, useSearchParams } from 'react-router-dom';
+import { deviceApi } from '@/api/device.api';
+import { groupsApi } from '@/api/groups.api';
+import { NetworkDiscoveryPage } from './NetworkDiscoveryPage';
+import { CustomSectionsPage } from './CustomSectionsPage';
+import type { AgentApiKey, DeviceGroupTreeNode } from '@obliance/shared';
+import toast from 'react-hot-toast';
+import { PageContainer } from '@/components/common/PageContainer';
+import { SegmentedTabs } from '@/components/common/SegmentedTabs';
+import { IconButton } from '@/components/common/IconButton';
+import { useConfirm } from '@/components/common/ConfirmDialog';
+import { copyText } from '@/utils/clipboard';
+
+// /admin/devices used to host the device list (Agents tab) too, but
+// that's now the canonical /devices page (with admin features
+// role-gated). What remains here is the admin agent-config hub: API
+// keys, custom sections, network discovery. The old `?tab=agents`
+// link redirects to /devices to keep external bookmarks working.
+type Tab = 'keys' | 'custom-sections' | 'discovery';
+
+export function AdminDevicesPage() {
+ const { t } = useTranslation();
+ // Shared dialog (window.confirm is a no-op in the Android WebView — docs §5.6).
+ const confirm = useConfirm();
+ const [searchParams] = useSearchParams();
+ const rawTab = searchParams.get('tab');
+ const isLegacyAgentsTab = rawTab === 'agents';
+ const [tab, setTab] = useState<Tab>((['keys', 'custom-sections', 'discovery'] as const).includes(rawTab as any) ? rawTab as Tab : 'keys');
+
+ // ── API Keys state ─────────────────────────────────────────────────────────
+ const [keys, setKeys] = useState<AgentApiKey[]>([]);
+ const [newKeyName, setNewKeyName] = useState('');
+ const [newKeyGroupId, setNewKeyGroupId] = useState<number | null>(null);
+ const [isCreatingKey, setIsCreatingKey] = useState(false);
+ const [showNewKey, setShowNewKey] = useState<string | null>(null);
+ const [isLoadingKeys, setIsLoadingKeys] = useState(true);
+ const [groups, setGroups] = useState<DeviceGroupTreeNode[]>([]);
+ const [editingKeyId, setEditingKeyId] = useState<number | null>(null);
+ const [editGroupId, setEditGroupId] = useState<number | null>(null);
+
+ const loadKeys = useCallback(async () => {
+ setIsLoadingKeys(true);
+ try {
+ setKeys(await deviceApi.listKeys());
+ } catch {
+ toast.error(t('common.error'));
+ } finally {
+ setIsLoadingKeys(false);
+ }
+ }, [t]);
+
+ useEffect(() => {
+ if (tab === 'keys') {
+ loadKeys();
+ groupsApi.tree().then(setGroups).catch(() => {});
+ }
+ }, [tab, loadKeys]);
+
+ const handleCreateKey = async () => {
+ if (!newKeyName.trim()) return;
+ setIsCreatingKey(true);
+ try {
+ const key = await deviceApi.createKey(newKeyName.trim(), newKeyGroupId);
+ setShowNewKey(key.key);
+ setNewKeyName('');
+ setNewKeyGroupId(null);
+ loadKeys();
+ toast.success(t('devices.apiKeys.createSuccess'));
+ } catch {
+ toast.error(t('devices.apiKeys.failedCreate'));
+ } finally {
+ setIsCreatingKey(false);
+ }
+ };
+
+ const handleDeleteKey = async (key: AgentApiKey) => {
+ if (!(await confirm({ message: t('devices.apiKeys.confirmDelete'), danger: true }))) return;
+ try {
+ await deviceApi.deleteKey(key.id);
+ loadKeys();
+ toast.success(t('devices.apiKeys.deleteSuccess'));
+ } catch {
+ toast.error(t('devices.apiKeys.failedDelete'));
+ }
+ };
+
+ const handleSaveKeyGroup = async (keyId: number) => {
+ try {
+ await deviceApi.updateKey(keyId, { defaultGroupId: editGroupId });
+ setEditingKeyId(null);
+ loadKeys();
+ toast.success(t('common.save'));
+ } catch {
+ toast.error(t('common.error'));
+ }
+ };
+
+ // Clipboard through the shared helper (Clipboard API → execCommand → native
+ // bridge) and a toast that reflects the real outcome: an API key is only
+ // displayed once, a false "Copied" would lose it.
+ const copyKey = async (value: string) => {
+ if (await copyText(value)) toast.success(t('common.copied'));
+ else toast.error(t('devices.apiKeys.copyFailed', 'Could not copy — select the key and copy it manually'));
+ };
+
+ // Flatten group tree for select options
+ const flattenGroups = (nodes: DeviceGroupTreeNode[], depth = 0): Array<{ id: number; name: string; depth: number }> => {
+ const result: Array<{ id: number; name: string; depth: number }> = [];
+ for (const n of nodes) {
+ result.push({ id: n.id, name: n.name, depth });
+ result.push(...flattenGroups(n.children, depth + 1));
+ }
+ return result;
+ };
+ const flatGroups = flattenGroups(groups);
+
+ // Hooks above; safe to early-return now. Legacy `?tab=agents` URLs
+ // (saved bookmarks, sidebar links from old releases) get bounced to
+ // the canonical /devices page where the agent list now lives.
+ if (isLegacyAgentsTab) {
+ return <Navigate to="/devices" replace />;
+ }
+
+ return (
+ <PageContainer className="space-y-6">
+ <div>
+ <h1 className="text-2xl font-bold text-text-primary">{t('agents.title')}</h1>
+ <p className="text-sm text-text-muted mt-0.5">{t('agents.subtitle')}</p>
+ </div>
+
+ {/* Tabs — three admin-only surfaces. The agent list itself is
+ on /devices (single canonical page, role-gated). */}
+ {/* Shared segmented bar: same look on desktop; scrolls horizontally
+ (instead of 2-3 line wrapped labels) when it does not fit on a phone. */}
+ <SegmentedTabs<Tab>
+ value={tab}
+ onChange={setTab}
+ tabClassName="gap-1.5"
+ tabs={[
+ { id: 'keys', label: t('devices.tabApiKeys') },
+ { id: 'custom-sections', label: t('nav.customSections', 'Custom sections'), icon: <TerminalSquare className="w-3.5 h-3.5" /> },
+ { id: 'discovery', label: t('nav.discovery', 'Discovery'), icon: <Wifi className="w-3.5 h-3.5" /> },
+ ]}
+ />
+
+ {/* Tab: API Keys */}
+ {tab === 'keys' && (
+ <div className="space-y-5">
+ <p className="text-sm text-text-muted">{t('devices.apiKeys.description')}</p>
+
+ {/* New key alert */}
+ {showNewKey && (
+ <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg space-y-2">
+ <p className="text-sm font-medium text-green-400">{t('devices.apiKeys.newKeyAlert')}</p>
+ <div className="flex items-center gap-2">
+ <code className="flex-1 text-sm font-mono bg-bg-tertiary p-2 rounded text-text-primary break-all">{showNewKey}</code>
+ <IconButton
+ label={t('common.copy', 'Copy')}
+ icon={<Copy className="w-4 h-4" />}
+ size="lg"
+ variant="plain"
+ onClick={() => void copyKey(showNewKey)}
+ className="hover:bg-bg-tertiary flex-shrink-0 text-current hover:text-current"
+ />
+ </div>
+ <button onClick={() => setShowNewKey(null)} className="text-xs text-text-muted hover:text-text-primary coarse:min-h-10 coarse:text-sm">{t('common.close')}</button>
+ </div>
+ )}
+
+ {/* Create key form */}
+ <div className="flex gap-2 flex-wrap">
+ <input
+ type="text"
+ value={newKeyName}
+ onChange={e => setNewKeyName(e.target.value)}
+ placeholder={t('devices.apiKeys.namePlaceholder')}
+ enterKeyHint="done"
+ className="flex-1 min-w-[200px] max-sm:min-w-0 max-sm:basis-full px-3 py-2 bg-bg-secondary rounded-lg text-text-primary focus:outline-none focus:border-accent text-sm"
+ onKeyDown={e => e.key === 'Enter' && handleCreateKey()}
+ />
+ <select
+ value={newKeyGroupId ?? ''}
+ onChange={e => setNewKeyGroupId(e.target.value ? parseInt(e.target.value) : null)}
+ className="px-3 py-2 bg-bg-secondary rounded-lg text-text-primary focus:outline-none focus:border-accent text-sm max-sm:min-w-0 max-sm:flex-1"
+ >
+ <option value="">{t('apiKeys.noGroup')}</option>
+ {flatGroups.map(g => (
+ <option key={g.id} value={g.id}>{' '.repeat(g.depth)}{g.name}</option>
+ ))}
+ </select>
+ <button
+ onClick={handleCreateKey}
+ disabled={isCreatingKey || !newKeyName.trim()}
+ className="flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-lg hover:bg-accent/80 disabled:opacity-50 transition-colors text-sm font-medium"
+ >
+ <Plus className="w-4 h-4" />
+ {t('devices.apiKeys.newKey')}
+ </button>
+ </div>
+
+ {/* Keys list */}
+ {isLoadingKeys ? (
+ <div className="flex items-center justify-center py-10">
+ <RefreshCw className="w-5 h-5 animate-spin text-text-muted" />
+ </div>
+ ) : keys.length === 0 ? (
+ <p className="text-sm text-text-muted py-6 text-center">{t('devices.apiKeys.noKeys')}</p>
+ ) : (
+ <div className="space-y-2">
+ {keys.map(key => {
+ const truncatedKey = `${key.key.slice(0, 8)}...${key.key.slice(-4)}`;
+ const isEditing = editingKeyId === key.id;
+ return (
+ <div key={key.id} className="flex items-center gap-3 p-4 bg-bg-secondary rounded-lg max-sm:items-start max-sm:gap-2.5 max-sm:p-3">
+ <Key className="w-4 h-4 text-accent flex-shrink-0 max-sm:mt-0.5" />
+ <div className="flex-1 min-w-0">
+ <div className="flex items-center gap-2 flex-wrap">
+ <span className="font-medium text-text-primary text-sm max-sm:break-all">{key.name || t('common.unknown')}</span>
+ <code className="text-xs text-text-muted font-mono">{truncatedKey}</code>
+ <IconButton
+ label={t('common.copy', 'Copy')}
+ icon={<Copy className="w-3.5 h-3.5" />}
+ size="xs"
+ variant="plain"
+ onClick={() => void copyKey(key.key)}
+ className="hover:bg-bg-tertiary"
+ />
+ <span className="flex items-center gap-1 text-xs text-text-muted">
+ <ChevronRight className="w-3 h-3" />
+ {t('devices.apiKeys.devices', { count: key.deviceCount })}
+ </span>
+ </div>
+ <div className="flex items-center gap-3 text-xs text-text-muted mt-1 flex-wrap">
+ <span>{t('devices.apiKeys.created', { date: new Date(key.createdAt).toLocaleDateString() })}</span>
+ {key.lastUsedAt && (
+ <span>{t('devices.apiKeys.lastUsed', { date: new Date(key.lastUsedAt).toLocaleDateString() })}</span>
+ )}
+ {/* Default group display/edit */}
+ {isEditing ? (
+ <span className="flex items-center gap-1 flex-wrap coarse:gap-2">
+ <FolderOpen className="w-3 h-3" />
+ <select
+ value={editGroupId ?? ''}
+ onChange={e => setEditGroupId(e.target.value ? parseInt(e.target.value) : null)}
+ className="px-1.5 py-0.5 bg-bg-tertiary rounded text-xs text-text-primary max-sm:min-w-0 max-sm:max-w-[60vw] coarse:min-h-9"
+ >
+ <option value="">{t('apiKeys.noGroup')}</option>
+ {flatGroups.map(g => (
+ <option key={g.id} value={g.id}>{' '.repeat(g.depth)}{g.name}</option>
+ ))}
+ </select>
+ <button onClick={() => handleSaveKeyGroup(key.id)} className="text-accent hover:underline text-xs coarse:min-h-9 coarse:px-2 coarse:text-sm">{t('common.save')}</button>
+ <button onClick={() => setEditingKeyId(null)} className="text-text-muted hover:text-text-primary text-xs coarse:min-h-9 coarse:px-2 coarse:text-sm">{t('common.cancel')}</button>
+ </span>
+ ) : (
+ <button
+ onClick={() => { setEditingKeyId(key.id); setEditGroupId(key.defaultGroupId); }}
+ className="flex items-center gap-1 text-text-muted hover:text-accent transition-colors text-left coarse:min-h-9"
+ >
+ <FolderOpen className="w-3 h-3 shrink-0" />
+ {key.defaultGroupName ? (
+ <span>{t('apiKeys.defaultGroup')}: <span className="text-text-primary">{key.defaultGroupName}</span></span>
+ ) : (
+ <span className="italic">{t('apiKeys.noGroup')}</span>
+ )}
+ <Edit className="w-2.5 h-2.5 ml-0.5 shrink-0 coarse:w-3.5 coarse:h-3.5" />
+ </button>
+ )}
+ </div>
+ </div>
+ <IconButton
+ label={t('common.delete')}
+ icon={<Trash2 className="w-4 h-4" />}
+ size="lg"
+ variant="danger"
+ onClick={() => handleDeleteKey(key)}
+ className="flex-shrink-0"
+ />
+ </div>
+ );
+ })}
+ </div>
+ )}
+ </div>
+ )}
+
+ {/* Tab: Custom Sections */}
+ {tab === 'custom-sections' && <CustomSectionsPage embedded />}
+
+ {/* Tab: Discovery */}
+ {tab === 'discovery' && <NetworkDiscoveryPage embedded />}
+ </PageContainer>
+ );
+}

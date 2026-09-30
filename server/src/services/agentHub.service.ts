@@ -1,0 +1,550 @@
+import crypto from 'crypto';
+import type { WebSocket } from 'ws';
+import { db } from '../db';
+import { getIO } from '../socket';
+import { SocketEvents } from '@obliance/shared';
+import { logger } from '../utils/logger';
+import { commandService } from './command.service';
+import { deviceService } from './device.service';
+import { processService } from './process.service';
+import { fileExplorerService } from './fileExplorer.service';
+
+// ── Types ─────────────────────────────────────────────────────────────────────
+
+interface AgentConn {
+  ws: WebSocket;
+  deviceId: number;
+  tenantId: number;
+  /** API key row ID — forwarded to agentService.handlePush */
+  apiKeyId: number;
+  /** Hardware device UUID — forwarded to agentService.handlePush */
+  deviceUuid: string;
+  /** Client IP extracted at WS upgrade time */
+  clientIp: string;
+  /** Liveness: set by a pong / any message / socket progress, cleared at each keepalive ping. */
+  alive: boolean;
+  /** Consecutive keepalive rounds without any sign of life (see sweep). */
+  missed: number;
+  /** Socket counters at the previous round (see socketMoved). */
+  lastRead: number;
+  lastWriteBacklog: number;
+}
+
+/**
+ * Rounds (15 s each) without a pong, a message or any byte moving on the
+ * socket before the channel is judged dead. One round was too strict: a
+ * pong waits behind a large ack the agent is writing (same write mutex),
+ * and the server's ping behind a large command it is sending — a 35 s
+ * download_file ack killed the channel and every ack in flight on it.
+ */
+export const AGENT_CHANNEL_MAX_MISSED = 3;
+
+/** A write backlog at least this large that shrinks = the peer is reading (a ping is never that big). */
+const WRITE_DRAIN_MIN = 64 * 1024;
+
+/** Socket counters: bytes read so far, bytes still queued for writing. */
+function socketCounters(ws: unknown): { read: number; backlog: number } {
+  const s = (ws as { _socket?: { bytesRead?: number; writableLength?: number } } | null)?._socket;
+  return {
+    read: typeof s?.bytesRead === 'number' ? s.bytesRead : 0,
+    backlog: typeof s?.writableLength === 'number' ? s.writableLength : 0,
+  };
+}
+
+/**
+ * Bytes moved since the previous round: the agent sent something (part of a
+ * large ack), or a large outgoing backlog (a big command) drained — the
+ * kernel only takes more once the agent acknowledges what it read.
+ */
+export function socketMoved(prev: { read: number; backlog: number }, cur: { read: number; backlog: number }): boolean {
+  return cur.read > prev.read || (prev.backlog >= WRITE_DRAIN_MIN && cur.backlog < prev.backlog);
+}
+
+// Message sent FROM server TO agent on the command channel
+export interface HubCommand {
+  type: 'command';
+  id: string;              // unique invocation ID (for ack correlation)
+  commandType: string;
+  payload: Record<string, unknown>;
+}
+
+// Ack sent FROM agent TO server
+interface AgentAck {
+  type: 'ack';
+  id: string;
+  commandType: string;
+  success: boolean;
+  result?: any;
+  sessionToken?: string;
+  error?: string;
+}
+
+// Heartbeat sent FROM agent TO server on the command channel
+interface AgentHeartbeat {
+  type: 'heartbeat';
+  hostname?: string;
+  agentVersion?: string;
+  osInfo?: Record<string, unknown>;
+  metrics?: Record<string, unknown>;
+}
+
+// Privacy mode notification FROM agent TO server
+interface AgentPrivacyNotify {
+  type: 'privacy_mode_changed';
+  enabled: boolean;
+}
+
+export interface AgentRequestResult {
+  success: boolean;
+  result?: any;
+  error?: string;
+}
+
+// ── Service ───────────────────────────────────────────────────────────────────
+
+class AgentHubService {
+  /** deviceId → active connection */
+  private byDevice = new Map<number, AgentConn>();
+
+  /** In-flight request() calls: command id -> resolver (bound to ONE device). */
+  private pending = new Map<string, { deviceId: number; resolve: (r: AgentRequestResult) => void; timer: NodeJS.Timeout }>();
+
+  constructor() {
+    // Ping all connected agents every 15 s so the WebSocket stays alive through
+    // reverse proxies that close idle connections. 15 s covers proxies with
+    // timeouts as low as ~20 s (e.g. cPanel/WHM Nginx custom configuration).
+    //
+    // Side-effect: refresh last_seen_at on every connected device in a single
+    // batched UPDATE. The agent doesn't send proactive heartbeats over WS,
+    // so without this the "last seen" pill drifts past 5 min on a device
+    // whose only contact path is the WS command channel — even though it's
+    // demonstrably reachable (admin can run commands, browse files).
+    //
+    // Liveness: a channel with no pong, no message and no byte moving on
+    // its socket for AGENT_CHANNEL_MAX_MISSED rounds is dead (NAT / proxy /
+    // sleep dropped it silently while the socket still looks OPEN):
+    // terminate it, so push() returns false and the command falls back to
+    // the DB queue instead of being lost.
+    setInterval(() => { void this.sweep(); }, 15_000);
+  }
+
+  /** One keepalive round (public for tests). */
+  async sweep(): Promise<void> {
+    const liveIds: number[] = [];
+    for (const [deviceId, conn] of this.byDevice) {
+      if (conn.ws.readyState !== 1 /* OPEN */) continue;
+      // Bytes moving (a large ack arriving, a large command leaving) count
+      // as life: the pong is only late behind them. Measured BEFORE this
+      // round's ping is queued (the ping itself never counts).
+      const cur = socketCounters(conn.ws);
+      if (socketMoved({ read: conn.lastRead, backlog: conn.lastWriteBacklog }, cur)) conn.alive = true;
+      conn.lastRead = cur.read;
+      conn.lastWriteBacklog = cur.backlog;
+      conn.missed = conn.alive ? 0 : conn.missed + 1;
+      if (conn.missed >= AGENT_CHANNEL_MAX_MISSED) {
+        logger.warn({ deviceId, rounds: conn.missed }, 'Agent command channel: no pong nor traffic for several keepalive rounds — terminated');
+        try { (conn.ws as any).terminate(); } catch { /* already gone */ }
+        this._unregister(deviceId, conn.ws);
+        continue;
+      }
+      conn.alive = false;
+      try { (conn.ws as any).ping(); } catch { this._unregister(deviceId, conn.ws); continue; }
+      liveIds.push(deviceId);
+    }
+    if (liveIds.length > 0) {
+      try {
+        await db('devices').whereIn('id', liveIds).update({ last_seen_at: new Date() });
+      } catch (e) {
+        logger.error(e, 'agentHub: keepalive last_seen_at refresh failed');
+      }
+    }
+  }
+
+  /**
+   * Register an agent command-channel WebSocket.
+   * If a previous connection for the same device exists it is cleanly replaced.
+   * Drains any pending_command stored in the DB immediately on connect.
+   */
+  async register(
+    deviceId: number,
+    tenantId: number,
+    ws: WebSocket,
+    apiKeyId: number,
+    deviceUuid: string,
+    clientIp: string,
+  ): Promise<void> {
+    const existing = this.byDevice.get(deviceId);
+    if (existing && existing.ws.readyState === 1 /* OPEN */) {
+      try { existing.ws.close(1000, 'replaced'); } catch {}
+    }
+    const counters = socketCounters(ws);
+    const conn: AgentConn = {
+      ws, deviceId, tenantId, apiKeyId, deviceUuid, clientIp,
+      alive: true, missed: 0, lastRead: counters.read, lastWriteBacklog: counters.backlog,
+    };
+    this.byDevice.set(deviceId, conn);
+    ws.on('pong', () => { conn.alive = true; });
+
+    // Treat WS command-channel connection as a heartbeat. The agent's HTTP push
+    // is the usual path that updates last_push_at and flips transient statuses
+    // (updating/update_error/offline) back to online — but if that push path
+    // breaks (post-update zombie, firewall flapping, etc.) while the WS stays
+    // up, the device would be stuck in update_error/offline in the UI even
+    // though realtime features (explorer, tunnels) keep working via WS.
+    // So on connect: refresh last_push_at and reset stuck transient statuses.
+    try {
+      const prev = await db('devices')
+        .where({ id: deviceId })
+        .select('status')
+        .first();
+      const prevStatus = prev?.status as string | undefined;
+      const now = new Date();
+      const patch: Record<string, unknown> = { last_push_at: now, last_seen_at: now, updated_at: now };
+      const transient = prevStatus === 'updating' || prevStatus === 'update_error' || prevStatus === 'offline';
+      if (transient) {
+        patch.status = 'online';
+        patch.update_started_at = null;
+      }
+      await db('devices')
+        .where({ id: deviceId })
+        .whereNot({ status: 'pending_uninstall' })
+        .update(patch);
+      if (transient) {
+        try {
+          getIO().to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_UPDATED, { deviceId, status: 'online' });
+        } catch {}
+      }
+      // Back from 'offline' through the command channel (the next push
+      // then no longer sees 'offline'): the offline incident is over, its
+      // live alert is resolved (leaves the bell / "À traiter").
+      if (prevStatus === 'offline') {
+        try {
+          const { liveAlertService } = await import('./liveAlert.service');
+          await liveAlertService.resolveIncidents('offline', [deviceId]);
+        } catch (e) {
+          logger.error(e, 'agentHub: failed to resolve the offline live alert');
+        }
+      }
+    } catch (e) {
+      logger.error(e, 'agentHub: failed to refresh status on WS connect');
+    }
+
+    ws.on('close', () => this._unregister(deviceId, ws));
+    ws.on('error', () => this._unregister(deviceId, ws));
+    ws.on('message', async (data: Buffer) => {
+      conn.alive = true;
+      try {
+        const msg = JSON.parse(data.toString()) as AgentHeartbeat | AgentAck | AgentPrivacyNotify | { type: string; streamId?: string; data?: string; code?: number };
+        if ((msg as any).type === 'heartbeat') {
+          await this._handleHeartbeat(conn, msg as AgentHeartbeat);
+        } else if ((msg as any).type === 'ack') {
+          await this._handleAck(conn, msg as AgentAck);
+        } else if ((msg as any).type === 'privacy_mode_changed') {
+          await this._handlePrivacyChange(conn, msg as AgentPrivacyNotify);
+        } else if ((msg as any).type === 'custom_section_output' || (msg as any).type === 'custom_section_closed') {
+          const streamId = (msg as any).streamId as string;
+          if (streamId) {
+            const { customSectionStreamService } = await import('./customSectionStream.service');
+            customSectionStreamService.handleAgentMessage(
+              conn.deviceId,
+              (msg as any).type,
+              streamId,
+              msg,
+            );
+          }
+        } else if ((msg as any).type === 'metrics_sample') {
+          // Live-mode lightweight metrics (cpu/ram/disks) streamed over
+          // WS while a user is watching this device's detail page.
+          // Forward straight to socket.io as DEVICE_METRICS_PUSHED so
+          // the same client listener handles both HTTP-push samples
+          // and live-WS samples uniformly. NO database write, NO
+          // threshold evaluation — those stay on the heavier HTTP
+          // push pipeline at its configured cadence.
+          const sample = (msg as any).metrics;
+          if (sample && typeof sample === 'object') {
+            try {
+              const { getIO } = await import('../socket');
+              const { SocketEvents } = await import('@obliance/shared');
+              const io = getIO();
+              if (io) {
+                io.to(`tenant:${conn.tenantId}`).emit(SocketEvents.DEVICE_METRICS_PUSHED, {
+                  deviceId: conn.deviceId,
+                  metrics: sample,
+                });
+              }
+            } catch { /* socket not ready — drop the sample */ }
+          }
+        }
+      } catch { /* malformed JSON — ignore */ }
+    });
+
+    // Drain any command queued in the DB while the agent was offline.
+    await this._drainPendingCommand(conn);
+
+    logger.info({ deviceId, deviceUuid }, 'Agent command channel connected');
+  }
+
+  private _unregister(deviceId: number, ws: WebSocket): void {
+    const existing = this.byDevice.get(deviceId);
+    if (existing?.ws === ws) {
+      this.byDevice.delete(deviceId);
+      logger.info({ deviceId }, 'Agent command channel disconnected');
+    }
+  }
+
+  /**
+   * Deliver any command that was queued in agent_devices.pending_command
+   * while the agent was offline. Clears the DB field before delivering so
+   * a crash between clear and send at worst skips one command (safe).
+   */
+  private async _drainPendingCommand(conn: AgentConn): Promise<void> {
+    try {
+      // Up to 5 pending commands queued while the agent was offline, marked
+      // sent before delivering (avoids re-delivery on reconnect races); a
+      // waiting agent update goes through the rollout gate.
+      const { agentUpdateRollout } = await import('./agentUpdateRollout.service');
+      const pending = await agentUpdateRollout.claimPendingCommands(conn.deviceId, { limit: 5 });
+
+      if (!pending.length) return;
+
+      // A claimed agent update that never left (socket closed meanwhile, send
+      // failed) goes back to pending: the device gets it on its next contact
+      // instead of after the 30-min delivery timeout.
+      if (conn.ws.readyState !== 1 /* OPEN */) {
+        await agentUpdateRollout.requeueUndelivered(pending);
+        return;
+      }
+
+      const undelivered: any[] = [];
+      for (const row of pending) {
+        const cmd: HubCommand = {
+          type: 'command',
+          id: row.id,
+          commandType: row.type,
+          payload: row.payload || {},
+        };
+        try { conn.ws.send(JSON.stringify(cmd)); } catch { undelivered.push(row); /* socket closed mid-drain */ }
+      }
+      if (undelivered.length) await agentUpdateRollout.requeueUndelivered(undelivered);
+    } catch (e) {
+      logger.error(e, 'agentHub: failed to drain pending commands');
+    }
+  }
+
+  /**
+   * Handle a heartbeat from an agent on the command channel.
+   * Delegates to agentService.handlePush (same path as the old HTTP push endpoint)
+   * and sends a `{ type: "config", ... }` response with the resolved interval,
+   * latest version, and any one-shot command.
+   */
+  private async _handleHeartbeat(conn: AgentConn, msg: AgentHeartbeat): Promise<void> {
+    try {
+      const response = await deviceService.handlePush(
+        conn.deviceId,
+        conn.tenantId,
+        {
+          deviceUuid: conn.deviceUuid,
+          agentVersion: msg.agentVersion ?? '',
+          metrics: (msg.metrics ?? {}) as any,
+          acks: [],
+        },
+      );
+
+      // Deliver any commands returned by handlePush (it already marked them
+      // 'sent'). An agent update that could not be written to the socket
+      // goes back to pending (next contact, not a 30-min timeout).
+      const commands = (response.commands ?? []) as Array<{ id: string; type: string; payload: any }>;
+      if (conn.ws.readyState !== 1 /* OPEN */ && commands.length) {
+        const { agentUpdateRollout } = await import('./agentUpdateRollout.service');
+        await agentUpdateRollout.requeueUndelivered(commands);
+      }
+      if (conn.ws.readyState === 1 /* OPEN */) {
+        for (let i = 0; i < commands.length; i++) {
+          const cmd = commands[i];
+          const hubCmd: HubCommand = {
+            type: 'command',
+            id: cmd.id,
+            commandType: cmd.type as string,
+            payload: cmd.payload,
+          };
+          try {
+            conn.ws.send(JSON.stringify(hubCmd));
+          } catch {
+            const { agentUpdateRollout } = await import('./agentUpdateRollout.service');
+            await agentUpdateRollout.requeueUndelivered(commands.slice(i));
+            break;
+          }
+        }
+
+        // Config reply so the agent can update its poll interval.
+        const configMsg: Record<string, unknown> = { type: 'config' };
+        if (response.config?.pushIntervalSeconds) {
+          configMsg.checkIntervalSeconds = response.config.pushIntervalSeconds;
+        }
+        if (response.latestVersion) {
+          configMsg.latestVersion = response.latestVersion;
+        }
+        // The socket may have closed mid-reply (a failed command send above):
+        // not an error, the agent's next heartbeat gets the config.
+        try { conn.ws.send(JSON.stringify(configMsg)); } catch { /* socket closed */ }
+      }
+    } catch (e) {
+      logger.error(e, 'agentHub: failed to handle heartbeat');
+    }
+  }
+
+  /**
+   * Handle an ack message received from an agent on the command channel.
+   * All command types are now handled:
+   *   - All acks → update command_queue row + emit COMMAND_RESULT to tenant room
+   *   - open_remote_tunnel failure → additionally mark session failed
+   */
+  private async _handlePrivacyChange(conn: AgentConn, msg: AgentPrivacyNotify): Promise<void> {
+    try {
+      await db('devices').where({ id: conn.deviceId }).update({
+        privacy_mode_enabled: msg.enabled,
+        updated_at: new Date(),
+      });
+      const device = await deviceService.getDeviceById(conn.deviceId, conn.tenantId);
+      if (device) {
+        getIO().to(`tenant:${conn.tenantId}`).emit(SocketEvents.DEVICE_UPDATED, device);
+      }
+      logger.info({ deviceId: conn.deviceId, privacyMode: msg.enabled }, 'Privacy mode changed via WS');
+    } catch (err) {
+      logger.error(err, 'Failed to handle privacy mode change');
+    }
+  }
+
+  private async _handleAck(conn: AgentConn, msg: AgentAck): Promise<void> {
+    if (msg.type !== 'ack') return;
+
+    // request() callers: answered in-process, never touches command_queue. The
+    // ack must come from the device the request was sent to (ids are random,
+    // but a mismatched device is ignored rather than trusted).
+    const waiter = this.pending.get(msg.id);
+    if (waiter && waiter.deviceId === conn.deviceId) {
+      this.pending.delete(msg.id);
+      clearTimeout(waiter.timer);
+      let result = msg.result;
+      if (typeof result === 'string') { try { result = JSON.parse(result); } catch { /* keep raw */ } }
+      waiter.resolve({ success: !!msg.success, result, error: msg.error });
+      return;
+    }
+
+    // Ephemeral process list — never touches the command_queue path (rewind
+    // dispatches carry no DB row; live-poll dispatches have random ids). Handle
+    // BOTH success and failure here and always return, so a failed ack can't
+    // fall through and insert a phantom command_queue row / emit a spurious
+    // COMMAND_RESULT. onProcessAck persists for rewind dispatches and no-ops for
+    // live-viewer polls; calling it with [] on failure just releases the pending
+    // entry immediately (instead of leaking until the 90s TTL).
+    if (msg.commandType === 'list_processes') {
+      let processes: any[] = [];
+      if (msg.success && msg.result) {
+        try {
+          const parsed = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
+          const arr = parsed?.processes ?? parsed;
+          if (Array.isArray(arr)) {
+            processes = arr;
+            processService.broadcast(conn.deviceId, conn.tenantId, processes);
+          }
+        } catch { /* ignore malformed process data */ }
+      }
+      import('./rewindCollector.service')
+        .then(({ rewindCollector }) => rewindCollector.onProcessAck(msg.id, conn.deviceId, conn.tenantId, processes))
+        .catch(() => { /* best-effort */ });
+      return;
+    }
+
+    // File explorer commands — relay to requesting browser socket, skip DB
+    const fileExplorerCmds = ['list_directory', 'create_directory', 'rename_file', 'delete_file', 'download_file', 'upload_file'];
+    if (msg.commandType && fileExplorerCmds.includes(msg.commandType)) {
+      const result = typeof msg.result === 'string' ? JSON.parse(msg.result) : msg.result;
+      fileExplorerService.handleResult(msg.id, msg.success ? 'success' : 'failure', result ?? { error: msg.error }, msg.commandType);
+      return;
+    }
+
+    // Update command in DB and emit socket event for ALL command types
+    try {
+      const status = msg.success ? 'success' : 'failure';
+      await commandService.processAcks(conn.deviceId, conn.tenantId, [{
+        commandId: msg.id,
+        status,
+        result: msg.result ?? (msg.error ? { error: msg.error } : {}),
+      }]);
+    } catch (e) {
+      logger.error(e, 'Failed to process WS command ack');
+    }
+
+    // Special handling: open_remote_tunnel failure → mark session failed,
+    // also when it is already 'active' (a shell tunnel dials the relay BEFORE
+    // spawning the shell, so a ConPTY failure arrives after pairing), with
+    // the agent's error text in end_reason. Only this agent's own sessions —
+    // an agent cannot fail another device's session by echoing a token back.
+    if (msg.commandType === 'open_remote_tunnel' && !msg.success && msg.sessionToken) {
+      try {
+        // Lazy import: remote.service imports this module.
+        const { remoteService } = await import('./remote.service');
+        const updated = await remoteService.failSessionFromCommandAck(msg.sessionToken, conn.deviceId, msg.error);
+        if (updated) {
+          logger.error(
+            { sessionId: updated.id, error: msg.error, deviceId: conn.deviceId },
+            'open_remote_tunnel failed (command channel)',
+          );
+        }
+      } catch (err) {
+        logger.error(err, 'open_remote_tunnel failure ack handling failed');
+      }
+    }
+  }
+
+  /**
+   * Push a command directly to a connected agent.
+   * Returns true if the message was delivered, false if the agent is not
+   * currently connected on the command channel (caller should fall back to
+   * the DB command queue).
+   */
+  push(deviceId: number, cmd: HubCommand): boolean {
+    const conn = this.byDevice.get(deviceId);
+    if (!conn || conn.ws.readyState !== 1 /* OPEN */) return false;
+    try {
+      conn.ws.send(JSON.stringify(cmd));
+      return true;
+    } catch {
+      this._unregister(deviceId, conn.ws);
+      return false;
+    }
+  }
+
+  /**
+   * Send a command over the live WS channel and await the agent's ack.
+   * Live-only (no DB-queue fallback): resolves { success:false } when the
+   * agent is not connected or does not answer within timeoutMs.
+   */
+  request(deviceId: number, commandType: string, payload: Record<string, unknown>, timeoutMs = 20_000): Promise<AgentRequestResult> {
+    const id = 'req_' + crypto.randomBytes(12).toString('hex');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        resolve({ success: false, error: 'agent did not answer in time' });
+      }, timeoutMs);
+      this.pending.set(id, { deviceId, resolve, timer });
+      if (!this.push(deviceId, { type: 'command', id, commandType, payload })) {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        resolve({ success: false, error: 'agent offline' });
+      }
+    });
+  }
+
+  isConnected(deviceId: number): boolean {
+    const conn = this.byDevice.get(deviceId);
+    return !!conn && conn.ws.readyState === 1;
+  }
+
+  connectedCount(): number {
+    return this.byDevice.size;
+  }
+}
+
+export const agentHub = new AgentHubService();

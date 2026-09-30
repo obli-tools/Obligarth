@@ -1,0 +1,30 @@
+# Every text file is stored with LF line endings, whatever the local core.autocrlf
+# (cherry-picks from Obliance, Linux builds).
+* text=auto eol=lf
+
+# Binary files: never converted
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.eot binary
+*.zip binary
+*.gz binary
+*.pdf binary
+*.exe binary
+*.msi binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.jar binary
+*.apk binary
+*.p12 binary
+*.der binary
+*.cer binary

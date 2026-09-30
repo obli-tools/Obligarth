@@ -1,0 +1,276 @@
+import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { TerminalSquare, ShieldCheck, Copy, KeyRound } from 'lucide-react';
+import toast from 'react-hot-toast';
+import { sshBastionApi, apiErrorMessage, type SshBastionInfo } from '@/api/sshBastion.api';
+import { sshConnectCommand } from '@/components/profile/SshKeysSection';
+import { useAuthStore } from '@/store/authStore';
+import { cn } from '@/utils/cn';
+import { copyText } from '@/utils/clipboard';
+import { Drawer } from '@/components/common/Drawer';
+import { IconButton } from '@/components/common/IconButton';
+import { useClickOutside } from '@/hooks/useClickOutside';
+import { useNativeBack } from '@/hooks/useNativeBack';
+
+// ── Header "SSH" button (ObliJump) ──────────────────────────────────────────
+// Authorizes the caller's CURRENT IP to reach the SSH bastion for the tenant
+// "Trust this IP" duration (0 = disabled), after a
+// fresh 2FA code (the api client interceptor prompts and replays). Hidden when
+// the bastion is disabled in .env.
+
+function remaining(iso: string | null): number {
+  return iso ? new Date(iso).getTime() - Date.now() : 0;
+}
+
+export interface SshBastionButtonProps {
+  /** Icon-only trigger (tablet header). */
+  compact?: boolean;
+  /**
+   * Phone header: no trigger button at all — the panel opens as a bottom
+   * sheet, driven by `open` / `onOpenChange` (account menu entry).
+   */
+  sheetOnly?: boolean;
+  /** Controlled open state (optional; uncontrolled by default). */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Reports whether the bastion is enabled (so a menu can show its entry). */
+  onAvailableChange?: (available: boolean) => void;
+}
+
+export function SshBastionButton({
+  compact = false,
+  sheetOnly = false,
+  open: openProp,
+  onOpenChange,
+  onAvailableChange,
+}: SshBastionButtonProps = {}) {
+  const { t } = useTranslation();
+  const { user } = useAuthStore();
+  const [info, setInfo] = useState<SshBastionInfo | null>(null);
+  const [openState, setOpenState] = useState(false);
+  const open = openProp ?? openState;
+  const setOpen = (next: boolean | ((prev: boolean) => boolean)) => {
+    const value = typeof next === 'function' ? next(open) : next;
+    if (openProp === undefined) setOpenState(value);
+    onOpenChange?.(value);
+  };
+  const [busy, setBusy] = useState(false);
+  const [, setTick] = useState(0);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const load = () => sshBastionApi.info().then(setInfo).catch(() => { /* stays hidden */ });
+  useEffect(() => { load(); }, []);
+
+  const available = !!info?.enabled;
+  useEffect(() => { onAvailableChange?.(available); }, [available, onAvailableChange]);
+
+  // Refresh the countdown every minute; refetch when the menu opens (IP may have changed).
+  useEffect(() => {
+    const id = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(id);
+  }, []);
+  useEffect(() => { if (open) load(); }, [open]);
+
+  // Popover: outside tap (pointerdown — mouse, touch, pen), Escape and the
+  // Android back button close it. The phone sheet (Drawer) handles its own.
+  const popoverOpen = open && !sheetOnly;
+  useClickOutside(rootRef, () => setOpen(false), popoverOpen);
+  useNativeBack(() => { setOpen(false); }, popoverOpen, { escape: true });
+
+  if (!info?.enabled) return null;
+
+  const ms = remaining(info.ipAuthorizedUntil);
+  const authorized = ms > 0;
+  const allowlisted = info.gateVia === 'allowlist';
+  // Button duration = tenant "Trust this IP" setting (0 = IP authorization disabled).
+  const grantHours = info.grantHours ?? 24;
+  const duration = grantHours >= 1
+    ? `${Math.round(grantHours * 10) / 10}h`
+    : `${Math.max(1, Math.round(grantHours * 60))} min`;
+  const h = Math.floor(ms / 3_600_000);
+  const m = Math.floor((ms % 3_600_000) / 60_000);
+  const left = h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m}min`;
+
+  const authorize = async () => {
+    setBusy(true);
+    try {
+      await sshBastionApi.authorizeIp();
+      toast.success(t('sshBastion.button.authorized', { duration }) || `This IP can connect over SSH for ${duration}`);
+      await load();
+    } catch (err) {
+      const msg = apiErrorMessage(err, t('sshBastion.button.authorizeFailed') || 'Could not authorize this IP');
+      if (msg) toast.error(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async () => {
+    setBusy(true);
+    try {
+      await sshBastionApi.revokeIp();
+      toast.success(t('sshBastion.button.revoked') || 'SSH authorization revoked for this IP');
+      await load();
+    } catch (err) {
+      const msg = apiErrorMessage(err, t('common.error') || 'Error');
+      if (msg) toast.error(msg);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const command = sshConnectCommand(info, user?.username);
+  // Clipboard API → execCommand → native bridge (plain-http origins and the
+  // Android WebView included); the result is always toasted.
+  const copyCommand = async () => {
+    if (await copyText(command)) toast.success(t('common.copied', 'Copied'));
+    else toast.error(t('sshBastion.button.copyFailed', 'Could not copy — select the command and copy it manually'));
+  };
+  const triggerTitle = authorized
+    ? (t('sshBastion.button.authorizedFor', { time: left }) || `SSH authorized for this IP (${left} left)`)
+    : (t('sshBastion.button.tooltip') || 'SSH bastion access');
+
+  const panelBody = (
+    <>
+          <div>
+            {!sheetOnly && (
+              <p className="text-sm font-semibold text-text-primary">{t('sshBastion.button.title') || 'SSH bastion'}</p>
+            )}
+            <p className="text-xs text-text-muted mt-0.5">
+              {t('sshBastion.button.currentIp') || 'Your IP'}:{' '}
+              <span className="font-mono text-text-secondary">{info.currentIp || '—'}</span>
+            </p>
+          </div>
+
+          {info.ipRelayed ? (
+            <p className="rounded-md border border-red-400/30 bg-red-400/10 px-3 py-2 text-xs text-red-300">
+              {t('sshBastion.button.relayed') || 'Obliance cannot see your real IP (internal relay address): SSH access is impossible from here. Contact an administrator.'}
+            </p>
+          ) : authorized ? (
+            <div className="flex items-center justify-between gap-2 rounded-md bg-status-up/10 px-3 py-2">
+              <span className="flex items-center gap-1.5 text-xs text-status-up">
+                <ShieldCheck size={14} />
+                {t('sshBastion.button.authorizedUntil', { time: new Date(info.ipAuthorizedUntil!).toLocaleString() })
+                  || `Authorized until ${new Date(info.ipAuthorizedUntil!).toLocaleString()}`}
+              </span>
+              <button
+                onClick={revoke}
+                disabled={busy}
+                className="text-xs text-red-400 hover:text-red-300 hover:bg-red-400/10 px-2 py-0.5 rounded disabled:opacity-50 coarse:min-h-10 coarse:px-3"
+              >
+                {t('sshBastion.button.revoke') || 'Revoke'}
+              </button>
+            </div>
+          ) : grantHours <= 0 ? (
+            <p className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-300">
+              {t('sshBastion.button.grantDisabled') || 'IP authorization is disabled on this tenant ("Trust this IP" duration = 0). Ask an administrator to add your IP to the allow-list.'}
+            </p>
+          ) : info.has2fa ? (
+            <div className="space-y-1.5">
+              <button
+                onClick={authorize}
+                disabled={busy}
+                className="w-full rounded-md bg-accent px-3 py-2 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50 coarse:min-h-11"
+              >
+                {t('sshBastion.button.authorize', { duration }) || `Authorize this IP for ${duration}`}
+              </button>
+              <p className="text-[11px] text-text-muted">
+                {t('sshBastion.button.authorizeHint') || 'A two-factor code is requested. Only this IP is authorized, and only for the SSH bastion.'}
+              </p>
+            </div>
+          ) : (
+            <p className="rounded-md border border-amber-400/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-300">
+              {t('sshBastion.button.need2fa') || 'Enable two-factor authentication on your account to authorize an IP.'}
+            </p>
+          )}
+
+          {allowlisted && !authorized && (
+            <p className="flex items-center gap-1.5 rounded-md bg-status-up/10 px-3 py-2 text-xs text-status-up">
+              <ShieldCheck size={14} />
+              {t('sshBastion.button.allowlisted') || 'This IP is in the administrator allow-list: SSH access is open without the button.'}
+            </p>
+          )}
+
+          {!info.enforce && !authorized && (
+            <p className="text-[11px] text-text-muted">
+              {t('sshBastion.button.notEnforced') || 'IP restriction is currently disabled by an administrator: any IP can connect with a valid key.'}
+            </p>
+          )}
+
+          <div className="space-y-1">
+            <p className="text-[11px] font-semibold uppercase tracking-wide text-text-muted">{t('sshBastion.connect.title') || 'Connect'}</p>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 min-w-0 truncate rounded bg-bg-primary px-2 py-1 font-mono text-xs text-text-primary select-all">{command}</code>
+              <IconButton
+                label={t('common.copy', 'Copy')}
+                onClick={copyCommand}
+                size="sm"
+                icon={<Copy size={13} />}
+              />
+            </div>
+            {info.hostKey && (
+              <p className="text-[11px] text-text-muted break-all">
+                {t('sshBastion.connect.fingerprint') || 'Fingerprint'}:{' '}
+                <span className="font-mono text-text-secondary select-all">{info.hostKey.fingerprint}</span>
+              </p>
+            )}
+          </div>
+
+          <Link
+            to="/profile#ssh-keys"
+            onClick={() => {
+              setOpen(false);
+              // Already on /profile: the hash change alone does not scroll.
+              setTimeout(() => document.getElementById('ssh-keys')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+            }}
+            className="flex items-center gap-1.5 text-xs text-accent hover:underline coarse:min-h-10"
+          >
+            <KeyRound size={12} />
+            {t('sshBastion.button.manageKeys') || 'Manage my SSH keys'}
+          </Link>
+    </>
+  );
+
+  // Phone: bottom sheet opened from the header account menu.
+  if (sheetOnly) {
+    return (
+      <Drawer
+        open={open}
+        onClose={() => setOpen(false)}
+        side="bottom"
+        title={t('sshBastion.button.title') || 'SSH bastion'}
+        icon={<TerminalSquare className="h-4 w-4 text-accent" />}
+        bodyClassName="space-y-3 px-4 pb-4 pt-0"
+      >
+        {panelBody}
+      </Drawer>
+    );
+  }
+
+  return (
+    <div ref={rootRef} className="relative">
+      <button
+        onClick={() => setOpen((o) => !o)}
+        className={cn(
+          'flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[13px] font-medium transition-colors',
+          compact && 'px-2 coarse:min-h-10 coarse:min-w-10 coarse:justify-center',
+          authorized || allowlisted ? 'text-status-up hover:bg-bg-hover' : 'text-text-muted hover:bg-bg-hover hover:text-text-primary',
+        )}
+        title={triggerTitle}
+        aria-label={compact ? triggerTitle : undefined}
+        aria-expanded={open}
+      >
+        <TerminalSquare size={compact ? 16 : 14} />
+        {!compact && 'SSH'}
+        {!compact && authorized && <span className="text-[11px] font-normal opacity-80">{left}</span>}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-[22rem] max-w-[calc(100vw-2rem)] max-h-[calc(100dvh-5rem)] supports-[not(height:100dvh)]:max-h-[calc(100vh-5rem)] overflow-y-auto overscroll-contain rounded-lg border border-border bg-bg-secondary p-4 shadow-xl z-50 space-y-3">
+          {panelBody}
+        </div>
+      )}
+    </div>
+  );
+}

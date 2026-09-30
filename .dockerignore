@@ -1,0 +1,30 @@
+node_modules
+**/node_modules
+**/dist
+!agent/dist
+!oblireach-desktop/dist
+.git
+.env
+*.md
+!oblireach-desktop/RELEASE_NOTES.md
+.vscode
+**/*.ps1
+.cache
+
+# Obli mobile (Android): only the release drop zone (manifest.json,
+# RELEASE_NOTES.md, obliance.apk) enters the build context. The Gradle
+# project (mobile/android: sources, local.properties, keystores) never does.
+mobile/*
+!mobile/release
+!mobile/release/RELEASE_NOTES.md
+**/*.jks
+**/*.keystore
+**/.secrets
+
+# Données d'outils locaux et scripts locaux : jamais dans un contexte de build
+.cache
+**/.cache
+**/*.bat
+# Documentation : jamais dans un contexte de build
+docs
+docs-import

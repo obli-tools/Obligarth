@@ -1,0 +1,36 @@
+import { Router } from 'express';
+import { usersController } from '../controllers/users.controller';
+import { requireAuth } from '../middleware/auth';
+import { requireTenantCapability } from '../middleware/rbac';
+import { validate } from '../middleware/validate';
+import {
+  createUserSchema,
+  updateUserSchema,
+  changePasswordSchema,
+} from '../validators/user.schema';
+
+const router = Router();
+
+router.use(requireAuth);
+router.use(requireTenantCapability('users.manage'));
+
+router.get('/', usersController.list);
+router.get('/:id', usersController.getById);
+router.post('/', validate(createUserSchema), usersController.create);
+router.put('/:id', validate(updateUserSchema), usersController.update);
+router.put('/:id/password', validate(changePasswordSchema), usersController.changePassword);
+router.delete('/:id/2fa', usersController.resetMfa);
+// Device-bound 2FA: the account's phones (P1 scope, tenant.manage_users envelope).
+router.get('/:id/device-keys', usersController.listDeviceKeys);
+router.delete('/:id/device-keys/:keyId', usersController.revokeDeviceKeys);
+router.delete('/:id/device-keys', usersController.revokeDeviceKeys);
+router.delete('/:id', usersController.delete);
+
+// Team membership listing
+router.get('/:id/teams', usersController.getTeams);
+
+// Tenant assignment management
+router.get('/:id/tenants', usersController.getTenants);
+router.put('/:id/tenants', usersController.setTenants);
+
+export default router;

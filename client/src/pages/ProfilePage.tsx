@@ -1,0 +1,948 @@
+import { useState, useEffect, useRef, type FormEvent } from 'react';
+import { useTranslation } from 'react-i18next';
+import { User, Save, KeyRound, Bell, CheckCircle2, AlertTriangle, QrCode, Mail, Palette, Monitor, Camera, Trash2, MessageCircle, X } from 'lucide-react';
+import { profileApi } from '@/api/profile.api';
+import { appConfigApi } from '@/api/appConfig.api';
+import { twoFactorApi, type TwoFactorStatus } from '@/api/twoFactor.api';
+import { useAuthStore } from '@/store/authStore';
+import { useLiveAlertsStore } from '@/store/liveAlertsStore';
+import { Button } from '@/components/common/Button';
+import { Input } from '@/components/common/Input';
+import { ThemePicker } from '@/components/ThemePicker';
+import { applyTheme, loadSavedTheme, type AppTheme } from '@/utils/theme';
+import { anonymize } from '@/utils/anonymize';
+import { SUPPORTED_LANGUAGES, setLanguage } from '@/i18n';
+import toast from 'react-hot-toast';
+import { SshKeysSection } from '@/components/profile/SshKeysSection';
+import { DeviceKeysSection, TRUSTED_IPS_CHANGED_EVENT } from '@/components/deviceKeys/DeviceKeysSection';
+import { TotpMobileActions } from '@/components/profile/TotpMobileActions';
+import { PageContainer } from '@/components/common/PageContainer';
+import { IconButton } from '@/components/common/IconButton';
+import { useConfirm } from '@/components/common/ConfirmDialog';
+import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
+import { openExternal } from '@/utils/openExternal';
+import { isStepUpHandled } from '@/api/client';
+
+// A cancelled 2FA / password prompt, or a failure the api client already
+// reported (wrong code, caps, Obligate unreachable), needs no extra toast.
+const isQuietStepUpError = (err: unknown): boolean => isStepUpHandled(err);
+
+// Invisible ≥40px hit area around small hand-rolled switches (touch only).
+const TOUCH_HIT = "coarse:after:absolute coarse:after:-inset-2.5 coarse:after:content-['']";
+
+export function ProfilePage() {
+ const { t } = useTranslation();
+ const coarse = useIsCoarsePointer();
+ const { user: sessionUser, requires2faSetup } = useAuthStore();
+ const [obligateUrl, setObligateUrl] = useState<string | null>(null);
+ // SSO (Obligate) account: its e-mail address is Obligate's, resynced at each
+ // SSO sign-in — read-only here (the server refuses a change: ssoEmailManaged).
+ const isSso = sessionUser?.foreignSource === 'obligate';
+
+ useEffect(() => {
+ if (sessionUser?.foreignSource === 'obligate') {
+ appConfigApi.getConfig().then(cfg => {
+ const url = (cfg as any).obligate_url ?? (cfg as any).obligateUrl ?? null;
+ setObligateUrl(url);
+ }).catch(() => {});
+ }
+ }, [sessionUser]);
+ const { localEnabled: alertEnabled, position: alertPosition, setEnabled, setPosition } = useLiveAlertsStore();
+
+ const [displayName, setDisplayName] = useState('');
+ const [email, setEmail] = useState('');
+ // Address as SAVED on the profile: e-mail sign-in codes always go there.
+ const [savedEmail, setSavedEmail] = useState('');
+ const [preferredLanguage, setPreferredLanguage] = useState('');
+ const [savingProfile, setSavingProfile] = useState(false);
+
+ const [currentPassword, setCurrentPassword] = useState('');
+ const [newPassword, setNewPassword] = useState('');
+ const [confirmPassword, setConfirmPassword] = useState('');
+ const [savingPassword, setSavingPassword] = useState(false);
+
+
+ // Avatar
+ const [avatar, setAvatar] = useState<string | null>(null);
+ const [avatarUploading, setAvatarUploading] = useState(false);
+
+ // Theme state — initialise from localStorage so the picker shows the active theme immediately
+ const [preferredTheme, setPreferredTheme] = useState<AppTheme>(loadSavedTheme);
+
+ // 2FA state
+ const [allow2fa, setAllow2fa] = useState(false);
+ const [tfaStatus, setTfaStatus] = useState<TwoFactorStatus | null>(null);
+
+ // TOTP setup flow
+ const [totpSetupData, setTotpSetupData] = useState<{ secret: string; qrDataUrl: string } | null>(null);
+ const [totpCode, setTotpCode] = useState('');
+ const [totpSaving, setTotpSaving] = useState(false);
+
+ // Email OTP setup flow
+ const [emailSetupStep, setEmailSetupStep] = useState<'idle' | 'entering' | 'sent'>('idle');
+ const [emailInput, setEmailInput] = useState('');
+ const [emailCode, setEmailCode] = useState('');
+ const [emailSaving, setEmailSaving] = useState(false);
+
+ useEffect(() => {
+ profileApi.get().then((profile) => {
+ setDisplayName(profile.displayName || '');
+ setEmail((profile as any).email || '');
+ setSavedEmail((profile as any).email || '');
+ setPreferredLanguage((profile as any).preferredLanguage || '');
+ setAvatar(profile.avatar ?? null);
+ if (profile.preferences?.preferredTheme) {
+ setPreferredTheme(profile.preferences.preferredTheme);
+ applyTheme(profile.preferences.preferredTheme);
+ }
+ });
+ appConfigApi.getConfig().then((cfg) => {
+ setAllow2fa(cfg.allow_2fa === 'true');
+ }).catch(() => {});
+ twoFactorApi.getStatus().then(setTfaStatus).catch(() => {});
+ }, []);
+
+ const handleProfileSubmit = async (e: FormEvent) => {
+ e.preventDefault();
+ setSavingProfile(true);
+ try {
+ await profileApi.update({
+ displayName: displayName || null,
+ ...(isSso ? {} : { email: email || null }),
+ preferredLanguage: preferredLanguage || undefined,
+ });
+ toast.success(t('profile.profileUpdated'));
+ // Re-read: the saved address drives the e-mail code setup below.
+ profileApi.get().then((profile) => setSavedEmail((profile as any).email || '')).catch(() => {});
+ } catch {
+ toast.error(t('profile.failedProfile'));
+ } finally {
+ setSavingProfile(false);
+ }
+ };
+
+ const handlePasswordSubmit = async (e: FormEvent) => {
+ e.preventDefault();
+
+ if (newPassword !== confirmPassword) {
+ toast.error(t('profile.password.mismatch'));
+ return;
+ }
+
+ if (newPassword.length < 6) {
+ toast.error(t('profile.password.tooShort'));
+ return;
+ }
+
+ setSavingPassword(true);
+ try {
+ await profileApi.changePassword(currentPassword, newPassword);
+ toast.success(t('profile.password.changed'));
+ setCurrentPassword('');
+ setNewPassword('');
+ setConfirmPassword('');
+ } catch (err: any) {
+ // Step-up prompt cancelled, or too many wrong passwords / codes (429,
+ // already reported by the API client): no second toast.
+ if (isStepUpHandled(err)) return;
+ const msg = err?.response?.data?.error || t('profile.password.failed');
+ toast.error(msg);
+ } finally {
+ setSavingPassword(false);
+ }
+ };
+
+ const handleAlertToggle = async (enabled: boolean) => {
+ setEnabled(enabled);
+ try {
+ await profileApi.update({ preferences: { toastEnabled: enabled } });
+ } catch {
+ // non-critical, ignore
+ }
+ };
+
+ const handleAlertPosition = async (pos: 'top-center' | 'bottom-right') => {
+ setPosition(pos);
+ try {
+ await profileApi.update({ preferences: { toastPosition: pos } });
+ } catch {
+ // non-critical, ignore
+ }
+ };
+
+ const handleThemeChange = async (theme: AppTheme) => {
+ setPreferredTheme(theme);
+ applyTheme(theme); // apply immediately for live preview
+ try {
+ await profileApi.update({ preferences: { preferredTheme: theme } });
+ toast.success(t('profile.appearance.saved'));
+ } catch {
+ toast.error(t('profile.appearance.failed'));
+ }
+ };
+
+ const [preferredCodec, setPreferredCodec] = useState<string>(sessionUser?.preferences?.preferredCodec || 'h264');
+ const [quickReplies, setQuickReplies] = useState<string[]>(sessionUser?.preferences?.quickReplies || []);
+ const [newReply, setNewReply] = useState('');
+ // Latest list, read by the (touch) undo toast — its closure would
+ // otherwise hold the list as it was when that removal happened.
+ const quickRepliesRef = useRef(quickReplies);
+ quickRepliesRef.current = quickReplies;
+
+ const handleAddReply = async () => {
+ if (!newReply.trim() || quickReplies.length >= 50) return;
+ const updated = [...quickReplies, newReply.trim()];
+ quickRepliesRef.current = updated;
+ setQuickReplies(updated);
+ setNewReply('');
+ try { await profileApi.update({ preferences: { quickReplies: updated } }); } catch {}
+ };
+
+ const handleRemoveReply = async (idx: number) => {
+ const removed = quickReplies[idx];
+ const updated = quickReplies.filter((_, i) => i !== idx);
+ quickRepliesRef.current = updated;
+ setQuickReplies(updated);
+ try { await profileApi.update({ preferences: { quickReplies: updated } }); } catch {}
+ // Touch: removal is one tap away from an accidental tap — offer an undo.
+ if (coarse && removed !== undefined) {
+ toast((tt) => (
+ <span className="flex items-center gap-3">
+ <span>{t('profile.quickReplies.removed', 'Quick reply removed')}</span>
+ <button
+ type="button"
+ className="rounded px-3 py-2 text-sm font-medium text-accent hover:bg-accent/10"
+ onClick={async () => {
+ toast.dismiss(tt.id);
+ // Re-insert only this reply into the CURRENT list (other
+ // removals / additions made since then are kept).
+ const restored = [...quickRepliesRef.current];
+ restored.splice(Math.min(idx, restored.length), 0, removed);
+ quickRepliesRef.current = restored;
+ setQuickReplies(restored);
+ try { await profileApi.update({ preferences: { quickReplies: restored } }); } catch {}
+ }}
+ >
+ {t('profile.quickReplies.undo', 'Undo')}
+ </button>
+ </span>
+ ), { duration: 6000 });
+ }
+ };
+
+ const handleCodecChange = async (codec: string) => {
+ setPreferredCodec(codec);
+ try {
+ await profileApi.update({ preferences: { preferredCodec: codec as any } });
+ toast.success('Codec preference saved');
+ } catch {}
+ };
+
+ const handleLanguageChange = async (code: string) => {
+ setPreferredLanguage(code);
+ setLanguage(code);
+ try {
+ await profileApi.update({ preferredLanguage: code });
+ } catch {
+ // non-critical, ignore
+ }
+ };
+
+ if (sessionUser?.foreignSource === 'obligate' && obligateUrl) {
+ return (
+ <div className="p-3 sm:p-4 lg:p-6 max-w-2xl mx-auto">
+ <div className="bg-bg-secondary rounded-lg p-4 sm:p-6 text-center">
+ <h2 className="text-lg font-medium text-text-primary mb-2">Profile managed by Obligate</h2>
+ <p className="text-sm text-text-secondary mb-4">
+ Your profile, password, and preferences are managed centrally through Obligate SSO.
+ </p>
+ <a
+ href={`${obligateUrl}/account`}
+ target="_blank"
+ rel="noopener noreferrer"
+ onClick={(e) => { e.preventDefault(); void openExternal(`${obligateUrl}/account`); }}
+ className="inline-flex items-center gap-2 px-4 py-2 coarse:py-3 bg-accent hover:bg-accent-hover text-white rounded-md font-medium text-sm transition-colors"
+ >
+ Open Obligate Profile
+ </a>
+ </div>
+ <DeviceKeysSection ssoAccount />
+ <SshKeysSection />
+ </div>
+ );
+ }
+
+ return (
+ <PageContainer>
+ <h1 className="text-2xl font-semibold text-text-primary mb-6">{t('profile.title')}</h1>
+
+ {/* Avatar section */}
+ <div className="mb-8 rounded-lg bg-bg-secondary p-5">
+ <div className="flex items-center gap-4 sm:gap-6">
+ <div className="relative group shrink-0">
+ {avatar ? (
+ <img src={avatar} alt="Avatar" className="w-20 h-20 rounded-full object-cover border-2 border-transparent" />
+ ) : (
+ <div className="w-20 h-20 rounded-full bg-accent/20 flex items-center justify-center border-2 border-transparent">
+ <User size={32} className="text-accent" />
+ </div>
+ )}
+ {/* Hover overlay: mouse only. Touch gets the visible "Change photo" button below. */}
+ <label htmlFor="profile-avatar-input" className="absolute inset-0 rounded-full bg-black/50 opacity-0 group-hover:opacity-100 hidden can-hover:flex items-center justify-center cursor-pointer transition-opacity">
+ <Camera size={20} className="text-white" />
+ </label>
+ <input
+ id="profile-avatar-input"
+ type="file"
+ accept="image/*"
+ className="hidden"
+ onChange={async (e) => {
+ const file = e.target.files?.[0];
+ if (!file) return;
+ if (file.size > 375_000) { toast.error(t('profile.avatar.tooLarge')); return; }
+ const reader = new FileReader();
+ reader.onload = async () => {
+ const dataUri = reader.result as string;
+ setAvatarUploading(true);
+ try {
+ await profileApi.uploadAvatar(dataUri);
+ setAvatar(dataUri);
+ toast.success(t('profile.avatar.updated'));
+ } catch { toast.error(t('profile.avatar.failed')); }
+ finally { setAvatarUploading(false); }
+ };
+ reader.readAsDataURL(file);
+ e.target.value = '';
+ }}
+ />
+ {avatarUploading && (
+ <div className="absolute inset-0 rounded-full bg-black/50 flex items-center justify-center">
+ <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+ </div>
+ )}
+ </div>
+ <div className="space-y-1 min-w-0">
+ <p className="text-sm font-medium text-text-primary">{t('profile.avatar.title')}</p>
+ <p className="text-xs text-text-muted">{t('profile.avatar.hint')}</p>
+ <label
+ htmlFor="profile-avatar-input"
+ className="can-hover:hidden inline-flex items-center gap-1.5 rounded-md bg-bg-tertiary px-3 py-2 text-xs font-medium text-text-primary cursor-pointer"
+ >
+ <Camera size={14} /> {t('profile.avatar.change', 'Change photo')}
+ </label>
+ {avatar && (
+ <button
+ onClick={async () => {
+ try {
+ await profileApi.deleteAvatar();
+ setAvatar(null);
+ toast.success(t('profile.avatar.removed'));
+ } catch { toast.error(t('common.error')); }
+ }}
+ className="flex items-center gap-1 text-xs text-red-400 hover:text-red-300 mt-1 coarse:py-2"
+ >
+ <Trash2 size={12} /> {t('profile.avatar.remove')}
+ </button>
+ )}
+ </div>
+ </div>
+ </div>
+
+ {/* Profile section */}
+ <form onSubmit={handleProfileSubmit} className="mb-8">
+ <div className="rounded-lg bg-bg-secondary p-5 space-y-4">
+ <div className="flex items-center gap-2 mb-2">
+ <User size={18} className="text-accent" />
+ <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
+ {t('profile.sectionProfile')}
+ </h2>
+ </div>
+
+ <div className="space-y-1">
+ <label className="block text-sm font-medium text-text-secondary">{t('profile.usernameLabel')}</label>
+ <p className="text-sm text-text-primary font-mono bg-bg-tertiary rounded-md px-3 py-2">
+ {anonymize(sessionUser?.username)}
+ </p>
+ </div>
+
+ <Input
+ label={t('profile.displayNameLabel')}
+ value={displayName}
+ onChange={(e) => setDisplayName(e.target.value)}
+ placeholder={t('profile.displayNamePlaceholder')}
+ />
+
+ <div>
+ <Input
+ label={t('profile.emailLabel')}
+ type="email"
+ value={email}
+ onChange={(e) => { if (!isSso) setEmail(e.target.value); }}
+ placeholder={isSso ? undefined : t('profile.emailPlaceholder')}
+ readOnly={isSso}
+ aria-readonly={isSso || undefined}
+ className={isSso ? 'cursor-not-allowed opacity-70 focus:ring-0' : undefined}
+ />
+ <p className="mt-1 text-xs text-text-muted">
+ {isSso
+ ? t('profile.ssoEmailManagedHint', 'This address comes from Obligate and is updated at each Obligate sign-in. Change it in your Obligate account.')
+ : t('profile.emailHint')}
+ </p>
+ </div>
+
+ <div className="space-y-1">
+ <label className="block text-sm font-medium text-text-secondary">{t('profile.preferredLanguage')}</label>
+ <select
+ value={preferredLanguage}
+ onChange={(e) => handleLanguageChange(e.target.value)}
+ className="w-full rounded-md bg-bg-tertiary px-3 py-2 text-sm text-text-primary focus:outline-none focus:ring-1 focus:ring-accent"
+ >
+ {SUPPORTED_LANGUAGES.map((lang) => (
+ <option key={lang.code} value={lang.code}>
+ {lang.nativeName} ({lang.name})
+ </option>
+ ))}
+ </select>
+ </div>
+
+ <Button type="submit" loading={savingProfile}>
+ <Save size={16} className="mr-1.5" />
+ {t('profile.saveProfile')}
+ </Button>
+ </div>
+ </form>
+
+ {/* Password section */}
+ {sessionUser?.foreignSource !== 'obligate' && (
+ <form onSubmit={handlePasswordSubmit} className="mb-8">
+ <div className="rounded-lg bg-bg-secondary p-5 space-y-4">
+ <div className="flex items-center gap-2 mb-2">
+ <KeyRound size={18} className="text-accent" />
+ <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
+ {t('profile.password.title')}
+ </h2>
+ </div>
+
+ <Input
+ label={t('profile.password.current')}
+ type="password"
+ value={currentPassword}
+ onChange={(e) => setCurrentPassword(e.target.value)}
+ placeholder={t('profile.password.currentPlaceholder')}
+ required
+ />
+
+ <Input
+ label={t('profile.password.new')}
+ type="password"
+ value={newPassword}
+ onChange={(e) => setNewPassword(e.target.value)}
+ placeholder={t('profile.password.newPlaceholder')}
+ required
+ />
+
+ <Input
+ label={t('profile.password.confirm')}
+ type="password"
+ value={confirmPassword}
+ onChange={(e) => setConfirmPassword(e.target.value)}
+ placeholder={t('profile.password.confirmPlaceholder')}
+ required
+ />
+
+ <Button type="submit" loading={savingPassword}>
+ <KeyRound size={16} className="mr-1.5" />
+ {t('profile.password.change')}
+ </Button>
+ </div>
+ </form>
+ )}
+
+ {/* Appearance section */}
+ <div className="mb-8">
+ <div className="rounded-lg bg-bg-secondary p-5 space-y-4">
+ <div className="flex items-center gap-2 mb-2">
+ <Palette size={18} className="text-accent" />
+ <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
+ {t('profile.appearance.title')}
+ </h2>
+ </div>
+ <p className="text-xs text-text-muted -mt-2">{t('profile.appearance.subtitle')}</p>
+ <ThemePicker value={preferredTheme} onChange={handleThemeChange} />
+ </div>
+ </div>
+
+ {/* Live Alert Notifications section */}
+ <div className="mb-8">
+ <div className="rounded-lg bg-bg-secondary p-5 space-y-4">
+ <div className="flex items-center gap-2 mb-2">
+ <Bell size={18} className="text-accent" />
+ <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide">
+ {t('profile.alerts.title')}
+ </h2>
+ </div>
+
+ {/* Enabled toggle */}
+ <div className="flex items-center justify-between gap-4">
+ <div className="min-w-0">
+ <p className="text-sm font-medium text-text-primary">{t('profile.alerts.enableLabel')}</p>
+ <p className="text-xs text-text-muted mt-0.5">
+ {t('profile.alerts.enableDesc')}
+ </p>
+ </div>
+ <button
+ type="button"
+ onClick={() => handleAlertToggle(!alertEnabled)}
+ aria-label={t('profile.alerts.enableLabel')}
+ className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors focus:outline-none ${TOUCH_HIT} ${
+ alertEnabled ? 'bg-accent' : 'bg-bg-tertiary'
+ }`}
+ aria-pressed={alertEnabled}
+ >
+ <span
+ className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+ alertEnabled ? 'translate-x-6' : 'translate-x-1'
+ }`}
+ />
+ </button>
+ </div>
+
+ {/* Position selector */}
+ <div>
+ <p className="text-sm font-medium text-text-primary mb-2">{t('profile.alerts.positionLabel')}</p>
+ <div className="flex flex-col gap-3">
+ <label className="flex items-start gap-3 cursor-pointer">
+ <input
+ type="radio"
+ name="alertPosition"
+ value="bottom-right"
+ checked={alertPosition === 'bottom-right'}
+ onChange={() => handleAlertPosition('bottom-right')}
+ className="accent-accent mt-0.5 shrink-0 coarse:h-5 coarse:w-5"
+ />
+ <div>
+ <span className="text-sm text-text-primary">{t('profile.alerts.bottomRight')}</span>
+ <p className="text-xs text-text-muted">
+ {t('profile.alerts.bottomRightDesc')}
+ </p>
+ </div>
+ </label>
+ <label className="flex items-start gap-3 cursor-pointer">
+ <input
+ type="radio"
+ name="alertPosition"
+ value="top-center"
+ checked={alertPosition === 'top-center'}
+ onChange={() => handleAlertPosition('top-center')}
+ className="accent-accent mt-0.5 shrink-0 coarse:h-5 coarse:w-5"
+ />
+ <div>
+ <span className="text-sm text-text-primary">{t('profile.alerts.topCenter')}</span>
+ <p className="text-xs text-text-muted">
+ {t('profile.alerts.topCenterDesc')}
+ </p>
+ </div>
+ </label>
+ </div>
+ </div>
+
+ </div>
+ </div>
+
+ {/* Remote Desktop codec preference */}
+ <div>
+ <h2 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+ <Monitor size={18} className="text-accent" />
+ Remote Desktop
+ </h2>
+ <div className="bg-bg-secondary rounded-xl p-5 space-y-3">
+ <div>
+ <label className="text-sm text-text-muted mb-1 block">Preferred video codec</label>
+ <select
+ value={preferredCodec}
+ onChange={e => handleCodecChange(e.target.value)}
+ className="w-full sm:w-64 px-3 py-2 rounded-lg bg-bg-tertiary border border-transparent text-text-primary text-sm"
+ >
+ <option value="h264">H.264 (OpenH264) — Best default</option>
+ <option value="h265">H.265 (HEVC) — Better compression</option>
+ <option value="vp9">VP9 — Good compression</option>
+ <option value="av1">AV1 — Best compression, heavy CPU</option>
+ <option value="jpeg">JPEG — Fallback, low quality</option>
+ </select>
+ <p className="text-xs text-text-muted mt-1">
+ If the selected codec is unavailable on the remote agent, it will automatically fall back to JPEG.
+ </p>
+ </div>
+ </div>
+ </div>
+
+ {/* Quick Replies section */}
+ <div>
+ <h2 className="text-lg font-semibold text-text-primary mb-4 flex items-center gap-2">
+ <MessageCircle size={18} className="text-accent" />
+ Quick Replies
+ </h2>
+ <div className="bg-bg-secondary rounded-xl p-5 space-y-3">
+ <p className="text-xs text-text-muted">
+ Personal quick reply messages for the support chat. These are available alongside your tenant's global templates.
+ </p>
+ {quickReplies.length === 0 && (
+ <p className="text-xs text-text-muted italic">No quick replies yet.</p>
+ )}
+ {quickReplies.map((reply, i) => (
+ <div key={i} className="flex items-center gap-2 bg-bg-tertiary rounded-lg px-3 py-2">
+ {/* Below lg the full text wraps (no hover tooltip to read a truncated reply). */}
+ <span className="flex-1 min-w-0 text-sm text-text-primary lg:truncate max-lg:break-words">{reply}</span>
+ <IconButton
+ label={t('common.delete')}
+ icon={<X size={14} />}
+ size="xs"
+ variant="plain"
+ showTooltip={false}
+ onClick={() => handleRemoveReply(i)}
+ className="p-0 shrink-0 hover:text-red-400"
+ />
+ </div>
+ ))}
+ {quickReplies.length < 50 && (
+ <div className="flex gap-2">
+ <input
+ value={newReply}
+ onChange={e => setNewReply(e.target.value)}
+ onKeyDown={e => e.key === 'Enter' && handleAddReply()}
+ placeholder="Type a quick reply..."
+ maxLength={500}
+ enterKeyHint="done"
+ className="min-w-0 flex-1 px-3 py-2 text-sm bg-bg-tertiary rounded-lg text-text-primary"
+ />
+ <Button onClick={handleAddReply} disabled={!newReply.trim()} size="sm">Add</Button>
+ </div>
+ )}
+ </div>
+ </div>
+
+ {/* Security / 2FA section */}
+ {/* A user who already has a factor always keeps access to it (replace /
+     disable), even when the admin turned "Allow 2FA" off afterwards. */}
+ {(allow2fa || requires2faSetup || !!tfaStatus?.totpEnabled || !!tfaStatus?.emailOtpEnabled) && (
+ <div>
+ <h2 className="text-lg font-semibold text-text-primary mb-4">{t('profile.security.title')}</h2>
+
+ {requires2faSetup && (
+ <div className="mb-4 flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-4">
+ <AlertTriangle size={16} className="text-amber-400 mt-0.5 shrink-0" />
+ <p className="text-sm text-amber-300">
+ {t('profile.security.force2faWarning')}
+ </p>
+ </div>
+ )}
+
+ <div className="rounded-lg bg-bg-secondary divide-y divide-border">
+ {/* TOTP */}
+ <div className="p-5 space-y-3">
+ <div className="flex items-center justify-between">
+ <div className="flex items-center gap-2">
+ <QrCode size={16} className="text-text-muted" />
+ <p className="text-sm font-medium text-text-primary">{t('profile.security.totp')}</p>
+ {tfaStatus?.totpEnabled && <CheckCircle2 size={14} className="text-green-400" />}
+ </div>
+ {tfaStatus?.totpEnabled ? (
+ <Button
+ size="sm"
+ variant="ghost"
+ onClick={async () => {
+ try {
+ await twoFactorApi.totpDisable();
+ setTfaStatus((s) => s ? { ...s, totpEnabled: false } : s);
+ toast.success(t('profile.security.totpDisabled'));
+ } catch (err) { if (!isQuietStepUpError(err)) toast.error(t('profile.security.failedDisableTotp')); }
+ }}
+ >
+ {t('common.disable')}
+ </Button>
+ ) : !totpSetupData ? (
+ <Button
+ size="sm"
+ onClick={async () => {
+ try {
+ const data = await twoFactorApi.totpSetup();
+ setTotpSetupData(data);
+ setTotpCode('');
+ } catch (err) { if (!isQuietStepUpError(err)) toast.error(t('profile.security.failedStartTotp')); }
+ }}
+ >
+ {t('common.enable')}
+ </Button>
+ ) : null}
+ </div>
+
+ {!tfaStatus?.totpEnabled && totpSetupData && (
+ <div className="space-y-3">
+ <p className="text-xs text-text-muted">{t('profile.security.totpScanDesc')}</p>
+ <img src={totpSetupData.qrDataUrl} alt="TOTP QR Code" className="w-40 h-40 rounded-lg" />
+ <p className="text-xs text-text-muted font-mono break-all">{t('profile.security.totpSecret', { secret: totpSetupData.secret })}</p>
+ {/* Touch only: a phone cannot scan its own screen. */}
+ <TotpMobileActions secret={totpSetupData.secret} account={sessionUser?.username} />
+ <div className="flex flex-wrap items-end gap-2">
+ <div className="flex-1 min-w-[8rem]">
+ <Input
+ label={t('profile.security.verificationCode')}
+ type="text"
+ inputMode="numeric"
+ autoComplete="one-time-code"
+ value={totpCode}
+ onChange={(e) => setTotpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+ placeholder="000000"
+ />
+ </div>
+ <Button
+ disabled={totpCode.length !== 6 || totpSaving}
+ loading={totpSaving}
+ onClick={async () => {
+ setTotpSaving(true);
+ try {
+ await twoFactorApi.totpEnable(totpCode);
+ setTfaStatus((s) => s ? { ...s, totpEnabled: true } : s);
+ setTotpSetupData(null);
+ setTotpCode('');
+ toast.success(t('profile.security.totpEnabled'));
+ } catch (err) {
+ if ((err as { response?: { status?: number } } | null)?.response?.status === 409) {
+ // Another session enabled an authenticator meanwhile.
+ toast.error(t('profile.security.totpChangedRestart', 'Two-factor authentication was enabled in the meantime. Start again.'));
+ setTotpSetupData(null);
+ setTotpCode('');
+ twoFactorApi.getStatus().then(setTfaStatus).catch(() => {});
+ } else {
+ toast.error(t('profile.security.invalidCode'));
+ }
+ }
+ finally { setTotpSaving(false); }
+ }}
+ >
+ {t('common.confirm')}
+ </Button>
+ <Button variant="ghost" onClick={() => { setTotpSetupData(null); setTotpCode(''); }}>{t('common.cancel')}</Button>
+ </div>
+ </div>
+ )}
+ </div>
+
+ {/* Email OTP */}
+ <div className="p-5 space-y-3">
+ <div className="flex flex-wrap items-center justify-between gap-2">
+ <div className="flex flex-wrap items-center gap-2 min-w-0">
+ <Mail size={16} className="text-text-muted" />
+ <p className="text-sm font-medium text-text-primary">{t('profile.security.emailOtp')}</p>
+ {tfaStatus?.emailOtpEnabled && (
+ <>
+ <CheckCircle2 size={14} className="text-green-400" />
+ <span className="text-xs text-text-muted min-w-0 break-all">{tfaStatus.email}</span>
+ </>
+ )}
+ </div>
+ {tfaStatus?.emailOtpEnabled ? (
+ <Button
+ size="sm"
+ variant="ghost"
+ onClick={async () => {
+ try {
+ await twoFactorApi.emailDisable();
+ setTfaStatus((s) => s ? { ...s, emailOtpEnabled: false, email: null } : s);
+ toast.success(t('profile.security.emailOtpDisabled'));
+ } catch (err) { if (!isQuietStepUpError(err)) toast.error(t('profile.security.failedDisableEmailOtp')); }
+ }}
+ >
+ {t('common.disable')}
+ </Button>
+ ) : emailSetupStep === 'idle' ? (
+ <Button size="sm" onClick={() => setEmailSetupStep('entering')}>{t('common.enable')}</Button>
+ ) : null}
+ </div>
+
+ {!tfaStatus?.emailOtpEnabled && emailSetupStep === 'entering' && (
+ <div className="space-y-3">
+ {/* Codes go to the address SAVED on the profile (changed in the
+ profile section above, under the tenant's profile policy). */}
+ {savedEmail ? (
+ <p className="text-xs text-text-muted">
+ {t('profile.security.codesSentTo', 'Codes will be sent to the address of your profile:')}{' '}
+ <span className="text-text-primary break-all">{savedEmail}</span>
+ </p>
+ ) : (
+ <p className="text-xs text-amber-400">
+ {t('profile.security.emailRequired', 'Add an e-mail address to your profile (above) and save it first.')}
+ </p>
+ )}
+ <div className="flex gap-2">
+ <Button
+ disabled={!savedEmail || emailSaving}
+ loading={emailSaving}
+ onClick={async () => {
+ setEmailSaving(true);
+ try {
+ await twoFactorApi.emailSetup(savedEmail);
+ setEmailInput(savedEmail);
+ setEmailSetupStep('sent');
+ toast.success(t('profile.security.codeSent'));
+ } catch (err) { if (!isQuietStepUpError(err)) toast.error(t('profile.security.failedSendCode')); }
+ finally { setEmailSaving(false); }
+ }}
+ >
+ {t('profile.security.sendCode')}
+ </Button>
+ <Button variant="ghost" onClick={() => { setEmailSetupStep('idle'); setEmailInput(''); setEmailCode(''); }}>{t('common.cancel')}</Button>
+ </div>
+ </div>
+ )}
+
+ {!tfaStatus?.emailOtpEnabled && emailSetupStep === 'sent' && (
+ <div className="space-y-3">
+ <p className="text-xs text-text-muted">{t('profile.security.enterCode', { email: emailInput })}</p>
+ <div className="flex flex-wrap items-end gap-2">
+ <div className="flex-1 min-w-[8rem]">
+ <Input
+ label={t('profile.security.verificationCode')}
+ type="text"
+ inputMode="numeric"
+ autoComplete="one-time-code"
+ value={emailCode}
+ onChange={(e) => setEmailCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+ placeholder="000000"
+ autoFocus
+ />
+ </div>
+ <Button
+ disabled={emailCode.length !== 6 || emailSaving}
+ loading={emailSaving}
+ onClick={async () => {
+ setEmailSaving(true);
+ try {
+ await twoFactorApi.emailEnable(emailCode);
+ const status = await twoFactorApi.getStatus();
+ setTfaStatus(status);
+ setEmailSetupStep('idle');
+ setEmailInput('');
+ setEmailCode('');
+ toast.success(t('profile.security.emailOtpEnabled'));
+ } catch (err) {
+ const status = (err as { response?: { status?: number } } | null)?.response?.status;
+ toast.error(status === 409
+ ? t('profile.security.emailChangedRestart', 'Your e-mail address changed during the setup. Start again.')
+ : t('profile.security.invalidCode'));
+ if (status === 409) { setEmailSetupStep('idle'); setEmailCode(''); }
+ }
+ finally { setEmailSaving(false); }
+ }}
+ >
+ {t('common.confirm')}
+ </Button>
+ <Button variant="ghost" onClick={() => { setEmailSetupStep('idle'); setEmailInput(''); setEmailCode(''); }}>{t('common.cancel')}</Button>
+ </div>
+ </div>
+ )}
+ </div>
+ </div>
+ </div>
+ )}
+
+ <TrustedIpsSection />
+ <DeviceKeysSection />
+ <SshKeysSection />
+ </PageContainer>
+ );
+}
+
+// ── Trusted IPs for 2FA step-up ───────────────────────────────────────────
+// Admins can see which IPs currently skip their TOTP prompt for sensitive
+// actions, and revoke them individually or all at once. Entries live 24h
+// after a successful step-up where the user explicitly ticked the
+// "Trust this IP" box in the TOTP modal.
+
+function TrustedIpsSection() {
+ const { t } = useTranslation();
+ const confirm = useConfirm();
+ const [items, setItems] = useState<{ ip: string; trustedUntil: string; createdAt: string }[]>([]);
+ const [loading, setLoading] = useState(true);
+
+ const load = async () => {
+ setLoading(true);
+ try { setItems(await profileApi.listTrustedIps()); }
+ finally { setLoading(false); }
+ };
+ useEffect(() => { load(); }, []);
+ // A phone revocation forgets every trusted IP of the account (§6.7).
+ useEffect(() => {
+ const onChange = () => { void load(); };
+ window.addEventListener(TRUSTED_IPS_CHANGED_EVENT, onChange);
+ return () => window.removeEventListener(TRUSTED_IPS_CHANGED_EVENT, onChange);
+ }, []);
+
+ const revokeOne = async (ip: string) => {
+ if (!(await confirm({
+ message: t('profile.trustedIps.confirmRevoke', { defaultValue: 'Revoke trust for {{ip}}? The next sensitive action from this IP will prompt for TOTP again.', ip }),
+ danger: true,
+ confirmLabel: t('profile.trustedIps.revoke', 'Revoke'),
+ }))) return;
+ await profileApi.revokeTrustedIp(ip);
+ await load();
+ };
+ const revokeAll = async () => {
+ if (!(await confirm({
+ message: t('profile.trustedIps.confirmRevokeAll', 'Revoke trust for ALL IPs? Every sensitive action will prompt for TOTP again until you re-opt-in.'),
+ danger: true,
+ confirmLabel: t('profile.trustedIps.revokeAll', 'Revoke all'),
+ }))) return;
+ await profileApi.revokeAllTrustedIps();
+ await load();
+ };
+
+ const fmt = (iso: string) => {
+ const ms = new Date(iso).getTime() - Date.now();
+ if (ms <= 0) return 'expired';
+ const h = Math.floor(ms / 3600000);
+ const m = Math.floor((ms % 3600000) / 60000);
+ return h > 0 ? `${h}h ${m}m` : `${m}m`;
+ };
+
+ return (
+ <div className="mt-8 bg-bg-secondary rounded-xl p-4 sm:p-6">
+ <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+ <div className="min-w-0">
+ <h2 className="text-lg font-semibold text-text-primary">Trusted IPs (2FA)</h2>
+ <p className="text-xs text-text-muted mt-0.5">
+ IPs where you ticked "Trust this IP for 24h" on a sensitive-action TOTP prompt. Sensitive actions from these IPs skip the prompt until expiry.
+ </p>
+ </div>
+ {items.length > 0 && (
+ <button
+ onClick={revokeAll}
+ className="text-xs px-2.5 py-1 coarse:px-3 coarse:py-2 rounded border border-red-400/30 text-red-400 hover:bg-red-400/10"
+ >
+ Revoke all
+ </button>
+ )}
+ </div>
+ {loading ? (
+ <p className="text-sm text-text-muted italic">Loading…</p>
+ ) : items.length === 0 ? (
+ <p className="text-sm text-text-muted italic">No trusted IPs. Every sensitive action will ask for a TOTP code.</p>
+ ) : (
+ <div className="space-y-1">
+ {items.map((it) => (
+ <div key={it.ip} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 rounded/50 bg-bg-tertiary/30 text-xs">
+ <span className="font-mono text-text-primary truncate flex-1 min-w-0">{it.ip}</span>
+ <span className="text-text-muted">expires in {fmt(it.trustedUntil)}</span>
+ <button
+ onClick={() => revokeOne(it.ip)}
+ className="text-red-400 hover:text-red-300 hover:bg-red-400/10 px-2 py-0.5 coarse:px-3 coarse:py-2 rounded"
+ >
+ Revoke
+ </button>
+ </div>
+ ))}
+ </div>
+ )}
+ </div>
+ );
+}

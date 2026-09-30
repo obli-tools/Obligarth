@@ -1,0 +1,60 @@
+# =============================================================================
+# Obligarth : LISTE BLANCHE (dépôt public).
+# Règle des propriétaires : rien de ce qui n'est pas indispensable au build ne va
+# sur GitHub. Tout est ignoré par défaut ; seuls les fichiers nécessaires pour
+# construire et installer le produit sont ré-autorisés ci-dessous.
+# Avant d'ajouter une ligne « ! », vérifier qu'elle n'apporte ni documentation,
+# ni script interne, ni capture, ni donnée réelle.
+# =============================================================================
+
+# 1. Tout ignorer à la racine...
+/*
+
+# 2. ...sauf ce qui sert au build
+!/.gitignore
+!/.gitattributes
+!/.dockerignore
+!/package.json
+!/package-lock.json
+!/shared/
+!/server/
+!/client/
+!/docker-compose.build.yml
+
+# ...et à l'installation : install.sh télécharge docker-compose.yml et
+# .env.example depuis GitHub (voir la fin du fichier pour .env.example)
+!/install.sh
+!/docker-compose.yml
+
+# 3. Jamais versionnés, même dans les dossiers autorisés
+docs/
+*.md
+*.bat
+*.cmd
+*.ps1
+.cache/
+.secrets/
+*.jks
+*.keystore
+
+# Tests et jeux de données de test : restent locaux (non indispensables au build)
+*.test.*
+*.spec.*
+__tests__/
+testdata/
+test-resolve.mjs
+
+# Artefacts et fichiers locaux
+node_modules/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.env
+.env.*
+!/.env.example

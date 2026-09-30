@@ -1,0 +1,98 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: obliance
+      POSTGRES_USER: obliance
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    # RMM ingestion tuning — see docker-compose.yml for rationale. Scale
+    # shared_buffers≈25% / effective_cache_size≈75% of host RAM. Keep
+    # max_connections above knexfile.ts pool.max + session pool + headroom.
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+      - "-c"
+      - "shared_buffers=2GB"
+      - "-c"
+      - "effective_cache_size=6GB"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=512MB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "wal_compression=on"
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.02"
+      - "-c"
+      - "autovacuum_analyze_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_vacuum_cost_delay=2ms"
+      - "-c"
+      - "autovacuum_naptime=15s"
+      - "-c"
+      - "autovacuum_max_workers=4"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U obliance"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://obliance:${DB_PASSWORD:-changeme}@postgres:5432/obliance
+      SESSION_SECRET: ${SESSION_SECRET:-change-this-in-production}
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
+      # Public URL of this instance (e-mail links, trusted SSO origin, phone enrolment) — see .env.example
+      APP_URL: ${APP_URL:-}
+      DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      # Device-bound 2FA (fingerprint validation from the Android app) — see .env.example
+      DEVICE_KEYS_DISABLED: ${DEVICE_KEYS_DISABLED:-false}
+      DEVICE_KEY_ORIGINS: ${DEVICE_KEY_ORIGINS:-}
+      DEVICE_KEY_APP_IDS: ${DEVICE_KEY_APP_IDS:-}
+      DEVICE_KEY_APP_SIGNERS: ${DEVICE_KEY_APP_SIGNERS:-}
+      DEVICE_KEY_BINDING_SECRET: ${DEVICE_KEY_BINDING_SECRET:-}
+      DEVICE_KEYS_SSO_ENABLED: ${DEVICE_KEYS_SSO_ENABLED:-false}
+      # Obligate: optional distinct inbound secret (empty = Settings value / the API key) — see .env.example
+      OBLIGATE_INBOUND_SECRET: ${OBLIGATE_INBOUND_SECRET:-}
+      # Delegated reads from sibling apps (empty = oblidesk only, platform-admin subjects refused) — see .env.example
+      OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-}
+      OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
+    volumes:
+      # Persistent custom directory: scripts, SSH keys, etc.
+      # SSH keys: chmod 700 custom/.ssh && chmod 600 custom/.ssh/id_*
+      - ${CUSTOM_DIR:-./custom}:/custom
+
+  client:
+    build:
+      context: .
+      dockerfile: client/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      server:
+        condition: service_healthy
+    ports:
+      - "${LISTEN_PORT:-3000}:80"
+
+volumes:
+  postgres_data:

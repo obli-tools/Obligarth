@@ -1,0 +1,174 @@
+import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
+import { Package, ShieldCheck, BarChart3, Loader2, ListChecks, Activity, Bell, Bug } from 'lucide-react';
+import { UpdatesPage } from './UpdatesPage';
+import { CompliancePage } from './CompliancePage';
+import { SoftwareCompliancePage } from './SoftwareCompliancePage';
+import { TenantThresholdsTab } from './TenantThresholdsTab';
+import { NotificationsPage } from './NotificationsPage';
+import { CvesPage } from './CvesPage';
+import { updateApi } from '@/api/update.api';
+import { useAuthStore } from '@/store/authStore';
+import type { PatchComplianceReport } from '@obliance/shared';
+import { clsx } from 'clsx';
+import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedTabs';
+import { TableScroll } from '@/components/common/TableScroll';
+import { PageContainer } from '@/components/common/PageContainer';
+
+type Tab = 'updates' | 'compliance' | 'software' | 'cves' | 'patchReport' | 'thresholds' | 'notifications';
+
+// ─── Patch Report Tab ────────────────────────────────────────────────────────
+
+function PatchReportTab() {
+ const { t } = useTranslation();
+ const [report, setReport] = useState<PatchComplianceReport | null>(null);
+ const [isLoading, setIsLoading] = useState(true);
+
+ useEffect(() => {
+ updateApi.getComplianceReport().then(r => { setReport(r); setIsLoading(false); }).catch(() => setIsLoading(false));
+ }, []);
+
+ if (isLoading) return (
+ <div className="flex items-center justify-center py-12">
+ <Loader2 className="w-6 h-6 animate-spin text-text-muted" />
+ </div>
+ );
+ if (!report) return <div className="text-center text-text-muted py-12">{t('patchReport.noData', 'No data available')}</div>;
+
+ return (
+ <div className="space-y-6">
+ {/* Big number */}
+ <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+ <div className="text-center">
+ <div className={clsx('text-4xl font-bold tabular-nums', report.fullyPatchedPercent >= 80 ? 'text-green-400' : report.fullyPatchedPercent >= 50 ? 'text-yellow-400' : 'text-red-400')}>
+ {report.fullyPatchedPercent.toFixed(0)}%
+ </div>
+ <div className="text-xs text-text-muted mt-1">{t('patchReport.fleetCompliance', 'Fleet Patch Compliance')}</div>
+ </div>
+ <div className="text-sm text-text-muted">
+ {t('patchReport.fullyPatched', { patched: report.fullyPatchedDevices, total: report.totalDevices, defaultValue: '{{patched}} / {{total}} devices fully patched' })}
+ </div>
+ </div>
+
+ {/* Severity bars */}
+ <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+ {report.bySeverity.map(s => (
+ <div key={s.severity} className="p-3 bg-bg-secondary rounded-xl">
+ <div className="flex justify-between text-xs mb-1">
+ <span className="text-text-muted capitalize">{s.severity}</span>
+ <span className="font-medium">{s.percent.toFixed(0)}%</span>
+ </div>
+ <div className="h-2 bg-bg-tertiary rounded-full overflow-hidden">
+ <div className={clsx('h-full rounded-full', s.percent >= 80 ? 'bg-green-400' : s.percent >= 50 ? 'bg-yellow-400' : 'bg-red-400')} style={{ width: `${s.percent}%` }} />
+ </div>
+ <div className="text-[10px] text-text-muted mt-1">{t('patchReport.patchedOfTotal', { patched: s.patched, total: s.total, defaultValue: '{{patched}}/{{total}} devices' })}</div>
+ </div>
+ ))}
+ </div>
+
+ {/* Per-group table */}
+ {report.byGroup.length > 0 && (
+ <TableScroll className="bg-bg-secondary rounded-xl">
+ <table className="w-full text-sm min-w-[420px]">
+ <thead><tr className=" bg-bg-tertiary/50">
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colGroup', 'Group')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colDevices', 'Devices')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colPatched', 'Patched')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colCompliance', 'Compliance')}</th>
+ </tr></thead>
+ <tbody>{report.byGroup.map(g => (
+ <tr key={g.groupId ?? 'ungrouped'} className="">
+ <td className="px-4 py-2 text-text-primary">{g.groupName ?? t('patchReport.ungrouped', 'Ungrouped')}</td>
+ <td className="px-4 py-2 text-text-muted">{g.total}</td>
+ <td className="px-4 py-2 text-text-muted">{g.patched}</td>
+ <td className="px-4 py-2">
+ <div className="flex items-center gap-2">
+ <div className="w-20 h-1.5 bg-bg-tertiary rounded-full overflow-hidden">
+ <div className={clsx('h-full rounded-full', g.percent >= 80 ? 'bg-green-400' : g.percent >= 50 ? 'bg-yellow-400' : 'bg-red-400')} style={{ width: `${g.percent}%` }} />
+ </div>
+ <span className="text-xs font-medium">{g.percent.toFixed(0)}%</span>
+ </div>
+ </td>
+ </tr>
+ ))}</tbody>
+ </table>
+ </TableScroll>
+ )}
+
+ {/* Per-update table (top 50) */}
+ {report.byUpdate.length > 0 && (
+ <TableScroll className="bg-bg-secondary rounded-xl">
+ <table className="w-full text-sm min-w-[560px]">
+ <thead><tr className=" bg-bg-tertiary/50">
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colUpdate', 'Update')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colSeverity', 'Severity')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colDevices', 'Devices')}</th>
+ <th className="text-left px-4 py-2 text-xs text-text-muted uppercase">{t('patchReport.colPatched', 'Patched')}</th>
+ </tr></thead>
+ <tbody>{report.byUpdate.map(u => (
+ <tr key={u.updateUid} className="">
+ <td className="px-4 py-2 text-text-primary truncate max-w-[300px] max-lg:whitespace-normal max-lg:[overflow-wrap:anywhere] coarse:whitespace-normal coarse:[overflow-wrap:anywhere]">{u.title}</td>
+ <td className="px-4 py-2"><span className={clsx('text-xs capitalize', u.severity === 'critical' ? 'text-red-400' : u.severity === 'important' ? 'text-orange-400' : 'text-text-muted')}>{u.severity}</span></td>
+ <td className="px-4 py-2 text-text-muted">{u.totalDevices}</td>
+ <td className="px-4 py-2">
+ <span className={clsx('text-xs font-medium', u.percent >= 80 ? 'text-green-400' : u.percent >= 50 ? 'text-yellow-400' : 'text-red-400')}>
+ {u.patchedDevices}/{u.totalDevices} ({u.percent.toFixed(0)}%)
+ </span>
+ </td>
+ </tr>
+ ))}</tbody>
+ </table>
+ </TableScroll>
+ )}
+ </div>
+ );
+}
+
+// ─── Policies Page ───────────────────────────────────────────────────────────
+
+export function PoliciesPage() {
+ const { t } = useTranslation();
+ const [searchParams] = useSearchParams();
+ const initialTab = (searchParams.get('tab') as Tab) || 'updates';
+ const [tab, setTab] = useState<Tab>(initialTab);
+ const { isAdmin, permissions } = useAuthStore();
+
+ // "Seuils" + "Notifications" tabs are admin-only — non-admin users
+ // would have nothing to do here (the editor is disabled below the
+ // role check anyway, and the resolved cascade is exposed via the
+ // device/group editors they already see). Notifications used to
+ // live under /admin/users; it's an operational concern (channels +
+ // bindings on monitoring/automations) so it fits this page better.
+ //
+ // CVE tab is gated on the dedicated `cve:read` capability — the data
+ // leaks sensitive infrastructure detail (active CVE on which product
+ // version) and we don't want every operator to discover it by
+ // default. Admins bypass via their role flag, non-admins must be
+ // explicitly granted the cap from the PermissionSets matrix.
+ const canSeeCves = isAdmin() || (permissions?.tenantCapabilities ?? []).includes('cve:read');
+
+ const tabs: SegmentedTab<Tab>[] = [
+ { id: 'updates', label: t('policies.tabUpdates'), icon: <Package size={16} /> },
+ { id: 'compliance', label: t('policies.tabCompliance'), icon: <ShieldCheck size={16} /> },
+ { id: 'software', label: t('policies.tabSoftware'), icon: <ListChecks size={16} /> },
+ ...(canSeeCves ? [{ id: 'cves' as Tab, label: t('policies.tabCves', 'CVE'), icon: <Bug size={16} /> }] : []),
+ { id: 'patchReport', label: t('patchReport.tabLabel', 'Patch Report'), icon: <BarChart3 size={16} /> },
+ ...(isAdmin() ? [{ id: 'notifications' as Tab, label: t('policies.tabNotifications', 'Notifications'), icon: <Bell size={16} /> }] : []),
+ ...(isAdmin() ? [{ id: 'thresholds' as Tab, label: t('policies.tabThresholds', 'Seuils'), icon: <Activity size={16} /> }] : []),
+ ];
+
+ return (
+ <PageContainer className="space-y-6">
+ <h1 className="text-2xl font-bold text-text-primary">{t('policies.title')}</h1>
+ <SegmentedTabs tabs={tabs} value={tab} onChange={setTab} ariaLabel={t('policies.title')} />
+ {tab === 'updates' && <UpdatesPage embedded />}
+ {tab === 'compliance' && <CompliancePage embedded />}
+ {tab === 'software' && <SoftwareCompliancePage embedded />}
+ {tab === 'cves' && canSeeCves && <CvesPage embedded />}
+ {tab === 'patchReport' && <PatchReportTab />}
+ {tab === 'notifications' && isAdmin() && <NotificationsPage embedded />}
+ {tab === 'thresholds' && isAdmin() && <TenantThresholdsTab />}
+ </PageContainer>
+ );
+}
