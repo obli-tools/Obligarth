@@ -436,24 +436,6 @@ router.post('/services', agentAuth, async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// ── GET /api/agent/software-repo/:uuid — agent downloads an internal repo package ──
-router.get('/software-repo/:uuid', agentAuth, async (req, res, next) => {
-  try {
-    const { softwareRepoService } = await import('../services/softwareRepo.service');
-    // Honour the per-tenant depot toggle: a disabled depot blocks agent
-    // downloads too (disable = block upload AND download).
-    const agentTenantId = (req as any).agentTenantId as number | undefined;
-    if (agentTenantId && !(await softwareRepoService.isEnabled(agentTenantId))) {
-      return res.status(403).json({ error: 'Software repository is disabled for this tenant' });
-    }
-    const result = await softwareRepoService.getFilePath(req.params.uuid);
-    if (!result) return res.status(404).json({ error: 'Package not found' });
-    res.set('Content-Disposition', `attachment; filename="${result.filename}"`);
-    res.set('Content-Type', result.mimeType);
-    res.sendFile(result.filePath);
-  } catch (err) { next(err); }
-});
-
 // ── DELETE /api/agent/self — agent-initiated self-removal (uninstall flow) ────
 router.delete('/self', agentAuth, async (req, res, next) => {
   try {
