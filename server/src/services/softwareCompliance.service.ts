@@ -444,8 +444,8 @@ class SoftwareComplianceService {
   // ─── Scheduled checks ────────────────────────────────────────────────────
   /**
    * Run software compliance checks for all enabled lists across all tenants.
-   * Called periodically by index.ts (default every 6h).
-   * Skips devices that were already checked within the interval.
+   * Called periodically by a start task of modules/rmm.ts (default every
+   * 6h). Skips devices that were already checked within the interval.
    */
   async runScheduledChecks(intervalMs: number) {
     const lists = await db('software_compliance_lists').where({ enabled: true });

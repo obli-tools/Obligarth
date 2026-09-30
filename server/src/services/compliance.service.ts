@@ -190,8 +190,8 @@ class ComplianceService {
   // ─── Scheduled checks ────────────────────────────────────────────────────
   /**
    * Run compliance checks for all enabled policies across all tenants.
-   * Called periodically by index.ts (default every 6h).
-   * Skips devices that were already checked within the interval.
+   * Called periodically by a start task of modules/rmm.ts (default every
+   * 6h). Skips devices that were already checked within the interval.
    */
   async runScheduledChecks(intervalMs: number) {
     const policies = await db('compliance_policies').where({ enabled: true });

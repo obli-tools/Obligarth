@@ -7,9 +7,9 @@ import type { RestrictionLevel } from './restriction.service';
  * File explorer gate — who may send an explorer command to which device, and
  * the tenant's action restrictions on those commands.
  *
- * Used by the socket.io FILE_EXPLORER_CMD channel (socket.ts: the web's
- * FileExplorerTab and the Oblireach Desktop explorer) and by the REST step-up
- * route POST /api/files/:deviceId/files/step-up (file.routes.ts).
+ * Used by the socket.io FILE_EXPLORER_CMD channel (fileExplorer.socket.ts:
+ * the web's FileExplorerTab and the Oblireach Desktop explorer) and by the
+ * REST step-up route POST /api/files/:deviceId/files/step-up (file.routes.ts).
  *
  * Authorization is PER DEVICE, not the tenant frozen at the socket handshake
  * (the Desktop's multi-server socket, a tenant switch, the master god view):

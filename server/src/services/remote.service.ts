@@ -39,7 +39,7 @@ interface TunnelEntry {
   /** sha256 of the express-session id that attached the browser end (the
    *  upgrade cookie): a revocation deleting that session closes the relay. */
   browserSessionHash?: string;
-  /** The browser end is a real WebSocket (index.ts upgrade), not an
+  /** The browser end is a real WebSocket (remoteTunnel.upgrade.ts), not an
    *  in-process bastion adapter: only those get the relay's JSON notices
    *  ({"type":"waiting"}, {"type":"error",…}) — an adapter treats its first
    *  send() as "paired". */

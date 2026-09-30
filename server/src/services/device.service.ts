@@ -2402,10 +2402,10 @@ class DeviceService {
   }
 
   // ─── Hourly snapshot job ─────────────────────────────────────────────────
-  // Called once per hour by the cron in index.ts. Writes one row per tenant
-  // in fleet_hourly_snapshot, used by the dashboard "Activité du parc" 24h
-  // view. Retention is 7 days — older rows are pruned in the same job so
-  // the table stays small (~168 rows per tenant max).
+  // Called once per hour by a start task of modules/rmm.ts. Writes one row
+  // per tenant in fleet_hourly_snapshot, used by the dashboard "Activité du
+  // parc" 24h view. Retention is 7 days — older rows are pruned in the same
+  // job so the table stays small (~168 rows per tenant max).
   async snapshotFleetHourly() {
     try {
       // Round to the current hour boundary so onConflict-merge keeps a
@@ -2494,9 +2494,9 @@ class DeviceService {
   }
 
   // ─── Daily snapshot job ──────────────────────────────────────────────────
-  // Called once a day by the cron in index.ts. Writes one row per tenant in
-  // fleet_daily_snapshot, used by the dashboard for week-over-week deltas
-  // and for the "Activité du parc" timeseries chart.
+  // Called once a day by a start task of modules/rmm.ts. Writes one row per
+  // tenant in fleet_daily_snapshot, used by the dashboard for week-over-week
+  // deltas and for the "Activité du parc" timeseries chart.
   async snapshotFleetDaily() {
     try {
       const today = new Date().toISOString().slice(0, 10);

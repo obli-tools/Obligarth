@@ -249,7 +249,8 @@ class ObliReachHubService {
             } catch {}
           }
           // Persist to DB — under the device's tenant, like the operator's
-          // messages (socket.ts), so a resumed chat shows the whole exchange.
+          // messages (oblireachChat.socket.ts), so a resumed chat shows the
+          // whole exchange.
           try {
             await db('chat_messages').insert({
               chat_id: msg.chatId,
@@ -377,10 +378,10 @@ class ObliReachHubService {
   private async _handleHeartbeat(conn: ObliReachConn, msg: any): Promise<void> {
     const { hostname, os, arch, version, sessions } = msg;
     // SECURITY: a channel reports for ITS device only (the uuid it registered
-    // with, whose API-key binding was checked at the upgrade — index.ts).
-    // A heartbeat naming another uuid would let one agent rewrite another
-    // device's row of its tenant (sessions shown to operators, last_seen_at
-    // keeping a dead agent "online"): dropped.
+    // with, whose API-key binding was checked at the upgrade —
+    // oblireachHub.upgrade.ts). A heartbeat naming another uuid would let one
+    // agent rewrite another device's row of its tenant (sessions shown to
+    // operators, last_seen_at keeping a dead agent "online"): dropped.
     if (!msg.deviceUuid || msg.deviceUuid !== conn.deviceUuid) {
       if (msg.deviceUuid) logger.warn({ channelUuid: conn.deviceUuid, claimedUuid: String(msg.deviceUuid).slice(0, 64) }, 'ObliReach heartbeat for another device ignored');
       return;
