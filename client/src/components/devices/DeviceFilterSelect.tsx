@@ -75,7 +75,7 @@ export function DeviceFilterSelect({
       <Modal
         open={open}
         onClose={() => setOpen(false)}
-        title={t('compliance.filterByDevice', 'Filter by device')}
+        title={t('deviceFilter.filterByDevice', 'Filter by device')}
         icon={<Monitor className="w-4 h-4 text-accent" />}
         bodyClassName="p-0"
       >
@@ -105,7 +105,7 @@ export function DeviceFilterSelect({
           )}
           {filtered.length > DEVICE_FILTER_LIMIT && (
             <p className="px-4 py-3 text-xs text-text-muted">
-              {t('compliance.refineSearch', { count: filtered.length - DEVICE_FILTER_LIMIT, defaultValue: '{{count}} more — refine the search' })}
+              {t('deviceFilter.refineSearch', { count: filtered.length - DEVICE_FILTER_LIMIT, defaultValue: '{{count}} more — refine the search' })}
             </p>
           )}
         </div>

@@ -99,7 +99,7 @@ export function GroupTreeMultiSelect({ selectedIds, onChange }: Props) {
  <button
  type="button"
  onClick={(e) => { e.stopPropagation(); if (hasChildren) toggleExpand(node.id); }}
- aria-label={isExpanded ? t('automations.collapse', 'Collapse') : t('automations.expand', 'Expand')}
+ aria-label={isExpanded ? t('groupTree.collapse', 'Collapse') : t('groupTree.expand', 'Expand')}
  aria-expanded={hasChildren ? isExpanded : undefined}
  tabIndex={hasChildren ? 0 : -1}
  className={clsx(
@@ -145,7 +145,7 @@ export function GroupTreeMultiSelect({ selectedIds, onChange }: Props) {
  };
 
  if (tree.length === 0) {
- return <p className="text-sm text-text-muted py-2">{t('automations.groupTree.empty', 'No groups available')}</p>;
+ return <p className="text-sm text-text-muted py-2">{t('groupTree.empty', 'No groups available')}</p>;
  }
 
  return (

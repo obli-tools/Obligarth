@@ -106,7 +106,7 @@ export function GroupEditPage() {
  <div className="flex h-full flex-col items-center justify-center">
  <p className="text-text-muted">{t('groups.notFoundOrDenied', 'Group not found or access denied')}</p>
  <Link to="/" className="mt-4">
- <Button variant="secondary">{t('monitors.backToDashboard')}</Button>
+ <Button variant="secondary">{t('groups.backToDashboard')}</Button>
  </Link>
  </div>
  );
@@ -196,7 +196,7 @@ export function GroupEditPage() {
 
  {/* General */}
  <div className="rounded-lg bg-bg-secondary p-5 mb-6 max-sm:p-4">
- <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-4">{t('monitors.form.sectionGeneral')}</h2>
+ <h2 className="text-sm font-semibold text-text-secondary uppercase tracking-wide mb-4">{t('groups.form.sectionGeneral')}</h2>
  <form onSubmit={handleSubmit} className="space-y-4">
  <Input
  label={t('groups.form.name')}

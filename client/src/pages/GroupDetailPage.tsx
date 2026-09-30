@@ -52,9 +52,9 @@ export function GroupDetailPage() {
  if (!group) {
  return (
  <div className="flex h-full flex-col items-center justify-center">
- <p className="text-text-muted">{t('monitors.notFound')}</p>
+ <p className="text-text-muted">{t('groups.notFound') || 'Group not found'}</p>
  <Link to="/" className="mt-4">
- <Button variant="secondary">{t('monitors.backToDashboard')}</Button>
+ <Button variant="secondary">{t('groups.backToDashboard')}</Button>
  </Link>
  </div>
  );
@@ -79,7 +79,7 @@ export function GroupDetailPage() {
  {/* Back button */}
  <Link to="/" className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary mb-4 coarse:min-h-10">
  <ArrowLeft size={14} />
- {t('monitors.backToDashboard')}
+ {t('groups.backToDashboard')}
  </Link>
 
  {/* Header — below md the title block takes the full width (long

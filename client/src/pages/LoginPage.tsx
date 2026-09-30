@@ -182,7 +182,7 @@ export function LoginPage() {
  <div className="w-full max-w-sm space-y-8 relative">
  <div className="text-center">
  <Logo className="mx-auto h-24 w-24 mb-3" />
- <p className="mt-2 text-sm text-text-secondary">{t('login.title')}</p>
+ <p className="mt-2 text-sm text-text-secondary">{t('login.title') || 'Sign in to your account'}</p>
  </div>
 
  {ssoState === 'unavailable' && (

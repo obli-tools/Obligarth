@@ -221,12 +221,12 @@ export const DeviceRow = memo(function DeviceRow({
             and stays at the end of the name line (after last seen). */}
         <button
           onClick={handleEye}
-          aria-label={t('chat.viewDevice')}
+          aria-label={t('devices.viewDevice')}
           className={clsx(
             "p-1 rounded hover:bg-bg-tertiary text-text-muted hover:text-text-primary transition-colors flex-shrink-0 max-md:hidden relative coarse:after:absolute coarse:after:-inset-2 coarse:after:content-['']",
             stacked && 'order-1',
           )}
-          title={t('chat.viewDevice')}
+          title={t('devices.viewDevice')}
         >
           <Eye className="w-4 h-4" />
         </button>

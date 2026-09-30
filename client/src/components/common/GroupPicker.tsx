@@ -219,7 +219,7 @@ export function GroupPicker({ value, onChange, tree, placeholder, excludeId, kin
  )}
  >
  <span className="w-3.5 shrink-0" />
- <span className="italic">{t('monitors.form.noGroup', 'No group')}</span>
+ <span className="italic">{t('groupPicker.noGroup', 'No group')}</span>
  </button>
 
  {tree.map((node) => (

@@ -573,7 +573,7 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  </span>
  {!(ch as any).isEnabled && (
  <span className="rounded-full bg-status-down/10 px-2 py-0.5 text-[10px] font-medium text-status-down">
- {t('status.disabled')}
+ {t('notifications.disabled')}
  </span>
  )}
  {/* Badge for shared channels showing the source tenant */}
@@ -598,7 +598,7 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  aria-pressed={isGloballyBound(ch.id)}
  >
  <Zap size={12} className="inline mr-1" />
- {isGloballyBound(ch.id) ? t('remediations.globalActive') : t('common.enable')}
+ {isGloballyBound(ch.id) ? t('notifications.globalActive') : t('common.enable')}
  </button>
 
  {/* Tenant sharing toggle — own channels only, multi-tenant mode only */}
