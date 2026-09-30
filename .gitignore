@@ -19,6 +19,7 @@
 !/shared/
 !/server/
 !/client/
+!/apple-edge/
 !/docker-compose.build.yml
 
 # ...et à l'installation : install.sh télécharge docker-compose.yml et
@@ -40,6 +41,7 @@ docs/
 # Tests et jeux de données de test : restent locaux (non indispensables au build)
 *.test.*
 *.spec.*
+*_test.go
 __tests__/
 testdata/
 test-resolve.mjs
