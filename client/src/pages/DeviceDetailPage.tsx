@@ -102,7 +102,7 @@ function LastSeenPill({ lastSeenAt }: { lastSeenAt: string | null }) {
  // own — without this the pill is computed once at first render and the
  // user sees "1m" even after sitting on the page for 5 minutes (then a
  // manual refresh resets it). Pairs with the metrics-push handler in
- // useSocket.ts which also advances `device.lastSeenAt` on every push,
+ // deviceStore.ts which also advances `device.lastSeenAt` on every push,
  // so an actively talking agent shows "1m" continuously.
  const [, setTick] = useState(0);
  useEffect(() => {

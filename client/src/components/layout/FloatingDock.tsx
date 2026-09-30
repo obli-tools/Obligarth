@@ -9,30 +9,29 @@ const FULL_HEIGHT =
     : '100vh';
 
 /**
- * Bottom-right dock for the app-wide floating widgets (live-alert toasts,
- * chat FAB / panel, remote-shell pill) — docs/obli-mobile.md §4.
+ * Bottom-right dock for the app-wide floating widgets (today: the live-alert
+ * toasts) — docs/obli-mobile.md §4.
  *
- * The widgets are stacked in normal flow (top → bottom: toasts, chat, shell
- * pill) instead of each being `position: fixed` at the same corner, so they
- * never cover each other. The dock keeps the historic 16 px corner offset on
+ * The widgets are stacked in normal flow (top → bottom, in children order)
+ * instead of each being `position: fixed` at the same corner, so they never
+ * cover each other. The dock keeps the historic 16 px corner offset on
  * desktop, adds the safe-area insets (gesture bar / notch) on phones, and
  * spans the full width below `md` so toasts can go edge to edge.
  *
  * The dock itself ignores pointer events (the page under its padding stays
- * clickable); every child opts back in with `pointer-events-auto`. Children
- * that switch to a full-screen `fixed` layer (open shell panel, phone chat)
- * still position against the viewport — the dock has no transform.
+ * clickable); every child opts back in with `pointer-events-auto`. A child
+ * that switches to a full-screen `fixed` layer still positions against the
+ * viewport — the dock has no transform.
  *
  * When the children do not fit (short window, phone in landscape with the
  * soft keyboard open) the shrinkable items give way first (toasts are
  * `min-h-0` + flex-shrink 100), and `justify-end` makes any remaining
- * overflow spill out at the TOP: the bottom-most item — the chat panel with
- * its input, the shell pill — stays on screen right above the keyboard.
- * When everything fits (the normal desktop case) justify-content has no
- * effect: the dock is exactly as tall as its content.
+ * overflow spill out at the TOP: the bottom-most item stays on screen right
+ * above the keyboard. When everything fits (the normal desktop case)
+ * justify-content has no effect: the dock is exactly as tall as its content.
  *
- * Z order inside the dock (it is one stacking context at z-[60]):
- *   chat z-[2] > open shell panel z-[1] (later in DOM) > toasts z-[1].
+ * The dock is one stacking context at z-[60]; children order themselves
+ * inside it (toasts: z-[1]).
  */
 export function FloatingDock({ children }: { children: ReactNode }) {
   const nativeTop = useNativeTopOffset();

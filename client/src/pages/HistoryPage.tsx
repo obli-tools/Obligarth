@@ -62,21 +62,15 @@ function cmdToEvent(c: Command): HistoryEvent {
 
 // ─── Status config ───────────────────────────────────────────────────────────
 
-// `label` = English fallback of history.status.<status>.
+// `label` = English fallback of history.status.<status> (command statuses).
 const STATUS_CFG: Record<string, { color: string; bg: string; label: string }> = {
  pending: { color: 'text-yellow-400', bg: 'bg-yellow-400/10', label: 'Pending' },
  sent: { color: 'text-blue-300', bg: 'bg-blue-300/10', label: 'Sent' },
  ack_running: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'Running' },
- running: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'Running' },
  success: { color: 'text-green-400', bg: 'bg-green-400/10', label: 'Success' },
  failure: { color: 'text-red-400', bg: 'bg-red-400/10', label: 'Failed' },
- failed: { color: 'text-red-400', bg: 'bg-red-400/10', label: 'Failed' },
  timeout: { color: 'text-orange-400', bg: 'bg-orange-400/10', label: 'Timeout' },
  cancelled: { color: 'text-gray-400', bg: 'bg-gray-400/10', label: 'Cancelled' },
- skipped: { color: 'text-gray-400', bg: 'bg-gray-400/10', label: 'Skipped' },
- installed: { color: 'text-green-400', bg: 'bg-green-400/10', label: 'Installed' },
- approved: { color: 'text-blue-400', bg: 'bg-blue-400/10', label: 'Approved' },
- available: { color: 'text-yellow-400', bg: 'bg-yellow-400/10', label: 'Available' },
 };
 
 const PAGE_SIZE = 50;
@@ -263,7 +257,7 @@ export function HistoryPage({ embedded }: { embedded?: boolean } = {}) {
  <tbody className="divide-y divide-border">
  {visible.map(ev => {
  const sc = STATUS_CFG[ev.status] ?? { color: 'text-text-muted', bg: 'bg-bg-tertiary', label: ev.status };
- const isLive = ev.status === 'ack_running' || ev.status === 'running';
+ const isLive = ev.status === 'ack_running';
 
  return (
  <tr key={ev.id} className="hover:bg-bg-tertiary transition-colors">

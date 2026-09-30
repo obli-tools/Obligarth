@@ -250,7 +250,7 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // We use them to surface admin-tenant pages to non-admin users who
   // have been granted a specific page-gate capability:
   //   - supervision:read         → Supervision (Reports + History + Remote sessions)
-  //   - agent_config:custom_sections / discovery / keys → Agent config tabs
+  //   - agent_config:*           → Agent config (API keys)
   // Admins implicitly have all capabilities (the sidebar ORs role and
   // cap so the menu still appears for admins regardless of cap state).
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
@@ -494,10 +494,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     ...(admin || hasSupervisionCap
       ? [{ label: t('nav.supervision'), path: '/admin/supervision', icon: <Laptop size={18} /> } as NavItem]
       : []),
-    // Agent config — Custom Sections / Discovery / API Keys. The
-    // page itself shows only the tabs the user has the matching
-    // sub-cap for; we surface the menu entry as soon as ANY of them
-    // is granted (or the user is admin).
+    // Agent config — the API keys page. The entry shows as soon as ANY
+    // agent_config:* sub-cap is granted (or the user is admin), including
+    // custom_sections / discovery, whose tabs are gone.
     ...(admin || hasAnyAgentConfigCap
       ? [{ label: t('nav.agentConfig', 'Agent config'), path: '/admin/devices', icon: <Key size={18} /> } as NavItem]
       : []),

@@ -97,7 +97,7 @@ function AlertCard({ alert, opacity = 1, lifetimeMs }: AlertCardProps) {
 
 /**
  * Live-alert toasts. Rendered inside the app-wide FloatingDock (AppLayout):
- * the bottom-right stack flows above the chat FAB / shell pill instead of
+ * the bottom-right stack flows with the other dock widgets instead of
  * overlapping them, goes full width on phones, and is the first thing to
  * shrink (oldest cards clipped) when the dock runs out of height.
  */
