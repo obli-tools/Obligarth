@@ -1,7 +1,7 @@
 import { clientIp } from '../utils/clientIp';
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
-import { tenantService } from '../services/tenant.service';
+import { tenantService, forgetTenantMemberships } from '../services/tenant.service';
 import { permissionService } from '../services/permission.service';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
@@ -89,6 +89,9 @@ router.post('/switch', async (req, res, next) => {
     }
 
     req.session.currentTenantId = tenantId;
+    // requireTenant re-checks the membership from here on: start from the
+    // answer just read, not from one cached before.
+    forgetTenantMemberships(userId);
     res.json({ success: true, data: { currentTenantId: tenantId } });
   } catch (err) {
     next(err);
@@ -207,14 +210,24 @@ router.get('/:id/members', async (req, res, next) => {
   }
 });
 
+// The tenant role of a membership is 'admin' (tenant administrator) or the
+// slug of a permission set, checked by tenantService: 'member' (the pre-091
+// name the panel still sends) and a missing role are stored as 'user', any
+// other unknown slug is refused (400) — an orphan slug gives no capability.
+
 // POST /api/tenants/:id/members  { userId, role }
 router.post('/:id/members', async (req, res, next) => {
   try {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const tenantId = parseInt(req.params.id);
-    const { userId, role } = req.body as { userId: number; role?: 'admin' | 'member' };
+    const { userId, role } = req.body as { userId: number; role?: unknown };
     if (!userId) throw new AppError(400, 'userId is required');
-    await tenantService.addUser(tenantId, userId, role ?? 'member');
+    if (!Number.isInteger(userId) || userId <= 0) throw new AppError(400, 'Invalid userId');
+    if (!Number.isInteger(tenantId) || tenantId <= 0 || !(await tenantService.getById(tenantId))) {
+      throw new AppError(404, 'Tenant not found');
+    }
+    if (!(await db('users').where({ id: userId }).first('id'))) throw new AppError(404, 'User not found');
+    await tenantService.addUser(tenantId, userId, role);
     res.json({ success: true });
   } catch (err) {
     next(err);
@@ -227,7 +240,7 @@ router.put('/:id/members/:uid', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const tenantId = parseInt(req.params.id);
     const userId = parseInt(req.params.uid);
-    const { role } = req.body as { role: 'admin' | 'member' };
+    const { role } = req.body as { role?: unknown };
     if (!role) throw new AppError(400, 'role is required');
     await tenantService.updateUserRole(tenantId, userId, role);
     res.json({ success: true });
@@ -237,6 +250,8 @@ router.put('/:id/members/:uid', async (req, res, next) => {
 });
 
 // DELETE /api/tenants/:id/members/:uid
+// The user's teams of that tenant go with it, and its sessions end
+// (tenantService.removeUser).
 router.delete('/:id/members/:uid', async (req, res, next) => {
   try {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');

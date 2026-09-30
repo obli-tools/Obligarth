@@ -107,6 +107,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       if (status === 403 && axiosErr?.response?.data?.code === 'ssoLoginRequired') {
         throw Object.assign(new Error(serverMessage ?? 'This account signs in through Obligate (SSO).'), { code: 'ssoLoginRequired' });
       }
+      // The account belongs to no tenant: no session (the login page says why).
+      if (status === 403 && axiosErr?.response?.data?.code === 'noTenantAccess') {
+        throw Object.assign(new Error(serverMessage ?? 'This account has no access to any tenant.'), { code: 'noTenantAccess' });
+      }
       if (status === 429) {
         throw new Error(serverMessage ?? 'Too many login attempts, please try again later');
       } else if (status === 401) {

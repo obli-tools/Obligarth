@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { hashPassword } from '../utils/crypto';
+import { forgetTenantMemberships } from './tenant.service';
 import type { User, UserRole, UserTenantAssignment } from '@obligarth/shared';
 
 interface UserRow {
@@ -39,10 +40,10 @@ function rowToUser(row: UserRow): User {
 export const userService = {
   /** List users. When `tenantId` is provided, restrict to users that have
    *  a membership row in `user_tenants` for that tenant — used by the
-   *  /admin/users page when the caller is browsing a non-default tenant
-   *  (so a Contoso admin doesn't see ACME users by accident). Pass `null`
-   *  / undefined to get every user (only used from the default tenant
-   *  where admins legitimately want the global view). */
+   *  /admin/users page for every caller outside the global view (so a
+   *  Contoso admin doesn't see ACME users by accident). Pass `null` /
+   *  undefined to get every user: the global view, for a platform admin on
+   *  the master tenant only (usersController.list). */
   async getAll(tenantId?: number | null): Promise<User[]> {
     const q = db<UserRow>('users').orderBy('users.username').select('users.*');
     if (tenantId != null) {
@@ -146,12 +147,22 @@ export const userService = {
     }));
   },
 
-  /** Bulk-replaces all tenant memberships for a user. */
+  /**
+   * Bulk-replaces all tenant memberships for a user. Teams are mono-tenant:
+   * the user's memberships of the teams of every tenant it no longer belongs
+   * to go too (a team membership left behind kept its device grants), as
+   * tenantService.removeUser and the Obligate reconciliation do. When a
+   * tenant was removed, the user's sessions end: one may sit on that tenant.
+   */
   async setUserTenantAssignments(
     userId: number,
     assignments: { tenantId: number; role: string }[],
   ): Promise<void> {
+    const kept = [...new Set(assignments.map((a) => Number(a.tenantId)))];
+    let removedTenants = 0;
     await db.transaction(async (trx) => {
+      const before = (await trx('user_tenants').where({ user_id: userId }).pluck('tenant_id') as number[]).map(Number);
+      removedTenants = before.filter((t) => !kept.includes(t)).length;
       await trx('user_tenants').where({ user_id: userId }).del();
       if (assignments.length > 0) {
         await trx('user_tenants').insert(
@@ -165,6 +176,14 @@ export const userService = {
           })),
         );
       }
+      const outside = trx('user_teams').select('id');
+      if (kept.length > 0) outside.whereNotIn('tenant_id', kept);
+      await trx('team_memberships').where({ user_id: userId }).whereIn('team_id', outside).del();
     });
+    forgetTenantMemberships(userId);
+    if (removedTenants > 0) {
+      const { killSessionsForUser } = await import('./userSessions.service');
+      await killSessionsForUser(userId, 'tenant_access_removed');
+    }
   },
 };

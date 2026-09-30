@@ -100,6 +100,7 @@
     "serverVersion": "server v{{version}}",
     "ssoFailed": "SSO authentication failed. Please try local login.",
     "accountDisabled": "Your account is disabled on this server. Ask an administrator to re-enable it.",
+    "noTenantAccess": "Your account has no access to any tenant on this server. Ask an administrator to grant it access.",
     "ssoLoginRequired": {
       "title": "This account signs in through Obligate",
       "body": "Its password and two-factor authentication are managed in Obligate. Local sign-in is only possible with an authenticator app set up on this server.",

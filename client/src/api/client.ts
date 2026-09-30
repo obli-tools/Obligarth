@@ -304,8 +304,10 @@ apiClient.interceptors.response.use(
       && body?.error
       && !body?.twoFactorRequired
       && !body?.passwordRequired
-      // SSO account signing in locally: the login page explains it inline.
+      // SSO account signing in locally, account without any tenant: the
+      // login page explains it inline.
       && body?.code !== 'ssoLoginRequired'
+      && body?.code !== 'noTenantAccess'
       && method !== 'get';
     if (shouldSurface) {
       // Lazy-load to avoid a circular import (client.ts is imported very early).

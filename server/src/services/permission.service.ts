@@ -1,6 +1,7 @@
 import { db } from '../db';
 import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obligarth/shared';
 import { knownDeviceCapabilities, knownTenantCapabilities } from '@obligarth/shared';
+import { normaliseTenantRole } from './userScope.service';
 
 export const permissionService = {
   /**
@@ -14,15 +15,18 @@ export const permissionService = {
   },
 
   /**
-   * Check if user (via any of their teams) has canCreate permission.
+   * Check if user (via any of their teams) has canCreate permission. With
+   * `tenantId`, only the teams of that tenant count (teams are mono-tenant:
+   * a team of another tenant grants nothing here).
    */
-  async canCreate(userId: number, isAdmin: boolean): Promise<boolean> {
+  async canCreate(userId: number, isAdmin: boolean, tenantId?: number): Promise<boolean> {
     if (isAdmin) return true;
-    const row = await db('user_teams')
+    const q = db('user_teams')
       .join('team_memberships', 'user_teams.id', 'team_memberships.team_id')
       .where('team_memberships.user_id', userId)
-      .where('user_teams.can_create', true)
-      .first();
+      .where('user_teams.can_create', true);
+    if (tenantId !== undefined) q.where('user_teams.tenant_id', Number.isInteger(tenantId) ? tenantId : -1);
+    const row = await q.first('user_teams.id');
     return !!row;
   },
 
@@ -115,14 +119,17 @@ export const permissionService = {
    * check entirely. Tenant role drives WHAT the user can do; team
    * membership (handled by canUseCapability) drives WHERE they can
    * do it. Stored values outside the shared vocabulary never match.
+   * The pre-091 role 'member' is the 'user' set (normaliseTenantRole, as
+   * for the user-management scope).
    */
   async userHasTenantCapability(userId: number, tenantId: number, capability: TenantCapability): Promise<boolean> {
     const ut = await db('user_tenants')
       .where({ user_id: userId, tenant_id: tenantId })
       .first() as { role: string } | undefined;
     if (!ut) return false;
-    if (ut.role === 'admin') return true;
-    const set = await db('permission_sets').where({ slug: ut.role }).first() as { capabilities: unknown } | undefined;
+    const role = normaliseTenantRole(ut.role);
+    if (role === 'admin') return true;
+    const set = await db('permission_sets').where({ slug: role }).first() as { capabilities: unknown } | undefined;
     if (!set) return false;
     return knownTenantCapabilities(set.capabilities).includes(capability);
   },
@@ -139,7 +146,8 @@ export const permissionService = {
       .where({ user_id: userId, tenant_id: tenantId })
       .first() as { role: string } | undefined;
     if (!ut) return [];
-    if (ut.role === 'admin') {
+    const role = normaliseTenantRole(ut.role);
+    if (role === 'admin') {
       // Union of the capabilities of every set, so the client renders
       // their gates as open.
       const all = await db('permission_sets').select('capabilities') as Array<{ capabilities: unknown }>;
@@ -149,7 +157,7 @@ export const permissionService = {
       }
       return [...set];
     }
-    const set = await db('permission_sets').where({ slug: ut.role }).first() as { capabilities: unknown } | undefined;
+    const set = await db('permission_sets').where({ slug: role }).first() as { capabilities: unknown } | undefined;
     if (!set) return [];
     return knownTenantCapabilities(set.capabilities);
   },
@@ -415,7 +423,8 @@ export const permissionService = {
     }
 
     const teamIds = await this.getUserTeamIds(userId);
-    const canCreate = await this.canCreate(userId, false);
+    // Only the teams of the active tenant open the "create" gates there.
+    const canCreate = await this.canCreate(userId, false, tenantId);
 
     const perms = await db('team_permissions')
       .whereIn('team_id', teamIds)

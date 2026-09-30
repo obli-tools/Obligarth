@@ -6,6 +6,7 @@ import { userScope, actorFromReq, resetSecondFactors } from '../services/userSco
 import { createUserAccount, updateUserAccount, deleteUserAccount, usernameTaken } from '../services/userAdmin.service';
 import { hashPassword } from '../utils/crypto';
 import { db } from '../db';
+import { isMasterTenant } from '@obligarth/shared';
 import type {
   CreateUserInput,
   UpdateUserInput,
@@ -38,19 +39,20 @@ async function auditUserAction(req: Request, action: string, targetId: number, d
 export const usersController = {
   // GET /api/users
   //
-  // Default tenant (id=1) is the platform-admin "god view": admins on
-  // that tenant see every user across the install — they need it to
-  // bootstrap memberships, audit access, etc. Any other tenant is a
-  // customer workspace, so we scope the listing to users that actually
-  // have access to it (i.e. own a row in `user_tenants` for it). This
-  // makes the /admin/users page double as a "who can see this tenant?"
-  // glance card and stops a Contoso admin from accidentally browsing
-  // ACME users.
+  // A platform admin on the default tenant (id=1) gets the "god view":
+  // every user across the install — needed to bootstrap memberships,
+  // audit access, etc. Anyone else — on a customer workspace, or a
+  // tenant administrator of the default tenant who is not a platform
+  // admin — only lists the users that actually have access to the current
+  // tenant (i.e. own a row in `user_tenants` for it). This makes the
+  // /admin/users page double as a "who can see this tenant?" glance card
+  // and stops a Contoso admin from accidentally browsing ACME users.
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const tenantId = (req as any).tenantId as number | undefined;
-      const scopeAll = tenantId === 1;
-      const users = await userService.getAll(scopeAll ? null : tenantId ?? null);
+      const tenantId = Number(req.tenantId);
+      if (!Number.isInteger(tenantId) || tenantId <= 0) throw new AppError(400, 'No tenant selected');
+      const scopeAll = isPlatformAdmin(req) && isMasterTenant(tenantId);
+      const users = await userService.getAll(scopeAll ? null : tenantId);
       res.json({ success: true, data: users });
     } catch (err) {
       next(err);
@@ -61,8 +63,8 @@ export const usersController = {
   async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = parseInt(req.params.id, 10);
-      // Same population as GET /users (members of the current tenant; every
-      // account from the master tenant or for a platform admin).
+      // Members of the current tenant; every account for a platform admin
+      // (userScope.assertReadableTarget).
       await userScope.assertReadableTarget(actorFromReq(req), id);
       const user = await userService.getById(id);
       if (!user) throw new AppError(404, 'User not found');
@@ -251,8 +253,10 @@ export const usersController = {
       const actor = actorFromReq(req);
       await userScope.assertReadableTarget(actor, id);
       let teams = await teamService.getUserTeams(id);
-      // Outside the god view, only the current tenant's teams are shown.
-      if (!actor.isPlatformAdmin && actor.tenantId !== 1) {
+      // A manager that is not a platform admin only sees the current
+      // tenant's teams (the master tenant included: no global view for a
+      // tenant administrator there).
+      if (!actor.isPlatformAdmin) {
         teams = teams.filter((tm) => Number(tm.tenantId) === actor.tenantId);
       }
       res.json({ success: true, data: teams });

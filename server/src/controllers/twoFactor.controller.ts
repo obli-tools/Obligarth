@@ -5,7 +5,7 @@ import { db } from '../db';
 import { twoFactorService } from '../services/twoFactor.service';
 import { appConfigService } from '../services/appConfig.service';
 import { authService } from '../services/auth.service';
-import { tenantService } from '../services/tenant.service';
+import { tenantService, refuseSignInWithoutTenant } from '../services/tenant.service';
 import { AppError } from '../middleware/errorHandler';
 import {
   checkSecondFactor, checkPasswordStepUp, sendStepUpFailure, acceptTotpStep, rebindTotpStepSession,
@@ -395,6 +395,17 @@ export const twoFactorController = {
 
       if (!valid) throw new AppError(401, 'Invalid code');
 
+      const via = method === 'device' ? 'password+device_key' : totpStep !== null ? 'password+totp' : 'password+email';
+
+      // The session's tenant (tenantService.sessionTenantFor): an account
+      // without any tenant gets no session — never the master tenant it is
+      // not a member of (authController.login). The pending sign-in ends.
+      const tenantId = await tenantService.sessionTenantFor(row.id, row.role);
+      if (tenantId === null) {
+        await regenerateSession(req);
+        throw await refuseSignInWithoutTenant(req, row, via);
+      }
+
       // Complete the session under a NEW id (session fixation): the pending
       // state is dropped with the old id.
       await regenerateSession(req);
@@ -422,10 +433,8 @@ export const twoFactorController = {
       if (bindKeyId) req.session.deviceKeyId = bindKeyId;
 
       // Set tenant in session
-      const firstTenant = await tenantService.getFirstTenantForUser(row.id);
-      req.session.currentTenantId = firstTenant?.id ?? 1;
+      req.session.currentTenantId = tenantId;
 
-      const via = method === 'device' ? 'password+device_key' : totpStep !== null ? 'password+totp' : 'password+email';
       await auditSelf(req, 'auth.login', { username: row.username, via, ...(bindKeyId ? { keyId: bindKeyId } : {}) });
 
       const user = await authService.getUserById(row.id);

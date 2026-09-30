@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { MASTER_TENANT_ID, knownTenantCapabilities } from '@obligarth/shared';
+import { knownTenantCapabilities } from '@obligarth/shared';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 
@@ -104,12 +104,14 @@ export const userScope = {
     return target;
   },
 
-  /** Read access (GET /users/:id, /:id/tenants, /:id/teams): the same
-   *  population as GET /users — every account from the master tenant,
-   *  members of the current tenant otherwise. 404 outside. */
+  /** Read access (GET /users/:id, /:id/tenants, /:id/teams): every account
+   *  for a platform admin; members of the current tenant otherwise — the
+   *  master tenant included: its tenant administrators who are not platform
+   *  admins get no global view (GET /users lists the same population). 404
+   *  outside. */
   async assertReadableTarget(actor: ScopeActor, targetId: number): Promise<void> {
     if (!Number.isInteger(targetId) || targetId <= 0) throw new AppError(400, 'Invalid user id');
-    if (actor.isPlatformAdmin || actor.tenantId === MASTER_TENANT_ID) return;
+    if (actor.isPlatformAdmin) return;
     const member = await db('user_tenants').where({ user_id: targetId, tenant_id: actor.tenantId }).first('user_id');
     if (!member) throw new AppError(404, 'User not found');
   },

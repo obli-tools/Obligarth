@@ -100,6 +100,7 @@
     "serverVersion": "serveur v{{version}}",
     "ssoFailed": "Échec de l'authentification SSO. Utilisez la connexion locale.",
     "accountDisabled": "Votre compte est désactivé sur ce serveur. Demandez à un administrateur de le réactiver.",
+    "noTenantAccess": "Votre compte n'a accès à aucun tenant sur ce serveur. Demandez à un administrateur de vous y donner accès.",
     "ssoLoginRequired": {
       "title": "Ce compte se connecte par Obligate",
       "body": "Son mot de passe et sa double authentification sont gérés dans Obligate. La connexion locale n'est possible qu'avec une application d'authentification configurée sur ce serveur.",

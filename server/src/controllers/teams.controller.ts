@@ -2,12 +2,35 @@ import type { Request, Response, NextFunction } from 'express';
 import { teamService } from '../services/team.service';
 import { AppError } from '../middleware/errorHandler';
 import { isMasterTenant } from '@obligarth/shared';
+import type { UserTeam } from '@obligarth/shared';
 import type {
   CreateTeamInput,
   UpdateTeamInput,
   SetTeamMembersInput,
   SetTeamPermissionsInput,
 } from '../validators/team.schema';
+
+/** The god view over teams: a platform admin on the master tenant. */
+function teamGodView(req: Request): boolean {
+  return req.session.role === 'admin' && isMasterTenant(req.tenantId);
+}
+
+/**
+ * The team of `/:id`, if the request may act on it: a team of the request's
+ * tenant, or any team in the god view. Every `/:id` route goes through it —
+ * `teamService.getById` is tenant-agnostic — BEFORE any restriction envelope
+ * (no approval is ever filed for another tenant's team). Anything else
+ * answers like an unknown team (404: a sibling tenant's team's existence is
+ * not leaked).
+ */
+async function teamInScope(req: Request): Promise<UserTeam> {
+  const id = Number(req.params.id);
+  const team = Number.isInteger(id) && id > 0 ? await teamService.getById(id) : null;
+  if (!team || (!teamGodView(req) && Number(team.tenantId) !== Number(req.tenantId))) {
+    throw new AppError(404, 'Team not found');
+  }
+  return team;
+}
 
 /**
  * What an approved team request will do (tenant.manage_teams /
@@ -53,13 +76,23 @@ async function describeTeamRequest(req: Request, action: string): Promise<string
   }
 }
 
+/** Audit of a team action, filed in the team's tenant: a god-view action on
+ *  another tenant's team leaves its trace in that tenant's own log (as
+ *  logReqAs does for devices), where the team's name resolves. */
+async function auditTeam(req: Request, teamTenantId: number, action: string, teamId: number, details?: Record<string, unknown>): Promise<void> {
+  try {
+    const { auditService } = await import('../services/audit.service');
+    await auditService.logReqAs(req, teamTenantId, action, { resourceType: 'team', resourcePath: String(teamId), details });
+  } catch {}
+}
+
 export const teamsController = {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      // Platform admins can request all teams across tenants via ?scope=all
-      // Otherwise scope to the current tenant from session
-      const isPlatformAdmin = req.session.role === 'admin';
-      const scopeAll = isPlatformAdmin && req.query.scope === 'all';
+      // The god view (platform admin on the master tenant) can request all
+      // teams across tenants via ?scope=all. Otherwise scope to the current
+      // tenant from session
+      const scopeAll = teamGodView(req) && req.query.scope === 'all';
       const teams = await teamService.getAll(scopeAll ? null : req.tenantId);
       res.json({ success: true, data: teams });
     } catch (err) {
@@ -69,21 +102,10 @@ export const teamsController = {
 
   async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const id = parseInt(req.params.id, 10);
-      const team = await teamService.getById(id);
-      if (!team) throw new AppError(404, 'Team not found');
-      // Tenant ownership gate — `teamService.getById` is intentionally
-      // tenant-agnostic (background jobs read across tenants), so the
-      // controller MUST gate the response. Same 404 shape as
-      // "doesn't exist" so a sibling tenant's team's existence isn't
-      // leaked.
-      if (!isMasterTenant(req.tenantId) && team.tenantId !== req.tenantId) {
-        throw new AppError(404, 'Team not found');
-      }
-
+      const team = await teamInScope(req);
       const [members, permissions] = await Promise.all([
-        teamService.getMembers(id),
-        teamService.getPermissions(id),
+        teamService.getMembers(team.id),
+        teamService.getPermissions(team.id),
       ]);
 
       res.json({ success: true, data: { ...team, memberIds: members, permissions } });
@@ -124,19 +146,15 @@ export const teamsController = {
         if (!data.tenantId || !Number.isFinite(data.tenantId)) {
           throw new AppError(400, 'tenantId is required when creating a team from the master tenant. Pick the tenant the team will operate in.');
         }
+        const { tenantService } = await import('../services/tenant.service');
+        if (!(await tenantService.getById(data.tenantId))) throw new AppError(400, 'Target tenant not found');
         targetTenantId = data.tenantId;
       } else {
         // Body tenantId is ignored from child tenants (security).
         targetTenantId = req.tenantId;
       }
       const team = await teamService.create(data, targetTenantId);
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'team.created', {
-          resourceType: 'team', resourcePath: String(team.id),
-          details: { name: team.name },
-        });
-      } catch {}
+      await auditTeam(req, targetTenantId, 'team.created', team.id, { name: team.name });
       res.status(201).json({ success: true, data: team });
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes('unique')) {
@@ -149,25 +167,20 @@ export const teamsController = {
 
   async update(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const current = await teamInScope(req);
       const { applyRestriction } = await import('../services/restriction.service');
       const gated = await applyRestriction(res, {
         req, actionKey: 'tenant.manage_teams',
         approvalRequestType: 'batch_command',
         approvalDescription: await describeTeamRequest(req, 'team_update'),
-        approvalPayload: { action: 'team_update', teamId: parseInt(req.params.id, 10), body: req.body },
+        approvalPayload: { action: 'team_update', teamId: current.id, body: req.body },
       });
       if (!gated) return;
 
-      const id = parseInt(req.params.id, 10);
       const data = req.body as UpdateTeamInput;
-      const team = await teamService.update(id, data);
+      const team = await teamService.update(current.id, data);
       if (!team) throw new AppError(404, 'Team not found');
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'team.updated', {
-          resourceType: 'team', resourcePath: String(id), details: { name: team.name },
-        });
-      } catch {}
+      await auditTeam(req, Number(current.tenantId), 'team.updated', current.id, { name: team.name });
       res.json({ success: true, data: team });
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes('unique')) {
@@ -180,22 +193,19 @@ export const teamsController = {
 
   async delete(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const current = await teamInScope(req);
       const { applyRestriction } = await import('../services/restriction.service');
       const gated = await applyRestriction(res, {
         req, actionKey: 'tenant.manage_teams',
         approvalRequestType: 'batch_command',
         approvalDescription: await describeTeamRequest(req, 'team_delete'),
-        approvalPayload: { action: 'team_delete', teamId: parseInt(req.params.id, 10) },
+        approvalPayload: { action: 'team_delete', teamId: current.id },
       });
       if (!gated) return;
 
-      const id = parseInt(req.params.id, 10);
-      const deleted = await teamService.delete(id);
+      const deleted = await teamService.delete(current.id);
       if (!deleted) throw new AppError(404, 'Team not found');
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'team.deleted', { resourceType: 'team', resourcePath: String(id) });
-      } catch {}
+      await auditTeam(req, Number(current.tenantId), 'team.deleted', current.id, { name: current.name });
       res.json({ success: true, message: 'Team deleted' });
     } catch (err) {
       next(err);
@@ -206,8 +216,8 @@ export const teamsController = {
 
   async getMembers(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const id = parseInt(req.params.id, 10);
-      const members = await teamService.getMembers(id);
+      const team = await teamInScope(req);
+      const members = await teamService.getMembers(team.id);
       res.json({ success: true, data: members });
     } catch (err) {
       next(err);
@@ -216,25 +226,22 @@ export const teamsController = {
 
   async setMembers(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const team = await teamInScope(req);
+      const { memberIds } = req.body as SetTeamMembersInput;
+      // Members of the team's tenant only: refused now rather than after a
+      // second administrator approved it (setMembers checks it again).
+      await teamService.assertMembersInTenant(Number(team.tenantId), memberIds);
       const { applyRestriction } = await import('../services/restriction.service');
       const gated = await applyRestriction(res, {
         req, actionKey: 'tenant.manage_permissions',
         approvalRequestType: 'batch_command',
         approvalDescription: await describeTeamRequest(req, 'team_members_set'),
-        approvalPayload: { action: 'team_members_set', teamId: parseInt(req.params.id, 10), memberIds: (req.body as SetTeamMembersInput)?.memberIds },
+        approvalPayload: { action: 'team_members_set', teamId: team.id, memberIds },
       });
       if (!gated) return;
 
-      const id = parseInt(req.params.id, 10);
-      const { memberIds } = req.body as SetTeamMembersInput;
-      await teamService.setMembers(id, memberIds);
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'team.members_changed', {
-          resourceType: 'team', resourcePath: String(id),
-          details: { userCount: memberIds.length, memberIds },
-        });
-      } catch {}
+      await teamService.setMembers(team.id, memberIds);
+      await auditTeam(req, Number(team.tenantId), 'team.members_changed', team.id, { userCount: memberIds.length, memberIds });
       res.json({ success: true, data: memberIds });
     } catch (err) {
       next(err);
@@ -245,8 +252,8 @@ export const teamsController = {
 
   async getPermissions(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const id = parseInt(req.params.id, 10);
-      const permissions = await teamService.getPermissions(id);
+      const team = await teamInScope(req);
+      const permissions = await teamService.getPermissions(team.id);
       res.json({ success: true, data: permissions });
     } catch (err) {
       next(err);
@@ -255,35 +262,26 @@ export const teamsController = {
 
   async setPermissions(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const id = parseInt(req.params.id, 10);
-
       // Tenant ownership check — a request from tenant A may not edit a
-      // team owned by tenant B. The default tenant (id=1) is the
-      // platform-admin "god view" and bypasses the check by design.
-      const team = await teamService.getById(id);
-      if (!team) throw new AppError(404, 'Team not found');
-      if (req.tenantId !== 1 && team.tenantId !== req.tenantId) {
-        throw new AppError(403, 'Team belongs to another tenant');
-      }
+      // team owned by tenant B (only the god view reaches every team) —
+      // and the scopes must name groups and devices of the TEAM's tenant:
+      // both refused before any approval is filed (setPermissions checks
+      // the scopes again).
+      const team = await teamInScope(req);
+      const { permissions } = req.body as SetTeamPermissionsInput;
+      await teamService.assertScopesInTenant(Number(team.tenantId), permissions);
 
       const { applyRestriction } = await import('../services/restriction.service');
       const gated = await applyRestriction(res, {
         req, actionKey: 'tenant.manage_permissions',
         approvalRequestType: 'batch_command',
         approvalDescription: await describeTeamRequest(req, 'team_permissions_set'),
-        approvalPayload: { action: 'team_permissions_set', teamId: id, permissions: (req.body as SetTeamPermissionsInput)?.permissions },
+        approvalPayload: { action: 'team_permissions_set', teamId: team.id, permissions },
       });
       if (!gated) return;
 
-      const { permissions } = req.body as SetTeamPermissionsInput;
-      const result = await teamService.setPermissions(id, permissions);
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'team.permissions_changed', {
-          resourceType: 'team', resourcePath: String(id),
-          details: { permissionCount: permissions.length },
-        });
-      } catch {}
+      const result = await teamService.setPermissions(team.id, permissions);
+      await auditTeam(req, Number(team.tenantId), 'team.permissions_changed', team.id, { permissionCount: permissions.length });
       res.json({ success: true, data: result });
     } catch (err) {
       next(err);
@@ -292,9 +290,13 @@ export const teamsController = {
 
   async removePermission(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const permId = parseInt(req.params.permId, 10);
-      const deleted = await teamService.removePermission(permId);
+      // The team's tenant first, then a scope of THAT team only.
+      const team = await teamInScope(req);
+      const permId = Number(req.params.permId);
+      if (!Number.isInteger(permId) || permId <= 0) throw new AppError(404, 'Permission not found');
+      const deleted = await teamService.removePermission(team.id, permId);
       if (!deleted) throw new AppError(404, 'Permission not found');
+      await auditTeam(req, Number(team.tenantId), 'team.permission_removed', team.id, { permissionId: permId });
       res.json({ success: true, message: 'Permission removed' });
     } catch (err) {
       next(err);

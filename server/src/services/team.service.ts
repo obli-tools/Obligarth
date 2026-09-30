@@ -1,6 +1,9 @@
+import type { Knex } from 'knex';
 import { db } from '../db';
 import type { UserTeam, TeamPermission, DeviceCapability } from '@obligarth/shared';
 import { DEFAULT_DEVICE_CAPABILITIES, knownDeviceCapabilities } from '@obligarth/shared';
+import { AppError } from '../middleware/errorHandler';
+import { logger } from '../utils/logger';
 
 interface TeamRow {
   id: number;
@@ -59,6 +62,50 @@ function rowToPermission(row: any): TeamPermission {
   };
 }
 
+type TeamScope = 'group' | 'device' | 'ungrouped';
+
+/**
+ * Teams are mono-tenant: a team's scopes name groups and devices of the
+ * team's own tenant only, whoever edits it (a platform admin on the master
+ * tenant edits the teams of every tenant). Refuses (400) a group or a device
+ * of another tenant (or that does not exist), an 'ungrouped' scope whose id
+ * is not 0 (its convention), and the same scope twice.
+ */
+async function assertScopesInTenant(
+  tenantId: number,
+  permissions: ReadonlyArray<{ scope: TeamScope; scopeId: number }>,
+  conn: Knex = db,
+): Promise<void> {
+  const seen = new Set<string>();
+  const ids: Record<'group' | 'device', Set<number>> = { group: new Set(), device: new Set() };
+  for (const p of permissions) {
+    const key = `${p.scope}:${p.scopeId}`;
+    if (seen.has(key)) throw new AppError(400, `Duplicate scope: ${key}`);
+    seen.add(key);
+    if (p.scope === 'ungrouped') {
+      if (p.scopeId !== 0) throw new AppError(400, "The 'ungrouped' scope has the id 0");
+    } else if (p.scope === 'group' || p.scope === 'device') {
+      ids[p.scope].add(Number(p.scopeId));
+    } else {
+      throw new AppError(400, `Unknown scope: ${String(p.scope)}`);
+    }
+  }
+  for (const [scope, table] of [['group', 'device_groups'], ['device', 'devices']] as const) {
+    const wanted = [...ids[scope]];
+    if (wanted.length === 0) continue;
+    const found = new Set((await conn(table).whereIn('id', wanted).where({ tenant_id: tenantId }).pluck('id') as number[]).map(Number));
+    const outside = wanted.filter((id) => !found.has(id));
+    if (outside.length > 0) {
+      throw new AppError(400, `${scope === 'group' ? 'Group' : 'Device'} not found in the team's tenant: ${outside.join(', ')}`);
+    }
+  }
+}
+
+async function teamTenantId(teamId: number, conn: Knex = db): Promise<number | null> {
+  const row = await conn('user_teams').where({ id: teamId }).first('tenant_id') as { tenant_id: number } | undefined;
+  return row ? Number(row.tenant_id) : null;
+}
+
 export const teamService = {
   /**
    * Returns teams scoped to a tenant.
@@ -78,11 +125,11 @@ export const teamService = {
   },
 
   /** UNSAFE without tenant scope — callers MUST pair this with a
-   *  `team.tenantId === req.tenantId || isMasterTenant(req.tenantId)`
-   *  check before exposing the row to the user (see
-   *  `teamsController.setPermissions` for the canonical pattern). The
-   *  helper is left tenant-agnostic on purpose because internal jobs
-   *  (e.g. group cascade) need cross-tenant access. */
+   *  `team.tenantId === req.tenantId`, or platform admin on the master
+   *  tenant, check before exposing the row to the user (see `teamInScope`
+   *  in teams.controller.ts for the canonical pattern). The helper is left
+   *  tenant-agnostic on purpose because internal jobs (e.g. group cascade)
+   *  need cross-tenant access. */
   async getById(id: number): Promise<UserTeam | null> {
     const row = await db<TeamRow>('user_teams').where({ id }).first();
     return row ? rowToTeam(row) : null;
@@ -130,23 +177,48 @@ export const teamService = {
     return rows.map((r) => r.user_id);
   },
 
+  /** Refuses (400) members that do not belong to the tenant `tenantId`: a
+   *  removal from a tenant purges the user's teams there, so a team never
+   *  grants anything to a non-member of its tenant. */
+  async assertMembersInTenant(tenantId: number, userIds: ReadonlyArray<number>): Promise<void> {
+    const ids = [...new Set(userIds.map(Number))];
+    if (ids.length === 0) return;
+    const members = new Set((await db('user_tenants')
+      .where({ tenant_id: tenantId })
+      .whereIn('user_id', ids)
+      .pluck('user_id') as number[]).map(Number));
+    const outside = ids.filter((id) => !members.has(id));
+    if (outside.length > 0) {
+      throw new AppError(400, `Not a member of the team's tenant: user ${outside.join(', ')}`);
+    }
+  },
+
+  /** Replaces the members of a team: members of the team's tenant only
+   *  (assertMembersInTenant). */
   async setMembers(teamId: number, userIds: number[]): Promise<void> {
+    const tenantId = await teamTenantId(teamId);
+    if (tenantId === null) throw new AppError(404, 'Team not found');
+    const ids = [...new Set(userIds.map(Number))];
+    await this.assertMembersInTenant(tenantId, ids);
     await db.transaction(async (trx) => {
       await trx('team_memberships').where({ team_id: teamId }).del();
-      if (userIds.length > 0) {
+      if (ids.length > 0) {
         await trx('team_memberships').insert(
-          userIds.map((uid) => ({ team_id: teamId, user_id: uid })),
+          ids.map((uid) => ({ team_id: teamId, user_id: uid })),
         );
       }
     });
   },
 
-  async getUserTeams(userId: number): Promise<UserTeam[]> {
-    const rows = await db<TeamRow>('user_teams')
+  /** The user's teams; with `tenantId`, only that tenant's. */
+  async getUserTeams(userId: number, tenantId?: number): Promise<UserTeam[]> {
+    const q = db<TeamRow>('user_teams')
       .join('team_memberships', 'user_teams.id', 'team_memberships.team_id')
       .where('team_memberships.user_id', userId)
       .select('user_teams.*')
       .orderBy('user_teams.name');
+    if (tenantId !== undefined) q.where('user_teams.tenant_id', Number.isInteger(tenantId) ? tenantId : -1);
+    const rows = await q;
     return rows.map(rowToTeam);
   },
 
@@ -160,13 +232,26 @@ export const teamService = {
     return rows.map(rowToPermission);
   },
 
+  /** Refuses (400) scopes a team of `tenantId` may not hold (see
+   *  assertScopesInTenant): lets a route refuse a request before it waits
+   *  for an approval. setPermissions checks them again. */
+  async assertScopesInTenant(
+    tenantId: number,
+    permissions: ReadonlyArray<{ scope: TeamScope; scopeId: number }>,
+  ): Promise<void> {
+    await assertScopesInTenant(tenantId, permissions);
+  },
+
+  /** Replaces the scopes of a team: groups and devices of the team's tenant
+   *  only (400 otherwise). */
   async setPermissions(
     teamId: number,
     permissions: Array<{ scope: 'group' | 'device' | 'ungrouped'; scopeId: number; level: 'ro' | 'rw'; capabilities?: DeviceCapability[] }>,
   ): Promise<TeamPermission[]> {
     // Resolve tenant_id from the team
-    const team = await db('user_teams').where({ id: teamId }).select('tenant_id').first();
-    const tenantId = team?.tenant_id;
+    const tenantId = await teamTenantId(teamId);
+    if (tenantId === null) throw new AppError(404, 'Team not found');
+    await assertScopesInTenant(tenantId, permissions);
 
     return db.transaction(async (trx) => {
       await trx('team_permissions').where({ team_id: teamId }).del();
@@ -190,22 +275,42 @@ export const teamService = {
     });
   },
 
+  /**
+   * Adds one scope to a team, or changes its level (group creation grants
+   * the creator's can_create teams the new group). The row is written in
+   * the team's tenant (`tenant_id`, NOT NULL). A scope outside that tenant
+   * is never written: logged, and null is returned. The ON CONFLICT relies
+   * on the unique constraint on (team_id, scope, scope_id). `conn`: a
+   * transaction of the caller, if any.
+   */
   async addPermission(
     teamId: number,
     scope: 'group' | 'device' | 'ungrouped',
     scopeId: number,
     level: 'ro' | 'rw',
-  ): Promise<TeamPermission> {
-    const [row] = await db<PermissionRow>('team_permissions')
-      .insert({ team_id: teamId, scope, scope_id: scopeId, level })
+    conn: Knex = db,
+  ): Promise<TeamPermission | null> {
+    const tenantId = await teamTenantId(teamId, conn);
+    if (tenantId === null) return null;
+    try {
+      await assertScopesInTenant(tenantId, [{ scope, scopeId }], conn);
+    } catch (err) {
+      if (!(err instanceof AppError)) throw err;
+      logger.warn({ teamId, tenantId, scope, scopeId }, `team scope not added: ${err.message}`);
+      return null;
+    }
+    const [row] = await conn<PermissionRow>('team_permissions')
+      .insert({ team_id: teamId, tenant_id: tenantId, scope, scope_id: scopeId, level })
       .onConflict(['team_id', 'scope', 'scope_id'])
       .merge({ level })
       .returning('*');
     return rowToPermission(row);
   },
 
-  async removePermission(permissionId: number): Promise<boolean> {
-    const count = await db('team_permissions').where({ id: permissionId }).del();
+  /** Removes one scope of this team; false when the team has no such scope
+   *  (a scope of another team is never touched). */
+  async removePermission(teamId: number, permissionId: number): Promise<boolean> {
+    const count = await db('team_permissions').where({ id: permissionId, team_id: teamId }).del();
     return count > 0;
   },
 };

@@ -5,19 +5,13 @@ import { authService } from '../services/auth.service';
 import { appConfigService } from '../services/appConfig.service';
 import { twoFactorService } from '../services/twoFactor.service';
 import { permissionService } from '../services/permission.service';
-import { tenantService } from '../services/tenant.service';
+import { tenantService, noTenantAccessError, refuseSignInWithoutTenant } from '../services/tenant.service';
 import { AppError } from '../middleware/errorHandler';
 import { config } from '../config';
 import { obligateService } from '../services/obligate.service';
 import { db } from '../db';
 import type { LoginInput } from '../validators/auth.schema';
 import { DEVICE_KEY_HEADER, type DeviceChallenge, type AuthMeDeviceKey } from '@obligarth/shared';
-
-/** Helper: resolve & store the first accessible tenant in the session. */
-async function setSessionTenant(req: Request, userId: number): Promise<void> {
-  const tenant = await tenantService.getFirstTenantForUser(userId);
-  req.session.currentTenantId = tenant?.id ?? 1;
-}
 
 export const authController = {
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -120,11 +114,18 @@ export const authController = {
         return;
       }
 
-      // No 2FA — complete session immediately
+      // No 2FA — complete session immediately, on the first tenant of the
+      // account (the master tenant for a platform admin without membership
+      // rows). An account without any tenant gets no session: never the
+      // master tenant it is not a member of. (With a second factor, the same
+      // check runs once it is proven, twoFactorController.verify: nothing is
+      // told before both factors are.)
+      const tenantId = await tenantService.sessionTenantFor(user.id, user.role);
+      if (tenantId === null) throw await refuseSignInWithoutTenant(req, user, 'password');
       req.session.userId = user.id;
       req.session.username = user.username;
       req.session.role = user.role;
-      await setSessionTenant(req, user.id);
+      req.session.currentTenantId = tenantId;
 
       try {
         const { auditService } = await import('../services/audit.service');
@@ -201,9 +202,20 @@ export const authController = {
         throw new AppError(401, 'User not found');
       }
 
-      // Repair missing currentTenantId (e.g. sessions from before Phase 13)
-      if (!req.session.currentTenantId) {
-        await setSessionTenant(req, user.id);
+      // Repair a missing session tenant (e.g. sessions from before Phase 13)
+      // or one the user no longer belongs to (requireTenant refuses it): the
+      // first tenant it still belongs to. None — never the master tenant it
+      // is not a member of: the session ends, as the sign-in is refused.
+      const current = Number(req.session.currentTenantId);
+      const stale = !Number.isInteger(current) || current <= 0
+        || (user.role !== 'admin' && !(await tenantService.isMemberCached(user.id, current)));
+      if (stale) {
+        const tenantId = await tenantService.sessionTenantFor(user.id, user.role);
+        if (tenantId === null) {
+          await new Promise<void>((resolve) => req.session.destroy(() => resolve()));
+          throw noTenantAccessError();
+        }
+        req.session.currentTenantId = tenantId;
       }
 
       const isAdmin = user.role === 'admin';

@@ -1,4 +1,5 @@
 import { clientIp as resolveClientIp } from '../utils/clientIp';
+import type { Knex } from 'knex';
 import { db } from '../db';
 import type { Request } from 'express';
 import { isMasterTenant } from '@obligarth/shared';
@@ -64,26 +65,45 @@ function rowToAudit(r: any): AuditLogRow {
 // whose id is the row's resource_path. The core registers its own below; a
 // module registers its types (registerAuditResourceName) — removing the
 // module removes the subquery on its table.
+//
+// A name is only resolved within the tenant of the entry (`tenant`): an
+// entry that cites the id of another tenant's resource (resource_path is
+// free text) shows no name, so a tenant's log never names what another
+// tenant owns. The same goes for the device of an entry (device_id).
+//   - { column: c }              the row's own tenant column (tenant_id by
+//                                default; `id` for the tenants table);
+//   - { membership: t, key: k }  a global row (users) named only when it
+//                                belongs to the entry's tenant through the
+//                                membership table t (t.k = the row's id,
+//                                t.tenant_id = the entry's tenant).
+
+export type AuditNameTenant = { column: string } | { membership: string; key: string };
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 const RESOURCE_TYPE_RE = /^[a-z][a-z0-9_]*$/;
-const resourceNames: Array<{ resourceType: string; table: string; column: string }> = [];
+const resourceNames: Array<{ resourceType: string; table: string; column: string; tenant: AuditNameTenant }> = [];
 
-export function registerAuditResourceName(resourceType: string, table: string, column = 'name'): void {
+export function registerAuditResourceName(
+  resourceType: string,
+  table: string,
+  column = 'name',
+  tenant: AuditNameTenant = { column: 'tenant_id' },
+): void {
   // Inlined in the SQL below: identifiers and the type literal are checked.
-  if (!RESOURCE_TYPE_RE.test(resourceType) || !IDENT_RE.test(table) || !IDENT_RE.test(column)) {
+  const idents = 'column' in tenant ? [tenant.column] : [tenant.membership, tenant.key];
+  if (!RESOURCE_TYPE_RE.test(resourceType) || ![table, column, ...idents].every((i) => IDENT_RE.test(i))) {
     throw new Error(`Invalid audit resource name source: ${resourceType} → ${table}.${column}`);
   }
   if (resourceNames.some((r) => r.resourceType === resourceType)) {
     throw new Error(`Audit resource type '${resourceType}' registered twice`);
   }
-  resourceNames.push({ resourceType, table, column });
+  resourceNames.push({ resourceType, table, column, tenant });
 }
 
 registerAuditResourceName('team', 'user_teams');
-registerAuditResourceName('user', 'users', 'username');
+registerAuditResourceName('user', 'users', 'username', { membership: 'user_tenants', key: 'user_id' });
 registerAuditResourceName('group', 'device_groups');
-registerAuditResourceName('tenant', 'tenants');
+registerAuditResourceName('tenant', 'tenants', 'name', { column: 'id' });
 
 /** Resolves the human-readable name for an audit row's resource via
  *  correlated subqueries.
@@ -98,16 +118,26 @@ registerAuditResourceName('tenant', 'tenants');
  *  branch is only executed when the WHERE predicate is true, and we
  *  compare `id::text = resource_path` (cast the PK, not the path).
  *  With LIMIT 100 + indexed PK lookups this stays cheap. The types are
- *  distinct, so at most one branch names a row. */
+ *  distinct, so at most one branch names a row. Each branch only names a
+ *  row of the entry's tenant (see "Resource names" above). */
 function resourceNameSelect() {
   if (!resourceNames.length) return db.raw('NULL::text as resource_name');
+  const inTenant = (r: (typeof resourceNames)[number]) => ('column' in r.tenant
+    ? `${r.table}.${r.tenant.column} = al.tenant_id`
+    : `EXISTS (SELECT 1 FROM ${r.tenant.membership} m WHERE m.${r.tenant.key} = ${r.table}.id AND m.tenant_id = al.tenant_id)`);
   const branches = resourceNames.map((r) =>
-    `(SELECT ${r.column} FROM ${r.table} WHERE al.resource_type = '${r.resourceType}' AND ${r.table}.id::text = al.resource_path)`);
+    `(SELECT ${r.column} FROM ${r.table} WHERE al.resource_type = '${r.resourceType}' AND ${r.table}.id::text = al.resource_path AND ${inTenant(r)})`);
   return db.raw(`
   COALESCE(
     ${branches.join(',\n    ')}
   ) as resource_name
 `);
+}
+
+/** The device named by an entry, only when it is in the entry's tenant
+ *  (see "Resource names" above). */
+function deviceOfEntryTenant(this: Knex.JoinClause): void {
+  this.on('d.id', '=', 'al.device_id').andOn('d.tenant_id', '=', 'al.tenant_id');
 }
 
 function clientIpFromReq(req: Request | undefined): string | undefined {
@@ -176,7 +206,7 @@ export const auditService = {
   async getByDevice(deviceId: number, tenantId: number, limit = 50): Promise<AuditLogRow[]> {
     const rows = await db('audit_logs as al')
       .leftJoin('users as u', 'u.id', 'al.user_id')
-      .leftJoin('devices as d', 'd.id', 'al.device_id')
+      .leftJoin('devices as d', deviceOfEntryTenant)
       .where({ 'al.device_id': deviceId, 'al.tenant_id': tenantId })
       .select(
         'al.*',
@@ -215,7 +245,7 @@ export const auditService = {
     const isMaster = isMasterTenant(params.tenantId);
     const base = db('audit_logs as al')
       .leftJoin('users as u', 'u.id', 'al.user_id')
-      .leftJoin('devices as d', 'd.id', 'al.device_id')
+      .leftJoin('devices as d', deviceOfEntryTenant)
       // Always join `tenants` so master rows carry a tenant name column;
       // child tenants get the join too but ignore it.
       .leftJoin('tenants as ten', 'ten.id', 'al.tenant_id');

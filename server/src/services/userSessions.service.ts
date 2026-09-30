@@ -3,6 +3,7 @@ import { getIO } from '../socket';
 import { logger } from '../utils/logger';
 import { forgetSessionUser } from '../middleware/sessionUserGuard';
 import { sessionHash, sessionRoom } from '../utils/sessionHash';
+import { forgetTenantMemberships } from './tenant.service';
 
 // Session kill-switch for one user (P6, docs/mobile/device-bound-2fa.md §6.0).
 //
@@ -16,10 +17,12 @@ import { sessionHash, sessionRoom } from '../utils/sessionHash';
 //
 // Deleting rows alone is not enough: a request already in flight saves its
 // session back when it ends. middleware/sessionUserGuard.ts re-reads the
-// user on every request (its cache entry is dropped here), so such a
-// resurrected row dies on its next use. Connections that outlive the
-// session are closed too: the modules close theirs through their
-// onSessionsKilled hooks.
+// user on every request, and requireTenant (middleware/tenant.ts) its
+// membership of the session's tenant (both caches of the user are dropped
+// here): on its next use, such a resurrected row dies (user disabled or
+// deleted), loses the admin bypasses (user demoted) or is refused its tenant
+// (membership removed). Connections that outlive the session are closed
+// too: the modules close theirs through their onSessionsKilled hooks.
 
 // ── Hooks of the modules ────────────────────────────────────────────────────
 
@@ -59,6 +62,7 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   ) as { rowCount?: number } | undefined;
   const count = Number(res?.rowCount ?? 0);
   forgetSessionUser(userId);
+  forgetTenantMemberships(userId);
   try {
     getIO().in(`user:${userId}`).disconnectSockets(true);
   } catch { /* Socket.io not initialised (CLI) */ }

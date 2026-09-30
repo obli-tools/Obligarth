@@ -18,10 +18,14 @@ export function LoginPage() {
  const [username, setUsername] = useState('');
  const [password, setPassword] = useState('');
  const errorParam = searchParams.get('error');
+ // The account belongs to no tenant: the server opens no session for it
+ // (403 noTenantAccess, or ?error=no_tenant after an Obligate sign-in).
+ const noTenantMessage = t('login.noTenantAccess', 'Your account has no access to any tenant on this server. Ask an administrator to grant it access.');
  const [error, setError] = useState(
  errorParam === 'sso_failed' ? t('login.ssoFailed', 'SSO authentication failed. Please try local login.')
  // SSO worked but the linked local account is disabled in Obligarth.
  : errorParam === 'account_disabled' ? t('login.accountDisabled', 'Your account is disabled on this server. Ask an administrator to re-enable it.')
+ : errorParam === 'no_tenant' ? noTenantMessage
  : '',
  );
  const [serverVersion, setServerVersion] = useState<string | null>(null);
@@ -29,8 +33,8 @@ export function LoginPage() {
  // only sign in through Obligate (server answer 403 ssoLoginRequired).
  const [ssoLoginRequired, setSsoLoginRequired] = useState(false);
 
- // If we arrived here with ?error=sso_failed (or account_disabled), don't auto-redirect to Obligate again
- const ssoFailed = errorParam === 'sso_failed' || errorParam === 'account_disabled';
+ // If we arrived here with ?error=sso_failed (or account_disabled, no_tenant), don't auto-redirect to Obligate again
+ const ssoFailed = errorParam === 'sso_failed' || errorParam === 'account_disabled' || errorParam === 'no_tenant';
  // Break-glass: ?local=1 forces the local username/password form and skips
  // the automatic SSO redirect. Lets a local admin sign in even when SSO is
  // enabled and Obligate is up — the escape hatch when SSO is misconfigured
@@ -121,6 +125,11 @@ export function LoginPage() {
  setSsoLoginRequired(true);
  return;
  }
+ if ((err as { code?: string } | null)?.code === 'noTenantAccess') {
+ setPassword('');
+ setError(noTenantMessage);
+ return;
+ }
  setError(err instanceof Error ? err.message : t('login.loginFailed'));
  }
  };
@@ -134,12 +143,18 @@ export function LoginPage() {
  await checkSession();
  navigate('/', { replace: true });
  } catch (err: unknown) {
- const axiosErr = err as { response?: { status?: number; data?: { error?: string } } };
+ const axiosErr = err as { response?: { status?: number; data?: { error?: string; code?: string } } };
  const status = axiosErr?.response?.status;
  const serverMsg = axiosErr?.response?.data?.error ?? '';
  if (status === 400 && serverMsg.toLowerCase().includes('pending')) {
  // Session was lost between login and 2FA verify (e.g. server restart)
  setError(t('login.twoFactor.sessionExpired'));
+ setStep('credentials');
+ } else if (status === 403 && axiosErr?.response?.data?.code === 'noTenantAccess') {
+ // Both factors were right, but the account belongs to no tenant: the
+ // pending sign-in is over.
+ setError(noTenantMessage);
+ setPassword('');
  setStep('credentials');
  } else {
  setError(t('login.twoFactor.invalidCode'));

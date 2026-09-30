@@ -4,7 +4,7 @@ import type { Request } from 'express';
 import crypto from 'crypto';
 import { db } from '../db';
 import { obligateService, moduleDashboardStats, type ObligateDashboardStat, type ObligateRoster } from '../services/obligate.service';
-import { tenantService } from '../services/tenant.service';
+import { tenantService, refuseSignInWithoutTenant, forgetTenantMemberships } from '../services/tenant.service';
 import { appConfigService } from '../services/appConfig.service';
 import { permissionSetService } from '../services/permissionSet.service';
 import { auditService } from '../services/audit.service';
@@ -47,7 +47,7 @@ async function resolvePublicOrigin(req: Request): Promise<string | null> {
  * 'admin' row of a platform admin who is one no longer) and the team
  * memberships of those tenants.
  * Returns true when a tenant row was removed: an open session may sit on that
- * tenant (requireTenant does not re-check membership), the caller ends them.
+ * tenant (requireTenant refuses it from then on), the caller ends them.
  */
 async function applySsoMemberships(
   localUserId: number,
@@ -393,6 +393,8 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
   const tenantRemoved = await applySsoMemberships(
     localUserId, { tenants: assertion.tenants, teams: assertion.teams }, platformRole, ssoOwned,
   );
+  // requireTenant caches memberships a few seconds: start from these rows.
+  forgetTenantMemberships(localUserId);
   if (demoted || tenantRemoved) {
     // Open sessions keep their tenant (and an admin's may sit on any tenant):
     // end them, as a local demotion does. This sign-in gets a new session.
@@ -420,6 +422,17 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
         preferences: JSON.stringify({ ...existing, ...uiPrefs }),
       });
     }
+  }
+
+  // The session's tenant when no cross-app hint applies: the first tenant of
+  // the account (a platform admin lands on the master tenant). An account
+  // left without any tenant gets no session — never the master tenant it is
+  // not a member of; the login page says why (?error=no_tenant) and access
+  // is granted in Obligate.
+  const firstTenantId = await tenantService.sessionTenantFor(localUserId, platformRole);
+  if (firstTenantId === null) {
+    await refuseSignInWithoutTenant(req, { id: localUserId, username: assertion.username }, 'sso');
+    throw Object.assign(new Error(`SSO sign-in refused: local user #${localUserId} belongs to no tenant`), { ssoErrorCode: 'no_tenant' });
   }
 
   // Set session, under a NEW id (session fixation). Only the cross-app tenant
@@ -471,10 +484,7 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
     delete req.session.requestedTenantSlug;
   }
 
-  if (resolvedTenantId === null) {
-    const tenant = await tenantService.getFirstTenantForUser(localUserId);
-    resolvedTenantId = tenant?.id ?? 1;
-  }
+  if (resolvedTenantId === null) resolvedTenantId = firstTenantId;
   req.session.currentTenantId = resolvedTenantId;
 
   return localUserId;
@@ -575,7 +585,8 @@ router.get('/callback', async (req, res) => {
       res.redirect(reauthResultUrl(reauthReturnPath(pendingReauth.returnTo), 'failed', 'error'));
       return;
     }
-    const code = (err as { ssoErrorCode?: string } | null)?.ssoErrorCode === 'account_disabled' ? 'account_disabled' : 'sso_failed';
+    const ssoErrorCode = (err as { ssoErrorCode?: string } | null)?.ssoErrorCode;
+    const code = ssoErrorCode === 'account_disabled' || ssoErrorCode === 'no_tenant' ? ssoErrorCode : 'sso_failed';
     res.redirect(`/login?error=${code}`);
   }
 });
@@ -1052,6 +1063,7 @@ async function applyConfirmedSync(
       const tenantRemoved = await applySsoMemberships(
         localId, { tenants: current?.tenants ?? [], teams: current?.teams ?? [] }, 'user', true,
       );
+      forgetTenantMemberships(localId);
       if (wasAdmin || tenantRemoved) {
         const { killSessionsForUser } = await import('../services/userSessions.service');
         await killSessionsForUser(localId, wasAdmin ? 'role_demoted' : 'tenant_access_removed');
