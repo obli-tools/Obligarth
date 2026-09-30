@@ -1,11 +1,5 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import {
-  DndContext,
-  useDroppable,
-  useDraggable,
-  type DragEndEvent,
-} from '@dnd-kit/core';
 import {
   LayoutDashboard,
   Settings,
@@ -25,26 +19,20 @@ import {
   Monitor,
   Laptop,
   ShieldCheck,
-  Plus,
   Key,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
-import { deviceMatchesSearch } from '@/utils/deviceSearch';
 import { cn } from '@/utils/cn';
 import { useAuthStore } from '@/store/authStore';
 import { useUiStore, useEffectiveSidebar } from '@/store/uiStore';
-import { useDndSensors } from '@/hooks/useDndSensors';
 import { IconButton } from '@/components/common/IconButton';
-import { confirmDialog } from '@/components/common/ConfirmDialog';
 import { useTenantStore } from '@/store/tenantStore';
-import { deviceApi } from '@/api/device.api';
 import { groupsApi } from '@/api/groups.api';
 import { getSocket } from '@/socket/socketClient';
-import type { Device, DeviceGroupTreeNode, DeviceStatus } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obliance/shared';
 import { SocketEvents, MASTER_TENANT_ID, isMasterTenant } from '@obliance/shared';
-import toast from 'react-hot-toast';
 
 // ── localStorage helpers ─────────────────────────────────────────────────────
 
@@ -70,24 +58,22 @@ function usePersisted<T>(key: string, initial: T): [T, (v: T | ((prev: T) => T))
 // ── Cross-mount cache ────────────────────────────────────────────────────────
 // Below 1024 px the Sidebar lives in the off-canvas Drawer (AppLayout), which
 // unmounts it when closed — and the drawer closes on every navigation. Without
-// this cache every hamburger tap would start from an empty tree and download
-// the whole fleet again (pageSize 10000: several MB on mobile data). The last
-// device list / group tree / approvals count are kept here, keyed by user +
+// this cache every hamburger tap would start from an empty tree and fetch it
+// again. The last group tree / approvals count are kept here, keyed by user +
 // tenant, so a remount renders at once and only refetches once the data is
 // REFRESH_MS old. The desktop column stays mounted: first load and tenant
 // switches behave as before (empty tree → fetch → refresh every 30 s).
 
-/** Full refresh cadence (socket deltas keep the list live in between). */
+/** Full refresh cadence (socket events keep the tree live in between). */
 const REFRESH_MS = 30_000;
 
 interface SidebarData {
   /** User + tenant the rows belong to; null = nothing loaded yet. */
   key: string | null;
-  devices: Device[];
   groupTree: DeviceGroupTreeNode[];
 }
 
-const EMPTY_SIDEBAR_DATA: SidebarData = { key: null, devices: [], groupTree: [] };
+const EMPTY_SIDEBAR_DATA: SidebarData = { key: null, groupTree: [] };
 
 let sidebarCache: (SidebarData & { key: string; fetchedAt: number }) | null = null;
 let pendingApprovalsCache: { key: string; count: number } | null = null;
@@ -108,193 +94,51 @@ function rememberDrawerUi(key: string, patch: Partial<{ search: string; scrollTo
   drawerUiCache = { ...base, ...patch };
 }
 
-// ── Device status dot ────────────────────────────────────────────────────────
+// ── Group search ─────────────────────────────────────────────────────────────
+// Keeps the groups whose name matches (with their whole sub-tree) and the
+// ancestors leading to them.
 
-const STATUS_DOT: Record<DeviceStatus, string> = {
-  online:      'bg-green-500',
-  offline:     'bg-gray-400',
-  warning:     'bg-yellow-500 animate-pulse',
-  critical:    'bg-red-500 animate-pulse',
-  pending:     'bg-blue-400',
-  maintenance:       'bg-rose-400',
-  suspended:         'bg-gray-500',
-  pending_uninstall: 'bg-orange-400 animate-pulse',
-  updating:          'bg-blue-400 animate-pulse',
-  update_error:      'bg-orange-400',
-};
-
-// ── Sidebar device ordering ───────────────────────────────────────────────────
-// Inside a group, devices are alphabetical by default, BUT any device with an
-// abnormal status bubbles to the top of its group — most-urgent first. Within
-// each tier the order stays alphabetical. Groups themselves keep their manual
-// order (only the devices inside are reordered).
-//
-//   Critical > Warn > Updating > Other (any other non-normal state) > Offline > Normal (online)
-//
-// Offline sits the LOWEST before online, on purpose: a workstation powering
-// off is normal and shouldn't dominate the top of the list. The live colours
-// (red/yellow/blue) stay above it because they flag something happening on a
-// REACHABLE machine — an offline box already lost those colours (see the
-// offline sweep, which now repaints stale warning/critical devices grey).
-const SIDEBAR_STATUS_TIER: Partial<Record<DeviceStatus, number>> = {
-  critical: 0,
-  warning:  1,
-  updating: 2,
-  // "Other" (maintenance / suspended / pending / pending_uninstall /
-  // update_error) → falls through to 3.
-  offline:  4,
-  online:   5,
-};
-function sidebarStatusTier(s: DeviceStatus): number {
-  return SIDEBAR_STATUS_TIER[s] ?? 3;
-}
-function sortSidebarDevices(devices: Device[]): Device[] {
-  return [...devices].sort((a, b) => {
-    const tier = sidebarStatusTier(a.status) - sidebarStatusTier(b.status);
-    if (tier !== 0) return tier;
-    const na = (a.displayName ?? a.hostname ?? '').toLowerCase();
-    const nb = (b.displayName ?? b.hostname ?? '').toLowerCase();
-    return na.localeCompare(nb, undefined, { numeric: true, sensitivity: 'base' });
-  });
-}
-
-function DeviceStatusDot({ status }: { status: DeviceStatus }) {
-  const dot = STATUS_DOT[status] ?? 'bg-gray-400';
-  return <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', dot)} />;
-}
-
-// ── Draggable Device Item ────────────────────────────────────────────────────
-
-function DraggableDeviceItem({
-  device,
-  indent = false,
-  depth = 0,
-}: {
-  device: Device;
-  indent?: boolean;
-  /** Parent group depth. Device is indented one level deeper than its parent. */
-  depth?: number;
-}) {
-  const location = useLocation();
-  const isActive = location.pathname === `/devices/${device.id}`;
-  const { attributes, listeners, setNodeRef, setActivatorNodeRef, isDragging } = useDraggable({
-    id: `device-${device.id}`,
-    data: { type: 'device', device },
-  });
-  // The wrapper is also the keyboard activator: dnd-kit's KeyboardSensor only
-  // starts a drag when Space / Enter is pressed ON it, so Enter on the inner
-  // Link still navigates.
-  const setRefs = useCallback((el: HTMLElement | null) => {
-    setNodeRef(el);
-    setActivatorNodeRef(el);
-  }, [setNodeRef, setActivatorNodeRef]);
-
-  const displayName = anonymize(device.displayName ?? device.hostname);
-
-  // Match the group-row padding formula: each nesting level adds 12px, and
-  // devices get an extra 22px so they clearly sit under their parent group
-  // header's icon (not level with it).
-  // Padding lives on the Link (not the wrapper) so the active background
-  // starts flush with the outer container and the status dot has breathing
-  // room inside the highlighted pill instead of being glued to its left edge.
-  const paddingLeft = indent ? depth * 12 + 22 : 8;
-
-  return (
-    <div
-      ref={setRefs}
-      {...attributes}
-      {...listeners}
-      className="touch-manipulation"
-      style={{ opacity: isDragging ? 0.4 : 1 }}
-    >
-      <Link
-        to={`/devices/${device.id}`}
-        style={{ paddingLeft }}
-        className={cn(
-          'flex items-center gap-2 rounded-md py-1.5 pr-2 transition-colors coarse:py-2.5',
-          isActive
-            ? 'bg-bg-active text-text-primary'
-            : 'text-text-secondary hover:bg-bg-hover hover:text-text-primary',
-        )}
-        onClick={e => { if (isDragging) e.preventDefault(); }}
-      >
-        <DeviceStatusDot status={device.status} />
-        <span className="truncate flex-1 text-[13px]">{displayName}</span>
-      </Link>
-    </div>
-  );
-}
-
-// ── Droppable Group Header ────────────────────────────────────────────────────
-
-function DroppableGroupHeader({
-  groupId,
-  children,
-}: {
-  groupId: number | null;
-  children: React.ReactNode;
-}) {
-  const { setNodeRef, isOver } = useDroppable({
-    id: groupId === null ? 'drop-device-ungrouped' : `drop-device-group-${groupId}`,
-    data: { type: 'device-group', groupId },
-  });
-  return (
-    <div
-      ref={setNodeRef}
-      className={cn(
-        'rounded-md transition-colors',
-        isOver && 'ring-1 ring-accent bg-accent/10',
-      )}
-    >
-      {children}
-    </div>
-  );
+function filterGroupTree(nodes: DeviceGroupTreeNode[], query: string): DeviceGroupTreeNode[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return nodes;
+  const walk = (list: DeviceGroupTreeNode[]): DeviceGroupTreeNode[] => {
+    const kept: DeviceGroupTreeNode[] = [];
+    for (const node of list) {
+      if (node.name.toLowerCase().includes(q)) {
+        kept.push(node);
+      } else {
+        const children = walk(node.children);
+        if (children.length > 0) kept.push({ ...node, children });
+      }
+    }
+    return kept;
+  };
+  return walk(nodes);
 }
 
 // ── Collapsible Group Row ─────────────────────────────────────────────────────
 
 function GroupRow({
   group,
-  devices,
-  searchQuery,
   depth = 0,
-  hideDeviceRows = false,
+  forceExpanded = false,
 }: {
   group: DeviceGroupTreeNode;
-  devices: Device[];
-  searchQuery: string;
   depth?: number;
-  hideDeviceRows?: boolean;
+  /** While searching: show the matches whatever the saved collapse state. */
+  forceExpanded?: boolean;
 }) {
   const { t } = useTranslation();
   const location = useLocation();
-  const [collapsed, setCollapsed] = usePersisted<boolean>(`sidebar-group-collapsed-${group.id}`, false);
+  const [collapsedPref, setCollapsed] = usePersisted<boolean>(`sidebar-group-collapsed-${group.id}`, false);
+  const collapsed = collapsedPref && !forceExpanded;
+  const hasChildren = group.children.length > 0;
 
   const isGroupActive = location.pathname === `/group/${group.id}`;
-  const groupDevices = devices.filter(d => d.groupId === group.id);
-
-  // Apply search filter — same field set as the /devices server search
-  // (hostname, displayName, IP local/public, MAC, last user, OS, agent
-  // version, geo, UUID, tags, group name) so the user can find a device
-  // from the sidebar by anything they would type into the main search.
-  const filteredDevices = searchQuery
-    ? groupDevices.filter(d => deviceMatchesSearch(d, searchQuery))
-    : groupDevices;
-
-  const onlineCount   = groupDevices.filter(d => d.status === 'online').length;
-  const warningCount  = groupDevices.filter(d => d.status === 'warning').length;
-  const criticalCount = groupDevices.filter(d => d.status === 'critical').length;
-  const offlineCount  = groupDevices.filter(d => d.status === 'offline').length;
-
-  // If searching and no devices match in this group/subtree, hide it
-  if (searchQuery && filteredDevices.length === 0 && group.children.length === 0) {
-    return null;
-  }
-
   const paddingLeft = depth * 12;
 
   return (
-    <DroppableGroupHeader groupId={group.id}>
+    <div>
       {/* Group header row */}
       <div
         className={cn(
@@ -305,21 +149,26 @@ function GroupRow({
         )}
         style={{ paddingLeft }}
       >
-        {/* Collapse toggle — invisible 40 px hit area on touch screens */}
-        <button
-          onClick={() => setCollapsed(v => !v)}
-          aria-label={collapsed
-            ? (t('nav.expandGroup', { name: group.name }) || `Expand ${group.name}`)
-            : (t('nav.collapseGroup', { name: group.name }) || `Collapse ${group.name}`)}
-          aria-expanded={!collapsed}
-          className="relative p-1 rounded hover:bg-bg-hover transition-colors shrink-0 coarse:after:absolute coarse:after:left-1/2 coarse:after:top-1/2 coarse:after:h-10 coarse:after:w-10 coarse:after:-translate-x-1/2 coarse:after:-translate-y-1/2 coarse:after:content-['']"
-        >
-          {collapsed ? (
-            <ChevronRight size={12} className="text-text-muted" />
-          ) : (
-            <ChevronDown size={12} className="text-text-muted" />
-          )}
-        </button>
+        {/* Collapse toggle — invisible 40 px hit area on touch screens. A
+            leaf group gets a spacer of the same width so names stay aligned. */}
+        {hasChildren ? (
+          <button
+            onClick={() => setCollapsed(v => !v)}
+            aria-label={collapsed
+              ? (t('nav.expandGroup', { name: group.name }) || `Expand ${group.name}`)
+              : (t('nav.collapseGroup', { name: group.name }) || `Collapse ${group.name}`)}
+            aria-expanded={!collapsed}
+            className="relative p-1 rounded hover:bg-bg-hover transition-colors shrink-0 coarse:after:absolute coarse:after:left-1/2 coarse:after:top-1/2 coarse:after:h-10 coarse:after:w-10 coarse:after:-translate-x-1/2 coarse:after:-translate-y-1/2 coarse:after:content-['']"
+          >
+            {collapsed ? (
+              <ChevronRight size={12} className="text-text-muted" />
+            ) : (
+              <ChevronDown size={12} className="text-text-muted" />
+            )}
+          </button>
+        ) : (
+          <span className="w-5 shrink-0" aria-hidden />
+        )}
 
         {/* Group link */}
         <Link
@@ -328,44 +177,19 @@ function GroupRow({
         >
           <Server size={14} className="shrink-0 text-text-muted" />
           <span className="truncate flex-1 text-[13px] font-medium">{anonymize(group.name)}</span>
-          {groupDevices.length > 0 && (
-            <span
-              className="flex items-center gap-1.5 shrink-0 text-[11px] font-mono font-medium"
-              title={t('nav.groupCounts', { online: onlineCount, warning: warningCount, critical: criticalCount, offline: offlineCount, total: groupDevices.length })
-                || `${onlineCount} online · ${warningCount} warning · ${criticalCount} critical · ${offlineCount} offline · ${groupDevices.length} total`}
-            >
-              {onlineCount   > 0 && <span className="text-green-400">{onlineCount}</span>}
-              {warningCount  > 0 && <span className="text-amber-400">{warningCount}</span>}
-              {criticalCount > 0 && <span className="text-red-400">{criticalCount}</span>}
-              {offlineCount  > 0 && <span className="text-text-muted">{offlineCount}</span>}
-            </span>
-          )}
         </Link>
       </div>
 
-      {/* Expanded content */}
-      {!collapsed && (
-        <div>
-          {/* Devices in this group — hidden when `hideDeviceRows` is true
-              (i.e. user toggled "Devices" off but still wants to see the
-              group tree for navigation). */}
-          {!hideDeviceRows && filteredDevices.map(device => (
-            <DraggableDeviceItem key={device.id} device={device} indent depth={depth} />
-          ))}
-          {/* Child groups */}
-          {group.children.map(child => (
-            <GroupRow
-              key={child.id}
-              group={child}
-              devices={devices}
-              searchQuery={searchQuery}
-              depth={depth + 1}
-              hideDeviceRows={hideDeviceRows}
-            />
-          ))}
-        </div>
-      )}
-    </DroppableGroupHeader>
+      {/* Child groups */}
+      {!collapsed && group.children.map(child => (
+        <GroupRow
+          key={child.id}
+          group={child}
+          depth={depth + 1}
+          forceExpanded={forceExpanded}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -413,7 +237,7 @@ interface SidebarProps {
    * instead of the collapse / float toggles. Default: the desktop column.
    */
   variant?: 'default' | 'drawer';
-  /** Drawer variant: close the drawer (before opening a modal, etc.). */
+  /** Drawer variant: close the drawer. */
   onRequestClose?: () => void;
 }
 
@@ -431,37 +255,25 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // cap so the menu still appears for admins regardless of cap state).
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
   const hasSupervisionCap = tenantCaps.has('supervision:read');
-  const hasApprovalCap = tenantCaps.has('agent_config:approval');
   const hasAnyAgentConfigCap =
     tenantCaps.has('agent_config:custom_sections') ||
     tenantCaps.has('agent_config:discovery') ||
     tenantCaps.has('agent_config:keys') ||
-    hasApprovalCap;
-  const { toggleSidebarFloating, toggleSidebarCollapsed, openAddAgentModal } = useUiStore();
+    tenantCaps.has('agent_config:approval');
+  const { toggleSidebarFloating, toggleSidebarCollapsed } = useUiStore();
   // Effective (device-aware) mode — see useEffectiveSidebar(). The drawer is
   // always the full, expanded sidebar.
   const effective = useEffectiveSidebar();
   const sidebarCollapsed = !inDrawer && effective.collapsed;
   const sidebarFloating = !inDrawer && effective.floating;
   const canFloat = !inDrawer && effective.canFloat;
-  // Opening the Add-agent modal from the drawer: close the drawer first
-  // (it sits above the modal).
-  const handleAddAgent = () => {
-    onRequestClose?.();
-    openAddAgentModal();
-  };
 
   const admin = isAdmin();
-  // "Add agent" button visibility — admin OR has `agent_config:approval`.
-  // The modal needs to list API keys (server gate updated to allow
-  // approval-capa holders to call GET /api/agent/keys for the picker).
-  const canAddAgent = admin || hasApprovalCap;
 
   // ── Layout preferences ─────────────────────────────────────────────────────
   const [storedSidebarLayout, setSidebarLayout] = usePersisted<'stacked' | 'side-by-side'>('sidebar-layout', 'stacked');
   // A 320 px drawer has no room for two columns: forced stacked, never persisted.
   const sidebarLayout = inDrawer ? 'stacked' : storedSidebarLayout;
-  const [showDevices, setShowDevices] = usePersisted<boolean>('sidebar-show-devices', true);
   const [splitPercent, setSplitPercent] = usePersisted<number>('sidebar-split-percent', 50);
   const [adminMenuOpen, setAdminMenuOpen] = usePersisted<boolean>('sidebar:admin-open', true);
   const [navMenuOpen, setNavMenuOpen] = usePersisted<boolean>('sidebar:nav-open', true);
@@ -476,20 +288,17 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   };
   const splitContainerRef = useRef<HTMLDivElement>(null);
 
-  // ── Device & group state ────────────────────────────────────────────────────
+  // ── Group tree state ───────────────────────────────────────────────────────
   // Seeded from the cross-mount cache (see top of file) when it holds this
   // user + tenant, so a re-opened drawer shows the tree immediately.
   const currentTenantId = useTenantStore(s => s.currentTenantId);
   const cacheKey = sidebarCacheKey(user?.id, currentTenantId);
   const [data, setData] = useState<SidebarData>(() => (
     sidebarCache?.key === cacheKey
-      ? { key: cacheKey, devices: sidebarCache.devices, groupTree: sidebarCache.groupTree }
+      ? { key: cacheKey, groupTree: sidebarCache.groupTree }
       : EMPTY_SIDEBAR_DATA
   ));
-  const { devices, groupTree } = data;
-  const setDevices = useCallback((update: (prev: Device[]) => Device[]) => {
-    setData(d => ({ ...d, devices: update(d.devices) }));
-  }, []);
+  const { groupTree } = data;
   const setGroupTree = useCallback((tree: DeviceGroupTreeNode[]) => {
     setData(d => ({ ...d, groupTree: tree }));
   }, []);
@@ -504,29 +313,23 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     pendingApprovalsCache?.key === cacheKey ? pendingApprovalsCache.count : 0
   ));
 
-  // Socket deltas / drag & drop edits flow back into the cache. `data.key`
-  // always describes `data`, so another tenant's rows can never land in it.
+  // Socket updates flow back into the cache. `data.key` always describes
+  // `data`, so another tenant's rows can never land in it.
   useEffect(() => {
     if (data.key !== null && sidebarCache?.key === data.key) {
-      sidebarCache.devices = data.devices;
       sidebarCache.groupTree = data.groupTree;
     }
   }, [data]);
 
-  const loadDeviceData = useCallback(async () => {
+  const loadGroupTree = useCallback(async () => {
     const key = currentSidebarCacheKey();
     try {
-      // Fetch ALL approved devices with a large page size. Default is 100
-      // which silently truncated sidebar contents on fleets > 100 devices.
-      const [paged, tree] = await Promise.all([
-        deviceApi.listPaginated({ approvalStatus: 'approved', page: 1, pageSize: 10000 }),
-        groupsApi.tree(),
-      ]);
+      const tree = await groupsApi.tree();
       // Tenant switched (or another user signed in) while in flight: the
       // answer belongs to the previous context — drop it.
       if (key !== currentSidebarCacheKey()) return;
-      sidebarCache = { key, devices: paged.items, groupTree: tree, fetchedAt: Date.now() };
-      setData({ key, devices: paged.items, groupTree: tree });
+      sidebarCache = { key, groupTree: tree, fetchedAt: Date.now() };
+      setData({ key, groupTree: tree });
     } catch {
       // fail silently — sidebar will just show empty
     }
@@ -538,13 +341,13 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // this user + tenant, or nothing until the fetch lands.
     setData(prev => (
       prev.key === cacheKey ? prev
-        : cached ? { key: cacheKey, devices: cached.devices, groupTree: cached.groupTree }
+        : cached ? { key: cacheKey, groupTree: cached.groupTree }
         : EMPTY_SIDEBAR_DATA
     ));
     // Background tabs / a backgrounded mobile app skip the 30 s full refresh
-    // (socket deltas keep the list live) and catch up once visible again.
+    // (socket events keep the tree live) and catch up once visible again.
     const refresh = () => {
-      if (document.visibilityState !== 'hidden') loadDeviceData();
+      if (document.visibilityState !== 'hidden') loadGroupTree();
     };
     let interval: ReturnType<typeof setInterval> | undefined;
     let firstTick: ReturnType<typeof setTimeout> | undefined;
@@ -552,17 +355,17 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     if (age >= 0 && age < REFRESH_MS) {
       // Remount on recent cached rows (drawer re-opened): they are already
       // on screen — resume the 30 s cadence from the last fetch instead of
-      // downloading the whole fleet again right now.
+      // fetching the tree again right now.
       firstTick = setTimeout(() => {
         refresh();
         interval = setInterval(refresh, REFRESH_MS);
       }, REFRESH_MS - age);
     } else {
-      loadDeviceData();
+      loadGroupTree();
       interval = setInterval(refresh, REFRESH_MS);
     }
     const onVisible = () => {
-      if (document.visibilityState === 'visible') loadDeviceData();
+      if (document.visibilityState === 'visible') loadGroupTree();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => {
@@ -570,10 +373,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
       clearInterval(interval);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [loadDeviceData, cacheKey]);
+  }, [loadGroupTree, cacheKey]);
 
   // Drawer: put the tree back where the user left it (the drawer unmounts
-  // the Sidebar on close — e.g. after tapping a device).
+  // the Sidebar on close — e.g. after tapping a group).
   const treeScrollRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (!inDrawer) return;
@@ -615,54 +418,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     };
   }, [admin, currentTenantId]);
 
-  // ── Real-time socket updates ────────────────────────────────────────────────
+  // ── Real-time group updates ────────────────────────────────────────────────
   useEffect(() => {
     const socket = getSocket();
     if (!socket) return;
-
-    const onDeviceUpdated = (data: { deviceId: number; status?: DeviceStatus; groupId?: number | null; hostname?: string; displayName?: string | null; privacyModeEnabled?: boolean; airgapEnabled?: boolean }) => {
-      // The server emits DEVICE_UPDATED with PARTIAL payloads from
-      // multiple call sites (handlePush, threshold flips, privacy/
-      // airgap toggles, etc.). Spreading data into the device row
-      // unconditionally overwrites missing fields with `undefined`,
-      // which then makes the device fail every later filter
-      // (groupId becomes undefined → drops out of every group →
-      // the agent visually "disappears" before reappearing on the
-      // next full refetch). Patch only the fields actually present
-      // so a status-only update doesn't wipe hostname/groupId.
-      setDevices(prev => prev.map(d => {
-        if (d.id !== data.deviceId) return d;
-        const next = { ...d };
-        if (data.status !== undefined)              next.status = data.status;
-        if (data.groupId !== undefined)             next.groupId = data.groupId;
-        if (data.hostname !== undefined)            next.hostname = data.hostname;
-        if (data.displayName !== undefined)         next.displayName = data.displayName;
-        if (data.privacyModeEnabled !== undefined)  next.privacyModeEnabled = data.privacyModeEnabled;
-        if (data.airgapEnabled !== undefined)       next.airgapEnabled = data.airgapEnabled;
-        return next;
-      }));
-    };
-
-    const onDeviceOnline = (data: { deviceId: number }) => {
-      setDevices(prev => prev.map(d =>
-        d.id === data.deviceId ? { ...d, status: 'online' as DeviceStatus } : d,
-      ));
-    };
-
-    const onDeviceOffline = (data: { deviceId: number }) => {
-      setDevices(prev => prev.map(d =>
-        d.id === data.deviceId ? { ...d, status: 'offline' as DeviceStatus } : d,
-      ));
-    };
-
-    const onDeviceApproved = () => {
-      // New device approved — reload to include it
-      loadDeviceData();
-    };
-
-    const onDeviceDeleted = (data: { deviceId: number }) => {
-      setDevices(prev => prev.filter(d => d.id !== data.deviceId));
-    };
 
     const onGroupChanged = () => {
       const key = currentSidebarCacheKey();
@@ -671,87 +430,18 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
         .catch(() => {});
     };
 
-    socket.on(SocketEvents.DEVICE_UPDATED, onDeviceUpdated);
-    socket.on(SocketEvents.DEVICE_ONLINE, onDeviceOnline);
-    socket.on(SocketEvents.DEVICE_OFFLINE, onDeviceOffline);
-    socket.on(SocketEvents.DEVICE_APPROVED, onDeviceApproved);
-    socket.on(SocketEvents.DEVICE_DELETED, onDeviceDeleted);
     socket.on(SocketEvents.GROUP_CREATED, onGroupChanged);
     socket.on(SocketEvents.GROUP_UPDATED, onGroupChanged);
     socket.on(SocketEvents.GROUP_DELETED, onGroupChanged);
     socket.on(SocketEvents.GROUP_MOVED, onGroupChanged);
 
     return () => {
-      socket.off(SocketEvents.DEVICE_UPDATED, onDeviceUpdated);
-      socket.off(SocketEvents.DEVICE_ONLINE, onDeviceOnline);
-      socket.off(SocketEvents.DEVICE_OFFLINE, onDeviceOffline);
-      socket.off(SocketEvents.DEVICE_APPROVED, onDeviceApproved);
-      socket.off(SocketEvents.DEVICE_DELETED, onDeviceDeleted);
       socket.off(SocketEvents.GROUP_CREATED, onGroupChanged);
       socket.off(SocketEvents.GROUP_UPDATED, onGroupChanged);
       socket.off(SocketEvents.GROUP_DELETED, onGroupChanged);
       socket.off(SocketEvents.GROUP_MOVED, onGroupChanged);
     };
-  }, [loadDeviceData, setDevices, setGroupTree]);
-
-  // ── Drag & drop device group reassignment ──────────────────────────────────
-  // Mouse: drag after 8 px (as before). Touch: long-press 250 ms so a swipe
-  // still scrolls the drawer. Keyboard: Space / Enter on the row wrapper.
-  const sensors = useDndSensors({ mouseDistance: 8 });
-
-  const findGroupName = useCallback((groupId: number | null): string => {
-    if (groupId === null) return t('nav.ungrouped') || 'Ungrouped';
-    const walk = (nodes: DeviceGroupTreeNode[]): string | null => {
-      for (const n of nodes) {
-        if (n.id === groupId) return n.name;
-        const hit = walk(n.children);
-        if (hit) return hit;
-      }
-      return null;
-    };
-    return walk(groupTree) ?? `#${groupId}`;
-  }, [groupTree, t]);
-
-  const handleDragEnd = useCallback(async (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over) return;
-
-    const dragData = active.data.current;
-    const dropData = over.data.current;
-
-    if (dragData?.type !== 'device' || dropData?.type !== 'device-group') return;
-
-    const device = dragData.device as Device;
-    const targetGroupId = dropData.groupId as number | null;
-
-    if (device.groupId === targetGroupId) return;
-
-    // A group change fires the `group_join` scenario trigger (scripts may run
-    // on the machine): on touch, where a long-press + slide can drop by
-    // accident, ask first.
-    const byTouch = typeof TouchEvent !== 'undefined' && event.activatorEvent instanceof TouchEvent;
-    if (byTouch) {
-      const deviceName = anonymize(device.displayName ?? device.hostname);
-      const groupName = anonymize(findGroupName(targetGroupId));
-      const ok = await confirmDialog({
-        title: t('nav.moveDeviceTitle') || 'Move device',
-        message: t('nav.moveDeviceConfirm', { device: deviceName, group: groupName })
-          || `Move ${deviceName} to ${groupName}?`,
-        confirmLabel: t('nav.moveDeviceAction') || 'Move',
-      });
-      if (!ok) return;
-    }
-
-    try {
-      await deviceApi.update(device.id, { groupId: targetGroupId });
-      setDevices(prev => prev.map(d =>
-        d.id === device.id ? { ...d, groupId: targetGroupId } : d,
-      ));
-      toast.success(t('nav.deviceMoved') || 'Device moved');
-    } catch {
-      toast.error(t('nav.deviceMoveFailed') || 'Failed to move device');
-    }
-  }, [findGroupName, setDevices, t]);
+  }, [setGroupTree]);
 
   // ── Split column resize ────────────────────────────────────────────────────
   const handleSplitMouseDown = useCallback((e: React.MouseEvent) => {
@@ -822,40 +512,27 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
       : []),
   ];
 
-  // Reorder devices for the sidebar: abnormal statuses bubble to the top of
-  // their group, then alphabetical. `.filter()` below is stable, so every
-  // group + ungrouped list inherits this order; the group tree keeps its
-  // manual order untouched.
-  const sortedDevices = useMemo(() => sortSidebarDevices(devices), [devices]);
-
-  // ── Ungrouped devices ──────────────────────────────────────────────────────
-  const ungroupedDevices = sortedDevices.filter(d => d.groupId === null);
-  const filteredUngrouped = search
-    ? ungroupedDevices.filter(d => deviceMatchesSearch(d, search))
-    : ungroupedDevices;
+  // ── Group tree content ─────────────────────────────────────────────────────
+  const searchQuery = search.trim();
+  const visibleTree = filterGroupTree(groupTree, searchQuery);
 
   // ── Master/god view: group everything by tenant ───────────────────────────
-  // On the master tenant the server returns rows from every tenant. To
-  // keep the sidebar legible we add an extra hierarchy level: a "Tenant
-  // X" header above each child tenant's group sub-tree, with that
-  // tenant's ungrouped devices nested inside. The master tenant's own
-  // groups appear under a "Default" header so admins can tell apart
-  // platform-internal devices from customer ones.
+  // On the master tenant the server returns the groups of every tenant. To
+  // keep the sidebar legible we add an extra hierarchy level: a "Tenant X"
+  // header above each tenant's group sub-tree, the master tenant first.
   const masterMode = isMasterTenant(currentTenantId);
   const tenantBuckets: Array<{
     id: number;
     name: string;
     groupTree: DeviceGroupTreeNode[];
-    ungrouped: Device[];
   }> = [];
   if (masterMode) {
-    const byTenant = new Map<number, { name: string; groupRoots: DeviceGroupTreeNode[]; ungrouped: Device[] }>();
+    const byTenant = new Map<number, { name: string; groupRoots: DeviceGroupTreeNode[] }>();
     const ensureBucket = (id: number, name: string | null | undefined) => {
-      if (!byTenant.has(id)) byTenant.set(id, { name: name ?? `Tenant ${id}`, groupRoots: [], ungrouped: [] });
+      if (!byTenant.has(id)) byTenant.set(id, { name: name ?? `Tenant ${id}`, groupRoots: [] });
       return byTenant.get(id)!;
     };
-    for (const root of groupTree) ensureBucket(root.tenantId, root.tenantName).groupRoots.push(root);
-    for (const dev of ungroupedDevices) ensureBucket(dev.tenantId, dev.tenantName).ungrouped.push(dev);
+    for (const root of visibleTree) ensureBucket(root.tenantId, root.tenantName).groupRoots.push(root);
     // Master tenant first, then alpha.
     const ordered = [...byTenant.entries()].sort(([aId, aV], [bId, bV]) => {
       if (aId === MASTER_TENANT_ID) return -1;
@@ -863,26 +540,16 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
       return aV.name.localeCompare(bV.name);
     });
     for (const [id, b] of ordered) {
-      tenantBuckets.push({ id, name: b.name, groupTree: b.groupRoots, ungrouped: b.ungrouped });
+      tenantBuckets.push({ id, name: b.name, groupTree: b.groupRoots });
     }
   }
 
-  // ── Device tree content ────────────────────────────────────────────────────
-  // `hideDeviceRows` = render the group tree but not the devices inside.
-  // This is what the user sees when they toggle the "Devices" chip off
-  // but still want quick navigation to group pages.
-  const renderTenantBucket = (
-    bucket: { id: number; name: string; groupTree: DeviceGroupTreeNode[]; ungrouped: Device[] },
-    hideDeviceRows: boolean,
-  ) => {
-    const filteredBucketUngrouped = search
-      ? bucket.ungrouped.filter(d => deviceMatchesSearch(d, search))
-      : bucket.ungrouped;
+  const renderTenantBucket = (bucket: { id: number; name: string; groupTree: DeviceGroupTreeNode[] }) => {
     const collapsed = isTenantCollapsed(bucket.id);
     // While the user is searching we ignore the per-tenant collapse —
     // otherwise typing a query would silently filter rows out of view
     // because their tenant happens to be folded.
-    const showChildren = !collapsed || !!search;
+    const showChildren = !collapsed || !!searchQuery;
     return (
       <div key={bucket.id} className="mt-2">
         <button
@@ -898,76 +565,56 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
           <Building2 size={11} />
           <span className="truncate">{bucket.name}</span>
         </button>
-        {showChildren && (
-          <>
-            {bucket.groupTree.map((group) => (
-              <GroupRow
-                key={group.id}
-                group={group}
-                devices={sortedDevices}
-                searchQuery={search}
-                hideDeviceRows={hideDeviceRows}
-              />
-            ))}
-            {!hideDeviceRows && filteredBucketUngrouped.length > 0 && (
-              <DroppableGroupHeader groupId={null}>
-                <div className="px-2 py-0.5 pl-4 text-[10px] font-medium text-text-muted uppercase tracking-wider mt-1">
-                  {t('nav.ungrouped') || 'Ungrouped'}
-                </div>
-                {filteredBucketUngrouped.map(device => (
-                  <DraggableDeviceItem key={device.id} device={device} />
-                ))}
-              </DroppableGroupHeader>
-            )}
-          </>
-        )}
+        {showChildren && bucket.groupTree.map((group) => (
+          <GroupRow
+            key={group.id}
+            group={group}
+            forceExpanded={!!searchQuery}
+          />
+        ))}
       </div>
     );
   };
 
-  const renderDeviceTree = (hideHeader = false, hideDeviceRows = false) => (
-    <DndContext sensors={sensors} onDragEnd={handleDragEnd}>
-      <div className={hideHeader ? '' : 'mt-2 pt-2 border-t border-border'}>
-        {!hideHeader && (
-          <div className="px-2 py-1.5 flex items-center gap-2 text-[11px] font-mono font-medium text-text-muted uppercase tracking-[0.12em]">
-            <Server size={12} />
-            {hideDeviceRows ? t('nav.groups', 'Groupes') : t('nav.devices')}
-          </div>
-        )}
+  // `inColumn` = rendered in the side-by-side column, which has its own header.
+  const renderGroupTree = (inColumn = false) => (
+    <div className={inColumn ? '' : 'mt-2 pt-2 border-t border-border'}>
+      {!inColumn && (
+        <div className="px-2 py-1.5 flex items-center gap-2 text-[11px] font-mono font-medium text-text-muted uppercase tracking-[0.12em]">
+          <Server size={12} />
+          <span className="flex-1">{t('nav.groups') || 'Groups'}</span>
+          {/* Side-by-side needs the width of the desktop column. */}
+          {!inDrawer && groupTree.length > 0 && (
+            <button
+              onClick={() => setSidebarLayout('side-by-side')}
+              title={t('nav.switchSideBySide') || 'Switch to side-by-side'}
+              aria-label={t('nav.switchSideBySide') || 'Switch to side-by-side'}
+              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0 coarse:min-h-10 coarse:min-w-10 coarse:inline-flex coarse:items-center coarse:justify-center"
+            >
+              <ArrowLeftRight size={13} />
+            </button>
+          )}
+        </div>
+      )}
 
-        {masterMode ? (
-          tenantBuckets.map((b) => renderTenantBucket(b, hideDeviceRows))
-        ) : (
-          <>
-            {/* Single-tenant flat tree (legacy view) */}
-            {groupTree.map(group => (
-              <GroupRow
-                key={group.id}
-                group={group}
-                devices={sortedDevices}
-                searchQuery={search}
-                hideDeviceRows={hideDeviceRows}
-              />
-            ))}
-            {!hideDeviceRows && filteredUngrouped.length > 0 && (
-              <DroppableGroupHeader groupId={null}>
-                <div className="px-2 py-0.5 text-[10px] font-medium text-text-muted uppercase tracking-wider mt-1">
-                  {t('nav.ungrouped') || 'Ungrouped'}
-                </div>
-                {filteredUngrouped.map(device => (
-                  <DraggableDeviceItem key={device.id} device={device} />
-                ))}
-              </DroppableGroupHeader>
-            )}
-          </>
-        )}
-      </div>
-    </DndContext>
+      {masterMode ? (
+        tenantBuckets.map((b) => renderTenantBucket(b))
+      ) : (
+        /* Single-tenant flat tree */
+        visibleTree.map(group => (
+          <GroupRow
+            key={group.id}
+            group={group}
+            forceExpanded={!!searchQuery}
+          />
+        ))
+      )}
+    </div>
   );
 
   // ── Collapsed mode (Obli Design v1) ─────────────────────────────────
   // 64 px icon-only column. Navigation items keep their tooltips, the
-  // device tree + search are hidden, the user avatar + logout stay
+  // group tree + search are hidden, the user avatar + logout stay
   // visible at the bottom. Click the panel toggle to expand back.
   if (sidebarCollapsed) {
     // In collapsed mode we don't surface the Administration label;
@@ -987,19 +634,6 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
             <ChevronsRight size={16} />
           </button>
         </div>
-
-        {canAddAgent && (
-          <div className="px-2 pt-1">
-            <button
-              onClick={handleAddAgent}
-              title={t('nav.addAgent')}
-              aria-label={t('nav.addAgent')}
-              className="flex h-10 w-full items-center justify-center rounded-md bg-accent/12 text-accent transition-colors hover:bg-accent/20"
-            >
-              <Plus size={16} />
-            </button>
-          </div>
-        )}
 
         <nav className="flex-1 overflow-y-auto px-2 pt-3 space-y-1">
           {allItems.map((item) => {
@@ -1108,23 +742,7 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
         )}
       </div>
 
-      {/* Add agent button — accent pill, matches mockup §4.2. Visible to
-          admins AND to users carrying `agent_config:approval` (they can
-          enroll new agents because the GET /api/agent/keys route was
-          relaxed to accept that cap too). */}
-      {canAddAgent && (
-        <div className="px-3 pt-2">
-          <button
-            onClick={handleAddAgent}
-            className="flex w-full items-center justify-center gap-2 rounded-md bg-accent/12 hover:bg-accent/20 px-3 py-2 text-[13px] font-medium text-accent transition-colors coarse:py-2.5"
-          >
-            <Plus size={15} />
-            {t('nav.addAgent')}
-          </button>
-        </div>
-      )}
-
-      {/* Search */}
+      {/* Search — filters the group tree by name */}
       <div className="px-3 py-2.5">
         <input
           type="text"
@@ -1138,37 +756,6 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
           className="w-full rounded-md bg-bg-tertiary px-3 py-2 text-[13px] text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-accent"
         />
       </div>
-
-      {/* Layout chips — only shown when device tree is visible */}
-      {groupTree.length > 0 && sidebarLayout === 'stacked' && (
-        <div className="flex items-center justify-between px-3 pb-1.5 gap-2">
-          <button
-            onClick={() => setShowDevices(v => !v)}
-            aria-pressed={showDevices}
-            className={cn(
-              // No border (owner, 28/09): a light fill, as the filter pills of the
-              // Devices page; same size as before (the 1px border folded into the padding).
-              'text-xs px-[9px] py-[3px] rounded-full transition-colors coarse:py-1.5 coarse:px-3',
-              showDevices
-                ? 'bg-accent/15 text-accent hover:bg-accent/25'
-                : 'bg-bg-tertiary text-text-muted hover:bg-bg-active hover:text-text-primary',
-            )}
-          >
-            {t('nav.devices')}
-          </button>
-          {/* Side-by-side needs the width of the desktop column. */}
-          {!inDrawer && (
-            <button
-              onClick={() => setSidebarLayout('side-by-side')}
-              title={t('nav.switchSideBySide') || 'Switch to side-by-side'}
-              aria-label={t('nav.switchSideBySide') || 'Switch to side-by-side'}
-              className="p-1 rounded text-text-muted hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0 coarse:min-h-10 coarse:min-w-10 coarse:inline-flex coarse:items-center coarse:justify-center"
-            >
-              <ArrowLeftRight size={13} />
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Content area — stacked or side-by-side */}
       {sidebarLayout === 'side-by-side' && groupTree.length > 0 ? (
@@ -1190,10 +777,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
             className="w-1 shrink-0 cursor-col-resize bg-border hover:bg-accent/50 active:bg-accent/70 transition-colors"
           />
 
-          {/* ── Devices column ── */}
+          {/* ── Groups column ── */}
           <div className="flex flex-col flex-1 overflow-hidden min-w-0">
             <div className="flex items-center justify-between px-3 py-1.5 border-b border-border shrink-0">
-              <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{t('nav.devices')}</span>
+              <span className="text-[10px] font-bold uppercase tracking-widest text-text-muted">{t('nav.groups') || 'Groups'}</span>
               <button
                 onClick={() => setSidebarLayout('stacked')}
                 title={t('nav.switchStacked') || 'Switch to stacked'}
@@ -1204,17 +791,15 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
               </button>
             </div>
             <div className="flex-1 overflow-y-auto px-2 min-h-0">
-              {renderDeviceTree(true)}
+              {renderGroupTree(true)}
             </div>
           </div>
 
         </div>
       ) : (
         <div className="flex flex-col flex-1 min-h-0 px-2">
-          {/* Primary nav — collapsible. Folding it gives the agents
-              tree the full sidebar height for users who manage their
-              fleet from this panel and don't need the top items
-              visible all the time. State persisted via usePersisted. */}
+          {/* Primary nav — collapsible. Folding it gives the group tree
+              the full sidebar height. State persisted via usePersisted. */}
           <button
             onClick={() => setNavMenuOpen(v => !v)}
             className="flex w-full items-center gap-2 px-1 py-1.5 text-text-muted hover:text-text-secondary transition-colors shrink-0 coarse:py-2.5"
@@ -1231,11 +816,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
             </nav>
           )}
 
-          {/* Group tree — always rendered. When `showDevices` is off we
-              still render the group tree (without the devices inside)
-              so the user can navigate to group pages. */}
+          {/* Group tree — quick navigation to the group pages. */}
           <div ref={treeScrollRef} onScroll={handleTreeScroll} className="flex-1 overflow-y-auto min-h-0">
-            {renderDeviceTree(false, !showDevices)}
+            {renderGroupTree()}
           </div>
         </div>
       )}

@@ -3,11 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
-import { DesktopUpdateBanner } from './DesktopUpdateBanner';
 import { LiveAlerts } from './LiveAlerts';
-import { GlobalAddAgentModal } from './GlobalAddAgentModal';
-import { GlobalChatPanel } from './GlobalChatPanel';
-import { GlobalShellPanel } from './GlobalShellPanel';
 import { FloatingDock } from './FloatingDock';
 import { Drawer } from '@/components/common/Drawer';
 import { useUiStore, useEffectiveSidebar } from '@/store/uiStore';
@@ -148,7 +144,6 @@ export function AppLayout() {
           floating, hidden).
           Spec: Obli Design System §4. */}
       <Header />
-      <DesktopUpdateBanner />
 
       {/* Body row — sidebar + main content side by side, below the topbar */}
       <div ref={bodyRowRef} className="flex flex-1 overflow-hidden">
@@ -238,16 +233,10 @@ export function AppLayout() {
       )}
 
       {/* Floating widgets, stacked in one bottom-right dock so they never
-          overlap: live-alert toasts, chat FAB / panel, remote-shell pill. */}
+          overlap: live-alert toasts. */}
       <FloatingDock>
         <LiveAlerts />
-        {/* Global persistent chat (multi-tab, survives page navigation) */}
-        <GlobalChatPanel />
-        <GlobalShellPanel />
       </FloatingDock>
-
-      {/* Global Add Agent modal (triggered from sidebar / dashboard) */}
-      <GlobalAddAgentModal />
     </div>
   );
 }

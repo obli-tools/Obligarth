@@ -12,7 +12,6 @@ interface UiState {
   /** Off-canvas navigation drawer used below 1024 px (docs/obli-mobile.md §4).
    *  Forced by the layout mode, so it is NEVER persisted. */
   mobileNavOpen: boolean;
-  addAgentModalOpen: boolean;
 
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
@@ -21,19 +20,36 @@ interface UiState {
   toggleSidebarCollapsed: () => void;
   setMobileNavOpen: (open: boolean) => void;
   toggleMobileNav: () => void;
-  openAddAgentModal: () => void;
-  closeAddAgentModal: () => void;
 }
 
 const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 600;
-const STORAGE_KEY_WIDTH     = 'ov-sidebar-width';
-const STORAGE_KEY_FLOATING  = 'ov-sidebar-floating';
+const STORAGE_KEY_WIDTH     = 'obli:sidebar-width';
+const STORAGE_KEY_FLOATING  = 'obli:sidebar-floating';
 const STORAGE_KEY_COLLAPSED = 'obli:sidebar-collapsed';
+
+/** Keys used before the neutral `obli:` prefix: a value still stored there is
+ *  moved to the new key on first read, so the saved preference survives. */
+const LEGACY_KEYS: Record<string, string> = {
+  [STORAGE_KEY_WIDTH]: 'ov-sidebar-width',
+  [STORAGE_KEY_FLOATING]: 'ov-sidebar-floating',
+};
+
+function readStored(key: string): string | null {
+  const value = localStorage.getItem(key);
+  const legacyKey = LEGACY_KEYS[key];
+  if (value !== null || !legacyKey) return value;
+  const legacy = localStorage.getItem(legacyKey);
+  if (legacy !== null) {
+    localStorage.setItem(key, legacy);
+    localStorage.removeItem(legacyKey);
+  }
+  return legacy;
+}
 
 function loadSavedWidth(): number {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY_WIDTH);
+    const saved = readStored(STORAGE_KEY_WIDTH);
     if (saved) {
       const w = parseInt(saved, 10);
       if (!isNaN(w) && w >= MIN_SIDEBAR_WIDTH && w <= MAX_SIDEBAR_WIDTH) return w;
@@ -46,7 +62,7 @@ function loadSavedWidth(): number {
 
 function loadSavedFloating(): boolean {
   try {
-    return localStorage.getItem(STORAGE_KEY_FLOATING) === 'true';
+    return readStored(STORAGE_KEY_FLOATING) === 'true';
   } catch {
     return false;
   }
@@ -65,14 +81,11 @@ export const useUiStore = create<UiState>((set) => ({
   sidebarFloating: loadSavedFloating(),
   sidebarCollapsed: loadSavedCollapsed(),
   mobileNavOpen: false,
-  addAgentModalOpen: false,
 
   toggleSidebar: () => set((s) => ({ sidebarOpen: !s.sidebarOpen })),
   setSidebarOpen: (open) => set({ sidebarOpen: open }),
   setMobileNavOpen: (open) => set({ mobileNavOpen: open }),
   toggleMobileNav: () => set((s) => ({ mobileNavOpen: !s.mobileNavOpen })),
-  openAddAgentModal: () => set({ addAgentModalOpen: true }),
-  closeAddAgentModal: () => set({ addAgentModalOpen: false }),
   // Floating and collapsed are mutually exclusive — leaving both on makes
   // the AppLayout draw the 260 px floating overlay AND a 64 px sidebar
   // inside it, so the drop-shadow extends to the wrong width. Whenever

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  RefreshCw, ArrowRight, Package, Clock, FolderOpen, Plus, ScreenShare,
+  RefreshCw, ArrowRight, Package, Clock, FolderOpen, ScreenShare,
   AlertTriangle, AlertCircle, HardDrive, ShieldCheck, FolderTree, Wifi, WifiOff, Box,
   Building2, Server, LayoutDashboard, Database, Download,
 } from 'lucide-react';
@@ -17,7 +17,6 @@ import { isStepUpHandled } from '@/api/client';
 import { useTenantStore } from '@/store/tenantStore';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
-import { useUiStore } from '@/store/uiStore';
 import { getSocket } from '@/socket/socketClient';
 import { hypervApi } from '@/api/hyperv.api';
 import { HyperVVmTable } from '@/components/hyperv/HyperVVmTable';
@@ -674,14 +673,13 @@ export function DashboardPage() {
   const { fetchDevices, summary, fetchSummary, devices } = useDeviceStore();
 
   // Real-time host status (online/offline/...) by host device id, fed from the
-  // device store (kept live by useSocket DEVICE_ONLINE/OFFLINE/UPDATED). Passed
+  // device store (kept live by its DEVICE_ONLINE/OFFLINE/UPDATED listeners). Passed
   // to the Hyper-V / Veeam grids so each host's drawer header shows its state.
   const hostStatusById = useMemo(() => {
     const m = new Map<number, DeviceStatus>();
     devices.forEach((d) => m.set(d.id, d.status));
     return m;
   }, [devices]);
-  const { openAddAgentModal } = useUiStore();
   const isAdmin = useAuthStore((s) => s.isAdmin)();
   const [isLoading, setIsLoading] = useState(true);
   const [groupStats, setGroupStats] = useState<GroupStats[]>([]);
@@ -1138,15 +1136,6 @@ export function DashboardPage() {
           {total} {t('dashboard.devicesManaged', 'appareils gérés')}
         </span>
         <div className="ml-auto flex items-center gap-2 max-sm:flex-wrap">
-          {isAdmin && (
-            <button
-              onClick={openAddAgentModal}
-              className="inline-flex items-center gap-2 h-9 px-3.5 rounded-md bg-bg-hover hover:bg-bg-active text-[13px] font-medium text-text-primary transition-colors whitespace-nowrap coarse:h-10"
-            >
-              <Plus size={14} />
-              {t('nav.addAgent')}
-            </button>
-          )}
           <Link
             to="/devices"
             className="inline-flex items-center gap-2 h-9 px-3.5 rounded-md bg-accent/12 hover:bg-accent/20 text-[13px] font-medium text-accent transition-colors whitespace-nowrap coarse:h-10"

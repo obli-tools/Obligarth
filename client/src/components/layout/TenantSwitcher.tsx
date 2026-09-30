@@ -1,9 +1,7 @@
 import { useRef, useState } from 'react';
 import { ChevronDown, Building2, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useTenantStore } from '@/store/tenantStore';
-import { useGroupStore } from '@/store/groupStore';
-import { useDeviceStore } from '@/store/deviceStore';
+import { useTenantStore, emitTenantChanged } from '@/store/tenantStore';
 import { disconnectSocket, connectSocket } from '@/socket/socketClient';
 import { useAuthStore } from '@/store/authStore';
 import { Drawer } from '@/components/common/Drawer';
@@ -50,11 +48,8 @@ export function TenantSwitcher() {
     try {
       await setCurrentTenant(tenantId);
 
-      // Reload all tenant-scoped data in parallel
-      await Promise.all([
-        useDeviceStore.getState().fetchDevices(),
-        useGroupStore.getState().fetchTree(),
-      ]);
+      // Tenant-scoped stores reload themselves on this event (in parallel)
+      await emitTenantChanged(tenantId);
 
       // Reconnect socket with new tenantId
       if (user) {

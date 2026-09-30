@@ -1,4 +1,4 @@
-import { LogOut, Download, Menu, Settings, TerminalSquare, UserCircle } from 'lucide-react';
+import { LogOut, Download, Menu, Settings, UserCircle } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -9,7 +9,6 @@ import { anonymize } from '@/utils/anonymize';
 import { useSocketStore } from '@/store/socketStore';
 import { NotificationCenter } from './NotificationCenter';
 import { TenantSwitcher } from './TenantSwitcher';
-import { SshBastionButton } from './SshBastionButton';
 import { Logo } from '@/components/common/Logo';
 import { IconButton } from '@/components/common/IconButton';
 import { ActionMenu, type ActionMenuItem } from '@/components/common/ActionMenu';
@@ -52,15 +51,12 @@ const CURRENT_APP: AppType = 'obliance';
 /**
  * Topbar — degrades with the layout mode (docs/obli-mobile.md §4):
  *  - desktop ≥ 1024: as designed; < 1280 the app pills show their dot only.
- *  - tablet 768–1023: hamburger (sidebar drawer), "Download App" moved into
- *    the account menu, icon-only SSH button, avatar-only user badge (opens
- *    the account menu).
+ *  - tablet 768–1023: hamburger (sidebar drawer), avatar-only user badge
+ *    (opens the account menu, which carries the download page).
  *  - phone < 768: hamburger · logo mark · truncated tenant · socket · bell ·
- *    avatar menu (profile, apps, SSH bastion, download page, app settings,
- *    sign out).
- * In the Android shell the desktop "Download App" link is hidden (it serves
- * the Windows Oblireach MSI); the account menu offers "App updates" (the
- * /download page = installed version + update check) and the native settings.
+ *    avatar menu (profile, apps, download page, app settings, sign out).
+ * In the Android shell the account menu offers "App updates" (the /download
+ * page = installed version + update check) and the native settings.
  */
 export function Header() {
   const { t } = useTranslation();
@@ -76,9 +72,6 @@ export function Header() {
   const isDesktop = mode === 'desktop';
   const android = isAndroidApp();
   const [connectedApps, setConnectedApps] = useState<Array<{ appType: string; name: string; baseUrl: string }>>([]);
-  // Phone: the SSH bastion panel opens as a sheet from the account menu.
-  const [sshSheetOpen, setSshSheetOpen] = useState(false);
-  const [sshAvailable, setSshAvailable] = useState(false);
 
   useEffect(() => {
     fetch('/api/auth/connected-apps', { credentials: 'include' })
@@ -145,10 +138,10 @@ export function Header() {
     )
   );
 
-  // /download (Oblireach Desktop + the Android APK; inside the Android shell
-  // the installed version + "Check for updates") — the desktop header link is
-  // not shown below 1024 px nor in the Android shell, so the account menu
-  // carries it there. Never in ObliTools (it already is the desktop app).
+  // /download (the Android APK; inside the Android shell the installed
+  // version + "Check for updates") — reached from the account menu, i.e.
+  // below 1024 px and in the Android shell. Never in ObliTools (it already is
+  // the desktop app).
   const showDownloadItem = !isNativeApp;
   const accountItems: ActionMenuItem[] = user ? [
     {
@@ -166,14 +159,6 @@ export function Header() {
       onClick: () => goApp(app),
       separator: i === 0,
     })) : []),
-    // Phone: SSH bastion (the header button is not shown).
-    ...(isPhone && sshAvailable ? [{
-      key: 'ssh',
-      icon: <TerminalSquare className="w-4 h-4" />,
-      label: t('sshBastion.button.title') || 'SSH bastion',
-      onClick: () => setSshSheetOpen(true),
-      separator: true,
-    } satisfies ActionMenuItem] : []),
     // Download page — Android shell: the app's version / updates screen.
     ...(showDownloadItem ? [{
       key: 'download',
@@ -182,7 +167,7 @@ export function Header() {
         ? (t('header.appUpdates') || 'App updates')
         : (t('nav.downloadApp') || 'Download App'),
       onClick: () => navigate('/download'),
-      separator: !(isPhone && sshAvailable),
+      separator: true,
     } satisfies ActionMenuItem] : []),
     // Android shell: native app settings (server URL, notifications, updates).
     ...(android && canUseNative('openSettings') ? [{
@@ -190,7 +175,7 @@ export function Header() {
       icon: <Settings className="w-4 h-4" />,
       label: t('header.appSettings') || 'App settings',
       onClick: () => { native.openSettings().catch(() => { /* shell too old */ }); },
-      separator: !(isPhone && sshAvailable) && !showDownloadItem,
+      separator: !showDownloadItem,
     } satisfies ActionMenuItem] : []),
     {
       key: 'logout',
@@ -283,30 +268,6 @@ export function Header() {
       )}
 
       <div className="ml-auto flex shrink-0 items-center gap-3 max-md:gap-1.5">
-        {/* Download App link — desktop widths only, never in a native shell
-            (ObliTools already is the app; the Android shell must not offer
-            the Windows MSI). */}
-        {!isNativeApp && !android && isDesktop && (
-          <Link
-            to="/download"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-[13px] font-medium text-text-muted hover:bg-bg-hover hover:text-text-primary transition-colors"
-          >
-            <Download size={14} />
-            {t('nav.downloadApp')}
-          </Link>
-        )}
-
-        {/* SSH bastion: authorize this IP for 24h (hidden when disabled).
-            Tablet: icon only. Phone: no header button — the panel opens as
-            a sheet from the account menu. */}
-        <SshBastionButton
-          compact={!isDesktop}
-          sheetOnly={isPhone}
-          open={isPhone ? sshSheetOpen : undefined}
-          onOpenChange={isPhone ? setSshSheetOpen : undefined}
-          onAvailableChange={setSshAvailable}
-        />
-
         {/* Socket connection status dot */}
         <button
           onClick={socketStatus !== 'connected' ? () => window.location.reload() : undefined}

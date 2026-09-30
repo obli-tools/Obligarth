@@ -1,36 +1,29 @@
 import { useState, useEffect, useCallback } from 'react';
 import {
- Key, Plus, Trash2, Copy, ChevronRight, RefreshCw, FolderOpen, Edit, Wifi, TerminalSquare,
+ Key, Plus, Trash2, Copy, ChevronRight, RefreshCw, FolderOpen, Edit,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { deviceApi } from '@/api/device.api';
 import { groupsApi } from '@/api/groups.api';
-import { NetworkDiscoveryPage } from './NetworkDiscoveryPage';
-import { CustomSectionsPage } from './CustomSectionsPage';
 import type { AgentApiKey, DeviceGroupTreeNode } from '@obliance/shared';
 import toast from 'react-hot-toast';
 import { PageContainer } from '@/components/common/PageContainer';
-import { SegmentedTabs } from '@/components/common/SegmentedTabs';
 import { IconButton } from '@/components/common/IconButton';
 import { useConfirm } from '@/components/common/ConfirmDialog';
 import { copyText } from '@/utils/clipboard';
 
 // /admin/devices used to host the device list (Agents tab) too, but
 // that's now the canonical /devices page (with admin features
-// role-gated). What remains here is the admin agent-config hub: API
-// keys, custom sections, network discovery. The old `?tab=agents`
-// link redirects to /devices to keep external bookmarks working.
-type Tab = 'keys' | 'custom-sections' | 'discovery';
-
+// role-gated). What remains here is the admin agent-config hub: the
+// API keys. The old `?tab=agents` link redirects to /devices to keep
+// external bookmarks working.
 export function AdminDevicesPage() {
  const { t } = useTranslation();
  // Shared dialog (window.confirm is a no-op in the Android WebView — docs §5.6).
  const confirm = useConfirm();
  const [searchParams] = useSearchParams();
- const rawTab = searchParams.get('tab');
- const isLegacyAgentsTab = rawTab === 'agents';
- const [tab, setTab] = useState<Tab>((['keys', 'custom-sections', 'discovery'] as const).includes(rawTab as any) ? rawTab as Tab : 'keys');
+ const isLegacyAgentsTab = searchParams.get('tab') === 'agents';
 
  // ── API Keys state ─────────────────────────────────────────────────────────
  const [keys, setKeys] = useState<AgentApiKey[]>([]);
@@ -55,11 +48,9 @@ export function AdminDevicesPage() {
  }, [t]);
 
  useEffect(() => {
- if (tab === 'keys') {
  loadKeys();
  groupsApi.tree().then(setGroups).catch(() => {});
- }
- }, [tab, loadKeys]);
+ }, [loadKeys]);
 
  const handleCreateKey = async () => {
  if (!newKeyName.trim()) return;
@@ -133,24 +124,10 @@ export function AdminDevicesPage() {
  <p className="text-sm text-text-muted mt-0.5">{t('agents.subtitle')}</p>
  </div>
 
- {/* Tabs — three admin-only surfaces. The agent list itself is
- on /devices (single canonical page, role-gated). */}
- {/* Shared segmented bar: same look on desktop; scrolls horizontally
- (instead of 2-3 line wrapped labels) when it does not fit on a phone. */}
- <SegmentedTabs<Tab>
- value={tab}
- onChange={setTab}
- tabClassName="gap-1.5"
- tabs={[
- { id: 'keys', label: t('devices.tabApiKeys') },
- { id: 'custom-sections', label: t('nav.customSections', 'Custom sections'), icon: <TerminalSquare className="w-3.5 h-3.5" /> },
- { id: 'discovery', label: t('nav.discovery', 'Discovery'), icon: <Wifi className="w-3.5 h-3.5" /> },
- ]}
- />
-
- {/* Tab: API Keys */}
- {tab === 'keys' && (
+ {/* API Keys — the agent list itself is on /devices (single
+ canonical page, role-gated). */}
  <div className="space-y-5">
+ <h2 className="text-lg font-semibold text-text-primary">{t('devices.tabApiKeys') || 'API Keys'}</h2>
  <p className="text-sm text-text-muted">{t('devices.apiKeys.description')}</p>
 
  {/* New key alert */}
@@ -287,13 +264,6 @@ export function AdminDevicesPage() {
  </div>
  )}
  </div>
- )}
-
- {/* Tab: Custom Sections */}
- {tab === 'custom-sections' && <CustomSectionsPage embedded />}
-
- {/* Tab: Discovery */}
- {tab === 'discovery' && <NetworkDiscoveryPage embedded />}
  </PageContainer>
  );
 }
