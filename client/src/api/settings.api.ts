@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { SettingScope, SettingKey } from '@obliance/shared';
+import type { SettingScope, SettingKey } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 

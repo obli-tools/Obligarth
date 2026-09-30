@@ -49,10 +49,10 @@ const ACCENT = '#6366f1';
 const INK = '#0f172a';
 const MUTED = '#64748b';
 
-// The real Obliance "O" mark (same SVG as the app favicon), inlined so it
+// The real Obligarth "O" mark (same SVG as the app favicon), inlined so it
 // renders in the offline PDF context. Gradient IDs renamed to ASCII to avoid
 // any encoding surprises in the render pipeline.
-const OBLI_LOGO = `<svg viewBox="0 0 122.88 122.88" width="34" height="34" role="img" aria-label="Obliance">
+const OBLI_LOGO = `<svg viewBox="0 0 122.88 122.88" width="34" height="34" role="img" aria-label="Obligarth">
 <defs>
 <linearGradient id="obliG1" x1="100.79" y1="22.04" x2="51.77" y2="110.5" gradientUnits="userSpaceOnUse">
 <stop offset=".11" stop-color="#c2001b"/><stop offset=".56" stop-color="#d28c7f"/><stop offset=".65" stop-color="#c0695f"/><stop offset=".87" stop-color="#941210"/><stop offset=".91" stop-color="#8b0000"/>
@@ -656,7 +656,7 @@ table.sw-std td.num { text-align: right; font-weight: 700; }
     <div class="brand">
       ${OBLI_LOGO}
       <div>
-        <div class="brand-name">Obliance</div>
+        <div class="brand-name">Obligarth</div>
         <div class="brand-sub">RMM Report</div>
       </div>
     </div>
@@ -681,7 +681,7 @@ table.sw-std td.num { text-align: right; font-weight: 700; }
   <div class="sig">
     <div>
       <div class="sig-name">${esc(opts.tenantName)}</div>
-      <div>This report was generated automatically by Obliance RMM.</div>
+      <div>This report was generated automatically by Obligarth MDM.</div>
       <div>Report “${esc(report.name)}” · ${generatedAt.toISOString().slice(0, 10)}</div>
     </div>
     <div style="text-align:right">

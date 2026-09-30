@@ -17,7 +17,7 @@ import { Knex } from 'knex';
 // `*_vm_console` family had drifted too.
 //
 // The list below is a frozen snapshot of the union at the time of writing, and
-// is deliberately NOT imported from @obliance/shared: a migration must be
+// is deliberately NOT imported from @obligarth/shared: a migration must be
 // reproducible forever, so it cannot depend on a value that changes with the
 // code. Adding an enum value that ends up unused is free; a missing one is a
 // 500 — so we list everything rather than trying to guess which types actually

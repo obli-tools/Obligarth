@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { Tenant, TenantWithRole } from '@obliance/shared';
+import type { Tenant, TenantWithRole } from '@obligarth/shared';
 
 interface TenantRow {
   id: number;

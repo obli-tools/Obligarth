@@ -6,7 +6,7 @@ import { isUuid } from '../services/deviceKey/payload';
 import {
   checkSecondFactor, sendStepUpFailure, enrolLocked, recordEnrolFailure,
 } from '../services/deviceKey/stepUpProof';
-import type { DeviceKeyListResponse } from '@obliance/shared';
+import type { DeviceKeyListResponse } from '@obligarth/shared';
 import { config } from '../config';
 
 // Device-bound 2FA — profile endpoints (docs/mobile/device-bound-2fa.md §6.5).
@@ -239,7 +239,7 @@ router.post('/:id/invalidated', async (req: Request, res: Response, next: NextFu
     if (!owned) { res.status(404).json({ success: false, error: 'Not found' }); return; }
     await deviceKeyService.revoke([id], 'invalidated', { ownerId: userId, byUserId: userId, req });
     await endSession(req);
-    res.clearCookie('connect.sid');
+    res.clearCookie(config.sessionCookieName);
     res.status(204).send();
   } catch (err) { next(err); }
 });

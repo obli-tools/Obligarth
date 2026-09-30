@@ -4,7 +4,7 @@ import { requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '
 import { permissionService } from '../services/permission.service';
 import { db } from '../db';
 import { launchChromium } from '../utils/chromium';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -100,7 +100,7 @@ router.get('/export', async (req, res, next) => {
     }
 
     const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
-    const baseName = `obliance-devices-${ts}`;
+    const baseName = `obligarth-devices-${ts}`;
 
     // Rows for the export — stable column order. `pdf: false` keeps a column
     // out of the (width-constrained) PDF while still exporting it to CSV/XLSX,
@@ -163,7 +163,7 @@ router.get('/export', async (req, res, next) => {
 
     if (fmt === 'xlsx') {
       const wb = new ExcelJS.Workbook();
-      wb.creator = 'Obliance';
+      wb.creator = 'Obligarth';
       wb.created = new Date();
       const ws = wb.addWorksheet('Devices');
       ws.columns = columns;
@@ -196,7 +196,7 @@ th, td { border: 1px solid #ddd; padding: 4px 6px; text-align: left; vertical-al
 th { background: #1f2937; color: white; font-weight: 600; }
 tr:nth-child(even) td { background: #f9fafb; }
 </style></head><body>
-<h1>Obliance — Devices export</h1>
+<h1>Obligarth — Devices export</h1>
 <div class="meta">${devices.length} devices · generated ${new Date().toISOString()}</div>
 <table><thead><tr>${headHtml}</tr></thead><tbody>${rowsHtml}</tbody></table>
 </body></html>`;
@@ -547,7 +547,7 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
 });
 
 // ── Change events (Blame Ribbon source) ─────────────────────────────────────
-// Read-through union over the tables Obliance already writes: what changed on
+// Read-through union over the tables Obligarth already writes: what changed on
 // this device in a window. Guarded like the device itself (requireDeviceRead) —
 // a weaker guard would be a permission bypass, since this exposes per-device
 // history.

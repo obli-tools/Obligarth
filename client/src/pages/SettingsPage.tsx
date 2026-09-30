@@ -8,7 +8,7 @@ import { appConfigApi } from '@/api/appConfig.api';
 import { systemApi, type SystemInfo } from '@/api/system.api';
 import { Button } from '@/components/common/Button';
 import { Input } from '@/components/common/Input';
-import type { SmtpServer, AppConfigData, ObligateConfig } from '@obliance/shared';
+import type { SmtpServer, AppConfigData, ObligateConfig } from '@obligarth/shared';
 import toast from 'react-hot-toast';
 import { cn } from '@/utils/cn';
 import { useTranslation } from 'react-i18next';

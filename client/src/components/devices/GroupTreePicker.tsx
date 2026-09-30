@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { ChevronRight, FolderOpen, X } from 'lucide-react';
 import { groupsApi } from '@/api/groups.api';
-import type { DeviceGroupTreeNode } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obligarth/shared';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
 import { clsx } from 'clsx';

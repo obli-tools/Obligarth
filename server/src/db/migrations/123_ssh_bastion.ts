@@ -4,10 +4,10 @@ import { Knex } from 'knex';
 // T1 ephemeral authorized_keys).
 //
 // user_ssh_keys: a user's registered SSH PUBLIC keys. The bastion's
-// PublicKeyCallback maps a presented key's fingerprint -> the Obliance user.
+// PublicKeyCallback maps a presented key's fingerprint -> the Obligarth user.
 // Fingerprint is globally UNIQUE so a key resolves to exactly one identity.
-// Obliance only ever stores the PUBLIC half — the private key never leaves the
-// user's machine. Local Obliance-owned field, settable by SSO users too (same
+// Obligarth only ever stores the PUBLIC half — the private key never leaves the
+// user's machine. Local Obligarth-owned field, settable by SSO users too (same
 // pattern as the local set-password path).
 //
 // ssh_bastion_grants: lifecycle record of ONE authenticated jump to a device.

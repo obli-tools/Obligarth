@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { AppConfigData, ObligateConfig } from '@obliance/shared';
+import type { AppConfigData, ObligateConfig } from '@obligarth/shared';
 
 // ── Platform settings of the modules ────────────────────────────────────────
 // A module's own app_config keys (registerConfigKey): listed by getAll()
@@ -95,7 +95,7 @@ export const appConfigService = {
       force_2fa: map['force_2fa'] ?? 'false',
       otp_smtp_server_id: map['otp_smtp_server_id'] ?? null,
       inventory_retention_days: map['inventory_retention_days'] ?? '90',
-      app_name: map['app_name'] ?? 'Obliance',
+      app_name: map['app_name'] ?? 'Obligarth',
       default_language: map['default_language'] ?? 'en',
       obligate_url:     parseUrl(OBLIGATE_CONFIG_KEY),
       obligate_enabled: map['obligate_enabled'] ?? 'false',

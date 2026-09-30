@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Fingerprint, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { DeviceKeyInfo, DeviceKeyListResponse } from '@obliance/shared';
+import type { DeviceKeyInfo, DeviceKeyListResponse } from '@obligarth/shared';
 import { deviceKeysApi } from '@/api/deviceKeys.api';
 import { isStepUpHandled } from '@/api/client';
 import { useConfirm } from '@/components/common/ConfirmDialog';

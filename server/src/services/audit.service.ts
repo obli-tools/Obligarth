@@ -1,7 +1,7 @@
 import { clientIp as resolveClientIp } from '../utils/clientIp';
 import { db } from '../db';
 import type { Request } from 'express';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 
 export interface AuditLogEntry {
   tenantId: number;

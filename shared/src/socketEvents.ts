@@ -1,5 +1,5 @@
 // =============================================================================
-// Obliance RMM — Socket.io Event Definitions
+// Obligarth MDM — Socket.io Event Definitions
 // =============================================================================
 
 // Server → Client events

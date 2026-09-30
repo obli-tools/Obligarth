@@ -10,7 +10,7 @@ import { MEDIA, useIsCoarsePointer, useMediaQuery } from '@/hooks/useMediaQuery'
 import apiClient from '@/api/client';
 import toast from 'react-hot-toast';
 import { useTranslation } from 'react-i18next';
-import type { TenantCapability } from '@obliance/shared';
+import type { TenantCapability } from '@obligarth/shared';
 
 interface PermissionSet {
  id: number;

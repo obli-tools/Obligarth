@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { RotateCcw, Check } from 'lucide-react';
-import type { SettingScope, SettingKey, SettingDefinition } from '@obliance/shared';
+import type { SettingScope, SettingKey, SettingDefinition } from '@obligarth/shared';
 import type { ResolvedSettingValue } from '@/api/settings.api';
 import { InheritanceBadge } from './InheritanceBadge';
 import { IconButton } from '@/components/common/IconButton';

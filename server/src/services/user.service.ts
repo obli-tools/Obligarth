@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { hashPassword } from '../utils/crypto';
-import type { User, UserRole, UserTenantAssignment } from '@obliance/shared';
+import type { User, UserRole, UserTenantAssignment } from '@obligarth/shared';
 
 interface UserRow {
   id: number;

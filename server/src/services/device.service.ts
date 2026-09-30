@@ -1,8 +1,8 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { db } from '../db';
 import { logger } from '../utils/logger';
-import { SocketEvents, isMasterTenant } from '@obliance/shared';
-import type { Device, DeviceIdentityFingerprint } from '@obliance/shared';
+import { SocketEvents, isMasterTenant } from '@obligarth/shared';
+import type { Device, DeviceIdentityFingerprint } from '@obligarth/shared';
 
 // JSONB columns come back as either an already-parsed array (pg's default
 // when the driver knows it's JSONB) or as a raw string in some edge paths.

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { Navigate, useSearchParams } from 'react-router-dom';
 import { deviceApi } from '@/api/device.api';
 import { groupsApi } from '@/api/groups.api';
-import type { AgentApiKey, DeviceGroupTreeNode } from '@obliance/shared';
+import type { AgentApiKey, DeviceGroupTreeNode } from '@obligarth/shared';
 import toast from 'react-hot-toast';
 import { PageContainer } from '@/components/common/PageContainer';
 import { IconButton } from '@/components/common/IconButton';

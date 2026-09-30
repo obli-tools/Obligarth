@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { User, UserPermissions, LoginRequest } from '@obliance/shared';
+import type { User, UserPermissions, LoginRequest } from '@obligarth/shared';
 
 interface ApiResponse<T = unknown> { data?: T; error?: string; }
 

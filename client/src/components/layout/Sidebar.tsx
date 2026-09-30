@@ -30,8 +30,8 @@ import { IconButton } from '@/components/common/IconButton';
 import { useTenantStore } from '@/store/tenantStore';
 import { groupsApi } from '@/api/groups.api';
 import { getSocket } from '@/socket/socketClient';
-import type { DeviceGroupTreeNode } from '@obliance/shared';
-import { SocketEvents, MASTER_TENANT_ID, isMasterTenant } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obligarth/shared';
+import { SocketEvents, MASTER_TENANT_ID, isMasterTenant } from '@obligarth/shared';
 
 // ── localStorage helpers ─────────────────────────────────────────────────────
 
@@ -279,7 +279,7 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // the same localStorage key as the /devices GroupSidePanel + the
   // DeviceTable so collapsing "Contoso" once folds it everywhere — one
   // mental model for "this tenant is currently not interesting".
-  const [collapsedTenants, setCollapsedTenants] = usePersisted<number[]>('obliance:groupPanelCollapsedTenants', []);
+  const [collapsedTenants, setCollapsedTenants] = usePersisted<number[]>('obligarth:groupPanelCollapsedTenants', []);
   const isTenantCollapsed = (id: number) => collapsedTenants.includes(id);
   const toggleTenantCollapsed = (id: number) => {
     setCollapsedTenants((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);

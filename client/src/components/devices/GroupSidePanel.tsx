@@ -11,8 +11,8 @@ import {
 } from '@dnd-kit/core';
 import { groupsApi } from '@/api/groups.api';
 import { deviceApi } from '@/api/device.api';
-import type { DeviceGroupTreeNode } from '@obliance/shared';
-import { SocketEvents, isMasterTenant, MASTER_TENANT_ID } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obligarth/shared';
+import { SocketEvents, isMasterTenant, MASTER_TENANT_ID } from '@obligarth/shared';
 import { getSocket } from '@/socket/socketClient';
 import { useTenantStore } from '@/store/tenantStore';
 import { clsx } from 'clsx';
@@ -53,14 +53,14 @@ interface FleetCounts {
   total: number;
 }
 
-const COLLAPSED_KEY = 'obliance:groupPanelCollapsed';
-const EXPANDED_KEY  = 'obliance:groupPanelExpanded';
-const WIDTH_KEY     = 'obliance:groupPanelWidth';
+const COLLAPSED_KEY = 'obligarth:groupPanelCollapsed';
+const EXPANDED_KEY  = 'obligarth:groupPanelExpanded';
+const WIDTH_KEY     = 'obligarth:groupPanelWidth';
 // Per-tenant collapse state for master view. Persisted as Set<tenantId>
 // of tenants that are CURRENTLY collapsed (default = expanded so a fresh
 // admin sees the buckets unfolded). Stored apart from EXPANDED_KEY,
 // which tracks group expansion.
-const TENANT_COLLAPSED_KEY = 'obliance:groupPanelCollapsedTenants';
+const TENANT_COLLAPSED_KEY = 'obligarth:groupPanelCollapsedTenants';
 const DEFAULT_WIDTH = 260;
 const MIN_WIDTH = 180;
 const MAX_WIDTH = 520;

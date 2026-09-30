@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ChevronDown, Monitor, Search } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
-import type { Device } from '@obliance/shared';
+import type { Device } from '@obligarth/shared';
 import { Modal } from '@/components/common/Modal';
 import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { deviceMatchesSearch } from '@/utils/deviceSearch';

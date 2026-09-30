@@ -7,7 +7,7 @@ import type {
  MaintenanceScopeType,
  MaintenanceScheduleType,
  MaintenanceRecurrenceType,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 import { cn } from '@/utils/cn';
 import { maintenanceApi } from '@/api/maintenance.api';
 import { ScopeSelector } from './ScopeSelector';

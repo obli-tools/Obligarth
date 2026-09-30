@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronRight, ChevronDown, Folder, Search, X } from 'lucide-react';
-import type { DeviceGroupTreeNode } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obligarth/shared';
 import { cn } from '@/utils/cn';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { useNativeBack } from '@/hooks/useNativeBack';

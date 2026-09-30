@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Bell, BellOff } from 'lucide-react';
 import { clsx } from 'clsx';
 import { notificationsApi } from '@/api/notifications.api';
-import type { NotificationChannel, AutomationNotificationBinding, AutomationNotificationMode } from '@obliance/shared';
+import type { NotificationChannel, AutomationNotificationBinding, AutomationNotificationMode } from '@obligarth/shared';
 
 interface Props {
  value: AutomationNotificationBinding[];

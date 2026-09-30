@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import type { Request, Response } from 'express';
-import { MASTER_TENANT_ID, DEVICE_KEY_HEADER, type DeviceChallenge } from '@obliance/shared';
+import { MASTER_TENANT_ID, DEVICE_KEY_HEADER, type DeviceChallenge } from '@obligarth/shared';
 import { isUuid } from './payload';
 import { db } from '../../db';
 import { twoFactorService } from '../twoFactor.service';
@@ -433,7 +433,7 @@ async function checkObligateCode(
   deviceKeysEnabled: boolean,
 ): Promise<'valid' | 'invalid' | 'used' | 'unavailable'> {
   const { obligateService } = await import('../obligate.service');
-  // The consuming verify-totp is part of lot O: only with the Obliance
+  // The consuming verify-totp is part of lot O: only with the Obligarth
   // opt-in (checked first by lotOSupported, no I/O while off) AND the
   // feature on (DEVICE_KEYS_DISABLED / device_keys_enabled=false restore
   // the historical call too).
@@ -507,7 +507,7 @@ export async function checkSecondFactor(req: Request, o: StepUpOpts): Promise<St
   const strict = !!bound && policy.strictSession;
   const needPassword = !isSsoAccount && (strict || o.requirePassword === true);
   // Lot O state, read only for an SSO account in a bound session (no I/O
-  // while the Obliance switch is off; cached otherwise). When lot O is
+  // while the Obligarth switch is off; cached otherwise). When lot O is
   // EXPLICITLY off (the switch, Obligate SSO off, or Obligate no longer
   // announcing the capabilities), the phone's SSO key cannot be used
   // (verifyAssertion: 'disabled') and no re-authentication can be started

@@ -2,8 +2,8 @@ import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
 import { auditService } from './audit.service';
-import { isMasterTenant } from '@obliance/shared';
-import type { TenantCapability } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
+import type { TenantCapability } from '@obligarth/shared';
 
 // Two-step approval service — creates pending requests, handles approve/deny,
 // and executes the approved actions. Designed so the existing handlers only
@@ -651,7 +651,7 @@ export const approvalService = {
    * key / inbound secret ask a step-up instead).
    */
   async _executeSettingsUpdate(tenantId: number, requesterId: number, payload: Record<string, unknown>): Promise<void> {
-    const { DEVICE_KEY_SETTING_KEYS } = await import('@obliance/shared');
+    const { DEVICE_KEY_SETTING_KEYS } = await import('@obligarth/shared');
     const key = typeof payload.key === 'string' ? payload.key : '';
     const value = payload.value;
     if ((DEVICE_KEY_SETTING_KEYS as readonly string[]).includes(key) && (value === 'true' || value === 'false')) {

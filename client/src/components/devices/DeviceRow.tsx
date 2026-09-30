@@ -1,6 +1,6 @@
 import { memo, type MouseEvent } from 'react';
 import { Eye, FolderOpen, User, MapPin, Wifi, Network, Calendar, ShieldCheck, History, Building2 } from 'lucide-react';
-import type { Device } from '@obliance/shared';
+import type { Device } from '@obligarth/shared';
 import { DeviceStatusBadge } from './DeviceStatusBadge';
 import { OsIcon } from './OsIcon';
 import { clsx } from 'clsx';

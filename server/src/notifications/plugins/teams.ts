@@ -162,9 +162,9 @@ export const teamsPlugin: NotificationPlugin = {
       monitorUrl: 'https://example.com',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'This is a test notification from Obliance',
+      message: 'This is a test notification from Obligarth',
       timestamp: new Date().toISOString(),
-      appName: 'Obliance',
+      appName: 'Obligarth',
     });
   },
 };

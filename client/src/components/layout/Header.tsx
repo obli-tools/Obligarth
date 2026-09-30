@@ -16,7 +16,7 @@ import { useLayoutMode } from '@/hooks/useMediaQuery';
 import { isAndroidApp, canUseNative, native } from '@/native/bridge';
 import { cn } from '@/utils/cn';
 
-/** True when running inside the Obliance native desktop app overlay (ObliTools —
+/** True when running inside the Obligarth native desktop app overlay (ObliTools —
  *  NOT the Android shell, see docs/obli-mobile.md §2). */
 const isNativeApp = typeof window !== 'undefined' &&
   !!(window as Window & { __obliance_is_native_app?: boolean }).__obliance_is_native_app;
@@ -27,7 +27,7 @@ const isNativeApp = typeof window !== 'undefined' &&
 // glowing with its own brand colour. The order is fixed across the suite so
 // muscle memory carries between apps.
 
-type AppType = 'obliview' | 'obliguard' | 'oblimap' | 'obliance' | 'obliplan' | 'oblidesk' | 'oblihub';
+type AppType = 'obliview' | 'obliguard' | 'oblimap' | 'obliance' | 'obligarth' | 'obliplan' | 'oblidesk' | 'oblihub';
 
 interface AppEntry {
   type: AppType;
@@ -41,12 +41,13 @@ const APP_ORDER: AppEntry[] = [
   { type: 'obliguard', label: 'Obliguard', color: '#f5a623' },
   { type: 'oblimap', label: 'Oblimap', color: '#1edd8a' },
   { type: 'obliance', label: 'Obliance', color: '#e03a3a' },
+  { type: 'obligarth', label: 'Obligarth', color: '#d63fd6' },
   { type: 'obliplan', label: 'Obliplan', color: '#7c6cff' },
   { type: 'oblidesk', label: 'Oblidesk', color: '#22b8f5' },
   { type: 'oblihub', label: 'Oblihub', color: '#2d4ec9' },
 ];
 
-const CURRENT_APP: AppType = 'obliance';
+const CURRENT_APP: AppType = 'obligarth';
 
 /**
  * Topbar — degrades with the layout mode (docs/obli-mobile.md §4):
@@ -83,7 +84,7 @@ export function Header() {
   }, []);
 
   // Build a map of which apps are reachable so we know which pills are
-  // clickable. The current app (Obliance) is always available.
+  // clickable. The current app (Obligarth) is always available.
   const reachable = new Set<string>([CURRENT_APP]);
   for (const a of connectedApps) reachable.add(a.appType);
   const visibleApps = APP_ORDER.filter((app) => app.type === CURRENT_APP || reachable.has(app.type));
@@ -213,9 +214,9 @@ export function Header() {
       {/* Logo — always visible in the topbar so it (and the tenant selector
           right next to it) stay accessible regardless of sidebar state
           (pinned, collapsed, floating). Phone: the square mark only. */}
-      <Link to="/" className="flex items-center gap-2 shrink-0" aria-label="Obliance">
+      <Link to="/" className="flex items-center gap-2 shrink-0" aria-label="Obligarth">
         {isPhone ? (
-          <img src="/favicon.svg" alt="Obliance" className="h-8 w-8" />
+          <img src="/favicon.svg" alt="Obligarth" className="h-8 w-8" />
         ) : (
           <Logo className="h-8 w-auto max-w-[160px] object-contain" />
         )}

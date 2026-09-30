@@ -9,7 +9,7 @@
  * thing and is intentionally NOT handled here.
  */
 
-import type { DeviceChallenge, SignDeviceChallengeResult } from '@obliance/shared';
+import type { DeviceChallenge, SignDeviceChallengeResult } from '@obligarth/shared';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,7 @@ export type NativeCapability =
 /** Injected by the shell at document start (docs §2). */
 export interface ObliNativeInfo {
   platform: 'android';
-  /** Flavor id, e.g. 'obliance'. */
+  /** Flavor id, e.g. 'obligarth'. */
   app: string;
   appVersion: string;
   versionCode: number;

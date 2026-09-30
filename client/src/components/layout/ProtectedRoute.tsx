@@ -1,5 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import type { TenantCapability } from '@obliance/shared';
+import type { TenantCapability } from '@obligarth/shared';
 import { useAuthStore } from '@/store/authStore';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
 

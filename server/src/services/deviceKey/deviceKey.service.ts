@@ -8,7 +8,7 @@ import {
   type DeviceChallenge, type DeviceKeyInfo, type DeviceKeyPolicy, type DeviceKeyRevokeReason,
   type DeviceKeySecurityLevel, type DeviceKeyEnrolBeginResponse, type DeviceKeyEnrolFinishResponse,
   type DeviceKeyAttestationFailureReason, type DeviceKeyEligibilityReason,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 import { db } from '../../db';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
@@ -40,7 +40,7 @@ import { createStatusListStore, normaliseSerial, type StatusListView } from './a
 //
 // Never logged nor audited: nonces, signatures, passwords, codes.
 
-// Compile-time guard: the 422 reasons published in @obliance/shared are
+// Compile-time guard: the 422 reasons published in @obligarth/shared are
 // exactly the verifier's (attestation.ts keeps no project import).
 type SameUnion<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 const ATTESTATION_REASONS_IN_SYNC: SameUnion<AttestationFailureReason, DeviceKeyAttestationFailureReason> = true;
@@ -123,7 +123,7 @@ export function allowedOrigins(): string[] {
   return [...out];
 }
 
-/** Accepted app packages (DEVICE_KEY_APP_IDS, default tools.obli.obliance.next). */
+/** Accepted app packages (DEVICE_KEY_APP_IDS, default tools.obli.obligarth.next). */
 export function appPackages(): string[] {
   const list = csv(config.deviceKeys.appIds);
   return list.length > 0 ? list : [DEVICE_KEY_DEFAULT_APP_ID];

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { TenantCapability, UserRole } from '@obliance/shared';
+import type { TenantCapability, UserRole } from '@obligarth/shared';
 import { AppError } from './errorHandler';
 import { permissionService } from '../services/permission.service';
 

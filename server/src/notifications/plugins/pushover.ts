@@ -13,7 +13,7 @@ export const pushoverPlugin: NotificationPlugin = {
 
   async send(config, payload) {
     const icon = statusIcon(payload.newStatus);
-    const prefix = payload.appName || 'Obliance';
+    const prefix = payload.appName || 'Obligarth';
 
     const res = await fetch('https://api.pushover.net/1/messages.json', {
       method: 'POST',
@@ -36,7 +36,7 @@ export const pushoverPlugin: NotificationPlugin = {
       monitorName: 'Test Monitor',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'Test from Obliance',
+      message: 'Test from Obligarth',
       timestamp: new Date().toISOString(),
     });
   },

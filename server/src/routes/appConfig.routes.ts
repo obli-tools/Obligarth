@@ -2,7 +2,7 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { appConfigController } from '../controllers/appConfig.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
-import { DEVICE_KEY_SETTING_KEYS } from '@obliance/shared';
+import { DEVICE_KEY_SETTING_KEYS } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 
 const router = Router();

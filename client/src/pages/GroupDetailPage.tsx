@@ -6,7 +6,7 @@ import { useGroupStore } from '@/store/groupStore';
 import { useAuthStore } from '@/store/authStore';
 import { anonymize } from '@/utils/anonymize';
 import { groupsApi } from '@/api/groups.api';
-import type { DeviceGroup } from '@obliance/shared';
+import type { DeviceGroup } from '@obligarth/shared';
 import { DeviceTable } from '@/components/devices/DeviceTable';
 import { TenantBadge } from '@/components/common/TenantBadge';
 import { Button } from '@/components/common/Button';

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { SmtpServer } from '@obliance/shared';
+import type { SmtpServer } from '@obligarth/shared';
 
 interface ApiResponse<T = unknown> { data?: T; error?: string; }
 

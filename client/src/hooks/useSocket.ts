@@ -3,8 +3,8 @@ import { getSocket } from '../socket/socketClient';
 import { bindSocketListeners } from '../socket/socketListeners';
 import { useAuthStore } from '../store/authStore';
 import { useLiveAlertsStore } from '../store/liveAlertsStore';
-import { SocketEvents } from '@obliance/shared';
-import type { LiveAlert, LiveAlertsResolvedEvent } from '@obliance/shared';
+import { SocketEvents } from '@obligarth/shared';
+import type { LiveAlert, LiveAlertsResolvedEvent } from '@obligarth/shared';
 
 /**
  * App-wide socket subscriptions: live alerts, plus the listeners other modules

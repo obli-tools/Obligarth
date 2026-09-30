@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { DeviceGroup, DeviceGroupTreeNode } from '@obliance/shared';
+import type { DeviceGroup, DeviceGroupTreeNode } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 

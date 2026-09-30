@@ -11,7 +11,7 @@ import { config } from '../config';
 import { obligateService } from '../services/obligate.service';
 import { db } from '../db';
 import type { LoginInput } from '../validators/auth.schema';
-import { DEVICE_KEY_HEADER, type DeviceChallenge, type AuthMeDeviceKey } from '@obliance/shared';
+import { DEVICE_KEY_HEADER, type DeviceChallenge, type AuthMeDeviceKey } from '@obligarth/shared';
 
 /** Helper: resolve & store the first accessible tenant in the session. */
 async function setSessionTenant(req: Request, userId: number): Promise<void> {
@@ -168,7 +168,7 @@ export const authController = {
           next(new AppError(500, 'Failed to logout'));
           return;
         }
-        res.clearCookie('connect.sid');
+        res.clearCookie(config.sessionCookieName);
         try {
           if (userId && tenantId) {
             const { auditService } = await import('../services/audit.service');

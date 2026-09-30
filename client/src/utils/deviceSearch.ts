@@ -1,4 +1,4 @@
-import type { Device } from '@obliance/shared';
+import type { Device } from '@obligarth/shared';
 
 // Single source of truth for "does this device match the user's search
 // query?". Used by the sidebar search, the DeviceMultiSelect picker, and

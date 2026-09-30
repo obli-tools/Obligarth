@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io';
 import type { Knex } from 'knex';
 import { db } from '../db';
-import { SocketEvents } from '@obliance/shared';
+import { SocketEvents } from '@obligarth/shared';
 
 
 let _io: SocketIOServer | null = null;

@@ -15,7 +15,7 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),
-      '@obliance/shared': path.resolve(__dirname, '../shared/src'),
+      '@obligarth/shared': path.resolve(__dirname, '../shared/src'),
     },
   },
   build: {

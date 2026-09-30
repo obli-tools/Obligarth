@@ -20,7 +20,7 @@ export function LoginPage() {
  const errorParam = searchParams.get('error');
  const [error, setError] = useState(
  errorParam === 'sso_failed' ? t('login.ssoFailed', 'SSO authentication failed. Please try local login.')
- // SSO worked but the linked local account is disabled in Obliance.
+ // SSO worked but the linked local account is disabled in Obligarth.
  : errorParam === 'account_disabled' ? t('login.accountDisabled', 'Your account is disabled on this server. Ask an administrator to re-enable it.')
  : '',
  );

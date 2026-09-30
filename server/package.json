@@ -1,5 +1,5 @@
 {
-  "name": "@obliance/server",
+  "name": "@obligarth/server",
   "version": "5.1.129",
   "private": true,
   "main": "dist/src/index.js",
@@ -14,7 +14,7 @@
     "test:device-keys": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/services/deviceKey/*.test.ts\""
   },
   "dependencies": {
-    "@obliance/shared": "*",
+    "@obligarth/shared": "*",
     "bcryptjs": "^3.0.2",
     "connect-pg-simple": "^9.0.1",
     "cookie-parser": "^1.4.6",

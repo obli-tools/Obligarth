@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { AppConfigData, ObligateConfig } from '@obliance/shared';
+import type { AppConfigData, ObligateConfig } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 

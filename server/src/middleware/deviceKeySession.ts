@@ -1,7 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
-import { DEVICE_KEY_HEADER } from '@obliance/shared';
+import { DEVICE_KEY_HEADER } from '@obligarth/shared';
 import { isUuid } from '../services/deviceKey/payload';
 import { clientAddress } from '../utils/clientIp';
+import { config } from '../config';
 
 // Device-bound 2FA — session binding (docs/mobile/device-bound-2fa.md §4.7,
 // §6.4). Mounted on /api in app.ts, after the session, captureStepUpProof,
@@ -37,8 +38,8 @@ import { clientAddress } from '../utils/clientIp';
 // device_keys_enabled !== 'true'): bound sessions then behave as unbound.
 
 const SIGN_IN_PATHS = /^\/api\/(auth\/login|profile\/2fa\/)/;
-/** express-session's cookie (default name, app.ts). */
-const SESSION_COOKIE_RE = /(?:^|;\s*)connect\.sid=/;
+/** express-session's cookie (config.sessionCookieName, app.ts). */
+const SESSION_COOKIE_RE = new RegExp(`(?:^|;\\s*)${config.sessionCookieName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}=`);
 
 /** Anonymous key lookups (no signed-in session) per IP and minute. */
 export const ANON_LOOKUPS_PER_IP = 20;

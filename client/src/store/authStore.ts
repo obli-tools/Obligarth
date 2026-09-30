@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TenantCapability, User } from '@obliance/shared';
+import type { TenantCapability, User } from '@obligarth/shared';
 
 export type PermissionLevel = 'ro' | 'rw';
 

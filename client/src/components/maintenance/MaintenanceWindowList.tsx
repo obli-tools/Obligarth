@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Plus, Pencil, Trash2, CalendarClock, Clock, RefreshCw, CheckCircle2, Globe, Users, Ban } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { MaintenanceWindow, MaintenanceScopeType, NotificationChannel } from '@obliance/shared';
+import type { MaintenanceWindow, MaintenanceScopeType, NotificationChannel } from '@obligarth/shared';
 import { maintenanceApi } from '@/api/maintenance.api';
 import { MaintenanceWindowModal } from './MaintenanceWindowModal';
 import { cn } from '@/utils/cn';
@@ -348,7 +348,7 @@ function EffectiveList({
  onSaved={handleSaved}
  initial={editing}
  channelOptions={channelOptions}
- defaultScopeType={(defaultScopeType ?? scopeType) as import('@obliance/shared').MaintenanceScopeType | undefined}
+ defaultScopeType={(defaultScopeType ?? scopeType) as import('@obligarth/shared').MaintenanceScopeType | undefined}
  defaultScopeId={defaultScopeId ?? scopeId}
  />
  </div>

@@ -19,7 +19,7 @@
     "resolveJsonModule": true,
     "paths": {
       "@/*": ["./src/*"],
-      "@obliance/shared": ["../shared/src"]
+      "@obligarth/shared": ["../shared/src"]
     }
   },
   "include": ["src"],

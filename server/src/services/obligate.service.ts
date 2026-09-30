@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { safeEqualSecret } from '../utils/safeCompare';
 import { db } from '../db';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
 
 /**
  * Public OAuth client id of this app for Obligate: lowercase hex SHA-256 of
@@ -63,8 +63,8 @@ const ROSTER_TIMEOUT_MS = 4_000;
 export const LOT_O_CAPABILITY_FLAGS = ['stepUpEpoch', 'reauth', 'totpReplayGuard'] as const;
 /**
  * Lot O availability, three ways (§4.10, §6.10):
- *  - 'on'      the Obliance switch is on AND Obligate announces the three flags;
- *  - 'off'     EXPLICITLY off: the Obliance switch (DEVICE_KEYS_SSO_ENABLED),
+ *  - 'on'      the Obligarth switch is on AND Obligate announces the three flags;
+ *  - 'off'     EXPLICITLY off: the Obligarth switch (DEVICE_KEYS_SSO_ENABLED),
  *              Obligate SSO disabled / not configured, or Obligate answered 2xx
  *              without the three flags == 1 (OAUTH_LOT_O_CAPABILITIES=false, a
  *              flag missing or with another value);
@@ -100,7 +100,7 @@ export interface ObligateTotpCheck {
 }
 
 /** Obligate's answer to GET /api/oauth/capabilities: 'on' / 'off' (2xx, flags
- *  missing) / 'unknown' (no usable answer). The Obliance switch is not in it. */
+ *  missing) / 'unknown' (no usable answer). The Obligarth switch is not in it. */
 type CapabilitiesAnswer = LotOState;
 let capabilitiesCache: { key: string; state: CapabilitiesAnswer; at: number; ttl: number } | null = null;
 let capabilitiesInflight: { key: string; promise: Promise<CapabilitiesAnswer> } | null = null;
@@ -135,7 +135,7 @@ export type PushRosterRead = { kind: 'ok'; roster: ObligateRoster } | { kind: 'u
  * Outbound reads started by inbound sso-user-sync pushes — whose Bearer
  * secret may be public — share this budget: a token bucket over time (not
  * only a concurrency cap), so that no stream of pushes, however paced, can
- * spend Obliance's request budget at Obligate (its apiLimiter: 500 requests
+ * spend Obligarth's request budget at Obligate (its apiLimiter: 500 requests
  * per 5 min per client IP, shared with the sign-in code exchange, verify-totp,
  * the capabilities, the use-time epoch reads). A read joined to one already
  * in flight or queued costs nothing. Beyond the budget the read is not made
@@ -202,7 +202,7 @@ async function fetchCapabilities(raw: { url: string; apiKey: string }): Promise<
 /**
  * Obligate's capabilities answer for this installation, cached 10 min when
  * it said something ('on' / 'off'), 1 min when it could not ('unknown'); one
- * read in flight at a time. The Obliance switch is checked by the caller.
+ * read in flight at a time. The Obligarth switch is checked by the caller.
  */
 function readCapabilities(raw: { url: string; apiKey: string }): Promise<CapabilitiesAnswer> {
   const key = lotOKey(raw);
@@ -503,7 +503,7 @@ export const obligateService = {
 
   /**
    * Public origin this app is registered under in Obligate: the base URL of
-   * the active connected app of type 'obliance' (the URL Obligate and the
+   * the active connected app of type 'obligarth' (the URL Obligate and the
    * other Obli* apps send browsers to).
    * Obligate does not tell an app which registration is its own, so this is
    * only usable when there is exactly ONE such app. With several (e.g. prod +
@@ -521,10 +521,10 @@ export const obligateService = {
     const apps = await this.getConnectedApps();
     // No app at all is a failed fetch (we are registered ourselves): not cached
     if (apps.length === 0) return null;
-    const own = apps.filter((a) => a.appType === 'obliance');
+    const own = apps.filter((a) => a.appType === 'obligarth');
     if (own.length > 1) {
       logger.error({ baseUrls: own.map((a) => a.baseUrl) },
-        'Obligate SSO: several Obliance apps are registered in Obligate, so their base URLs are not trusted — set APP_URL to this instance\'s public URL');
+        'Obligate SSO: several Obligarth apps are registered in Obligate, so their base URLs are not trusted — set APP_URL to this instance\'s public URL');
     }
     const origin = own.length === 1 ? toHttpOrigin(own[0].baseUrl) : null;
     this._originCache = { origin, at: now };
@@ -721,7 +721,7 @@ export const obligateService = {
    * Cached 10 min per Obligate installation (1 min after a failure); one
    * read in flight at a time.
    *
-   * Obliance-side opt-in FIRST (DEVICE_KEYS_SSO_ENABLED, off by default):
+   * Obligarth-side opt-in FIRST (DEVICE_KEYS_SSO_ENABLED, off by default):
    * Obligate announcing the flags is not enough — the owner turns lot O on
    * only after checking the Obligate build. While off: false, no I/O, so
    * every lot-O path (SSO enrolment, SSO key use, sso-redirect?reauth=1,
@@ -733,7 +733,7 @@ export const obligateService = {
 
   /**
    * Lot O availability with its three outcomes (see LotOState). Only an
-   * EXPLICIT 'off' (the Obliance switch, Obligate SSO off / not configured, or
+   * EXPLICIT 'off' (the Obligarth switch, Obligate SSO off / not configured, or
    * Obligate answering 2xx without the three flags) may relax anything — the
    * bound SSO session then accepts the code alone again (stepUpProof). A
    * failed read is 'unknown' and keeps every lot-O path closed.
@@ -948,7 +948,7 @@ export const obligateService = {
     }
   },
 
-  // syncCapabilitySchemas REMOVED. The capabilities Obliance used to
+  // syncCapabilitySchemas REMOVED. The capabilities Obligarth used to
   // push (monitor / execute / remote / files / power) are row-scoped
   // on team_permissions and never made sense as user-level toggles on
   // an Obligate user-tenant binding. The three legacy
@@ -959,7 +959,7 @@ export const obligateService = {
   // The new model:
   //   - Role (admin / user / viewer / custom) defines WHAT a user can do
   //   - Team membership defines WHERE (which groups / devices)
-  //   - Tenant-wide page gates are toggled per-team in Obliance UI
+  //   - Tenant-wide page gates are toggled per-team in Obligarth UI
   // Obligate-side schema cleanup is handled separately.
 
   /**

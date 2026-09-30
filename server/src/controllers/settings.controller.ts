@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { settingsService } from '../services/settings.service';
-import type { SettingScope } from '@obliance/shared';
-import type { SettingKey } from '@obliance/shared';
+import type { SettingScope } from '@obligarth/shared';
+import type { SettingKey } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import type { SetSettingInput, SetSettingsBulkInput } from '../validators/settings.schema';
 

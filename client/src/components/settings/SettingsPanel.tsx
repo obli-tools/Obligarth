@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 
 
-import type { SettingScope, SettingKey } from '@obliance/shared';
-import { SETTINGS_DEFINITIONS } from '@obliance/shared';
+import type { SettingScope, SettingKey } from '@obligarth/shared';
+import { SETTINGS_DEFINITIONS } from '@obligarth/shared';
 import type { ResolvedSettings } from '@/api/settings.api';
 import { settingsApi } from '@/api/settings.api';
 import { SettingField } from './SettingField';

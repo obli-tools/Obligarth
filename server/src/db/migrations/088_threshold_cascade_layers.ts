@@ -3,7 +3,7 @@ import { Knex } from 'knex';
 // Lot D.2 follow-up — extend the metric-threshold cascade from 3 layers
 // (system → group → device) to 5 layers:
 //
-//   system (hardcoded SYSTEM_DEFAULT_THRESHOLDS in @obliance/shared)
+//   system (hardcoded SYSTEM_DEFAULT_THRESHOLDS in @obligarth/shared)
 //     ↓
 //   global default (app_config.metric_thresholds_global, JSON string)
 //     ↓

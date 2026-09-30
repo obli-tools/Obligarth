@@ -1,7 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { teamService } from '../services/team.service';
 import { AppError } from '../middleware/errorHandler';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import type {
   CreateTeamInput,
   UpdateTeamInput,

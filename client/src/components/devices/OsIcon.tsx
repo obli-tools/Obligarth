@@ -1,5 +1,5 @@
 import { Monitor, Apple, Terminal, Shield } from 'lucide-react';
-import type { OsType } from '@obliance/shared';
+import type { OsType } from '@obligarth/shared';
 
 interface Props {
   osType: OsType;

@@ -61,7 +61,7 @@ const tenantRouter = Router();
 
 // Cross-app delegated reads. A short-lived Obligate-signed token naming a USER
 // stands in for the session on a small allowlist of device read routes, and
-// resolves to the local Obliance user, so requireAuth / requireTenant and every
+// resolves to the local Obligarth user, so requireAuth / requireTenant and every
 // RBAC guard below run against that user unchanged. Registered before
 // requireAuth because it is an alternative credential, not an extra check;
 // requests without the header fall straight through to the session path.

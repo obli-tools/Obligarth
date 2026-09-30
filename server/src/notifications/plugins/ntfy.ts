@@ -14,7 +14,7 @@ export const ntfyPlugin: NotificationPlugin = {
 
   async send(config, payload) {
     const icon = statusIcon(payload.newStatus);
-    const prefix = payload.appName || 'Obliance';
+    const prefix = payload.appName || 'Obligarth';
     const url = `${String(config.serverUrl).replace(/\/$/, '')}/${config.topic}`;
     const headers: Record<string, string> = { 'Content-Type': 'text/plain' };
     if (config.token) headers['Authorization'] = `Bearer ${config.token}`;
@@ -40,7 +40,7 @@ export const ntfyPlugin: NotificationPlugin = {
       monitorName: 'Test Monitor',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'Test from Obliance',
+      message: 'Test from Obligarth',
       timestamp: new Date().toISOString(),
     });
   },

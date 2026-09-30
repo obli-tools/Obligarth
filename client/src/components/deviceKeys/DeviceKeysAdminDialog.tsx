@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Fingerprint } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { DeviceKeyInfo } from '@obliance/shared';
+import type { DeviceKeyInfo } from '@obligarth/shared';
 import { deviceKeysApi } from '@/api/deviceKeys.api';
 import { isStepUpHandled } from '@/api/client';
 import { Modal } from '@/components/common/Modal';

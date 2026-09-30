@@ -1,6 +1,6 @@
 import { db } from '../db';
-import { isMasterTenant } from '@obliance/shared';
-import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
+import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obligarth/shared';
 
 interface GroupRow {
   id: number;

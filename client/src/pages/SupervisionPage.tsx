@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { Navigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { FileBarChart2 } from 'lucide-react';
-import type { TenantCapability } from '@obliance/shared';
+import type { TenantCapability } from '@obligarth/shared';
 import { ReportsPage } from './ReportsPage';
 import { useAuthStore } from '@/store/authStore';
 import { PageContainer } from '@/components/common/PageContainer';

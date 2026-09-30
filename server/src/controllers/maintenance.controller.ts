@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { maintenanceService, isWindowActive } from '../services/maintenance.service';
-import type { CreateMaintenanceWindowRequest, UpdateMaintenanceWindowRequest, MaintenanceScopeType } from '@obliance/shared';
-import { isMasterTenant } from '@obliance/shared';
+import type { CreateMaintenanceWindowRequest, UpdateMaintenanceWindowRequest, MaintenanceScopeType } from '@obligarth/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import { db } from '../db';
 
 // Tenant ownership gate. `maintenanceService.getById` is intentionally

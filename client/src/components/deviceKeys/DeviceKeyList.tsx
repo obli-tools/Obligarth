@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { Smartphone, ShieldCheck, ShieldAlert, Trash2 } from 'lucide-react';
-import type { DeviceKeyInfo, DeviceKeySecurityLevel } from '@obliance/shared';
+import type { DeviceKeyInfo, DeviceKeySecurityLevel } from '@obligarth/shared';
 import { cn } from '@/utils/cn';
 
 // Phones registered for device-bound 2FA ("validation par empreinte",

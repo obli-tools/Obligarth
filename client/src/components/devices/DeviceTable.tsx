@@ -8,13 +8,13 @@ import {
  SlidersHorizontal, Columns3, FolderTree,
 } from 'lucide-react';
 import { deviceApi } from '@/api/device.api';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { useTenantStore } from '@/store/tenantStore';
 import { groupsApi } from '@/api/groups.api';
 import { DeviceRow } from '@/components/devices/DeviceRow';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
-import type { Device, DeviceGroupTreeNode } from '@obliance/shared';
+import type { Device, DeviceGroupTreeNode } from '@obligarth/shared';
 import { useAuthStore } from '@/store/authStore';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
@@ -121,17 +121,17 @@ export function DeviceTable({
  // the filters, sessionStorage wins on subsequent mounts — otherwise the
  // user's manual chip toggles would be reverted by a stale URL after a
  // back-navigation.
- const [search, setSearch] = useSessionState<string>('obliance:devices:search', '');
+ const [search, setSearch] = useSessionState<string>('obligarth:devices:search', '');
  const [debouncedSearch, setDebouncedSearch] = useState('');
  const [statusFilters, setStatusFilters] = useSessionState<Set<string>>(
- 'obliance:devices:statusFilters',
+ 'obligarth:devices:statusFilters',
  () => (initialStatusFilter ? new Set([initialStatusFilter]) : new Set<string>()),
  );
  // Tag filter — set of selected tags. Populated by the popover from
  // /devices/tags so admins pick from existing tags only. Filter is
  // applied server-side via deviceApi.listPaginated({ tags }) so the
  // restriction spans the whole fleet, not just the visible page.
- const [tagFilters, setTagFilters] = useSessionState<Set<string>>('obliance:devices:tagFilters', new Set<string>());
+ const [tagFilters, setTagFilters] = useSessionState<Set<string>>('obligarth:devices:tagFilters', new Set<string>());
  const [tagFacets, setTagFacets] = useState<Array<{ tag: string; count: number }>>([]);
  const [tagsMenuOpen, setTagsMenuOpen] = useState(false);
  const toggleTagFilter = (tag: string) => {
@@ -142,13 +142,13 @@ export function DeviceTable({
  });
  };
  const [osFilters, setOsFilters] = useSessionState<Set<string>>(
- 'obliance:devices:osFilters',
+ 'obligarth:devices:osFilters',
  () => (initialOsFilter ? new Set([initialOsFilter]) : new Set<string>()),
  );
  // URL-driven filters from dashboard click-throughs. They flow straight to
  // the server query — no toggle UI here yet, the user clears them by
  // navigating away or removing the query param.
- const [staleHours, setStaleHours] = useSessionState<number | undefined>('obliance:devices:staleHours', initialStaleHours);
+ const [staleHours, setStaleHours] = useSessionState<number | undefined>('obligarth:devices:staleHours', initialStaleHours);
  // Lot C 3-tier OS filter: osType (existing chip) → osName → osVersion.
  // Each sub-filter is a Set<string> backing a multi-select popover so
  // admins can OR together several Windows versions or Linux distros in
@@ -158,8 +158,8 @@ export function DeviceTable({
  // single-string session values that were stored under the unsuffixed
  // key — without it, a returning admin would deserialise `""` as a
  // string and the next `.size` access would crash.
- const [osNameFilter, setOsNameFilter] = useSessionState<Set<string>>('obliance:devices:osNameFilter:multi', new Set<string>());
- const [osVersionFilter, setOsVersionFilter] = useSessionState<Set<string>>('obliance:devices:osVersionFilter:multi', new Set<string>());
+ const [osNameFilter, setOsNameFilter] = useSessionState<Set<string>>('obligarth:devices:osNameFilter:multi', new Set<string>());
+ const [osVersionFilter, setOsVersionFilter] = useSessionState<Set<string>>('obligarth:devices:osVersionFilter:multi', new Set<string>());
  const [osNameMenuOpen, setOsNameMenuOpen] = useState(false);
  const [osVersionMenuOpen, setOsVersionMenuOpen] = useState(false);
  const toggleOsNameFilter = (name: string) => {
@@ -202,13 +202,13 @@ export function DeviceTable({
  // ?approvalStatus=pending overrides the default — used by the
  // sidebar admin deep-link "Agents".
  const [approvalFilter, setApprovalFilter] = useSessionState<ApprovalFilter>(
- 'obliance:devices:approvalFilter',
+ 'obligarth:devices:approvalFilter',
  (initialApprovalFilter as ApprovalFilter | undefined) ?? (canManageApproval ? '' : 'approved'),
  );
  // Default = no explicit sort → enrolment order, tree-grouped. Clicking a
  // column cycles asc → desc → back to default (empty).
- const [sortBy, setSortBy] = useSessionState<SortField>('obliance:devices:sortBy', '');
- const [sortOrder, setSortOrder] = useSessionState<'asc' | 'desc'>('obliance:devices:sortOrder', 'asc');
+ const [sortBy, setSortBy] = useSessionState<SortField>('obligarth:devices:sortBy', '');
+ const [sortOrder, setSortOrder] = useSessionState<'asc' | 'desc'>('obligarth:devices:sortOrder', 'asc');
 
  // Data — `devices` is the accumulated list across infinite-scroll
  // fetches in flat mode, and the whole scope in tree mode.
@@ -223,7 +223,7 @@ export function DeviceTable({
  const [tree, setTree] = useState<DeviceGroupTreeNode[]>([]);
  const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<number>>(() => {
  try {
- const raw = localStorage.getItem('obliance:deviceTableCollapsed');
+ const raw = localStorage.getItem('obligarth:deviceTableCollapsed');
  return new Set<number>(raw ? JSON.parse(raw) : []);
  } catch {
  return new Set<number>();
@@ -233,7 +233,7 @@ export function DeviceTable({
  setCollapsedGroupIds((prev) => {
  const next = new Set(prev);
  if (next.has(gId)) next.delete(gId); else next.add(gId);
- try { localStorage.setItem('obliance:deviceTableCollapsed', JSON.stringify([...next])); } catch {}
+ try { localStorage.setItem('obligarth:deviceTableCollapsed', JSON.stringify([...next])); } catch {}
  return next;
  });
  }, []);
@@ -248,7 +248,7 @@ export function DeviceTable({
  // Change-group + transfer-tenant modal state
  const [changeGroupOpen, setChangeGroupOpen] = useState(false);
  const [transferOpen, setTransferOpen] = useState(false);
- const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obliance:devices:tenantFilters', new Set<number>());
+ const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obligarth:devices:tenantFilters', new Set<number>());
  const toggleTenantFilter = (tid: number) => {
  setTenantFilters((prev) => {
  const next = new Set(prev);
@@ -281,12 +281,12 @@ export function DeviceTable({
  // "Contoso" in the sidebar should also fold its bucket in the table.)
  const [collapsedTenantIds, setCollapsedTenantIds] = useState<Set<number>>(() => {
  try {
- const raw = localStorage.getItem('obliance:groupPanelCollapsedTenants');
+ const raw = localStorage.getItem('obligarth:groupPanelCollapsedTenants');
  return new Set(raw ? (JSON.parse(raw) as number[]) : []);
  } catch { return new Set(); }
  });
  useEffect(() => {
- try { localStorage.setItem('obliance:groupPanelCollapsedTenants', JSON.stringify([...collapsedTenantIds])); } catch {}
+ try { localStorage.setItem('obligarth:groupPanelCollapsedTenants', JSON.stringify([...collapsedTenantIds])); } catch {}
  }, [collapsedTenantIds]);
  const toggleTenantCollapsed = (id: number) => {
  setCollapsedTenantIds((prev) => {

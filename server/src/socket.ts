@@ -61,7 +61,7 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
       // In production, nginx proxies everything (same-origin from the browser)
       // but WebSocket upgrades always send the Origin header (RFC 6455), so a
       // fixed CLIENT_ORIGIN that doesn't include the port (e.g. "http://localhost"
-      // vs "http://localhost:3003") silently breaks the handshake.
+      // vs "http://localhost:3005") silently breaks the handshake.
       // Auth is enforced by the io.use() middleware below, not by CORS.
       origin: true,
       credentials: true,

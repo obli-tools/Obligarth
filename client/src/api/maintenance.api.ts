@@ -2,7 +2,7 @@ import type {
   MaintenanceWindow,
   CreateMaintenanceWindowRequest,
   UpdateMaintenanceWindowRequest,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 
 const BASE = '/api/maintenance';
 

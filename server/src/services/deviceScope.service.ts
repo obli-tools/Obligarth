@@ -1,6 +1,6 @@
 import type { Request } from 'express';
-import { isMasterTenant } from '@obliance/shared';
-import type { DeviceCapability } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
+import type { DeviceCapability } from '@obligarth/shared';
 import { db } from '../db';
 import { permissionService } from './permission.service';
 

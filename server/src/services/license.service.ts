@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { DeviceLicense } from '@obliance/shared';
+import type { DeviceLicense } from '@obligarth/shared';
 
 function rowToLicense(row: any): DeviceLicense {
   return {

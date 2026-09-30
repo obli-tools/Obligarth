@@ -26,7 +26,7 @@ export const DEVICE_KEY_MAX_BULK = 50;
 export const DEVICE_KEY_BULK_SPREAD_SECONDS = 60;
 
 /** Default accepted app package (DEVICE_KEY_APP_IDS). */
-export const DEVICE_KEY_DEFAULT_APP_ID = 'tools.obli.obliance.next';
+export const DEVICE_KEY_DEFAULT_APP_ID = 'tools.obli.obligarth.next';
 
 export type DeviceKeyPurpose = 'enrol' | 'login' | 'stepup';
 export type DeviceKeySecurityLevel = 'strongbox' | 'tee' | 'unverified';

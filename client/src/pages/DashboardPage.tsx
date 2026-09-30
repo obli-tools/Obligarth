@@ -6,7 +6,7 @@ import {
   Building2,
 } from 'lucide-react';
 import { useDeviceStore } from '@/store/deviceStore';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
 import {
   deviceApi,
   type GroupStats, type FleetTimeseriesPoint, type FleetHourlyPoint,

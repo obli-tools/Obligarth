@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Globe, Server, Folder, RefreshCw, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { DeviceGroup, Device, MaintenanceScope } from '@obliance/shared';
+import type { DeviceGroup, Device, MaintenanceScope } from '@obligarth/shared';
 import { groupsApi } from '@/api/groups.api';
 import { deviceApi } from '@/api/device.api';
 import { cn } from '@/utils/cn';

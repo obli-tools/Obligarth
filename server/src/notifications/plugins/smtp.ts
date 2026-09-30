@@ -75,7 +75,7 @@ export const smtpPlugin: NotificationPlugin = {
       monitorName: 'Test Monitor',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'Test from Obliance',
+      message: 'Test from Obligarth',
       timestamp: new Date().toISOString(),
     });
   },

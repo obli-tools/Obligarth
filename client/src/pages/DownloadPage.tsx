@@ -102,7 +102,7 @@ function AndroidAppSection({ inApp }: { inApp: boolean }) {
   const available = !!info?.available;
   // Absolute so it can be copied / typed on the phone (the API returns a path).
   const absoluteUrl = info ? toAbsoluteUrl(info.downloadUrl) : '';
-  const apkName = info ? `Obliance-${info.version}.apk` : 'Obliance.apk';
+  const apkName = info ? `Obligarth-${info.version}.apk` : 'Obligarth.apk';
   const serverOrigin = window.location.origin;
 
   const sizeLabel = available && info?.sizeBytes
@@ -169,7 +169,7 @@ function AndroidAppSection({ inApp }: { inApp: boolean }) {
             </div>
           </div>
           <h1 className="mb-2 text-2xl font-bold text-text-primary sm:text-3xl">
-            {t('download.android.appTitle') || 'Obliance for Android'}
+            {t('download.android.appTitle') || 'Obligarth for Android'}
           </h1>
           {app && (
             <p className="text-text-secondary">
@@ -280,7 +280,7 @@ function AndroidAppSection({ inApp }: { inApp: boolean }) {
 
       <p className="mb-4 text-sm text-text-secondary">
         {t('download.android.description') ||
-          'Obliance on your Android phone or tablet: native downloads, notifications and in-app updates.'}
+          'Obligarth on your Android phone or tablet: native downloads, notifications and in-app updates.'}
       </p>
 
       {available && info && (

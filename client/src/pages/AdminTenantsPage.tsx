@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Building2, Plus, Pencil, Trash2, Users, X, Check } from 'lucide-react';
-import type { Tenant } from '@obliance/shared';
+import type { Tenant } from '@obligarth/shared';
 import { Button } from '@/components/common/Button';
 import { IconButton } from '@/components/common/IconButton';
 import { Modal } from '@/components/common/Modal';

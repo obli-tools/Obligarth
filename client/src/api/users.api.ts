@@ -6,7 +6,7 @@ import type {
   ApiResponse,
   CreateUserRequest,
   UpdateUserRequest,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 
 /** 202 answer of a write gated at the 'restricted' level: the request waits
  *  for a second administrator (tenant.manage_users). */

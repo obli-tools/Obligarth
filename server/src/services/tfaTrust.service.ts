@@ -20,7 +20,7 @@ export async function trustWindowMs(tenantId?: number): Promise<number> {
   if (!tenantId) return DEFAULT_TRUST_WINDOW_MS;
   try {
     const { settingsService } = await import('./settings.service');
-    const { SETTINGS_KEYS } = await import('@obliance/shared');
+    const { SETTINGS_KEYS } = await import('@obligarth/shared');
     const hours = await settingsService.getGlobalNumber(tenantId, SETTINGS_KEYS.TFA_TRUST_HOURS);
     if (!Number.isFinite(hours)) return DEFAULT_TRUST_WINDOW_MS;
     return hours <= 0 ? 0 : hours * 60 * 60 * 1000;

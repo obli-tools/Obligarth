@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { knownDeviceCapabilities } from '@obliance/shared';
+import { knownDeviceCapabilities } from '@obligarth/shared';
 
 export const createTeamSchema = z.object({
   name: z.string().min(1).max(255),

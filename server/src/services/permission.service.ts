@@ -1,6 +1,6 @@
 import { db } from '../db';
-import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obliance/shared';
-import { knownDeviceCapabilities, knownTenantCapabilities } from '@obliance/shared';
+import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obligarth/shared';
+import { knownDeviceCapabilities, knownTenantCapabilities } from '@obligarth/shared';
 
 export const permissionService = {
   /**

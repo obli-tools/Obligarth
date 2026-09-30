@@ -1,4 +1,4 @@
-import type { NotificationConfigField } from '@obliance/shared';
+import type { NotificationConfigField } from '@obligarth/shared';
 
 export interface NotificationPayload {
   monitorName: string;

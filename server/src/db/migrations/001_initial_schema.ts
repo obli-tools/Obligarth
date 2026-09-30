@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 
 // =============================================================================
-// Obliance RMM — Initial Schema
+// Obligarth MDM — Initial Schema
 // Single migration that creates the full database structure from scratch.
 // Subsequent features will add new migrations on top of this baseline.
 // =============================================================================
@@ -963,7 +963,7 @@ export async function up(knex: Knex): Promise<void> {
     { key: 'remote_session_timeout_minutes',  value: '60'       },
     { key: 'catchup_window_days',             value: '7'        },  // look back N days for missed executions
     { key: 'inventory_retention_days',        value: '90'       },
-    { key: 'app_name',                        value: 'Obliance' },
+    { key: 'app_name',                        value: 'Obligarth' },
     { key: 'default_language',                value: 'en'       },
   ]);
 

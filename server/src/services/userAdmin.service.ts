@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import type { User } from '@obliance/shared';
+import type { User } from '@obligarth/shared';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { userService } from './user.service';

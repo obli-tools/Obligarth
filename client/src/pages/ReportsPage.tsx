@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Plus, FileText, Download, RefreshCw, Edit, Trash2, Play, Clock, CheckCircle, AlertCircle, Loader, ChevronDown, ChevronUp, Ban } from 'lucide-react';
 import { reportApi } from '@/api/report.api';
-import type { Report, ReportOutput, ReportType, ReportFormat, ReportSection, Device } from '@obliance/shared';
+import type { Report, ReportOutput, ReportType, ReportFormat, ReportSection, Device } from '@obligarth/shared';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import { cn } from '@/utils/cn';

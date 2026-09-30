@@ -23,13 +23,13 @@ const REAUTH_FAILURE_REASONS: Record<string, string> = {
   verifier_unavailable: 'Obligate could not confirm your account right now. Try again in a moment.',
   unreachable: 'Obligate cannot be reached right now. Try again in a moment.',
   cancelled: 'Confirmation cancelled at Obligate.',
-  origin: 'Open Obliance at its public address to confirm with Obligate.',
+  origin: 'Open Obligarth at its public address to confirm with Obligate.',
   expired: 'The confirmation took too long (over 10 minutes). Try again.',
   signed_out: 'You were signed out meanwhile. Sign in again.',
   state: 'The confirmation could not be matched to this session. Try again from this page.',
   exchange: 'Obligate did not confirm the sign-in. Try again.',
   not_sso: 'This account does not sign in with Obligate: confirmation with Obligate does not apply.',
-  misconfigured: 'Obligate is misconfigured on this server (it points to Obliance itself). Contact an administrator.',
+  misconfigured: 'Obligate is misconfigured on this server (it points to Obligarth itself). Contact an administrator.',
   error: 'Obligate re-authentication failed. Try again.',
 };
 

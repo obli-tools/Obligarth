@@ -1,6 +1,6 @@
 import { db } from '../db';
-import type { TenantCapability } from '@obliance/shared';
-import { TENANT_CAPABILITIES, TENANT_CAPABILITY_LABELS, knownTenantCapabilities } from '@obliance/shared';
+import type { TenantCapability } from '@obligarth/shared';
+import { TENANT_CAPABILITIES, TENANT_CAPABILITY_LABELS, knownTenantCapabilities } from '@obligarth/shared';
 
 interface PermissionSetRow {
   id: number;

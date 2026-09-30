@@ -97,15 +97,15 @@ async function main() {
   }
 
   server.listen(config.port, () => {
-    logger.info({ port: config.port, env: config.nodeEnv }, `Obliance RMM started`);
+    logger.info({ port: config.port, env: config.nodeEnv }, `Obligarth MDM started`);
 
     // Sync preference schemas with Obligate (non-blocking)
     obligateService.syncPreferenceSchemas().catch(() => {});
     // Capability schemas USED to be pushed to Obligate so admins could
     // tick per-user capability boxes from there. Dropped: capabilities
-    // live entirely in Obliance now (role = what / team = where), and
+    // live entirely in Obligarth now (role = what / team = where), and
     // pushing them to Obligate created confusing user-level toggles
-    // that didn't map to anything on the Obliance side. Obligate-side
+    // that didn't map to anything on the Obligarth side. Obligate-side
     // cleanup is handled separately.
   });
 

@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Device, FleetSummary, AgentApiKey } from '@obliance/shared';
+import type { Device, FleetSummary, AgentApiKey } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 
@@ -96,7 +96,7 @@ export const deviceApi = {
     });
     const cd = res.headers['content-disposition'] || res.headers['Content-Disposition'] || '';
     const match = /filename="([^"]+)"/.exec(cd);
-    const filename = match ? match[1] : `obliance-devices.${format}`;
+    const filename = match ? match[1] : `obligarth-devices.${format}`;
     return { blob: res.data as Blob, filename };
   },
   async getSummary(): Promise<FleetSummary> {

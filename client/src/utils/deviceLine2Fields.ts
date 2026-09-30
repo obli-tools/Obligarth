@@ -28,7 +28,7 @@ export const LINE2_FIELDS: Line2FieldDef[] = [
   { key: 'tags',         label: 'Tags',             defaultVisible: false },
 ];
 
-const STORAGE_KEY = 'obliance:deviceLine2Fields';
+const STORAGE_KEY = 'obligarth:deviceLine2Fields';
 
 /** Read the user's saved visibility preferences. Falls back to defaults
  *  for any field that is missing (e.g. after a release that adds new

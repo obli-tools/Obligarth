@@ -4,7 +4,7 @@
  * mailto:/tel:/otpauth:). Browser → new tab for http(s), same-window
  * navigation for other schemes (the OS hands them to the right app).
  *
- * Use it for every target=_blank link that leaves the Obliance origin
+ * Use it for every target=_blank link that leaves the Obligarth origin
  * (Obligate, other Obli apps, NVD/GHSA, docs, …).
  */
 import { canUseNative, native } from '@/native/bridge';

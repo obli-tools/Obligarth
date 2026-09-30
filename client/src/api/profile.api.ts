@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { User, UserPreferences } from '@obliance/shared';
+import type { User, UserPreferences } from '@obligarth/shared';
 
 export const profileApi = {
   async get(): Promise<User> {

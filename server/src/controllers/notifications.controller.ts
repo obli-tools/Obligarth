@@ -3,7 +3,7 @@ import { notificationService } from '../services/notification.service';
 import { deviceService } from '../services/device.service';
 import { getPluginMetas } from '../notifications/registry';
 import { AppError } from '../middleware/errorHandler';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import type {
   CreateChannelInput,
   UpdateChannelInput,

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, type FormEvent } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, ChevronUp, ChevronDown, FolderTree } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { DeviceGroup, DeviceGroupTreeNode } from '@obliance/shared';
+import type { DeviceGroup, DeviceGroupTreeNode } from '@obligarth/shared';
 import { groupsApi } from '@/api/groups.api';
 import { useGroupStore } from '@/store/groupStore';
 import { useAuthStore } from '@/store/authStore';
@@ -242,7 +242,7 @@ export function GroupEditPage() {
  </label>
  </div>
  <p className="text-xs text-text-muted ml-6">
- {t('groups.form.alwaysOnDesc') || 'Les appareils sont censés rester allumés en permanence. Si l’un ne répond plus à Obliance, c’est un défaut critique : alerte critique + notification immédiate (au lieu d’un simple « hors ligne » bénin pour les postes utilisateurs).'}
+ {t('groups.form.alwaysOnDesc') || 'Les appareils sont censés rester allumés en permanence. Si l’un ne répond plus à Obligarth, c’est un défaut critique : alerte critique + notification immédiate (au lieu d’un simple « hors ligne » bénin pour les postes utilisateurs).'}
  </p>
  </div>
  <div className="flex items-center gap-3 pt-2">

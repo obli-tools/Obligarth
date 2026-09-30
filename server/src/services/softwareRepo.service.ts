@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { config } from '../config';
-import type { SoftwareRepoPackage, SoftwareRepoSettings } from '@obliance/shared';
+import type { SoftwareRepoPackage, SoftwareRepoSettings } from '@obligarth/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';

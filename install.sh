@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-REPO="https://raw.githubusercontent.com/MeeJay/obliance/main"
-INSTALL_DIR="${OBLIANCE_DIR:-./obliance}"
+REPO="https://raw.githubusercontent.com/MeeJay/Obligarth/main"
+INSTALL_DIR="${OBLIGARTH_DIR:-./obligarth}"
 ADMIN_PASSWORD=""
 
 # Random alphanumeric string of $1 characters. No weak fallback: without a
@@ -21,7 +21,7 @@ random_string() {
 
 echo ""
 echo "  ╔═══════════════════════════════╗"
-echo "  ║     Obliance — Installer      ║"
+echo "  ║     Obligarth — Installer     ║"
 echo "  ╚═══════════════════════════════╝"
 echo ""
 
@@ -82,17 +82,17 @@ fi
 # Persistent custom directory (reports, software repository, phone-key cache)
 mkdir -p custom
 
-echo "→ Starting Obliance..."
+echo "→ Starting Obligarth..."
 echo ""
 docker compose pull
 docker compose up -d
 
 echo ""
 echo "  ╔══════════════════════════════════════╗"
-echo "  ║        Obliance is running!          ║"
+echo "  ║        Obligarth is running!         ║"
 echo "  ╚══════════════════════════════════════╝"
 echo ""
-echo "  → Open: http://localhost:3000"
+echo "  → Open: http://localhost:3005"
 if [ -n "$ADMIN_PASSWORD" ]; then
   echo "  → Sign in: admin / $ADMIN_PASSWORD"
   echo "    Shown only this once (also in .env, used only to create this first account)."

@@ -2,7 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { Bell, BellOff, ArrowDown, Check, Ban } from 'lucide-react';
 import { notificationsApi } from '@/api/notifications.api';
 import { cn } from '@/utils/cn';
-import type { NotificationChannel, OverrideMode } from '@obliance/shared';
+import type { NotificationChannel, OverrideMode } from '@obligarth/shared';
 import toast from 'react-hot-toast';
 
 interface ResolvedBinding {

@@ -1,5 +1,5 @@
 // =============================================================================
-// Obliance RMM — Settings Keys & Defaults
+// Obligarth MDM — Settings Keys & Defaults
 // =============================================================================
 
 export const SETTINGS_KEYS = {

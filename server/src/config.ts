@@ -19,7 +19,7 @@ function publicUrlFromEnv(): string {
 // `isDev` (logging, static files, cookie flag) are no such signal: they
 // treat an unset NODE_ENV as development.
 const explicitDevelopment = process.env.NODE_ENV === 'development';
-const DEV_DATABASE_URL = 'postgres://obliance:changeme@localhost:5432/obliance';
+const DEV_DATABASE_URL = 'postgres://obligarth:changeme@localhost:5432/obligarth';
 const DEV_SESSION_SECRET = 'change-this-secret';
 
 export const config = {
@@ -30,9 +30,12 @@ export const config = {
   databaseUrl: process.env.DATABASE_URL || (explicitDevelopment ? DEV_DATABASE_URL : ''),
   /** Empty when SESSION_SECRET is unset outside development (refused at start). */
   sessionSecret: process.env.SESSION_SECRET || (explicitDevelopment ? DEV_SESSION_SECRET : ''),
+  // Own session cookie name (Oblimap model): Obli* apps sharing a host name
+  // would otherwise overwrite each other's connect.sid (cookies ignore ports).
+  sessionCookieName: process.env.SESSION_COOKIE_NAME || 'obligarth.sid',
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
-  appName: process.env.APP_NAME || 'Obliance',
+  appName: process.env.APP_NAME || 'Obligarth',
   appUrl: process.env.APP_URL || '',
   // The public address of this instance: APP_URL, else CLIENT_ORIGIN when the
   // operator set it explicitly (in the Docker deployment both name the same
@@ -55,7 +58,7 @@ export const config = {
     disabled: process.env.DEVICE_KEYS_DISABLED === 'true',
     /** Extra enrolment origins (comma-separated), next to APP_URL [D17]. */
     origins: process.env.DEVICE_KEY_ORIGINS || '',
-    /** Accepted app packages (comma-separated); default tools.obli.obliance.next. */
+    /** Accepted app packages (comma-separated); default tools.obli.obligarth.next. */
     appIds: process.env.DEVICE_KEY_APP_IDS || '',
     /** Accepted APK signer SHA-256 digests (comma-separated, ':' ignored);
      *  default: the release signer. A debug signer is added here only on a

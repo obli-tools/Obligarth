@@ -14,7 +14,7 @@ import { obligateService } from '../services/obligate.service';
 
 const router = Router();
 
-const SELF = { name: 'Obliance', color: '#8b5cf6' };
+const SELF = { name: 'Obligarth', color: '#8b5cf6' };
 
 router.get('/manifest', requireAuth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {
@@ -23,7 +23,7 @@ router.get('/manifest', requireAuth, async (_req: Request, res: Response, next: 
 
     type LinkedApp = { name: string; url: string; color: string };
     const linkedApps: LinkedApp[] = apps
-      .filter(a => a.appType !== 'obliance')
+      .filter(a => a.appType !== 'obligarth')
       .map(a => ({ name: a.name, url: a.baseUrl, color: a.color ?? '#8b5cf6' }));
 
     res.json({

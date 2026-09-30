@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import type { LiveAlert as SharedLiveAlert } from '@obliance/shared';
+import type { LiveAlert as SharedLiveAlert } from '@obligarth/shared';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical' | 'down' | 'up';
 
@@ -215,7 +215,7 @@ export const useLiveAlertsStore = create<LiveAlertsState>()(
       },
     }),
     {
-      name: 'obliance-alert-prefs',
+      name: 'obligarth-alert-prefs',
       // Only persist preferences, NOT the alert list (alerts always fetched fresh from server)
       partialize: (s) => ({
         localEnabled: s.localEnabled,

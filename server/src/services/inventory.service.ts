@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { HardwareInventory, SoftwareEntry } from '@obliance/shared';
+import type { HardwareInventory, SoftwareEntry } from '@obligarth/shared';
 
 class InventoryService {
   async getHardware(deviceId: number): Promise<HardwareInventory | null> {

@@ -7,7 +7,7 @@ import type {
   UpdateTeamRequest,
   SetTeamMembersRequest,
   SetTeamPermissionsRequest,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 
 interface TeamDetail extends UserTeam {
   memberIds: number[];

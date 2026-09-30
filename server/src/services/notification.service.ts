@@ -1,6 +1,6 @@
 import { db } from '../db';
-import type { NotificationChannel, NotificationChannelType, NotificationBinding, OverrideMode } from '@obliance/shared';
-import { isMasterTenant } from '@obliance/shared';
+import type { NotificationChannel, NotificationChannelType, NotificationBinding, OverrideMode } from '@obligarth/shared';
+import { isMasterTenant } from '@obligarth/shared';
 
 import type { NotificationPayload } from '../notifications/types';
 import { getPlugin } from '../notifications/registry';

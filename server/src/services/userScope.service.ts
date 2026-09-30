@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { MASTER_TENANT_ID, knownTenantCapabilities } from '@obliance/shared';
+import { MASTER_TENANT_ID, knownTenantCapabilities } from '@obligarth/shared';
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 

@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey } from '@obliance/shared';
+import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import { appConfigService, moduleConfigKey } from './appConfig.service';
 

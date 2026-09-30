@@ -2,7 +2,7 @@ import { Building2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useTenantStore } from '@/store/tenantStore';
 import { useIsMasterTenant } from '@/hooks/useIsMasterTenant';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { clsx } from 'clsx';
 
 interface Props {

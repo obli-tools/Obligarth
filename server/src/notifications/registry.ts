@@ -1,5 +1,5 @@
 import type { NotificationPlugin } from './types';
-import type { NotificationPluginMeta } from '@obliance/shared';
+import type { NotificationPluginMeta } from '@obligarth/shared';
 import { webhookPlugin } from './plugins/webhook';
 import { discordPlugin } from './plugins/discord';
 import { telegramPlugin } from './plugins/telegram';

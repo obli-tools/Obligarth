@@ -1,7 +1,7 @@
 import { db } from '../db';
 
-import type { SettingScope, SettingKey, SettingDefinition } from '@obliance/shared';
-import { SETTINGS_KEYS, HARDCODED_DEFAULTS, SETTINGS_DEFINITIONS } from '@obliance/shared';
+import type { SettingScope, SettingKey, SettingDefinition } from '@obligarth/shared';
+import { SETTINGS_KEYS, HARDCODED_DEFAULTS, SETTINGS_DEFINITIONS } from '@obligarth/shared';
 
 interface SettingsRow {
   id: number;

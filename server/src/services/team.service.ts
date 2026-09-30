@@ -1,6 +1,6 @@
 import { db } from '../db';
-import type { UserTeam, TeamPermission, DeviceCapability } from '@obliance/shared';
-import { DEFAULT_DEVICE_CAPABILITIES, knownDeviceCapabilities } from '@obliance/shared';
+import type { UserTeam, TeamPermission, DeviceCapability } from '@obligarth/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, knownDeviceCapabilities } from '@obligarth/shared';
 
 interface TeamRow {
   id: number;

@@ -1,7 +1,7 @@
 import { db } from '../db';
 import path from 'path';
 import fs from 'fs/promises';
-import type { Report, ReportOutput, ReportSection } from '@obliance/shared';
+import type { Report, ReportOutput, ReportSection } from '@obligarth/shared';
 import { config } from '../config';
 import { logger } from '../utils/logger';
 import { renderReportHtml } from './reportRenderer';
@@ -330,7 +330,7 @@ class ReportService {
   private async toXlsx(data: Record<string, any>, report: any): Promise<Buffer> {
     const ExcelJS = (await import('exceljs')).default;
     const wb = new ExcelJS.Workbook();
-    wb.creator = 'Obliance';
+    wb.creator = 'Obligarth';
     wb.created = new Date();
 
     const used = new Set<string>();

@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditService } from '../services/audit.service';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 
 const router = Router();
 

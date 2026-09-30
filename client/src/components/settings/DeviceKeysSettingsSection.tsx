@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Fingerprint, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
 import toast from 'react-hot-toast';
-import type { AppConfigData, DeviceKeyListResponse, DeviceKeySettingKey, DeviceKeysSsoStatus } from '@obliance/shared';
+import type { AppConfigData, DeviceKeyListResponse, DeviceKeySettingKey, DeviceKeysSsoStatus } from '@obligarth/shared';
 import { appConfigApi } from '@/api/appConfig.api';
 import { deviceKeysApi } from '@/api/deviceKeys.api';
 import { isStepUpHandled } from '@/api/client';

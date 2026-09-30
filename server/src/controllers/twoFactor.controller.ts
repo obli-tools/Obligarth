@@ -1,6 +1,6 @@
 import { regenerateSession } from '../utils/session';
 import type { Request, Response, NextFunction } from 'express';
-import { DEVICE_KEY_HEADER, type DeviceKeyRevokeReason } from '@obliance/shared';
+import { DEVICE_KEY_HEADER, type DeviceKeyRevokeReason } from '@obligarth/shared';
 import { db } from '../db';
 import { twoFactorService } from '../services/twoFactor.service';
 import { appConfigService } from '../services/appConfig.service';

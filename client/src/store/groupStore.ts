@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { DeviceGroup, DeviceGroupTreeNode } from '@obliance/shared';
-import { SocketEvents } from '@obliance/shared';
+import type { DeviceGroup, DeviceGroupTreeNode } from '@obligarth/shared';
+import { SocketEvents } from '@obligarth/shared';
 import { groupsApi } from '../api/groups.api';
 import { registerSocketListener } from '../socket/socketListeners';
 import { onTenantChanged } from './tenantStore';

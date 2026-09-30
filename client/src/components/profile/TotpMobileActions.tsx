@@ -9,11 +9,11 @@ import { copyText } from '@/utils/clipboard';
 /**
  * Issuer used by the server when it builds the TOTP QR code
  * (server/src/services/twoFactor.service.ts → config.appName, default
- * "Obliance"). The generated codes only depend on the secret + SHA1/6/30,
+ * "Obligarth"). The generated codes only depend on the secret + SHA1/6/30,
  * so a different label never breaks verification — it only changes the
  * entry name shown in the authenticator app.
  */
-const TOTP_ISSUER = 'Obliance';
+const TOTP_ISSUER = 'Obligarth';
 
 /** otpauth:// URI equivalent to the QR code the server renders (SHA1, 6 digits, 30 s). */
 export function buildTotpUri(secret: string, account?: string | null, issuer: string = TOTP_ISSUER): string {

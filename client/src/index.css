@@ -52,7 +52,7 @@
 
 /* ── Obli Daylight — light companion to Obli Operator (Obliance red accent) ─
    Soft-white surface, depth via shadow (no borders), slate-900 text. Every
-   token Obliance uses MUST be redeclared here: :root above is the dark
+   token Obligarth uses MUST be redeclared here: :root above is the dark
    obli-operator, so any omitted token would inherit a DARK value on light. */
 [data-theme="obli-daylight"] {
   /* Nordic Mist (Nord Snow Storm) — cushioned cool blue-gray, not clinical

@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { clsx } from 'clsx';
 import { auditApi, type AuditLogRow, type AuditLogFilters } from '@/api/audit.api';
 import { usersApi } from '@/api/users.api';
-import type { User } from '@obliance/shared';
+import type { User } from '@obligarth/shared';
 import { TenantBadge } from '@/components/common/TenantBadge';
 import { TenantFilterChips } from '@/components/common/TenantFilterChips';
 import { useTenantFilter } from '@/hooks/useTenantFilter';

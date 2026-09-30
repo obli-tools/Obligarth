@@ -2,7 +2,7 @@ import { Knex } from 'knex';
 
 // "Always On" group flag. When true, every device in the group (and its
 // sub-groups, via inheritance) is expected to be permanently powered on:
-// if one stops responding to Obliance, that's treated as a CRITICAL fault
+// if one stops responding to Obligarth, that's treated as a CRITICAL fault
 // and fires an immediate channel notification (Slack/email/etc.), and the
 // in-app bell alert is raised at 'critical' severity instead of the benign
 // 'info' used for ordinary user workstations.

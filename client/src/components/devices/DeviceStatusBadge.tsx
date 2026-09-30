@@ -1,6 +1,6 @@
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
-import type { ApprovalStatus, DeviceStatus } from '@obliance/shared';
+import type { ApprovalStatus, DeviceStatus } from '@obligarth/shared';
 
 const STATUS_CONFIG: Record<DeviceStatus, { i18nKey: string; color: string; dot: string }> = {
   online:            { i18nKey: 'deviceStatus.online',           color: 'text-green-400 bg-green-400/10 border-green-400/30',     dot: 'bg-green-400' },

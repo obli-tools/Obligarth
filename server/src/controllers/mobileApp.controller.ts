@@ -21,7 +21,7 @@ import { logger } from '../utils/logger';
 // Drop zone (see mobile/release/README.md), written by the release script:
 //   mobile/release/manifest.json     required (placeholder committed: versionCode 0)
 //   mobile/release/RELEASE_NOTES.md  optional
-//   mobile/release/obliance.apk      optional (gitignored) — missing → available:false / 404
+//   mobile/release/obligarth.apk      optional (gitignored) — missing → available:false / 404
 //
 // process.cwd() is the server directory both in dev (server/) and in Docker
 // (WORKDIR /app/server), same convention as app.ts → <root>/mobile/release.
@@ -29,9 +29,9 @@ import { logger } from '../utils/logger';
 const RELEASE_DIR = path.resolve(process.cwd(), '..', 'mobile', 'release');
 const MANIFEST_FILE = path.join(RELEASE_DIR, 'manifest.json');
 const NOTES_FILE = path.join(RELEASE_DIR, 'RELEASE_NOTES.md');
-const APK_FILE = path.join(RELEASE_DIR, 'obliance.apk');
+const APK_FILE = path.join(RELEASE_DIR, 'obligarth.apk');
 
-const APP_ID = 'obliance';
+const APP_ID = 'obligarth';
 const DOWNLOAD_PATH = '/api/mobile/android/download';
 const APK_MIME = 'application/vnd.android.package-archive';
 
@@ -188,7 +188,7 @@ export async function androidDownload(_req: Request, res: Response): Promise<voi
 
   // Content-Type first: `send` (behind res.sendFile) keeps an existing type.
   res.type(APK_MIME);
-  res.attachment(`Obliance-${version}.apk`);
+  res.attachment(`Obligarth-${version}.apk`);
   if (sha256) res.setHeader('X-Content-SHA256', sha256);
 
   // res.sendFile → Range/If-Range (resumable DownloadManager), ETag and

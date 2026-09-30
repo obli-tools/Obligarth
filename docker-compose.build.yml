@@ -1,10 +1,12 @@
+name: obligarth
+
 services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: obliance
-      POSTGRES_USER: obliance
+      POSTGRES_DB: obligarth
+      POSTGRES_USER: obligarth
       POSTGRES_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
     # Tuning sized for the former RMM agent, kept until the load of the MDM is
     # measured — see docker-compose.yml for rationale. Scale
@@ -43,7 +45,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U obliance"]
+      test: ["CMD-SHELL", "pg_isready -U obligarth"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -60,8 +62,9 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgres://obliance:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obliance
+      DATABASE_URL: postgres://obligarth:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
+      SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
       # Public URL of this instance (e-mail links, trusted SSO origin, phone enrolment) — see .env.example
       APP_URL: ${APP_URL:-}
@@ -94,7 +97,7 @@ services:
       server:
         condition: service_healthy
     ports:
-      - "${LISTEN_PORT:-3000}:80"
+      - "${LISTEN_PORT:-3005}:80"
 
 volumes:
   postgres_data:

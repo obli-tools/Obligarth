@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Report, ReportOutput } from '@obliance/shared';
+import type { Report, ReportOutput } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import type { Device, DeviceStatus, FleetSummary } from '@obliance/shared';
-import { SocketEvents } from '@obliance/shared';
+import type { Device, DeviceStatus, FleetSummary } from '@obligarth/shared';
+import { SocketEvents } from '@obligarth/shared';
 import { deviceApi } from '../api/device.api';
 import { registerSocketListener } from '../socket/socketListeners';
 import { onTenantChanged } from './tenantStore';
@@ -99,7 +99,7 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
 /** Notify the native desktop app overlay (if running inside Electron). */
 function notifyNative(type: 'device_alert' | 'device_ok' | 'device_critical') {
   const isNativeApp = !!(window as Window & { __obliance_is_native_app?: boolean }).__obliance_is_native_app;
-  if (isNativeApp) window.dispatchEvent(new CustomEvent('obliance:notify', { detail: { type } }));
+  if (isNativeApp) window.dispatchEvent(new CustomEvent('obligarth:notify', { detail: { type } }));
 }
 
 // The server emits DEVICE_UPDATED with multiple payload shapes depending

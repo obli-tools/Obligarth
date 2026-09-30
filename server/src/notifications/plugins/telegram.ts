@@ -1,5 +1,5 @@
 import type { NotificationPlugin } from '../types';
-import type { NotificationConfigFieldType } from '@obliance/shared';
+import type { NotificationConfigFieldType } from '@obligarth/shared';
 import { statusIcon } from '../statusIcons';
 
 // Telegram bot sender. Switched from HTML parse_mode to MarkdownV2 to
@@ -68,7 +68,7 @@ export const telegramPlugin: NotificationPlugin = {
       monitorName: 'Test Monitor',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'This is a test notification from Obliance',
+      message: 'This is a test notification from Obligarth',
       timestamp: new Date().toISOString(),
     });
   },

@@ -1,6 +1,6 @@
 import { db } from '../db';
 import nodemailer from 'nodemailer';
-import type { SmtpServer } from '@obliance/shared';
+import type { SmtpServer } from '@obligarth/shared';
 
 interface SmtpServerRow {
   id: number;

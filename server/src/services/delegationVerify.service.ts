@@ -11,11 +11,11 @@ import { logger } from '../utils/logger';
  * (an Obligate user id + a tenant SLUG) and deliberately says nothing about
  * what that user may do. This service answers exactly one question:
  *
- *   "is this token genuine, current, addressed to Obliance, and does its
+ *   "is this token genuine, current, addressed to Obligarth, and does its
  *    subject map to a real local user?"
  *
  * It does NOT answer "may that user read device 123". That answer lives in
- * permissionService and is re-derived from Obliance's own model on every
+ * permissionService and is re-derived from Obligarth's own model on every
  * request (see middleware/delegatedAuth.ts). A permission / role / team claim
  * carried in a token is precisely the bypass this design exists to avoid, so
  * there is no code here that would read one even if one were present.
@@ -36,7 +36,7 @@ import { logger } from '../utils/logger';
  * replayable here, which is the cross-app confusion the audience exists to
  * prevent.
  */
-const THIS_AUDIENCE = 'obliance';
+const THIS_AUDIENCE = 'obligarth';
 
 /** The one accepted signature algorithm. Pinned — see verifyToken(). */
 const ALLOWED_ALG = 'EdDSA';
@@ -134,11 +134,11 @@ export interface DelegationClaims {
   exp: number;
 }
 
-/** The LOCAL Obliance user the token's subject resolves to. */
+/** The LOCAL Obligarth user the token's subject resolves to. */
 export interface DelegationSubject {
   localUserId: number;
   username: string;
-  /** Obliance's own platform role for this user. Read from the users table,
+  /** Obligarth's own platform role for this user. Read from the users table,
    *  never from the token. */
   role: string;
 }
@@ -202,7 +202,7 @@ async function getObligateOrigin(): Promise<ObligateOrigin | null> {
       // `iss` normally IS the configured base URL, and keeping them identical
       // is the tightest binding available (we trust the key we fetched from
       // the same origin that claims to have signed). OBLIGATE_ISSUER exists
-      // only for split-URL installs where Obliance reaches Obligate on an
+      // only for split-URL installs where Obligarth reaches Obligate on an
       // internal address while Obligate stamps its public one. It must name
       // the same Obligate; when unset we fail closed on any mismatch.
       const override = process.env.OBLIGATE_ISSUER?.trim().replace(/\/+$/, '');
@@ -488,7 +488,7 @@ async function verifyToken(token: string): Promise<DelegationResult> {
  * SSO link.
  *
  * NEVER auto-provisions. Creating a user here would let any app that can get a
- * token conjure accounts in Obliance; provisioning is the SSO flow's job
+ * token conjure accounts in Obligarth; provisioning is the SSO flow's job
  * (obligateCallback.routes.ts) and stays there. No link means no read.
  */
 async function resolveLocalSubject(sub: string): Promise<DelegationSubject | 'not_linked' | 'inactive'> {

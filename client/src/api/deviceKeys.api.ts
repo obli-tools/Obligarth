@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { DeviceKeyInfo, DeviceKeyListResponse } from '@obliance/shared';
+import type { DeviceKeyInfo, DeviceKeyListResponse } from '@obligarth/shared';
 
 // Device-bound 2FA ("validation par empreinte") — docs/mobile/device-bound-2fa.md §6.5.
 // The web never enrols nor signs: it lists the account's phones and revokes

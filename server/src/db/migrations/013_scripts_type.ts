@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 
 // Add script_type column to scripts table.
-// 'system' = built-in Obliance scripts (visible to all, admins can edit)
+// 'system' = built-in Obligarth scripts (visible to all, admins can edit)
 // 'user'   = tenant-created scripts (default)
 
 export async function up(knex: Knex): Promise<void> {

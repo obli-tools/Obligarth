@@ -1,4 +1,4 @@
-import type { AppTheme } from '@obliance/shared';
+import type { AppTheme } from '@obligarth/shared';
 
 export type { AppTheme };
 

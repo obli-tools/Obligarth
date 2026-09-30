@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { TenantWithRole } from '@obliance/shared';
+import type { TenantWithRole } from '@obligarth/shared';
 
 // ── Tenant changed event ─────────────────────────────────────────────────────
 // Fired by the tenant switcher after its switch request. The tenant-scoped

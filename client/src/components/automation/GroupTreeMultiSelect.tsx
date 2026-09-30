@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ChevronRight, FolderOpen, Check, Minus } from 'lucide-react';
 import { clsx } from 'clsx';
 import { groupsApi } from '@/api/groups.api';
-import type { DeviceGroupTreeNode } from '@obliance/shared';
+import type { DeviceGroupTreeNode } from '@obligarth/shared';
 
 interface Props {
  selectedIds: number[];

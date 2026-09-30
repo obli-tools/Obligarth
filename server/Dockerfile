@@ -48,7 +48,7 @@ COPY client/package.json ./client/
 # Obli mobile app (Android) — served by GET /api/mobile/android/{version,download}
 # (docs/obli-mobile.md §6). Drop zone written by the release script:
 # manifest.json (committed placeholder: versionCode 0 → available:false),
-# optional RELEASE_NOTES.md and obliance.apk (gitignored; missing → 404).
+# optional RELEASE_NOTES.md and obligarth.apk (gitignored; missing → 404).
 # The Gradle project (mobile/android) is excluded by .dockerignore.
 RUN mkdir -p ./mobile/release
 COPY mobile/release/ ./mobile/release/

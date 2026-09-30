@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { hashPassword, comparePassword } from '../utils/crypto';
-import type { User, UserPreferences } from '@obliance/shared';
+import type { User, UserPreferences } from '@obligarth/shared';
 import { logger } from '../utils/logger';
 
 interface UserRow {

@@ -12,7 +12,7 @@ node_modules
 .cache
 
 # Obli mobile (Android): only the release drop zone (manifest.json,
-# RELEASE_NOTES.md, obliance.apk) enters the build context. The Gradle
+# RELEASE_NOTES.md, obligarth.apk) enters the build context. The Gradle
 # project (mobile/android: sources, local.properties, keystores) never does.
 mobile/*
 !mobile/release

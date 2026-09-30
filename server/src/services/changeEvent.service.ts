@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import { db } from '../db';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import { logger } from '../utils/logger';
 
 /**

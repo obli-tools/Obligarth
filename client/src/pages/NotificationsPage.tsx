@@ -17,7 +17,7 @@ import type {
  NotificationPluginMeta,
  NotificationBinding,
  SmtpServer,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 import { notificationsApi } from '@/api/notifications.api';
 import { smtpServerApi } from '@/api/smtpServer.api';
 import { Button } from '@/components/common/Button';
@@ -323,7 +323,7 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  } else {
  await notificationsApi.createChannel({
  name: formName,
- type: selectedType as import('@obliance/shared').NotificationChannelType,
+ type: selectedType as import('@obligarth/shared').NotificationChannelType,
  config: formConfig,
  });
  toast.success(t('notifications.created'));

@@ -7,7 +7,7 @@ import type {
   CreateNotificationChannelRequest,
   UpdateNotificationChannelRequest,
   OverrideMode,
-} from '@obliance/shared';
+} from '@obligarth/shared';
 
 export const notificationsApi = {
   // Plugins

@@ -110,6 +110,8 @@ export function createApp() {
   }
 
   sessionMiddleware = session({
+      // Own cookie name, not connect.sid (see config.sessionCookieName).
+      name: config.sessionCookieName,
       store: sessionStore,
       secret: config.sessionSecret,
       resave: false,

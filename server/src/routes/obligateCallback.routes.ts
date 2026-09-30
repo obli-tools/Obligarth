@@ -11,7 +11,7 @@ import { auditService } from '../services/audit.service';
 import { forgetSessionUser } from '../middleware/sessionUserGuard';
 import { clientAddress } from '../utils/clientIp';
 import { logger } from '../utils/logger';
-import { MASTER_TENANT_ID, isMasterTenant } from '@obliance/shared';
+import { MASTER_TENANT_ID, isMasterTenant } from '@obligarth/shared';
 import { permissionService } from '../services/permission.service';
 
 const router = Router();
@@ -99,7 +99,7 @@ async function applySsoMemberships(
     }
 
     // Capabilities from Obligate are intentionally ignored: they live on
-    // team_permissions (Obliance) and are configured per-team via
+    // team_permissions (Obligarth) and are configured per-team via
     // /admin/users. Obligate owns the user-tenant binding (which tenants the
     // user belongs to + which role + which teams), not what a team may do.
   }
@@ -257,7 +257,7 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
   // Obligate is the source of truth for an SSO user's PLATFORM role.
   //
   // `assertion.role === 'admin'` means the user was granted "All tenants"
-  // admin on the Obliance app in Obligate's Permission Groups (an app-wide
+  // admin on the Obligarth app in Obligate's Permission Groups (an app-wide
   // mapping). That maps to a global / god-view admin here. Anything else is
   // a plain platform user — their PER-TENANT roles (incl. tenant-admin) are
   // synced into user_tenants further down from assertion.tenants[].
@@ -285,7 +285,7 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
   // public while the client_id is 'raw'), so it is cross-checked, never
   // trusted: a stale or rewritten value (e.g. pointing at a local admin) can
   // never open a session on another account. Linking a LOCAL (non-og_)
-  // account to an Obligate identity has no flow in which Obliance verifies
+  // account to an Obligate identity has no flow in which Obligarth verifies
   // the local credentials: such a link counts only when it is in
   // sso_foreign_users.
   let localUserId = (await obligateService.getLinkedLocalUserId(obligateUserId)) ?? 0;
@@ -317,7 +317,7 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
     // A LINKED local account (not og_) that is disabled never gets a session
     // through SSO (P6: a disabled account has no session at all), and nothing
     // of it is touched. The login page is told why (?error=account_disabled):
-    // an Obliance platform admin re-enables the account (Admin > Users).
+    // an Obligarth platform admin re-enables the account (Admin > Users).
     if (existing && existing.is_active === false && existing.foreign_source !== 'obligate') {
       throw Object.assign(new Error(`SSO sign-in refused: linked local user #${localUserId} is disabled`), { ssoErrorCode: 'account_disabled' });
     }
@@ -1241,7 +1241,7 @@ const RETRY_ERRORS: Record<string, string> = {
  *     are never retried); credentials-changed not readable → 503 (Obligate's
  *     persisted queue retries, then alerts its admins);
  *   - the reads a push starts at Obligate are bounded (PUSH_READ_BUDGET:
- *     coalesced, per user and over time): pushes cannot spend Obliance's
+ *     coalesced, per user and over time): pushes cannot spend Obligarth's
  *     request budget at Obligate.
  * The account being resolved from obligateUserId alone, and Obligate user ids
  * being enumerable, nothing here relies on the pointer being secret.

@@ -1,5 +1,5 @@
 import { db } from '../db';
-import type { MaintenanceWindow, MaintenanceScopeType, MaintenanceRecurrenceRule } from '@obliance/shared';
+import type { MaintenanceWindow, MaintenanceScopeType, MaintenanceRecurrenceRule } from '@obligarth/shared';
 import { getPlugin } from '../notifications/registry';
 import { config } from '../config';
 import { logger } from '../utils/logger';

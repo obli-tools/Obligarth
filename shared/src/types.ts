@@ -1,5 +1,5 @@
 // =============================================================================
-// Obliance RMM — Shared Types
+// Obligarth MDM — Shared Types
 // =============================================================================
 
 import type { DeviceCapability, TenantCapability } from './capabilities';
@@ -161,7 +161,7 @@ export interface Device {
   /** Computed server-side: true when this device's agent_version differs from
    *  the latest published agent version (same version string for x64/x86).
    *  Drives the "update available" picto/badge + the manual Update button.
-   *  Agents no longer self-update — updates are triggered from Obliance via
+   *  Agents no longer self-update — updates are triggered from Obligarth via
    *  the `update_agent` command. */
   updateAvailable: boolean;
   status: DeviceStatus;
@@ -247,7 +247,7 @@ export interface Device {
   /** Set true when the server sees too many distinct fingerprints in a
    *  short window (>=2 hostnames, >=3 IPs, or >=2 MACs in 30 min).
    *  Surfaces a warning banner in the device detail page + a badge in
-   *  the table. The actual fix lives outside Obliance (regen machine-id
+   *  the table. The actual fix lives outside Obligarth (regen machine-id
    *  + clear SMBIOS UUID at the hypervisor level). */
   duplicateAgentIdSuspected: boolean;
   /** Timestamp of the last admin acknowledgment of the duplicate flag.

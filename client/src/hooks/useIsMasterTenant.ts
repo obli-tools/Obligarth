@@ -1,5 +1,5 @@
 import { useTenantStore } from '@/store/tenantStore';
-import { MASTER_TENANT_ID, isMasterTenant } from '@obliance/shared';
+import { MASTER_TENANT_ID, isMasterTenant } from '@obligarth/shared';
 
 /** True when the active tenant is the master/Default tenant — the
  *  god view that aggregates every child tenant's data. UI code uses

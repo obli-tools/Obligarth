@@ -12,7 +12,7 @@ export const freemobilePlugin: NotificationPlugin = {
 
   async send(config, payload) {
     const icon = statusIcon(payload.newStatus);
-    const prefix = payload.appName || 'Obliance';
+    const prefix = payload.appName || 'Obligarth';
     const msg = `[${prefix}] ${icon} ${payload.monitorName}: ${payload.oldStatus} → ${payload.newStatus}${payload.message ? ` - ${payload.message}` : ''}`;
 
     const params = new URLSearchParams({
@@ -32,7 +32,7 @@ export const freemobilePlugin: NotificationPlugin = {
       monitorName: 'Test Monitor',
       oldStatus: 'up',
       newStatus: 'down',
-      message: 'Test from Obliance',
+      message: 'Test from Obligarth',
       timestamp: new Date().toISOString(),
     });
   },

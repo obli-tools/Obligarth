@@ -1,6 +1,6 @@
 import { clientIp as resolveClientIp } from '../utils/clientIp';
 import type { Request, Response, NextFunction } from 'express';
-import { MASTER_TENANT_ID } from '@obliance/shared';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { auditService } from '../services/audit.service';
 import { tenantService } from '../services/tenant.service';
 import {
@@ -15,16 +15,16 @@ import { logger } from '../utils/logger';
  * skip authorization.
  *
  * A sibling app (Oblidesk today) asks Obligate for a short-lived token that
- * says "user 42, audience obliance, tenant acme", then calls Obliance directly
+ * says "user 42, audience obligarth, tenant acme", then calls Obligarth directly
  * with it. This middleware verifies that token, resolves it to the LOCAL
- * Obliance user, and then puts that user on the request in exactly the shape a
+ * Obligarth user, and then puts that user on the request in exactly the shape a
  * browser session would have.
  *
  * That last property is the entire point. Once the identity is in place,
  * requireAuth, requireTenant, requireDeviceRead, permissionService and every
  * tenant-scoped query run UNCHANGED and unaware that the credential was a
  * token. Nothing downstream is skipped "because the token already said so" —
- * the token says WHO, and Obliance re-derives WHAT THEY MAY DO from its own
+ * the token says WHO, and Obligarth re-derives WHAT THEY MAY DO from its own
  * model, every time. The old behaviour (read with the calling app's static
  * key, i.e. with the calling app's authority) is what this replaces.
  *
@@ -77,7 +77,7 @@ type MiddlewareFailureReason =
  * key holder asked for it. Hence:
  *   OBLIGATE_DELEGATION_APPS  — comma list of source apps (the signed `azp`)
  *     whose tokens are accepted. Unset: 'oblidesk', the only app that reads
- *     Obliance this way today. 'none': delegation off.
+ *     Obligarth this way today. 'none': delegation off.
  *   OBLIGATE_DELEGATION_ALLOW_ADMIN — 'true' accepts a token whose subject is
  *     a platform admin here (god view on every tenant). Unset: refused, a
  *     leaked key must not open every tenant's devices. Set it back once the
@@ -349,7 +349,7 @@ export async function delegatedAuth(req: Request, res: Response, next: NextFunct
     }
 
     // Install the LOCAL identity in the shape every downstream guard reads.
-    // Nothing here grants anything: role and tenant come from Obliance's own
+    // Nothing here grants anything: role and tenant come from Obligarth's own
     // tables, and requireDeviceRead / getVisibleDeviceIds run next, unchanged.
     //
     // req.session is replaced with a detached stand-in and req.sessionID is

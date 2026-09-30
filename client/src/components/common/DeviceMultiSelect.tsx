@@ -5,7 +5,7 @@ import { clsx } from 'clsx';
 import { deviceApi } from '@/api/device.api';
 import { anonymize } from '@/utils/anonymize';
 import { deviceMatchesSearch } from '@/utils/deviceSearch';
-import type { Device } from '@obliance/shared';
+import type { Device } from '@obligarth/shared';
 
 // Inline picker for selecting a list of specific devices — used by Schedule
 // and Scenario "by device" target. Mirrors the GroupTreeMultiSelect pattern

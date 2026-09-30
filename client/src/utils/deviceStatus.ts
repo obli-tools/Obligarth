@@ -1,4 +1,4 @@
-import type { DeviceStatus } from '@obliance/shared';
+import type { DeviceStatus } from '@obligarth/shared';
 
 // A device is "reachable" — i.e. its agent is alive and the server is
 // receiving pushes — whenever the status reflects a healthy connection,

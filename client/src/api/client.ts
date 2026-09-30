@@ -1,5 +1,5 @@
 import axios from 'axios';
-import type { DeviceAssertion, DeviceChallenge, SignDeviceChallengeResult } from '@obliance/shared';
+import type { DeviceAssertion, DeviceChallenge, SignDeviceChallengeResult } from '@obligarth/shared';
 import { awaitTwoFactorCode, isTwoFactorCancelled, TWO_FACTOR_CANCELLED } from '@/utils/twoFactorGate';
 import { canUseNative, native } from '@/native/bridge';
 

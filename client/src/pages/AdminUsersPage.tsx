@@ -28,8 +28,8 @@ import type {
  DeviceGroupTreeNode,
  Device,
  UserTenantAssignment,
-} from '@obliance/shared';
-import { DEFAULT_DEVICE_CAPABILITIES, isMasterTenant } from '@obliance/shared';
+} from '@obligarth/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, isMasterTenant } from '@obligarth/shared';
 import { usersApi, isPendingApproval } from '@/api/users.api';
 import { isStepUpHandled } from '@/api/client';
 import { teamsApi } from '@/api/teams.api';

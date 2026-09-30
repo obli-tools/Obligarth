@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'crypto';
-import { isMasterTenant } from '@obliance/shared';
+import { isMasterTenant } from '@obligarth/shared';
 import { db } from '../db';
 import { requireRole, requireAnyTenantCapability } from '../middleware/rbac';
 
