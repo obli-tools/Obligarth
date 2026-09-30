@@ -162,9 +162,11 @@ export function createApp() {
   // API routes
   app.use('/api', routes);
 
-  // Health check (public — also used by login page to display server version)
+  // Health check (public — also used by login page to display server version).
+  // `app` names the application behind this URL: a client of a sibling Obli*
+  // app (its Android app, say) sees it is not talking to its own server.
   app.get('/health', (_req, res) => {
-    res.json({ status: 'ok', version: serverVersion, timestamp: new Date().toISOString() });
+    res.json({ status: 'ok', app: 'obligarth', version: serverVersion, timestamp: new Date().toISOString() });
   });
 
   // Obli.tools unified desktop app downloads — serves pre-built binaries from obli.tools/dist/.

@@ -5,18 +5,17 @@ import { Button } from '@/components/common/Button';
 import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { openExternal } from '@/utils/openExternal';
 import { copyText } from '@/utils/clipboard';
+import { APP_NAME } from '@/brand';
 
 /**
- * Issuer used by the server when it builds the TOTP QR code
- * (server/src/services/twoFactor.service.ts → config.appName, default
- * "Obligarth"). The generated codes only depend on the secret + SHA1/6/30,
- * so a different label never breaks verification — it only changes the
- * entry name shown in the authenticator app.
+ * otpauth:// URI equivalent to the QR code the server renders (SHA1, 6 digits, 30 s).
+ * `issuer`: the one the server put in that QR code (APP_NAME, returned by
+ * POST /api/profile/2fa/totp/setup); the product name when the server did not
+ * say. The generated codes only depend on the secret + SHA1/6/30, so a
+ * different label never breaks verification — it only changes the entry name
+ * shown in the authenticator app.
  */
-const TOTP_ISSUER = 'Obligarth';
-
-/** otpauth:// URI equivalent to the QR code the server renders (SHA1, 6 digits, 30 s). */
-export function buildTotpUri(secret: string, account?: string | null, issuer: string = TOTP_ISSUER): string {
+export function buildTotpUri(secret: string, account?: string | null, issuer: string = APP_NAME): string {
   const label = account ? `${issuer}:${account}` : issuer;
   const params = new URLSearchParams({
     secret: secret.replace(/\s+/g, ''),
@@ -38,10 +37,13 @@ export function buildTotpUri(secret: string, account?: string | null, issuer: st
 export function TotpMobileActions({
   secret,
   account,
+  issuer,
   className,
 }: {
   secret: string;
   account?: string | null;
+  /** Issuer of the server's QR code (TotpSetupData.issuer). */
+  issuer?: string;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -49,7 +51,7 @@ export function TotpMobileActions({
   if (!coarse || !secret) return null;
 
   const openApp = async () => {
-    const ok = await openExternal(buildTotpUri(secret, account));
+    const ok = await openExternal(buildTotpUri(secret, account, issuer || APP_NAME));
     if (!ok) toast.error(t('profile.security.openAuthenticatorFailed', 'No authenticator app could be opened. Copy the secret instead.'));
   };
 

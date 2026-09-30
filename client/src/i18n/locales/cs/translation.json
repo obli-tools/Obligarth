@@ -118,7 +118,7 @@
     "complete": "Dokončit nastavení",
     "language": {
       "title": "Vyberte jazyk",
-      "subtitle": "Vyberte jazyk rozhraní Obligarth."
+      "subtitle": "Vyberte jazyk rozhraní {{appName}}."
     },
     "profile": {
       "title": "Váš profil",

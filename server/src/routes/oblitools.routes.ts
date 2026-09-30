@@ -14,7 +14,8 @@ import { obligateService } from '../services/obligate.service';
 
 const router = Router();
 
-const SELF = { name: 'Obligarth', color: '#8b5cf6' };
+// Obligarth's accent colour, as in the web app switcher (Header.tsx).
+const SELF = { name: 'Obligarth', color: '#d63fd6' };
 
 router.get('/manifest', requireAuth, async (_req: Request, res: Response, next: NextFunction): Promise<void> => {
   try {

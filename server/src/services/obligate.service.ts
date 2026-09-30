@@ -25,6 +25,20 @@ export interface ObligateRosterEntry {
 /** Obligate user id → roster entry. */
 export type ObligateRoster = Map<number, ObligateRosterEntry>;
 
+/** app_type this app is registered under in Obligate. */
+const OWN_APP_TYPE = 'obligarth';
+
+/** One active app of GET /api/apps/connected. */
+export interface ObligateConnectedApp {
+  appType: string;
+  name: string;
+  baseUrl: string;
+  icon: string | null;
+  color: string | null;
+  /** Marks the entry that is this app itself (resolved by Obligate from our Bearer key). */
+  self?: boolean;
+}
+
 /** Normalised `scheme://host[:port]` of an http(s) URL (lower-case host, no default port), or null. */
 function toHttpOrigin(value: string): string | null {
   try {
@@ -502,13 +516,14 @@ export const obligateService = {
   },
 
   /**
-   * Public origin this app is registered under in Obligate: the base URL of
-   * the active connected app of type 'obligarth' (the URL Obligate and the
-   * other Obli* apps send browsers to).
-   * Obligate does not tell an app which registration is its own, so this is
-   * only usable when there is exactly ONE such app. With several (e.g. prod +
-   * staging on one Obligate) none is trusted and APP_URL must name this
-   * instance.
+   * Public origin this app is registered under in Obligate (the URL Obligate
+   * and the other Obli* apps send browsers to): the base URL of the entry
+   * Obligate marks `self: true` in GET /api/apps/connected — resolved from
+   * our own API key, so several Obligarth instances on one Obligate (prod +
+   * staging) each find their own.
+   * Fallback, for an Obligate that does not send `self` yet: the active app
+   * of type 'obligarth', usable only when there is exactly ONE such app. With
+   * several none is trusted and APP_URL must name this instance.
    * Cached 5 min; `refresh` bypasses the cache unless it is under 30 s old.
    */
   _originCache: null as { origin: string | null; at: number } | null,
@@ -521,10 +536,11 @@ export const obligateService = {
     const apps = await this.getConnectedApps();
     // No app at all is a failed fetch (we are registered ourselves): not cached
     if (apps.length === 0) return null;
-    const own = apps.filter((a) => a.appType === 'obligarth');
+    const marked = apps.filter((a) => a.self === true);
+    const own = marked.length > 0 ? marked : apps.filter((a) => a.appType === OWN_APP_TYPE);
     if (own.length > 1) {
       logger.error({ baseUrls: own.map((a) => a.baseUrl) },
-        'Obligate SSO: several Obligarth apps are registered in Obligate, so their base URLs are not trusted — set APP_URL to this instance\'s public URL');
+        'Obligate SSO: several Obligarth apps are registered in Obligate and no single one is marked as this instance, so their base URLs are not trusted — set APP_URL to this instance\'s public URL');
     }
     const origin = own.length === 1 ? toHttpOrigin(own[0].baseUrl) : null;
     this._originCache = { origin, at: now };
@@ -1055,7 +1071,7 @@ export const obligateService = {
    */
   async getConnectedApps(
     obligateUserId?: number | null,
-  ): Promise<Array<{ appType: string; name: string; baseUrl: string; icon: string | null; color: string | null }>> {
+  ): Promise<ObligateConnectedApp[]> {
     const raw = await appConfigService.getObligateRaw();
     if (!raw.url || !raw.apiKey) return [];
 
@@ -1073,7 +1089,7 @@ export const obligateService = {
         signal: AbortSignal.timeout(5_000),
       });
       if (!res.ok) return [];
-      const data = await res.json() as { success: boolean; data?: Array<{ appType: string; name: string; baseUrl: string; icon: string | null; color: string | null }> };
+      const data = await res.json() as { success: boolean; data?: ObligateConnectedApp[] };
       return data.data ?? [];
     } catch {
       return [];

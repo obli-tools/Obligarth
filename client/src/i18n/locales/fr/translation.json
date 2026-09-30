@@ -144,7 +144,7 @@
     "complete": "Terminer la configuration",
     "language": {
       "title": "Choisissez votre langue",
-      "subtitle": "Sélectionnez la langue de l'interface Obligarth."
+      "subtitle": "Sélectionnez la langue de l'interface {{appName}}."
     },
     "profile": {
       "title": "Votre profil",
@@ -269,7 +269,7 @@
       "groupNotifications": "Notifications groupées",
       "groupNotificationsDesc": "Envoie une notification unique lorsque le premier moniteur tombe, et une récupération quand tous sont de nouveau disponibles.",
       "alwaysOn": "Always On (serveurs)",
-      "alwaysOnDesc": "Les appareils sont censés rester allumés en permanence. Si l’un ne répond plus à Obligarth, c’est un défaut critique : alerte critique + notification immédiate (au lieu d’un simple « hors ligne » bénin pour les postes utilisateurs).",
+      "alwaysOnDesc": "Les appareils sont censés rester allumés en permanence. Si l’un ne répond plus à {{appName}}, c’est un défaut critique : alerte critique + notification immédiate (au lieu d’un simple « hors ligne » bénin pour les postes utilisateurs).",
       "sortOrder": "Ordre parmi les frères",
       "moveUp": "Déplacer vers le haut",
       "moveDown": "Déplacer vers le bas"
@@ -674,7 +674,7 @@
     "android": {
       "sectionTitle": "Application mobile",
       "title": "Android",
-      "description": "Obligarth sur votre téléphone ou votre tablette Android : téléchargements natifs, notifications et mises à jour intégrées.",
+      "description": "{{appName}} sur votre téléphone ou votre tablette Android : téléchargements natifs, notifications et mises à jour intégrées.",
       "loading": "Chargement de la version…",
       "unavailable": "L'application Android n'est pas encore publiée sur ce serveur.",
       "sizeMb": "{{size}} Mo",
@@ -692,7 +692,7 @@
       "versionCode": "Code de version",
       "sha256": "SHA-256 de l'APK",
       "signer": "SHA-256 du certificat de signature",
-      "appTitle": "Obligarth pour Android",
+      "appTitle": "{{appName}} pour Android",
       "inAppVersion": "Vous utilisez l'application v{{version}}",
       "serverVersion": "Dernière version sur ce serveur : v{{version}}",
       "newerOnServer": "Une version plus récente (v{{version}}) est disponible sur ce serveur.",
@@ -1277,13 +1277,13 @@
         "verifier_unavailable": "Obligate n'a pas pu confirmer votre compte pour le moment. Réessayez dans un instant.",
         "unreachable": "Obligate est injoignable pour le moment. Réessayez dans un instant.",
         "cancelled": "Reconfirmation annulée chez Obligate.",
-        "origin": "Ouvrez Obligarth à son adresse publique pour reconfirmer avec Obligate.",
+        "origin": "Ouvrez {{appName}} à son adresse publique pour reconfirmer avec Obligate.",
         "expired": "La reconfirmation a pris trop de temps (plus de 10 minutes). Réessayez.",
         "signed_out": "La session a pris fin entre-temps. Reconnectez-vous.",
         "state": "La reconfirmation ne correspond pas à cette session. Réessayez depuis cette page.",
         "exchange": "Obligate n'a pas confirmé la connexion. Réessayez.",
         "not_sso": "Ce compte ne se connecte pas avec Obligate : la reconfirmation avec Obligate ne s'applique pas.",
-        "misconfigured": "Obligate est mal configuré sur ce serveur (il pointe vers Obligarth lui-même). Contactez un administrateur.",
+        "misconfigured": "Obligate est mal configuré sur ce serveur (il pointe vers {{appName}} lui-même). Contactez un administrateur.",
         "error": "La reconfirmation auprès d'Obligate a échoué. Réessayez."
       }
     }

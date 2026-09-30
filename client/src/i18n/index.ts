@@ -1,5 +1,6 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
+import { APP_NAME } from '@/brand';
 
 // Import all locale files statically (no lazy loading needed at this app size)
 import en from './locales/en/translation.json';
@@ -70,7 +71,9 @@ i18n
     },
     lng: initialLang,
     fallbackLng: 'en',
-    interpolation: { escapeValue: false },
+    // {{appName}} in any translation is the product name (brand.ts): the
+    // translations never hard-code it.
+    interpolation: { escapeValue: false, defaultVariables: { appName: APP_NAME } },
   });
 
 /** Change the active language, persist the choice, update <html dir> for RTL. */

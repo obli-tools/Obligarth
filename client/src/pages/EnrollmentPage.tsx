@@ -346,7 +346,7 @@ function SecurityStep({
  <p className="text-xs text-text-muted text-center">{t('profile.security.totpScanDesc')}</p>
  <p className="text-xs text-text-muted text-center font-mono break-all">{t('profile.security.totpSecret', { secret: totpSetup.secret })}</p>
  {/* Touch only: a phone cannot scan its own screen. */}
- <TotpMobileActions secret={totpSetup.secret} account={user?.username} className="justify-center" />
+ <TotpMobileActions secret={totpSetup.secret} account={user?.username} issuer={totpSetup.issuer} className="justify-center" />
  <Input
  label={t('enrollment.security.verificationCode')}
  type="text"

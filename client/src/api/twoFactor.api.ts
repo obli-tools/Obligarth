@@ -12,6 +12,8 @@ export interface TwoFactorStatus {
 export interface TotpSetupData {
   secret: string;
   qrDataUrl: string;
+  /** Issuer written in the QR code (the server's APP_NAME). */
+  issuer?: string;
 }
 
 export const twoFactorApi = {

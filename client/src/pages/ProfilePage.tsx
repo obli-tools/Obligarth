@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { User, Save, KeyRound, Bell, CheckCircle2, AlertTriangle, QrCode, Mail, Palette, Camera, Trash2 } from 'lucide-react';
 import { profileApi } from '@/api/profile.api';
 import { appConfigApi } from '@/api/appConfig.api';
-import { twoFactorApi, type TwoFactorStatus } from '@/api/twoFactor.api';
+import { twoFactorApi, type TwoFactorStatus, type TotpSetupData } from '@/api/twoFactor.api';
 import { useAuthStore } from '@/store/authStore';
 import { useLiveAlertsStore } from '@/store/liveAlertsStore';
 import { Button } from '@/components/common/Button';
@@ -70,7 +70,7 @@ export function ProfilePage() {
  const [tfaStatus, setTfaStatus] = useState<TwoFactorStatus | null>(null);
 
  // TOTP setup flow
- const [totpSetupData, setTotpSetupData] = useState<{ secret: string; qrDataUrl: string } | null>(null);
+ const [totpSetupData, setTotpSetupData] = useState<TotpSetupData | null>(null);
  const [totpCode, setTotpCode] = useState('');
  const [totpSaving, setTotpSaving] = useState(false);
 
@@ -548,7 +548,7 @@ export function ProfilePage() {
  <img src={totpSetupData.qrDataUrl} alt="TOTP QR Code" className="w-40 h-40 rounded-lg" />
  <p className="text-xs text-text-muted font-mono break-all">{t('profile.security.totpSecret', { secret: totpSetupData.secret })}</p>
  {/* Touch only: a phone cannot scan its own screen. */}
- <TotpMobileActions secret={totpSetupData.secret} account={sessionUser?.username} />
+ <TotpMobileActions secret={totpSetupData.secret} account={sessionUser?.username} issuer={totpSetupData.issuer} />
  <div className="flex flex-wrap items-end gap-2">
  <div className="flex-1 min-w-[8rem]">
  <Input

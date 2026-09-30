@@ -118,7 +118,7 @@
     "complete": "設定を完了",
     "language": {
       "title": "言語を選択",
-      "subtitle": "Obligarth インターフェースの言語を選択してください。"
+      "subtitle": "{{appName}} インターフェースの言語を選択してください。"
     },
     "profile": {
       "title": "プロフィール",

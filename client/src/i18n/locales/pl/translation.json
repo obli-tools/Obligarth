@@ -118,7 +118,7 @@
     "complete": "Zakończ konfigurację",
     "language": {
       "title": "Wybierz język",
-      "subtitle": "Wybierz język interfejsu Obligarth."
+      "subtitle": "Wybierz język interfejsu {{appName}}."
     },
     "profile": {
       "title": "Twój profil",

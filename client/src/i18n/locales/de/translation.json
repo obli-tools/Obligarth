@@ -118,7 +118,7 @@
     "complete": "Einrichtung abschließen",
     "language": {
       "title": "Sprache wählen",
-      "subtitle": "Wählen Sie die Sprache der Obligarth-Benutzeroberfläche."
+      "subtitle": "Wählen Sie die Sprache der {{appName}}-Benutzeroberfläche."
     },
     "profile": {
       "title": "Ihr Profil",

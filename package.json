@@ -2,7 +2,7 @@
   "name": "obligarth",
   "private": true,
   "version": "0.1.0",
-  "description": "Advanced monitoring application with multi-user support and hierarchical groups",
+  "description": "Multi-tenant Apple and Android device management (MDM) of the Obli* suite",
   "scripts": {
     "dev": "docker compose -f docker-compose.build.yml -f docker-compose.dev.yml up --build",
     "dev:server": "cd server && npm run dev",
@@ -19,7 +19,6 @@
   "workspaces": [
     "shared",
     "server",
-    "client",
-    "agent"
+    "client"
   ]
 }

@@ -12,7 +12,7 @@ export const TOTP_WINDOW = 1;
 export const twoFactorService = {
   // ── TOTP ──────────────────────────────────────────────────────────────────
 
-  generateTotpSecret(username: string): { secret: string; uri: string } {
+  generateTotpSecret(username: string): { secret: string; uri: string; issuer: string } {
     const secret = new OTPAuth.Secret({ size: 20 });
     const totp = new OTPAuth.TOTP({
       issuer: config.appName,
@@ -25,6 +25,8 @@ export const twoFactorService = {
     return {
       secret: secret.base32,
       uri: totp.toString(),
+      // APP_NAME: the entry name shown in authenticator apps
+      issuer: config.appName,
     };
   },
 

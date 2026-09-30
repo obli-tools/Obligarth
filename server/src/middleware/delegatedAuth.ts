@@ -14,7 +14,7 @@ import { logger } from '../utils/logger';
  * Delegated authentication — an ADDITIONAL way to authenticate, never a way to
  * skip authorization.
  *
- * A sibling app (Oblidesk today) asks Obligate for a short-lived token that
+ * A sibling app (e.g. Oblidesk) asks Obligate for a short-lived token that
  * says "user 42, audience obligarth, tenant acme", then calls Obligarth directly
  * with it. This middleware verifies that token, resolves it to the LOCAL
  * Obligarth user, and then puts that user on the request in exactly the shape a
@@ -76,8 +76,8 @@ type MiddlewareFailureReason =
  * client id and its key has been regenerated, a token proves only that SOME
  * key holder asked for it. Hence:
  *   OBLIGATE_DELEGATION_APPS  — comma list of source apps (the signed `azp`)
- *     whose tokens are accepted. Unset: 'oblidesk', the only app that reads
- *     Obligarth this way today. 'none': delegation off.
+ *     whose tokens are accepted. Unset: 'oblidesk' (inherited default; no app
+ *     reads Obligarth this way yet: 'none' advised). 'none': delegation off.
  *   OBLIGATE_DELEGATION_ALLOW_ADMIN — 'true' accepts a token whose subject is
  *     a platform admin here (god view on every tenant). Unset: refused, a
  *     leaked key must not open every tenant's devices. Set it back once the

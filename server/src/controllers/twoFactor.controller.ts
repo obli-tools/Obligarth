@@ -140,7 +140,7 @@ export const twoFactorController = {
       // first enrolment needs the current password.
       const step = await checkFactorManagement(req, 'profile.totp_manage');
       if (!step.ok) { sendStepUpFailure(res, step); return; }
-      const { secret, uri } = twoFactorService.generateTotpSecret(row.username);
+      const { secret, uri, issuer } = twoFactorService.generateTotpSecret(row.username);
       const qrDataUrl = await twoFactorService.generateTotpQr(uri);
       // Bound the pending secret with a TTL — stale enrolment flows
       // shouldn't leave a usable TOTP secret sitting in the session
@@ -151,7 +151,8 @@ export const twoFactorController = {
       req.session.pendingTotpSecret = secret;
       req.session.pendingTotpExpiresAt = Date.now() + 10 * 60 * 1000;
       req.session.pendingTotpReplaces = hasLocalTotp;
-      res.json({ success: true, data: { secret, qrDataUrl } });
+      // issuer: the client builds the same otpauth:// URI for "Open in authenticator app"
+      res.json({ success: true, data: { secret, qrDataUrl, issuer } });
     } catch (err) { next(err); }
   },
 

@@ -118,7 +118,7 @@
     "complete": "إنهاء الإعداد",
     "language": {
       "title": "اختر لغتك",
-      "subtitle": "اختر لغة واجهة Obligarth."
+      "subtitle": "اختر لغة واجهة {{appName}}."
     },
     "profile": {
       "title": "ملفك الشخصي",

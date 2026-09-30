@@ -118,7 +118,7 @@
     "complete": "Slutför konfiguration",
     "language": {
       "title": "Välj ditt språk",
-      "subtitle": "Välj språk för Obligarth-gränssnittet."
+      "subtitle": "Välj språk för {{appName}}-gränssnittet."
     },
     "profile": {
       "title": "Din profil",

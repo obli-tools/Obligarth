@@ -118,7 +118,7 @@
     "complete": "Afslut opsætning",
     "language": {
       "title": "Vælg dit sprog",
-      "subtitle": "Vælg sproget til Obligarth-grænsefladen."
+      "subtitle": "Vælg sproget til {{appName}}-grænsefladen."
     },
     "profile": {
       "title": "Din profil",

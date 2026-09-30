@@ -118,7 +118,7 @@
     "complete": "Kurulumu bitir",
     "language": {
       "title": "Dilinizi seçin",
-      "subtitle": "Obligarth arayüzü için dil seçin."
+      "subtitle": "{{appName}} arayüzü için dil seçin."
     },
     "profile": {
       "title": "Profiliniz",
