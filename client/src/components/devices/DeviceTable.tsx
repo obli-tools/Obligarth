@@ -346,7 +346,7 @@ export function DeviceTable({
 
  // Tree view is active when the admin is in the "default landing" shape:
  // no search, no ungrouped filter, and no explicit sort. Any explicit
- // sort (Name asc/desc, CPU, RAM, Status, …) breaks the drawer metaphor
+ // sort (Name asc/desc, Status, Last seen, …) breaks the drawer metaphor
  // because devices end up ordered across groups — we switch to the flat
  // list with infinite scroll so the ordering holds across the whole fleet.
  //

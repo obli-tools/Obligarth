@@ -16,11 +16,9 @@ interface DeviceStore {
   fetchDevice: (id: number) => Promise<Device | null>;
   addDevice: (device: Device) => void;
   updateDevice: (id: number, data: Partial<Device>) => void;
-  updateDeviceMetrics: (id: number, metrics: DeviceMetrics) => void;
   /** Apply a metrics push in ONE Map clone (metrics + lastSeenAt together).
-   *  The socket handler used to call updateDeviceMetrics + updateDevice back to
-   *  back = two full 2000-entry Map clones per event; at 200 events/s that's the
-   *  client-side firehose. This merges them into a single clone. */
+   *  Two back-to-back updates would be two full 2000-entry Map clones per
+   *  event; at 200 events/s that's the client-side firehose. */
   applyMetricsPush: (id: number, metrics: DeviceMetrics) => void;
   removeDevice: (id: number) => void;
 
@@ -84,15 +82,6 @@ export const useDeviceStore = create<DeviceStore>((set, get) => ({
     });
   },
 
-  updateDeviceMetrics: (id, metrics) => {
-    set((state) => {
-      const devices = new Map(state.devices);
-      const existing = devices.get(id);
-      if (existing) devices.set(id, { ...existing, latestMetrics: metrics });
-      return { devices };
-    });
-  },
-
   applyMetricsPush: (id, metrics) => {
     set((state) => {
       const existing = state.devices.get(id);
@@ -148,7 +137,7 @@ registerSocketListener(SocketEvents.DEVICE_UPDATED, (data: any) => {
 
 // Single Map clone for metrics + lastSeenAt (the very fact that we got
 // metrics means the agent just talked, so lastSeenAt advances and the
-// detail header's relative-time pill doesn't drift).
+// device record's "last seen" stays current).
 registerSocketListener(SocketEvents.DEVICE_METRICS_PUSHED, (data: { deviceId: number; metrics: DeviceMetrics }) => {
   useDeviceStore.getState().applyMetricsPush(data.deviceId, data.metrics);
 });

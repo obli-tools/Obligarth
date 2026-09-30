@@ -46,8 +46,7 @@ const REPORT_TYPES: ReportType[] = ['fleet', 'compliance', 'scripts', 'updates',
 const REPORT_FORMATS: ReportFormat[] = ['pdf', 'csv', 'excel', 'html', 'json'];
 const REPORT_SECTIONS: ReportSection[] = ['hardware', 'network', 'inventory_detail', 'software', 'updates', 'compliance', 'scripts_history'];
 
-// Cron presets — same set as the script-schedule UI so admins don't have to
-// learn a different vocabulary depending on which scheduler they're using.
+// Cron presets offered by the report schedule picker.
 const COMMON_CRONS = [
  { id: 'hourly', label: 'Every hour', value: '0 * * * *' },
  { id: 'daily2am', label: 'Every day at 2am', value: '0 2 * * *' },
@@ -64,11 +63,10 @@ interface ReportFormData {
  scopeType: 'tenant' | 'group' | 'device';
  scopeId: number | null;
  sections: ReportSection[];
- // Tri-state run mode mirrors the scripts-schedule form: an admin can pick
- // recurring (cron), one-shot at a future time (not implemented yet — falls
- // back to cron), or "now" (save the definition and immediately fire one
- // generate run, no schedule). 'now' is the equivalent of the user's
- // "rapport à l'instant T" request.
+ // Tri-state run mode: an admin can pick recurring (cron), one-shot at a
+ // future time (not implemented yet — falls back to cron), or "now" (save
+ // the definition and immediately fire one generate run, no schedule).
+ // 'now' is the equivalent of the user's "rapport à l'instant T" request.
  runMode: 'cron' | 'now';
  scheduleCron: string;
  timezone: string;
