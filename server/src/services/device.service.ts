@@ -1,8 +1,15 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { db } from '../db';
 import { logger } from '../utils/logger';
+import { AppError } from '../middleware/errorHandler';
 import { SocketEvents, isMasterTenant } from '@obligarth/shared';
 import type { Device, DeviceIdentityFingerprint } from '@obligarth/shared';
+import type { TenantView } from './deviceScope.service';
+
+/** The master tenant's global view, as the caller passed it (TenantView). */
+function isGlobalView(tenantId: number, view?: TenantView): boolean {
+  return !!view?.globalView && isMasterTenant(tenantId);
+}
 
 // JSONB columns come back as either an already-parsed array (pg's default
 // when the driver knows it's JSONB) or as a raw string in some edge paths.
@@ -139,25 +146,26 @@ class DeviceService {
     /** Master-only: narrow the god-view to a subset of tenants. Sent
      *  by the DeviceTable tenant chips so the master admin can focus
      *  on one customer without losing the cross-tenant view they're
-     *  attached to. Ignored when the caller isn't on master. */
+     *  attached to. Ignored without the global view. */
     tenantIds?: number[];
-  }): Promise<{ items: Device[]; total: number; page: number; pageSize: number }> {
+  }, view?: TenantView): Promise<{ items: Device[]; total: number; page: number; pageSize: number }> {
     const page = Math.max(1, filters?.page ?? 1);
     // Cap is intentionally high to support the sidebar which needs to render
     // the entire approved fleet in one request. Callers that paginate the
     // UI (DeviceTable) still use reasonable page sizes from the UI controls.
     const pageSize = Math.min(10000, Math.max(1, filters?.pageSize ?? 100));
 
-    // Master tenant gets the god view: drop the tenant_id filter and
-    // join `tenants` so each row carries a `tenant_name` for the UI to
-    // group/sort by. Every other tenant stays strictly scoped.
-    const isMaster = isMasterTenant(tenantId);
+    // The global view (platform administrator on the master tenant) drops
+    // the tenant_id filter; `tenants` is joined so each row carries a
+    // `tenant_name` for the UI to group/sort by. Every other caller stays
+    // strictly scoped, on the master tenant too.
+    const isMaster = isGlobalView(tenantId, view);
     let q = db('devices')
       .leftJoin('device_groups', 'devices.group_id', 'device_groups.id')
       .leftJoin('tenants', 'devices.tenant_id', 'tenants.id');
     if (!isMaster) q = q.where({ 'devices.tenant_id': tenantId });
-    // Master-only narrow filter: subset of tenants. Silently dropped
-    // for non-master callers so a crafted query can't widen scope.
+    // Global-view narrow filter: subset of tenants. Silently dropped
+    // for every other caller so a crafted query can't widen scope.
     if (isMaster && Array.isArray(filters?.tenantIds) && filters!.tenantIds!.length > 0) {
       q = q.whereIn('devices.tenant_id', filters!.tenantIds!.map(Number).filter(Number.isFinite));
     }
@@ -307,8 +315,8 @@ class DeviceService {
   }
 
   /** Legacy non-paginated list — used by sidebar and internal calls. */
-  async getDevicesList(tenantId: number, filters?: { groupId?: number; status?: string; approvalStatus?: string; search?: string }): Promise<Device[]> {
-    const result = await this.getDevices(tenantId, { ...filters, page: 1, pageSize: 10000 });
+  async getDevicesList(tenantId: number, filters?: { groupId?: number; status?: string; approvalStatus?: string; search?: string }, view?: TenantView): Promise<Device[]> {
+    const result = await this.getDevices(tenantId, { ...filters, page: 1, pageSize: 10000 }, view);
     return result.items;
   }
 
@@ -415,11 +423,11 @@ class DeviceService {
     });
   }
 
-  async getDeviceById(id: number, tenantId: number): Promise<Device | null> {
-    // Master tenant sees any device regardless of its owning tenant; child
-    // tenants stay strictly scoped. We always join `tenants` so the row
+  async getDeviceById(id: number, tenantId: number, view?: TenantView): Promise<Device | null> {
+    // The global view reaches a device of any tenant; every other caller
+    // only the devices of `tenantId`. We always join `tenants` so the row
     // carries `tenant_name` for the UI in both modes.
-    const isMaster = isMasterTenant(tenantId);
+    const isMaster = isGlobalView(tenantId, view);
     const q = db('devices')
       .leftJoin('tenants', 'devices.tenant_id', 'tenants.id')
       .where('devices.id', id)
@@ -430,14 +438,22 @@ class DeviceService {
     return this.rowToDevice(row);
   }
 
-  async getDeviceByUuid(uuid: string, tenantId: number): Promise<Device | null> {
-    const isMaster = isMasterTenant(tenantId);
+  async getDeviceByUuid(uuid: string, tenantId: number, view?: TenantView): Promise<Device | null> {
+    const isMaster = isGlobalView(tenantId, view);
     const q = db('devices').where({ uuid });
     if (!isMaster) q.where({ tenant_id: tenantId });
     const row = await q.first();
     return row ? this.rowToDevice(row) : null;
   }
 
+  /**
+   * Updates a device of `tenantId` (of any tenant for the global view: the
+   * pencil of /devices renames across tenants). Returns null when the
+   * device is not reachable. A group is always one of the DEVICE's tenant:
+   * another tenant's group answers like an unknown one (404), since a
+   * device placed in another tenant's tree would hand that tenant's teams a
+   * scope on it through the closure.
+   */
   async updateDevice(id: number, tenantId: number, data: Partial<{
     displayName: string;
     description: string;
@@ -450,11 +466,30 @@ class DeviceService {
     warrantyStatus: string | null;
     expectedLifetimeYears: number | null;
     lifecycleStatus: string | null;
-  }>) {
+  }>, view?: TenantView) {
+    const isMaster = isGlobalView(tenantId, view);
+    const lookup = db('devices').where({ id });
+    if (!isMaster) lookup.where({ tenant_id: tenantId });
+    const current = await lookup.first('id', 'tenant_id') as { id: number; tenant_id: number } | undefined;
+    if (!current) return null;
+    const deviceTenantId = Number(current.tenant_id);
+
+    let groupId: number | null | undefined;
+    if (data.groupId === null) {
+      groupId = null;
+    } else if (data.groupId !== undefined) {
+      const gid = Number(data.groupId);
+      const group = Number.isSafeInteger(gid) && gid > 0
+        ? await db('device_groups').where({ id: gid, tenant_id: deviceTenantId }).first('id')
+        : undefined;
+      if (!group) throw new AppError(404, 'Group not found');
+      groupId = gid;
+    }
+
     const updates: any = { updated_at: new Date() };
     if (data.displayName !== undefined) updates.display_name = data.displayName;
     if (data.description !== undefined) updates.description = data.description;
-    if (data.groupId !== undefined) updates.group_id = data.groupId;
+    if (groupId !== undefined) updates.group_id = groupId;
     if (data.tags !== undefined) updates.tags = JSON.stringify(data.tags);
     if (data.customFields !== undefined) updates.custom_fields = JSON.stringify(data.customFields);
     if (data.purchaseDate !== undefined) updates.purchase_date = data.purchaseDate;
@@ -464,14 +499,9 @@ class DeviceService {
     if (data.expectedLifetimeYears !== undefined) updates.expected_lifetime_years = data.expectedLifetimeYears;
     if (data.lifecycleStatus !== undefined) updates.lifecycle_status = data.lifecycleStatus;
 
-    // Master tenant edits any device regardless of its owning tenant —
-    // the UI exposes the pencil on /devices for cross-tenant rename in
-    // god view. Child tenants stay strictly scoped to their own rows.
-    const isMaster = isMasterTenant(tenantId);
-    const updateQ = db('devices').where({ id });
-    if (!isMaster) updateQ.where({ tenant_id: tenantId });
-    await updateQ.update(updates);
-    const updated = await this.getDeviceById(id, tenantId);
+    // Written in the device's own tenant (the one resolved above).
+    await db('devices').where({ id, tenant_id: deviceTenantId }).update(updates);
+    const updated = await this.getDeviceById(id, deviceTenantId);
     if (updated && this.io) {
       // Emit on the OWNING tenant's room so the device's home tenant
       // sees the live change too — not just the master room.
@@ -483,13 +513,22 @@ class DeviceService {
     return updated;
   }
 
+  // The state changes below (approve, refuse, suspend, unsuspend, delete)
+  // reach the devices of `tenantId` only — never through the global view —
+  // and return null (false for a deletion) when the device is not there.
+
   async approveDevice(id: number, tenantId: number, approvedBy: number) {
-    // Check if the device's API key has a default group
-    const deviceRow = await db('devices').where({ id, tenant_id: tenantId }).first();
-    let groupId = deviceRow?.group_id;
-    if (!groupId && deviceRow?.api_key_id) {
-      const keyRow = await db('agent_api_keys').where({ id: deviceRow.api_key_id }).first();
-      if (keyRow?.default_group_id) groupId = keyRow.default_group_id;
+    const deviceRow = await db('devices').where({ id, tenant_id: tenantId }).first('id', 'group_id', 'api_key_id');
+    if (!deviceRow) return null;
+    // Check if the device's API key has a default group — adopted only when
+    // it is a group of the device's own tenant.
+    let groupId = deviceRow.group_id;
+    if (!groupId && deviceRow.api_key_id) {
+      const keyRow = await db('agent_api_keys as k')
+        .join('device_groups as g', 'g.id', 'k.default_group_id')
+        .where({ 'k.id': deviceRow.api_key_id, 'g.tenant_id': tenantId })
+        .first('g.id as group_id') as { group_id: number } | undefined;
+      if (keyRow?.group_id) groupId = keyRow.group_id;
     }
 
     await db('devices').where({ id, tenant_id: tenantId }).update({
@@ -508,28 +547,28 @@ class DeviceService {
   }
 
   async refuseDevice(id: number, tenantId: number) {
-    await db('devices').where({ id, tenant_id: tenantId }).update({
+    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
       approval_status: 'refused',
       status: 'suspended',
       updated_at: new Date(),
     });
-    return this.getDeviceById(id, tenantId);
+    return changed ? this.getDeviceById(id, tenantId) : null;
   }
 
   async suspendDevice(id: number, tenantId: number) {
-    await db('devices').where({ id, tenant_id: tenantId }).update({
+    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
       status: 'suspended',
       updated_at: new Date(),
     });
-    return this.getDeviceById(id, tenantId);
+    return changed ? this.getDeviceById(id, tenantId) : null;
   }
 
   async unsuspendDevice(id: number, tenantId: number) {
-    await db('devices').where({ id, tenant_id: tenantId }).update({
+    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
       status: 'offline',
       updated_at: new Date(),
     });
-    return this.getDeviceById(id, tenantId);
+    return changed ? this.getDeviceById(id, tenantId) : null;
   }
 
   /**
@@ -542,13 +581,16 @@ class DeviceService {
     try { await db('reports').where({ scope_type: 'device', scope_id: id }).delete(); } catch { /* ignore */ }
   }
 
-  async deleteDevice(id: number, tenantId: number) {
+  /** Deletes a device of `tenantId`; false when it is not there. */
+  async deleteDevice(id: number, tenantId: number): Promise<boolean> {
     const deleted = await db('devices').where({ id, tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
+    if (deleted.length === 0) return false;
     await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
     await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
     if (this.io) {
       this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id });
     }
+    return true;
   }
 
   /**
@@ -610,10 +652,20 @@ class DeviceService {
     }
   }
 
-  async bulkDelete(ids: number[], tenantId: number) {
+  /**
+   * Deletes the devices of `tenantId` among `ids` (the others are skipped,
+   * untouched) and purges the data of those actually deleted. Returns their
+   * ids. The restriction matrix is the caller's (DELETE /bulk/delete).
+   */
+  async bulkDelete(ids: number[], tenantId: number): Promise<number[]> {
+    if (ids.length === 0) return [];
     const deleted = await db('devices').whereIn('id', ids).where({ tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
     await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
     await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
+    if (this.io) {
+      for (const r of deleted) this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id: r.id });
+    }
+    return deleted.map((r) => Number(r.id));
   }
 
   // ─── Inventory pruning ────────────────────────────────────────────────────
@@ -640,10 +692,10 @@ class DeviceService {
   // approved fleet, with a count of matching devices for each. The client
   // uses these to populate the cascading filter dropdowns and to hide
   // options that no longer have any devices behind them.
-  async getOsFacets(tenantId: number): Promise<Array<{
+  async getOsFacets(tenantId: number, view?: TenantView): Promise<Array<{
     osType: string; osName: string | null; osVersion: string | null; count: number;
   }>> {
-    const isMaster = isMasterTenant(tenantId);
+    const isMaster = isGlobalView(tenantId, view);
     const q = db('devices')
       .where({ approval_status: 'approved' })
       .whereNot({ status: 'pending_uninstall' })
@@ -671,8 +723,8 @@ class DeviceService {
   // `tags` is a JSONB array on devices — `jsonb_array_elements_text`
   // unnests it so we can group by individual tag. The query skips
   // pending_uninstall to avoid surfacing stale data.
-  async getTagFacets(tenantId: number): Promise<Array<{ tag: string; count: number }>> {
-    const isMaster = isMasterTenant(tenantId);
+  async getTagFacets(tenantId: number, view?: TenantView): Promise<Array<{ tag: string; count: number }>> {
+    const isMaster = isGlobalView(tenantId, view);
     const where = isMaster
       ? `d.approval_status = 'approved' AND d.status <> 'pending_uninstall'`
       : `d.tenant_id = ? AND d.approval_status = 'approved' AND d.status <> 'pending_uninstall'`;
@@ -688,16 +740,14 @@ class DeviceService {
   }
 
   // ─── Fleet summary ────────────────────────────────────────────────────────
-  async getFleetSummary(tenantId: number, opts?: { strictTenantScope?: boolean }) {
-    // `strictTenantScope` forces the function to treat the master
-    // tenant (id=1) like any other tenant — i.e. count ONLY devices
-    // whose `devices.tenant_id = 1`, not the cross-tenant aggregate.
-    // Used by the daily snapshot job so the row stored for tenant 1
-    // reflects master's own fleet, not the install-wide sum. Without
-    // this flag the snapshot for tenant 1 = whole install, and the
-    // master timeseries that SUMs across tenants double-counts (the
-    // total shown was about twice the real device count).
-    const isMaster = isMasterTenant(tenantId) && !opts?.strictTenantScope;
+  async getFleetSummary(tenantId: number, opts?: { strictTenantScope?: boolean; globalView?: boolean }) {
+    // Only the global view (`globalView`, platform administrator on the
+    // master tenant) counts the cross-tenant aggregate; any other caller
+    // counts the devices of `tenantId`. `strictTenantScope` forces the
+    // latter even with the global view: the daily snapshot job stores
+    // master's own fleet in the row of tenant 1, not the install-wide sum
+    // (the master timeseries SUMs across tenants and would double-count).
+    const isMaster = isGlobalView(tenantId, opts) && !opts?.strictTenantScope;
     const statusQ = db('devices').select(db.raw('status, count(*) as count')).groupBy('status');
     if (!isMaster) statusQ.where({ tenant_id: tenantId });
     const rows = await statusQ;
@@ -816,15 +866,15 @@ class DeviceService {
   // Returns {date, total, online, offline, pendingUpdates, stale72} for the
   // last N days. The current day is always synthesized from live state — the
   // nightly snapshot job is for historic comparison only.
-  async getFleetTimeseries(tenantId: number, days: number) {
+  async getFleetTimeseries(tenantId: number, days: number, view?: TenantView) {
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     const cutoff = new Date(today.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
 
-    // Master tenant gets the cross-tenant aggregate: each (day) row is
-    // the sum of all tenant-scoped snapshots for that day. Other tenants
-    // stay strictly scoped.
-    const isMaster = isMasterTenant(tenantId);
+    // The global view gets the cross-tenant aggregate: each (day) row is
+    // the sum of all tenant-scoped snapshots for that day. Every other
+    // caller stays strictly scoped.
+    const isMaster = isGlobalView(tenantId, view);
     let rows: any[];
     if (isMaster) {
       rows = await db('fleet_daily_snapshot')
@@ -850,7 +900,7 @@ class DeviceService {
     // Synthesise the live "today" point from current state so the chart
     // always ends on the current value, regardless of whether the nightly
     // snapshot job has run.
-    const live = await this.getFleetSummary(tenantId);
+    const live = await this.getFleetSummary(tenantId, { globalView: isMaster });
     const todayStr = today.toISOString().slice(0, 10);
     const todayRow = {
       day: todayStr,
@@ -910,10 +960,10 @@ class DeviceService {
   // Returns up to N most-recent hourly points for the dashboard 24h view.
   // The current hour is always synthesised from live state so the chart
   // ends on "now" regardless of the cron cadence, mirroring the daily flow.
-  async getFleetHourlySeries(tenantId: number, hours: number) {
+  async getFleetHourlySeries(tenantId: number, hours: number, view?: TenantView) {
     const cap = Math.min(168, Math.max(2, hours));
     const cutoff = new Date(Date.now() - cap * 60 * 60 * 1000);
-    const isMaster = isMasterTenant(tenantId);
+    const isMaster = isGlobalView(tenantId, view);
     let rows: Array<{
       hour: Date | string; total: number; online: number; offline: number; pendingUpdates: number; stale72: number;
     }>;
@@ -939,7 +989,7 @@ class DeviceService {
         .select('hour', 'total', 'online', 'offline', 'pending_updates as pendingUpdates', 'stale_72h as stale72') as any;
     }
 
-    const live = await this.getFleetSummary(tenantId);
+    const live = await this.getFleetSummary(tenantId, { globalView: isMaster });
     const nowHour = new Date();
     nowHour.setMinutes(0, 0, 0);
     const liveRow = {

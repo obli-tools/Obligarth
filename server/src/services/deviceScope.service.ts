@@ -36,6 +36,29 @@ export function parseRequestDeviceId(raw: unknown): number | null {
   return Number.isSafeInteger(n) && n > 0 && n <= 2147483647 ? n : null;
 }
 
+/**
+ * The master tenant's global view: a platform administrator (users.role
+ * 'admin') whose session is on the master tenant reaches the devices and
+ * groups of every tenant. The tenant alone never grants it: a tenant
+ * administrator of the master tenant, or any other member of it, stays on
+ * the master tenant's own rows. The one rule for the device, group and
+ * settings routes — services take it as an explicit flag, never infer it
+ * from the tenant id.
+ */
+export function hasGlobalView(req: Request): boolean {
+  return req.session?.role === 'admin' && isMasterTenant(Number(req.tenantId));
+}
+
+/**
+ * Tenant filter of a service read or write (device.service, group.service,
+ * settings.service). Without it — the default — only the rows of the given
+ * tenant are reached. `globalView` is hasGlobalView(req), passed explicitly
+ * by the route; it has no effect outside the master tenant.
+ */
+export interface TenantView {
+  globalView?: boolean;
+}
+
 export async function resolveRequestDevice(
   req: Request,
   rawDeviceId: unknown,
@@ -50,7 +73,7 @@ export async function resolveRequestDevice(
   const isAdmin = req.session?.role === 'admin';
 
   const q = db('devices').where({ id: deviceId });
-  if (!(isAdmin && isMasterTenant(tenantId))) q.where({ tenant_id: tenantId });
+  if (!hasGlobalView(req)) q.where({ tenant_id: tenantId });
   const device = await q.first('id', 'tenant_id', 'hostname', 'approval_status') as RequestDevice | undefined;
   if (!device) return notFound;
   if (isAdmin) return { ok: true, device, isAdmin };

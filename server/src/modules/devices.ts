@@ -3,7 +3,7 @@ import { registerAuditResourceName } from '../services/audit.service';
 import { registerApprovalExecutor, registerApprovalRequestType } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { deviceService } from '../services/device.service';
-import { executeChangeGroup, executeDeviceRequest, executeTransferTenant } from '../services/deviceApproval';
+import { executeBulkDelete, executeChangeGroup, executeDeviceRequest, executeTransferTenant } from '../services/deviceApproval';
 
 // =============================================================================
 // DEVICE REGISTRY — its hooks into the core's registries (background jobs,
@@ -55,6 +55,7 @@ export function registerDeviceModule(): void {
   // ── Two-step approvals: executors (approval.service) ──────────────────────
   registerApprovalExecutor('change_group', executeChangeGroup);                // bulk group change
   registerApprovalExecutor('transfer_tenant', executeTransferTenant);          // bulk tenant transfer
+  registerApprovalExecutor('delete_devices', executeBulkDelete);               // bulk record deletion
   registerApprovalRequestType('device_uninstall', executeDeviceRequest);      // record deletion / tenant transfer
 
   // ── Restrictions matrix (restriction.service), in the order it lists them ─

@@ -1,7 +1,8 @@
 import { db } from '../db';
 
 import type { SettingScope, SettingKey, SettingDefinition } from '@obligarth/shared';
-import { SETTINGS_KEYS, HARDCODED_DEFAULTS, SETTINGS_DEFINITIONS } from '@obligarth/shared';
+import { SETTINGS_KEYS, HARDCODED_DEFAULTS, SETTINGS_DEFINITIONS, isMasterTenant } from '@obligarth/shared';
+import type { TenantView } from './deviceScope.service';
 
 interface SettingsRow {
   id: number;
@@ -41,6 +42,34 @@ export const SERVED_SETTING_KEYS: readonly SettingKey[] = Object.values(SETTINGS
 const SERVED_KEY_SET: ReadonlySet<string> = new Set<string>(SERVED_SETTING_KEYS);
 
 export const settingsService = {
+  // ── Scope ──
+
+  /**
+   * The tenant whose settings rows a request on `scope` / `scopeId` reads
+   * and writes, or null when the target is out of reach (the route answers
+   * 404, as for an unknown id):
+   *  - global: the request's tenant;
+   *  - group: a group of the request's tenant — of any tenant for the
+   *    master tenant's global view, whose settings then live in the
+   *    group's own tenant (where they apply);
+   *  - device: a device of the request's tenant.
+   */
+  async scopeTenantId(tenantId: number, scope: SettingScope, scopeId: number | null, view?: TenantView): Promise<number | null> {
+    if (scope === 'global') return tenantId;
+    if (scopeId === null || !Number.isSafeInteger(scopeId) || scopeId <= 0) return null;
+    if (scope === 'group') {
+      const q = db('device_groups').where({ id: scopeId });
+      if (!(view?.globalView && isMasterTenant(tenantId))) q.where({ tenant_id: tenantId });
+      const row = await q.first('tenant_id') as { tenant_id: number } | undefined;
+      return row ? Number(row.tenant_id) : null;
+    }
+    if (scope === 'device') {
+      const row = await db('devices').where({ id: scopeId, tenant_id: tenantId }).first('id');
+      return row ? tenantId : null;
+    }
+    return null;
+  },
+
   // ── Raw CRUD ──
 
   async getByScope(tenantId: number, scope: SettingScope, scopeId: number | null): Promise<Record<string, number>> {
@@ -147,10 +176,12 @@ export const settingsService = {
 
     // 3. Apply group chain (root → leaf) if device is in a group
     if (groupId !== null) {
-      // Get ancestors ordered by depth DESC (root first → direct parent last)
+      // Get ancestors ordered by depth DESC (root first → direct parent last),
+      // groups of the tenant only (a tree never spans two tenants).
       const ancestorRows = await db('device_group_closure')
         .join('device_groups', 'device_groups.id', 'device_group_closure.ancestor_id')
         .where('device_group_closure.descendant_id', groupId)
+        .where('device_groups.tenant_id', tenantId)
         .orderBy('device_group_closure.depth', 'desc')
         .select('device_groups.id', 'device_groups.name', 'device_group_closure.depth');
 
@@ -217,10 +248,11 @@ export const settingsService = {
       }
     }
 
-    // 3. Ancestors (root→parent, excluding self)
+    // 3. Ancestors (root→parent, excluding self), groups of the tenant only
     const ancestorRows = await db('device_group_closure')
       .join('device_groups', 'device_groups.id', 'device_group_closure.ancestor_id')
       .where('device_group_closure.descendant_id', groupId)
+      .where('device_groups.tenant_id', tenantId)
       .where('device_group_closure.depth', '>', 0) // exclude self
       .orderBy('device_group_closure.depth', 'desc')
       .select('device_groups.id', 'device_groups.name', 'device_group_closure.depth');

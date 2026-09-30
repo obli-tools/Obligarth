@@ -1,6 +1,15 @@
 import { db } from '../db';
+import { AppError } from '../middleware/errorHandler';
 import { isMasterTenant } from '@obligarth/shared';
 import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obligarth/shared';
+import type { TenantView } from './deviceScope.service';
+
+// Tenant rule: a group tree never spans two tenants — a parent is always a
+// group of the child's tenant (create, move) — so the closure never hands
+// the teams of one tenant a scope on another tenant's groups or devices.
+// The master tenant's global view (every tenant) is an explicit flag of
+// the caller (platform administrators only, deviceScope.service
+// hasGlobalView), never inferred from the tenant id.
 
 interface GroupRow {
   id: number;
@@ -67,12 +76,12 @@ async function ensureUniqueSlug(slug: string, excludeId?: number): Promise<strin
 }
 
 export const groupService = {
-  async getAll(tenantId: number): Promise<DeviceGroup[]> {
-    // Master tenant gets every group across the install — joined with
+  async getAll(tenantId: number, view?: TenantView): Promise<DeviceGroup[]> {
+    // The global view gets every group across the install — joined with
     // `tenants` so each row carries `tenant_name` for the UI to render
-    // tenant headers above the group sub-tree. Other tenants stay
-    // strictly scoped, no join needed.
-    const isMaster = isMasterTenant(tenantId);
+    // tenant headers above the group sub-tree. Every other caller stays
+    // strictly scoped.
+    const isMaster = !!view?.globalView && isMasterTenant(tenantId);
     const q = db('device_groups')
       .leftJoin('tenants', 'device_groups.tenant_id', 'tenants.id')
       .select('device_groups.*', 'tenants.name as tenant_name')
@@ -88,6 +97,11 @@ export const groupService = {
     return row ? rowToGroup(row) : null;
   },
 
+  /**
+   * Creates a group of `tenantId`. A parent must be a group of the same
+   * tenant: another tenant's parent answers like an unknown one (400). The
+   * row and its closure paths are written together.
+   */
   async create(data: {
     name: string;
     description?: string | null;
@@ -97,36 +111,44 @@ export const groupService = {
   }, tenantId: number): Promise<DeviceGroup> {
     const slug = await ensureUniqueSlug(slugify(data.name));
 
-    const [row] = await db<GroupRow>('device_groups')
-      .insert({
-        name: data.name,
-        slug,
-        description: data.description ?? null,
-        parent_id: data.parentId ?? null,
-        sort_order: data.sortOrder ?? 0,
-        group_notifications: data.groupNotifications ?? false,
-        tenant_id: tenantId,
-      })
-      .returning('*');
+    const row = await db.transaction(async (trx) => {
+      if (data.parentId) {
+        const parent = await trx('device_groups').where({ id: data.parentId, tenant_id: tenantId }).first('id');
+        if (!parent) throw new AppError(400, 'Parent group not found');
+      }
 
-    // Maintain closure table
-    // Self-reference (depth 0)
-    await db('device_group_closure').insert({
-      ancestor_id: row.id,
-      descendant_id: row.id,
-      depth: 0,
+      const [created] = await trx<GroupRow>('device_groups')
+        .insert({
+          name: data.name,
+          slug,
+          description: data.description ?? null,
+          parent_id: data.parentId ?? null,
+          sort_order: data.sortOrder ?? 0,
+          group_notifications: data.groupNotifications ?? false,
+          tenant_id: tenantId,
+        })
+        .returning('*');
+
+      // Maintain closure table
+      // Self-reference (depth 0)
+      await trx('device_group_closure').insert({
+        ancestor_id: created.id,
+        descendant_id: created.id,
+        depth: 0,
+      });
+
+      // Copy ancestor paths from parent
+      if (data.parentId) {
+        await trx.raw(
+          `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
+           SELECT gc.ancestor_id, ?, gc.depth + 1
+           FROM device_group_closure gc
+           WHERE gc.descendant_id = ?`,
+          [created.id, data.parentId],
+        );
+      }
+      return created;
     });
-
-    // Copy ancestor paths from parent
-    if (data.parentId) {
-      await db.raw(
-        `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
-         SELECT gc.ancestor_id, ?, gc.depth + 1
-         FROM device_group_closure gc
-         WHERE gc.descendant_id = ?`,
-        [row.id, data.parentId],
-      );
-    }
 
     return rowToGroup(row);
   },
@@ -158,52 +180,63 @@ export const groupService = {
     return row ? rowToGroup(row) : null;
   },
 
+  /**
+   * Moves a group under `newParentId` (null: root). The new parent must be a
+   * group of the moved group's tenant — another tenant's answers like an
+   * unknown one (400) — and not one of its descendants. The closure is
+   * rewritten in one transaction.
+   */
   async move(id: number, newParentId: number | null): Promise<DeviceGroup | null> {
-    // Get current group
-    const group = await db<GroupRow>('device_groups').where({ id }).first();
-    if (!group) return null;
+    const row = await db.transaction(async (trx) => {
+      // Get current group
+      const group = await trx<GroupRow>('device_groups').where({ id }).first();
+      if (!group) return null;
 
-    // Prevent circular reference: newParentId must not be a descendant of id
-    if (newParentId !== null) {
-      const isDescendant = await db('device_group_closure')
-        .where({ ancestor_id: id, descendant_id: newParentId })
-        .first();
-      if (isDescendant) {
-        throw new Error('Cannot move group into its own descendant');
+      if (newParentId !== null) {
+        const parent = await trx('device_groups').where({ id: newParentId, tenant_id: group.tenant_id }).first('id');
+        if (!parent) throw new AppError(400, 'Parent group not found');
+        // Prevent circular reference: newParentId must not be a descendant of id
+        const isDescendant = await trx('device_group_closure')
+          .where({ ancestor_id: id, descendant_id: newParentId })
+          .first();
+        if (isDescendant) {
+          throw new AppError(400, 'Cannot move group into its own descendant');
+        }
       }
-    }
 
-    // Get all descendants of the subtree (including self)
-    const subtreeIds = await db('device_group_closure')
-      .where({ ancestor_id: id })
-      .select('descendant_id');
-    const descIds = subtreeIds.map((r) => r.descendant_id);
+      // Get all descendants of the subtree (including self)
+      const subtreeIds = await trx('device_group_closure')
+        .where({ ancestor_id: id })
+        .select('descendant_id');
+      const descIds = subtreeIds.map((r) => r.descendant_id);
 
-    // Remove all closure entries where ancestor is NOT in the subtree
-    // but descendant IS in the subtree (these are the "outside" links)
-    await db('device_group_closure')
-      .whereIn('descendant_id', descIds)
-      .whereNotIn('ancestor_id', descIds)
-      .del();
+      // Remove all closure entries where ancestor is NOT in the subtree
+      // but descendant IS in the subtree (these are the "outside" links)
+      await trx('device_group_closure')
+        .whereIn('descendant_id', descIds)
+        .whereNotIn('ancestor_id', descIds)
+        .del();
 
-    // Reconnect: for each ancestor of newParent, create links to every node in subtree
-    if (newParentId !== null) {
-      await db.raw(
-        `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
-         SELECT p.ancestor_id, s.descendant_id, p.depth + s.depth + 1
-         FROM device_group_closure p
-         CROSS JOIN device_group_closure s
-         WHERE p.descendant_id = ?
-           AND s.ancestor_id = ?`,
-        [newParentId, id],
-      );
-    }
+      // Reconnect: for each ancestor of newParent, create links to every node in subtree
+      if (newParentId !== null) {
+        await trx.raw(
+          `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
+           SELECT p.ancestor_id, s.descendant_id, p.depth + s.depth + 1
+           FROM device_group_closure p
+           CROSS JOIN device_group_closure s
+           WHERE p.descendant_id = ?
+             AND s.ancestor_id = ?`,
+          [newParentId, id],
+        );
+      }
 
-    // Update the parent_id column
-    const [row] = await db<GroupRow>('device_groups')
-      .where({ id })
-      .update({ parent_id: newParentId, updated_at: new Date() })
-      .returning('*');
+      // Update the parent_id column
+      const [updated] = await trx<GroupRow>('device_groups')
+        .where({ id })
+        .update({ parent_id: newParentId, updated_at: new Date() })
+        .returning('*');
+      return updated ?? null;
+    });
 
     return row ? rowToGroup(row) : null;
   },
@@ -244,13 +277,13 @@ export const groupService = {
     return rows.map(rowToGroup);
   },
 
-  async getTree(tenantId: number): Promise<DeviceGroupTreeNode[]> {
-    const allGroups = await this.getAll(tenantId);
+  async getTree(tenantId: number, view?: TenantView): Promise<DeviceGroupTreeNode[]> {
+    const allGroups = await this.getAll(tenantId, view);
     const groupMap = new Map<number, DeviceGroupTreeNode>();
 
-    // Count devices per group (direct members only). Master tenant sees
-    // counts across every tenant; others stay strictly scoped.
-    const isMaster = isMasterTenant(tenantId);
+    // Count devices per group (direct members only). The global view sees
+    // counts across every tenant; every other caller stays strictly scoped.
+    const isMaster = !!view?.globalView && isMasterTenant(tenantId);
     const countQ = db('devices')
       .where({ approval_status: 'approved' })
       .whereNot({ status: 'pending_uninstall' })
@@ -322,15 +355,43 @@ export const groupService = {
     return roots;
   },
 
-  /** Batch-update sortOrder for multiple groups at once */
-  async reorder(items: { id: number; sortOrder: number }[]): Promise<void> {
-    await db.transaction(async (trx) => {
+  /**
+   * Batch-update sortOrder for multiple groups at once — all of them groups
+   * of `tenantId` (of any tenant for the global view). One id out of reach
+   * and nothing is written: returns false.
+   */
+  async reorder(items: { id: number; sortOrder: number }[], tenantId: number, view?: TenantView): Promise<boolean> {
+    const isMaster = !!view?.globalView && isMasterTenant(tenantId);
+    const ids = [...new Set(items.map((i) => i.id))];
+    return db.transaction(async (trx) => {
+      const found = trx('device_groups').whereIn('id', ids);
+      if (!isMaster) found.where({ tenant_id: tenantId });
+      if ((await found.pluck('id')).length !== ids.length) return false;
       for (const item of items) {
-        await trx('device_groups')
-          .where({ id: item.id })
-          .update({ sort_order: item.sortOrder, updated_at: new Date() });
+        const q = trx('device_groups').where({ id: item.id });
+        if (!isMaster) q.where({ tenant_id: tenantId });
+        await q.update({ sort_order: item.sortOrder, updated_at: new Date() });
       }
+      return true;
     });
+  },
+
+  /**
+   * The teams through which `userId` may create a group in `tenantId`:
+   * its teams OF THAT TENANT with can_create — a team is mono-tenant, and
+   * can_create granted elsewhere gives nothing here — while the user is
+   * still a member of the tenant. The new group's rw scope goes to these
+   * teams, and to no other.
+   */
+  async creatorTeamIds(userId: number, tenantId: number): Promise<number[]> {
+    const member = await db('user_tenants').where({ user_id: userId, tenant_id: tenantId }).first('user_id');
+    if (!member) return [];
+    const rows = await db('user_teams')
+      .join('team_memberships', 'user_teams.id', 'team_memberships.team_id')
+      .where({ 'team_memberships.user_id': userId, 'user_teams.tenant_id': tenantId, 'user_teams.can_create': true })
+      .orderBy('user_teams.id')
+      .select('user_teams.id') as Array<{ id: number }>;
+    return rows.map((r) => Number(r.id));
   },
 
   /**

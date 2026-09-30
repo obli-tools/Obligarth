@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { settingsService } from '../services/settings.service';
+import { hasGlobalView } from '../services/deviceScope.service';
 import type { SettingScope } from '@obligarth/shared';
 import type { SettingKey } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
@@ -15,6 +16,18 @@ function parseScope(req: Request): { scope: SettingScope; scopeId: number | null
     return { scope, scopeId: id };
   }
   throw new AppError(400, 'Invalid scope. Must be global, group, or device');
+}
+
+/**
+ * The tenant whose settings rows this request reads or writes: a group or a
+ * device of the session's tenant (a group of any tenant for the master
+ * tenant's global view, whose rows then live in the group's tenant).
+ * Anything else answers like an unknown id (404).
+ */
+async function scopeTenantId(req: Request, scope: SettingScope, scopeId: number | null): Promise<number> {
+  const tenantId = await settingsService.scopeTenantId(req.tenantId!, scope, scopeId, { globalView: hasGlobalView(req) });
+  if (tenantId === null) throw new AppError(404, scope === 'device' ? 'Device not found' : 'Group not found');
+  return tenantId;
 }
 
 export const settingsController = {
@@ -33,7 +46,8 @@ export const settingsController = {
     try {
       const groupId = parseInt(req.params.scopeId, 10);
       if (isNaN(groupId)) throw new AppError(400, 'Invalid group ID');
-      const result = await settingsService.resolveForGroup(req.tenantId!, groupId);
+      const tenantId = await scopeTenantId(req, 'group', groupId);
+      const result = await settingsService.resolveForGroup(tenantId, groupId);
       res.json({ success: true, data: result });
     } catch (err) {
       next(err);
@@ -67,8 +81,9 @@ export const settingsController = {
     try {
       const { scope, scopeId } = parseScope(req);
       const { key, value } = req.body as SetSettingInput;
+      const tenantId = await scopeTenantId(req, scope, scopeId);
 
-      await settingsService.set(req.tenantId!, scope, scopeId, key as SettingKey, value);
+      await settingsService.set(tenantId, scope, scopeId, key as SettingKey, value);
 
       res.json({ success: true, message: 'Setting saved' });
     } catch (err: unknown) {
@@ -85,9 +100,10 @@ export const settingsController = {
     try {
       const { scope, scopeId } = parseScope(req);
       const { overrides } = req.body as SetSettingsBulkInput;
+      const tenantId = await scopeTenantId(req, scope, scopeId);
 
       await settingsService.setBulk(
-        req.tenantId!,
+        tenantId,
         scope,
         scopeId,
         overrides.map((o) => ({ key: o.key as SettingKey, value: o.value })),
@@ -104,8 +120,9 @@ export const settingsController = {
     try {
       const { scope, scopeId } = parseScope(req);
       const { key } = req.params;
+      const tenantId = await scopeTenantId(req, scope, scopeId);
 
-      const deleted = await settingsService.remove(req.tenantId!, scope, scopeId, key as SettingKey);
+      const deleted = await settingsService.remove(tenantId, scope, scopeId, key as SettingKey);
 
       res.json({ success: true, message: deleted ? 'Setting reset to inherited' : 'No override found' });
     } catch (err) {

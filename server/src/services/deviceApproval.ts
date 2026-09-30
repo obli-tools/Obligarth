@@ -6,9 +6,9 @@ import {
 } from './approval.service';
 
 // ── Approval executors of the device actions ────────────────────────────────
-// Bulk group change, tenant transfer and record deletion, executed AS THE
-// REQUESTER once a second administrator approved them (approval.service).
-// Registered by modules/devices.ts.
+// Bulk group change, tenant transfer and record deletion (single or bulk),
+// executed AS THE REQUESTER once a second administrator approved them
+// (approval.service). Registered by modules/devices.ts.
 
 /** Payload of a 'device_uninstall' request (device.routes). */
 export interface DeviceUninstallPayload {
@@ -36,6 +36,27 @@ export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
   await auditAs(tenantId, requesterId, 'device.bulk_group_changed', {
     resourceType: 'device', resourcePath: prev.map((d) => d.id).join(','), details: { count: prev.length, changed: changed.length, toGroupId: groupId },
   });
+}
+
+/**
+ * Approved bulk deletion (device.delete, DELETE /api/devices/bulk/delete):
+ * 'delete_devices'. Only the devices still in the approval's tenant are
+ * deleted (and their data purged); the others are skipped, untouched.
+ */
+export async function executeBulkDelete(x: ApprovalExecution): Promise<string | void> {
+  const { tenantId, requesterId } = x;
+  const payload = x.payload as BatchCommandPayload;
+  await requireTenantCapability(requesterId, tenantId, 'devices.manage');
+  const ids = [...new Set((payload.deviceIds ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
+  const inTenant = ids.length ? await db('devices').whereIn('id', ids).andWhere({ tenant_id: tenantId }).pluck('id') as number[] : [];
+  if (!inTenant.length) refuse('None of the devices of this request is still in the tenant');
+  const { deviceService } = await import('./device.service');
+  const deleted = await deviceService.bulkDelete(inTenant.map(Number), tenantId);
+  if (!deleted.length) refuse('None of the devices of this request is still in the tenant');
+  await auditAs(tenantId, requesterId, 'device.bulk_deleted', {
+    resourceType: 'device', resourcePath: deleted.join(','), details: { count: deleted.length },
+  });
+  if (deleted.length < ids.length) return `Partially executed — ${ids.length - deleted.length} device(s) no longer in the tenant`;
 }
 
 /** Approved bulk tenant transfer (device.transfer_tenant): 'transfer_tenant'. */
@@ -67,9 +88,11 @@ export async function executeDeviceRequest(x: ApprovalExecution): Promise<string
   if (!payload.deleteOnly) refuse('Agent uninstall is not supported here — nothing was executed');
   await requireTenantCapability(requesterId, tenantId, 'devices.manage');
   const { deviceService } = await import('./device.service');
+  // The approval's tenant only (DELETE /:id files it for a device of the
+  // session's tenant).
   const existing = await deviceService.getDeviceById(deviceId, tenantId);
   if (!existing) refuse('Device not found');
-  await deviceService.deleteDevice(deviceId, tenantId);
+  if (!(await deviceService.deleteDevice(deviceId, tenantId))) refuse('Device not found');
   await auditAs(tenantId, requesterId, 'device.deleted', {
     deviceId, resourceType: 'device', resourcePath: String(deviceId),
     details: { hostname: existing.hostname, displayName: existing.displayName },

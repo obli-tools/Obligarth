@@ -2,12 +2,20 @@ import { Router } from 'express';
 import { deviceService } from '../services/device.service';
 import { requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
+import { hasGlobalView, parseRequestDeviceId } from '../services/deviceScope.service';
 import { db } from '../db';
 import { launchChromium } from '../utils/chromium';
-import { isMasterTenant } from '@obligarth/shared';
 import { logger } from '../utils/logger';
 
 const router = Router();
+
+// Tenant rule of these routes: the devices of the session's tenant. The
+// master tenant's global view (every tenant) is a platform administrator's
+// only (hasGlobalView), never a master-tenant member's, and it covers the
+// reads and the device update (PATCH /:id); the state changes (approve,
+// refuse, suspend, unsuspend, transfer, delete, bulk delete) stay on the
+// session's tenant for everyone. A device out of reach answers like an
+// unknown one (404).
 
 // ── Static / collection routes (must come before /:id routes) ─────────────────
 
@@ -22,8 +30,8 @@ router.get('/', async (req, res, next) => {
     if (Array.isArray(tags)) tagsArr = tags.map(String).filter(Boolean);
     else if (typeof tags === 'string' && tags.length > 0) tagsArr = tags.split(',').map((t) => t.trim()).filter(Boolean);
 
-    // Same parsing rules for `tenantIds` (master only — service drops
-    // it for non-master callers).
+    // Same parsing rules for `tenantIds` (global view only — the service
+    // drops it for every other caller).
     let tenantIdsArr: number[] | undefined;
     if (Array.isArray(tenantIds)) tenantIdsArr = tenantIds.map((v) => parseInt(String(v))).filter(Number.isFinite);
     else if (typeof tenantIds === 'string' && tenantIds.length > 0) {
@@ -55,7 +63,7 @@ router.get('/', async (req, res, next) => {
       staleHours: staleHours ? parseInt(staleHours) : undefined,
       tags: tagsArr,
       tenantIds: tenantIdsArr,
-    });
+    }, { globalView: hasGlobalView(req) });
 
     // Filter by visible devices for non-admins. The visibility set
     // now includes pre-approval devices "claimed" via their API key's
@@ -218,7 +226,7 @@ tr:nth-child(even) td { background: #f9fafb; }
 // GET /api/devices/summary
 router.get('/summary', async (req, res, next) => {
   try {
-    const summary = await deviceService.getFleetSummary(req.tenantId!);
+    const summary = await deviceService.getFleetSummary(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: summary });
   } catch (err) { next(err); }
 });
@@ -231,7 +239,7 @@ router.get('/summary', async (req, res, next) => {
 router.get('/fleet-timeseries', async (req, res, next) => {
   try {
     const days = Math.min(parseInt(String(req.query.days ?? '14')) || 14, 90);
-    const series = await deviceService.getFleetTimeseries(req.tenantId!, days);
+    const series = await deviceService.getFleetTimeseries(req.tenantId!, days, { globalView: hasGlobalView(req) });
     res.json({ data: series });
   } catch (err) { next(err); }
 });
@@ -243,7 +251,7 @@ router.get('/fleet-timeseries', async (req, res, next) => {
 router.get('/fleet-hourly', async (req, res, next) => {
   try {
     const hours = Math.min(168, Math.max(2, parseInt(String(req.query.hours ?? '24')) || 24));
-    const series = await deviceService.getFleetHourlySeries(req.tenantId!, hours);
+    const series = await deviceService.getFleetHourlySeries(req.tenantId!, hours, { globalView: hasGlobalView(req) });
     res.json({ data: series });
   } catch (err) { next(err); }
 });
@@ -254,7 +262,7 @@ router.get('/fleet-hourly', async (req, res, next) => {
 // client can render dropdowns showing only options that actually have devices.
 router.get('/os-facets', async (req, res, next) => {
   try {
-    const facets = await deviceService.getOsFacets(req.tenantId!);
+    const facets = await deviceService.getOsFacets(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: facets });
   } catch (err) { next(err); }
 });
@@ -265,7 +273,7 @@ router.get('/os-facets', async (req, res, next) => {
 // (typo-free) rather than retyping. Returns [{ tag, count }] desc by count.
 router.get('/tags', async (req, res, next) => {
   try {
-    const tags = await deviceService.getTagFacets(req.tenantId!);
+    const tags = await deviceService.getTagFacets(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: tags });
   } catch (err) { next(err); }
 });
@@ -274,10 +282,10 @@ router.get('/tags', async (req, res, next) => {
 router.get('/group-stats', async (req, res, next) => {
   try {
     const tenantId = req.tenantId!;
-    const isMaster = isMasterTenant(tenantId);
+    const isMaster = hasGlobalView(req);
 
-    // Device counts per group + status. Master sees the aggregate
-    // across every tenant; child tenants stay scoped.
+    // Device counts per group + status. The global view sees the
+    // aggregate across every tenant; every other caller stays scoped.
     const deviceQ = db('devices')
       .where({ approval_status: 'approved' })
       .whereNot({ status: 'pending_uninstall' })
@@ -365,13 +373,51 @@ router.post('/bulk/approve', requireTenantCapability('agent_config:approval'), a
   } catch (err) { next(err); }
 });
 
-// DELETE /api/devices/bulk/delete
+// DELETE /api/devices/bulk/delete — body { ids } or { deviceIds }.
+// The ids are narrowed to the devices of the session's tenant BEFORE
+// anything else (no mass deletion across tenants, even for the global
+// view): an id of another tenant reaches neither the restriction check nor
+// the purge, and a request with none of the tenant's devices answers 404.
+// Then the same gate as a single deletion: the `device.delete` restriction
+// (step-up, or a two-person approval executed by deviceApproval.ts).
 router.delete('/bulk/delete', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
-    const { ids, deviceIds } = req.body;
-    const list = ids ?? deviceIds ?? [];
-    await deviceService.bulkDelete(list, req.tenantId!);
-    res.json({ success: true });
+    const { ids, deviceIds } = (req.body ?? {}) as { ids?: unknown; deviceIds?: unknown };
+    const raw = ids ?? deviceIds;
+    if (!Array.isArray(raw) || raw.length === 0) {
+      return res.status(400).json({ error: 'deviceIds required' });
+    }
+    const requested = [...new Set(raw.map(parseRequestDeviceId).filter((n): n is number => n !== null))];
+    const devices = requested.length
+      ? await db('devices').whereIn('id', requested).andWhere({ tenant_id: req.tenantId! }).select('id') as Array<{ id: number }>
+      : [];
+    if (devices.length === 0) {
+      return res.status(404).json({ error: 'No matching devices in this tenant' });
+    }
+    const validIds = devices.map((d) => Number(d.id));
+
+    const { applyRestriction } = await import('../services/restriction.service');
+    const { deviceList } = await import('../services/approvalDescribe');
+    const approved = await applyRestriction(res, {
+      req,
+      actionKey: 'device.delete',
+      deviceIds: validIds,
+      approvalRequestType: 'batch_command',
+      approvalDescription: `Delete ${await deviceList(req.tenantId!, validIds)}`,
+      approvalPayload: { action: 'delete_devices', deviceIds: validIds },
+    });
+    if (!approved) return;
+
+    const deleted = await deviceService.bulkDelete(validIds, req.tenantId!);
+    try {
+      const { auditService } = await import('../services/audit.service');
+      await auditService.logReq(req, 'device.bulk_deleted', {
+        resourceType: 'device',
+        resourcePath: deleted.join(','),
+        details: { count: deleted.length },
+      });
+    } catch {}
+    res.json({ success: true, count: deleted.length });
   } catch (err) { next(err); }
 });
 
@@ -530,17 +576,18 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
 // GET /api/devices/:id
 router.get('/:id', requireDeviceRead(), async (req, res, next) => {
   try {
-    const device = await deviceService.getDeviceById(parseInt(req.params.id), req.tenantId!);
+    const device = await deviceService.getDeviceById(parseInt(req.params.id), req.tenantId!, { globalView: hasGlobalView(req) });
     if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
 });
 
-// PATCH /api/devices/:id
+// PATCH /api/devices/:id — a `groupId` must be a group of the device's own
+// tenant (404 'Group not found' otherwise, as for an unknown group).
 router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
-    const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body);
+    const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body ?? {}, { globalView: hasGlobalView(req) });
     if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
@@ -557,6 +604,11 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
 router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
+    // Same tenant rule as GET /:id (the service's own filter keys on the
+    // tenant id alone).
+    if (!(await deviceService.getDeviceById(deviceId, req.tenantId!, { globalView: hasGlobalView(req) }))) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
     const { changeEventService, changeEventsQuerySchema } = await import('../services/changeEvent.service');
     const parsed = changeEventsQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -576,6 +628,9 @@ router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => 
 router.get('/:id/change-events/summary', requireDeviceRead(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
+    if (!(await deviceService.getDeviceById(deviceId, req.tenantId!, { globalView: hasGlobalView(req) }))) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
     const { changeEventService, changeEventsSummaryQuerySchema } = await import('../services/changeEvent.service');
     const parsed = changeEventsSummaryQuerySchema.safeParse(req.query);
     if (!parsed.success) {
@@ -596,15 +651,14 @@ router.post('/:id/approve', requireTenantCapability('agent_config:approval'), as
   try {
     const id = parseInt(req.params.id);
     const device = await deviceService.approveDevice(id, req.tenantId!, req.session.userId!);
-    if (device) {
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'device.approved', {
-          deviceId: id, resourceType: 'device', resourcePath: String(id),
-          details: { hostname: device.hostname },
-        });
-      } catch {}
-    }
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    try {
+      const { auditService } = await import('../services/audit.service');
+      await auditService.logReq(req, 'device.approved', {
+        deviceId: id, resourceType: 'device', resourcePath: String(id),
+        details: { hostname: device.hostname },
+      });
+    } catch {}
     res.json({ data: device });
   } catch (err) { next(err); }
 });
@@ -614,15 +668,14 @@ router.post('/:id/refuse', requireTenantCapability('agent_config:approval'), asy
   try {
     const id = parseInt(req.params.id);
     const device = await deviceService.refuseDevice(id, req.tenantId!);
-    if (device) {
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'device.refused', {
-          deviceId: id, resourceType: 'device', resourcePath: String(id),
-          details: { hostname: device.hostname },
-        });
-      } catch {}
-    }
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    try {
+      const { auditService } = await import('../services/audit.service');
+      await auditService.logReq(req, 'device.refused', {
+        deviceId: id, resourceType: 'device', resourcePath: String(id),
+        details: { hostname: device.hostname },
+      });
+    } catch {}
     res.json({ data: device });
   } catch (err) { next(err); }
 });
@@ -823,7 +876,9 @@ router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (r
 // DELETE /api/devices/:id
 router.delete('/:id', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id);
+    const id = parseRequestDeviceId(req.params.id);
+    if (id === null) return res.status(404).json({ error: 'Device not found' });
+    // The session's tenant only (no global view for a deletion).
     const existing = await deviceService.getDeviceById(id, req.tenantId!);
     if (!existing) return res.status(404).json({ error: 'Device not found' });
 
@@ -838,7 +893,9 @@ router.delete('/:id', requireTenantCapability('devices.manage'), async (req, res
     });
     if (!approved) return;
 
-    await deviceService.deleteDevice(id, req.tenantId!);
+    if (!(await deviceService.deleteDevice(id, req.tenantId!))) {
+      return res.status(404).json({ error: 'Device not found' });
+    }
     try {
       const { auditService } = await import('../services/audit.service');
       await auditService.logReq(req, 'device.deleted', {
