@@ -141,9 +141,10 @@ export function LiveAlerts() {
   const capped = visibleToasts.slice(0, isPhone ? MAX_TOASTS.phone : MAX_TOASTS.other);
 
   return (
-    // In the dock's flex column: shrinks first (flex-shrink 100) and clips
-    // the oldest cards at the top rather than squeezing the chat panel. The
-    // -my-6 / py-6 pair leaves room for the card shadows inside the clip.
+    // In the dock's flex column: when the dock reaches its height cap (under
+    // the header), shrinks (flex-shrink 100) and clips the oldest cards at
+    // the top. The -my-6 / py-6 pair leaves room for the card shadows inside
+    // the clip.
     <div
       className="pointer-events-none relative z-[1] -my-6 flex min-h-0 w-80 max-w-full flex-col-reverse gap-2 overflow-y-clip py-6 max-md:w-full"
       style={{ flexShrink: 100 }}

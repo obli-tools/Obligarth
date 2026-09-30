@@ -15,8 +15,8 @@ export interface TwoFactorCodeResult {
 /** Optional hints from the 401 body (older servers send none of them). */
 export interface TwoFactorPromptHints {
   /** `false` when the server will neither honour nor grant an IP trust for
-   *  this action (e.g. SSH key / SSH button, TOTP management): the "Trust
-   *  this IP" box is hidden. Absent = shown, as before. */
+   *  this action (e.g. TOTP management): the "Trust this IP" box is
+   *  hidden. Absent = shown, as before. */
   trustIpAllowed?: boolean;
   /** The action needs a code never used before (not the sign-in code). */
   codeMustBeNew?: boolean;
