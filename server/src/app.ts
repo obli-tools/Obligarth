@@ -15,7 +15,7 @@ try {
   const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8')) as { version: string };
   serverVersion = pkg.version;
 } catch { /* ignore */ }
-import { config } from './config';
+import { config, sessionSecretError } from './config';
 import { errorHandler } from './middleware/errorHandler';
 import { apiLimiter } from './middleware/rateLimiter';
 import { captureStepUpProof } from './middleware/captureStepUpProof';
@@ -97,16 +97,16 @@ export function createApp() {
     logger.error(err, 'Session store error — sessions may fail until DB connection recovers');
   });
 
-  // SECURITY: refuse to start with the canonical default secret in
-  // production. Sessions signed with `change-this-secret` are
-  // trivially forgeable by anyone who reads the open-source repo.
-  // Dev installs keep the friendly default; production must set
-  // SESSION_SECRET via env (≥ 32 chars).
-  if (config.nodeEnv === 'production') {
-    if (!config.sessionSecret || config.sessionSecret === 'change-this-secret' || config.sessionSecret.length < 32) {
-      logger.fatal('SESSION_SECRET must be set to a 32+ character random value in production. Refusing to start.');
-      process.exit(1);
-    }
+  // SECURITY: sessions signed with a known secret are trivially forgeable by
+  // anyone who reads the open-source repo. Only an explicit
+  // NODE_ENV=development keeps the built-in secret; anywhere else
+  // SESSION_SECRET must be set, 32+ characters and not a placeholder
+  // (config.ts). index.ts checks it before the migrations; this guard keeps
+  // createApp() safe on its own.
+  const secretError = sessionSecretError();
+  if (secretError) {
+    logger.fatal(`${secretError} Refusing to start.`);
+    process.exit(1);
   }
 
   sessionMiddleware = session({

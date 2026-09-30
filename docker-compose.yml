@@ -5,13 +5,13 @@ services:
     environment:
       POSTGRES_DB: obliance
       POSTGRES_USER: obliance
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-    # RMM ingestion tuning for a large fleet (2000+ devices ≈ 200 push/s).
-    # Stock Postgres (shared_buffers 128MB, max_connections 100, lazy autovacuum)
-    # collapses under the device-table write churn. Values below assume a host
-    # with ~8GB RAM — scale shared_buffers≈25% and effective_cache_size≈75% of
-    # host RAM. max_connections must stay above (server pool.max + session pool
-    # + headroom); keep it in sync with knexfile.ts pool.max.
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
+    # Tuning sized for the push traffic of the former RMM agent (2000+ devices
+    # ≈ 200 push/s, where stock Postgres collapsed under the device-table write
+    # churn); kept until the load of the MDM is measured. Values below assume a
+    # host with ~8GB RAM — scale shared_buffers≈25% and effective_cache_size≈75%
+    # of host RAM. max_connections must stay above (server pool.max + session
+    # pool + headroom); keep it in sync with knexfile.ts pool.max.
     command:
       - "postgres"
       - "-c"
@@ -32,10 +32,10 @@ services:
       - "checkpoint_completion_target=0.9"
       - "-c"
       - "wal_compression=on"
-      # Aggressive autovacuum: the devices table takes ~hundreds of row versions/s
-      # from the push firehose. Stock autovacuum falls behind → bloat → every UI
-      # SELECT on devices slows down. (A per-table override on `devices` is set by
-      # migration 118 for even tighter thresholds.)
+      # Aggressive autovacuum, sized for the same former push traffic: hundreds
+      # of row versions/s on the devices table made stock autovacuum fall
+      # behind → bloat → every UI SELECT on devices slowed down. (A per-table
+      # override on `devices` is set by migration 118 for even tighter thresholds.)
       - "-c"
       - "autovacuum_vacuum_scale_factor=0.02"
       - "-c"
@@ -68,21 +68,20 @@ services:
     environment:
       NODE_ENV: production
       PORT: 3001
-      DATABASE_URL: postgres://obliance:${DB_PASSWORD:-changeme}@postgres:5432/obliance
-      SESSION_SECRET: ${SESSION_SECRET:-change-this-in-production}
+      DATABASE_URL: postgres://obliance:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obliance
+      SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
       # Public URL of this instance (e-mail links, trusted SSO origin) — see .env.example
       APP_URL: ${APP_URL:-}
+      # Initial administrator — empty password: a random one, printed once in
+      # the server logs. See .env.example.
       DEFAULT_ADMIN_USERNAME: ${DEFAULT_ADMIN_USERNAME:-admin}
-      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-admin123}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-}
       # Proxies whose X-Forwarded-For entries are believed (client IP for audit,
-      # 2FA "trust this IP", SSH button). Default: loopback + this container's
-      # own networks + Docker's 172.16/12 pool. See .env.example.
+      # 2FA "trust this IP"). Default: loopback + this container's own networks
+      # + Docker's 172.16/12 pool. See .env.example.
       TRUSTED_PROXIES: ${TRUSTED_PROXIES:-loopback, self, 172.16.0.0/12}
       TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:-2}
-      # SSH bastion (off by default) — see .env.example
-      SSH_BASTION_ENABLED: ${SSH_BASTION_ENABLED:-false}
-      SSH_BASTION_PORT: ${SSH_BASTION_PORT:-2222}
       # Device-bound 2FA (fingerprint validation from the Android app) — see .env.example
       DEVICE_KEYS_DISABLED: ${DEVICE_KEYS_DISABLED:-false}
       DEVICE_KEY_ORIGINS: ${DEVICE_KEY_ORIGINS:-}
@@ -95,17 +94,12 @@ services:
       # Delegated reads from sibling apps (empty = oblidesk only, platform-admin subjects refused) — see .env.example
       OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-}
       OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
-    # SSH bastion: uncomment to publish its port once SSH_BASTION_ENABLED=true.
-    # Publish it DIRECTLY (no TCP proxy in front): the bastion must see the real
-    # client IP, or the IP allow-list / bans / 3-strike rule become meaningless.
-    #ports:
-    #  - "${SSH_BASTION_PORT:-2222}:${SSH_BASTION_PORT:-2222}"
     volumes:
-      # Persistent custom directory: scripts, SSH keys, etc.
-      # SSH keys: chmod 700 custom/.ssh && chmod 600 custom/.ssh/id_*
+      # Persistent custom directory: reports, software repository, phone-key cache.
       - ${CUSTOM_DIR:-./custom}:/custom
-    # 2000+ agents each hold a persistent WebSocket (1 fd) on the command
-    # channel; the stock container nofile soft limit (1024) starves Node.
+    # Sized for the former RMM agent: 2000+ devices each held a persistent
+    # WebSocket (1 fd) and the stock nofile soft limit (1024) starved Node.
+    # Kept until the load of the MDM is measured.
     ulimits:
       nofile:
         soft: 131072

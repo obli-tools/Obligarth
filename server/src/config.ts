@@ -13,12 +13,23 @@ function publicUrlFromEnv(): string {
   return clientOrigin.replace(/\/+$/, '');
 }
 
+// Only an explicit NODE_ENV=development accepts the local fallbacks below
+// (database URL, session secret) and weak secrets. Any other value, unset
+// included, is a deployment: see startupConfigErrors(). `nodeEnv` and
+// `isDev` (logging, static files, cookie flag) are no such signal: they
+// treat an unset NODE_ENV as development.
+const explicitDevelopment = process.env.NODE_ENV === 'development';
+const DEV_DATABASE_URL = 'postgres://obliance:changeme@localhost:5432/obliance';
+const DEV_SESSION_SECRET = 'change-this-secret';
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   isDev: process.env.NODE_ENV !== 'production',
-  databaseUrl: process.env.DATABASE_URL || 'postgres://obliance:changeme@localhost:5432/obliance',
-  sessionSecret: process.env.SESSION_SECRET || 'change-this-secret',
+  /** Empty when DATABASE_URL is unset outside development (refused at start). */
+  databaseUrl: process.env.DATABASE_URL || (explicitDevelopment ? DEV_DATABASE_URL : ''),
+  /** Empty when SESSION_SECRET is unset outside development (refused at start). */
+  sessionSecret: process.env.SESSION_SECRET || (explicitDevelopment ? DEV_SESSION_SECRET : ''),
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
   appName: process.env.APP_NAME || 'Obliance',
@@ -28,14 +39,13 @@ export const config = {
   // origin: nginx serves the web client and proxies the API). Never the dev
   // default above, never derived from a request header.
   publicUrl: publicUrlFromEnv(),
-  // Default admin credentials — only consulted on a fresh DB. The
-  // password defaults to the canonical "admin123" so dev installs Just
-  // Work, but `ensureDefaultAdmin` refuses to bootstrap if the password
-  // is still the default OR shorter than 12 characters (see
-  // index.ts:ensureDefaultAdmin). Production installs MUST set
-  // DEFAULT_ADMIN_PASSWORD via env.
+  // Initial administrator (index.ts:ensureDefaultAdmin), created only while
+  // no administrator exists. No default password: when
+  // DEFAULT_ADMIN_PASSWORD is empty, a random one is generated and printed
+  // once in the startup logs. Outside development, a weak value (under 12
+  // characters or a known default) makes the server refuse to start.
   defaultAdminUsername: process.env.DEFAULT_ADMIN_USERNAME || 'admin',
-  defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || 'admin123',
+  defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || '',
   disable2faForce: process.env.DISABLE_2FA_FORCE === 'true',
   customDir: process.env.CUSTOM_DIR || './custom',
   // Device-bound 2FA (docs/mobile/device-bound-2fa.md §9). Parsed and
@@ -60,3 +70,58 @@ export const config = {
     ssoEnabled: process.env.DEVICE_KEYS_SSO_ENABLED === 'true',
   },
 };
+
+// Placeholders shipped at one time or another by the install files
+// (changeme, change-this-…, admin123) and their variants: refused outside
+// development, whatever the length.
+const PLACEHOLDER_RE = /change[-_. ]?(?:me|this)|admin123/i;
+const MIN_SESSION_SECRET_LENGTH = 32;
+const MIN_ADMIN_PASSWORD_LENGTH = 12;
+
+function isWeakSecret(value: string, minLength: number): boolean {
+  return value.length < minLength || PLACEHOLDER_RE.test(value);
+}
+
+export const DATABASE_URL_MISSING =
+  'DATABASE_URL is not set: point it at the PostgreSQL database (postgres://user:password@host:5432/name). ' +
+  'The local development database is only used with NODE_ENV=development.';
+
+/** Under 12 characters or a known default. */
+export function isWeakAdminPassword(password: string): boolean {
+  return isWeakSecret(password, MIN_ADMIN_PASSWORD_LENGTH);
+}
+
+/** Why the session secret is refused (sessions would be forgeable), or null.
+ *  Always null in development. */
+export function sessionSecretError(): string | null {
+  if (explicitDevelopment) return null;
+  if (!config.sessionSecret) {
+    return 'SESSION_SECRET is not set: set it to a random value of at least 32 characters ' +
+      '(e.g. openssl rand -hex 32). The built-in development secret is only accepted with NODE_ENV=development.';
+  }
+  if (isWeakSecret(config.sessionSecret, MIN_SESSION_SECRET_LENGTH)) {
+    return 'SESSION_SECRET is too weak: use a random value of at least 32 characters, not a placeholder ' +
+      '(e.g. openssl rand -hex 32).';
+  }
+  return null;
+}
+
+/**
+ * Settings the server refuses to start with, as messages for the operator
+ * (empty: none, always in development). Checked by index.ts before anything
+ * touches the database.
+ */
+export function startupConfigErrors(): string[] {
+  if (explicitDevelopment) return [];
+  const errors: string[] = [];
+  if (!config.databaseUrl) errors.push(DATABASE_URL_MISSING);
+  const secretError = sessionSecretError();
+  if (secretError) errors.push(secretError);
+  if (config.defaultAdminPassword && isWeakAdminPassword(config.defaultAdminPassword)) {
+    errors.push(
+      'DEFAULT_ADMIN_PASSWORD is too weak: use at least 12 characters and not a default value, or leave it ' +
+      'empty to get a random password printed once in the startup logs.',
+    );
+  }
+  return errors;
+}

@@ -1,12 +1,19 @@
-import './src/env';
 import path from 'path';
 import type { Knex } from 'knex';
+import { config as appConfig, DATABASE_URL_MISSING } from './src/config';
 
 const isCompiled = __filename.endsWith('.js');
 
+// No fallback outside NODE_ENV=development (src/config.ts): without
+// DATABASE_URL, the first query fails with an explicit message. The server
+// refuses to start before that (index.ts).
+function missingDatabaseUrl(): never {
+  throw new Error(DATABASE_URL_MISSING);
+}
+
 const config: Knex.Config = {
   client: 'pg',
-  connection: process.env.DATABASE_URL || 'postgres://obliance:changeme@localhost:5432/obliance',
+  connection: appConfig.databaseUrl || missingDatabaseUrl,
   searchPath: ['public'],
   migrations: {
     directory: isCompiled

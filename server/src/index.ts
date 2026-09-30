@@ -1,10 +1,11 @@
 import './env';
 import http from 'http';
-import { config } from './config';
+import { config, isWeakAdminPassword, startupConfigErrors } from './config';
 import { db } from './db';
 import { createApp } from './app';
 import { createSocketServer } from './socket';
 import { logger } from './utils/logger';
+import { generatePassword, hashPassword } from './utils/crypto';
 import { deviceService } from './services/device.service';
 import { setLiveAlertIO } from './services/liveAlert.service';
 import { obligateService } from './services/obligate.service';
@@ -17,6 +18,16 @@ import {
 import { registerDeviceModule } from './modules/devices';
 
 async function main() {
+  // Unsafe configuration (missing database URL, weak or missing session
+  // secret, weak initial admin password; see config.ts): refuse to start
+  // before anything touches the database.
+  const configErrors = startupConfigErrors();
+  if (configErrors.length > 0) {
+    for (const message of configErrors) logger.fatal(message);
+    logger.fatal('Unsafe configuration: refusing to start.');
+    process.exit(1);
+  }
+
   // Modules hook into the core's registries (lifecycle tasks, upgrades,
   // Socket.io handlers, approvals, restrictions, settings…) before anything
   // starts.
@@ -27,7 +38,7 @@ async function main() {
   await db.migrate.latest();
   logger.info('Migrations complete');
 
-  // Ensure default admin exists
+  // Initial administrator, on a database that has none.
   await ensureDefaultAdmin();
 
   // Modules' boot tasks: awaited, before any request can reach the API.
@@ -112,41 +123,64 @@ async function main() {
   process.on('SIGINT', shutdown);
 }
 
+/**
+ * Initial administrator, created only while no administrator exists (fresh
+ * database): DEFAULT_ADMIN_USERNAME with DEFAULT_ADMIN_PASSWORD when set,
+ * else with a random password printed ONCE in the startup logs. Only its
+ * hash is stored: it can never be shown again. Outside development, a weak
+ * DEFAULT_ADMIN_PASSWORD never gets here (startupConfigErrors). The account
+ * then remains the break-glass access when Obligate is unreachable.
+ */
 async function ensureDefaultAdmin() {
-  const existing = await db('users').where({ username: config.defaultAdminUsername }).first();
-  if (existing) return;
+  if (await db('users').where({ role: 'admin' }).first('id')) return;
 
-  // Soft warning only — NEVER block boot. The previous behaviour
-  // (process.exit on a weak/default password) silently broke fresh
-  // deployments that used the default .env: the server refused to start
-  // with no clear indication, and it isn't documented until first boot.
-  // The operator is responsible for setting a strong DEFAULT_ADMIN_PASSWORD
-  // in production and changing it after first login; we just warn loudly.
-  const isWeakDefaultPassword = config.defaultAdminPassword === 'admin123' || config.defaultAdminPassword.length < 12;
-  if (isWeakDefaultPassword) {
+  const username = config.defaultAdminUsername;
+  if (await db('users').where({ username }).first('id')) {
     logger.warn(
-      'Default admin is being created with a weak/default password. ' +
-      'Set DEFAULT_ADMIN_PASSWORD to a strong value and change it after first login.',
+      { username },
+      'No administrator exists, but this username belongs to a non-admin account: no initial administrator ' +
+      'created. Set DEFAULT_ADMIN_USERNAME to a free username to get one.',
+    );
+    return;
+  }
+
+  const generated = !config.defaultAdminPassword;
+  const password = config.defaultAdminPassword || generatePassword();
+  if (!generated && isWeakAdminPassword(password)) {
+    logger.warn('The initial administrator gets a weak DEFAULT_ADMIN_PASSWORD (accepted in development only).');
+  }
+  const hash = await hashPassword(password);
+
+  // All or nothing: a half-created account would keep a password nobody saw.
+  await db.transaction(async (trx) => {
+    const [user] = await trx('users').insert({
+      username,
+      password_hash: hash,
+      display_name: 'Administrator',
+      role: 'admin',
+      is_active: true,
+    }).returning('id');
+    const userId = user?.id ?? user;
+    // Ensure default tenant exists
+    let tenant = await trx('tenants').where({ id: 1 }).first();
+    if (!tenant) {
+      [tenant] = await trx('tenants').insert({ name: 'Default', slug: 'default' }).returning('*');
+    }
+    await trx('user_tenants').insert({ user_id: userId, tenant_id: 1, role: 'admin' }).onConflict(['user_id','tenant_id']).ignore();
+  });
+
+  if (generated) {
+    logger.warn(
+      { username },
+      `Initial administrator "${username}" created: sign in, change the password and enable two-factor ` +
+      `authentication. Generated password, shown only this once: ${password}`,
+    );
+  } else {
+    logger.info(
+      { username },
+      'Initial administrator created with DEFAULT_ADMIN_PASSWORD: change it and enable two-factor authentication at first sign-in',
     );
   }
-
-  const bcrypt = await import('bcryptjs');
-  const hash = await bcrypt.hash(config.defaultAdminPassword, 12);
-  const [user] = await db('users').insert({
-    username: config.defaultAdminUsername,
-    password_hash: hash,
-    display_name: 'Administrator',
-    role: 'admin',
-    is_active: true,
-  }).returning('id');
-  const userId = user?.id ?? user;
-  // Ensure default tenant exists
-  let tenant = await db('tenants').where({ id: 1 }).first();
-  if (!tenant) {
-    [tenant] = await db('tenants').insert({ name: 'Default', slug: 'default' }).returning('*');
-  }
-  await db('user_tenants').insert({ user_id: userId, tenant_id: 1, role: 'admin' }).onConflict(['user_id','tenant_id']).ignore();
-  logger.info({ username: config.defaultAdminUsername }, 'Default admin created');
 }
 
 main().catch((err) => {

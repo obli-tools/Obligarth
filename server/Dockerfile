@@ -22,11 +22,10 @@ RUN cd server && npm run build
 FROM node:24-alpine AS production
 WORKDIR /app
 
-# openssh-client: SSH build hosts / tunnels.
 # chromium + font/lib deps: server-side PDF rendering (reports, device
 # exports) via playwright-chromium pointed at this system binary. Playwright's
 # own bundled Chromium is glibc-only and won't run on Alpine.
-RUN apk add --no-cache openssh-client \
+RUN apk add --no-cache \
     chromium nss freetype harfbuzz ca-certificates ttf-freefont
 
 # Skip the bundled-browser download (see builder stage) and tell our launcher
@@ -60,16 +59,9 @@ COPY mobile/release/ ./mobile/release/
 ARG OBLITOOLS_VERSION=0.0.0
 RUN mkdir -p ./obli.tools && printf '%s' "${OBLITOOLS_VERSION}" > ./obli.tools/VERSION
 
-# Obli.tools release binaries (build on Windows: obli.tools/build-windows.ps1 → dist/ObliTools.exe)
-#                              (build on macOS:   obli.tools/build-mac.sh      → dist/ObliTools-*.dmg/zip)
-# obli.tools/ is a junction — Docker cannot follow it. The bat file stages the files into
-# _oblitools_dist_stage/ (a real directory) before building so COPY works.
-# If no binaries were built yet only a .keep placeholder is present → /downloads returns 404.
+# Obli.tools release binaries (GET /downloads/:filename): obli.tools/ is not
+# part of this repository, so none are copied here and /downloads answers 404.
 RUN mkdir -p ./obli.tools/dist
-COPY _oblitools_dist_stage/ ./obli.tools/dist/
-
-COPY server/docker-entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
 
 EXPOSE 3001
 
@@ -83,5 +75,8 @@ WORKDIR /app/server
 # other custom assets are silently LOST on every image upgrade / recreate.
 # Point the app at the mounted volume so uploads actually persist.
 ENV CUSTOM_DIR=/custom
-ENTRYPOINT ["/entrypoint.sh"]
+# A deployment even when NODE_ENV is not passed: the server then refuses its
+# development fallbacks (session secret, database URL) and weak secrets
+# (config.ts). Only an explicit NODE_ENV=development relaxes that.
+ENV NODE_ENV=production
 CMD ["node", "dist/src/index.js"]
