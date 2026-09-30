@@ -1110,17 +1110,7 @@
     "passwordLabel": "Mot de passe actuel",
     "actions": {
       "totpManage": "Modifier votre application d'authentification",
-      "emailOtpManage": "Modifier vos codes de connexion par e-mail",
-      "sshKeyAdd": "Ajouter une clé SSH",
-      "sshAuthorizeIp": "Autoriser cette IP sur le bastion SSH",
-      "listDirectory": "La navigation dans l'explorateur de fichiers",
-      "downloadFile": "La récupération d'un fichier depuis l'appareil",
-      "uploadFile": "La copie d'un fichier vers l'appareil",
-      "deleteFile": "La suppression d'un fichier sur l'appareil",
-      "renameFile": "La modification du nom d'un fichier sur l'appareil",
-      "createDirectory": "La création d'un dossier sur l'appareil",
-      "remoteSessionStart": "L'ouverture d'une session à distance",
-      "disablePrivacy": "La désactivation du mode confidentialité"
+      "emailOtpManage": "Modifier vos codes de connexion par e-mail"
     },
     "passwordOrCodeInvalid": "Mot de passe ou code incorrect."
   },

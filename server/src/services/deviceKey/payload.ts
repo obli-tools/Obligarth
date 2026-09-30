@@ -51,7 +51,7 @@ export interface PayloadInput {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const HEX64_RE = /^[0-9a-f]{64}$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
-const ACTION_RE = /^[\x21-\x7e]{1,120}$/; // printable ASCII, no space (action keys: "command.reboot")
+const ACTION_RE = /^[\x21-\x7e]{1,120}$/; // printable ASCII, no space (action keys: "device.delete")
 
 /** True for a lowercase canonical UUID (Postgres `uuid` output form). */
 export function isUuid(v: unknown): v is string {

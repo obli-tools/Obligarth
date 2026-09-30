@@ -1110,17 +1110,7 @@
     "passwordLabel": "Current password",
     "actions": {
       "totpManage": "Change your authenticator app",
-      "emailOtpManage": "Change your e-mail sign-in codes",
-      "sshKeyAdd": "Add an SSH key",
-      "sshAuthorizeIp": "Authorize this IP on the SSH bastion",
-      "listDirectory": "Browsing the file explorer",
-      "downloadFile": "Downloading a file from the device",
-      "uploadFile": "Uploading a file to the device",
-      "deleteFile": "Deleting a file on the device",
-      "renameFile": "Renaming a file on the device",
-      "createDirectory": "Creating a folder on the device",
-      "remoteSessionStart": "Starting a remote session",
-      "disablePrivacy": "Disabling privacy mode"
+      "emailOtpManage": "Change your e-mail sign-in codes"
     },
     "passwordOrCodeInvalid": "Wrong password or code."
   },

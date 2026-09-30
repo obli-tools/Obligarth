@@ -533,17 +533,18 @@ class DeviceService {
   }
 
   /**
-   * Immediately purge the data tied to a specific device id that no DB-level
-   * CASCADE removes with it (polymorphic references), before hard-deleting
-   * the device so no orphaned rows remain.
+   * Immediately purge the data tied to a hard-deleted device that no DB-level
+   * CASCADE removes with it (polymorphic references), so no orphaned rows
+   * remain. Only for the ids the tenant-scoped DELETE actually removed: an
+   * id of another tenant's device never reaches it.
    */
   private async purgeDeviceData(id: number) {
     try { await db('reports').where({ scope_type: 'device', scope_id: id }).delete(); } catch { /* ignore */ }
   }
 
   async deleteDevice(id: number, tenantId: number) {
-    await this.purgeDeviceData(id);
     const deleted = await db('devices').where({ id, tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
+    await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
     await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
     if (this.io) {
       this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id });
@@ -610,8 +611,8 @@ class DeviceService {
   }
 
   async bulkDelete(ids: number[], tenantId: number) {
-    await Promise.all(ids.map(id => this.purgeDeviceData(id)));
     const deleted = await db('devices').whereIn('id', ids).where({ tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
+    await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
     await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
   }
 

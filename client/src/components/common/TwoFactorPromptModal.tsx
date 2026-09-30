@@ -6,7 +6,7 @@ import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 
 // Modal shown when a server response says `twoFactorRequired: true` on a
 // sensitive action. The caller provides:
-// - the action label (for context: "Reboot SRV-01")
+// - the action label (for context: the action key, e.g. "device.delete")
 // - an `onSubmit(code)` that re-sends the original request with the code
 // in the body and resolves on success or throws on failure
 //
@@ -28,24 +28,12 @@ import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 const BUILTIN_ACTIONS: Record<string, [key: string, fallback: string]> = {
  'profile.totp_manage': ['twoFactorPrompt.actions.totpManage', 'Change your authenticator app'],
  'profile.email_otp_manage': ['twoFactorPrompt.actions.emailOtpManage', 'Change your e-mail sign-in codes'],
- 'profile.ssh_key_add': ['twoFactorPrompt.actions.sshKeyAdd', 'Add an SSH key'],
- 'profile.ssh_authorize_ip': ['twoFactorPrompt.actions.sshAuthorizeIp', 'Authorize this IP on the SSH bastion'],
 };
 
 // Actions of the tenant's Restrictions matrix named in words instead of their
-// key (the sentence stays "… is marked sensitive by your tenant admin"): the
-// file explorer (browsing asks at opening under the default matrix), remote
-// sessions, disabling privacy mode with its code.
-const RESTRICTION_ACTIONS: Record<string, [key: string, fallback: string]> = {
- 'command.list_directory': ['twoFactorPrompt.actions.listDirectory', 'Browsing the file explorer'],
- 'command.download_file': ['twoFactorPrompt.actions.downloadFile', 'Downloading a file from the device'],
- 'command.upload_file': ['twoFactorPrompt.actions.uploadFile', 'Uploading a file to the device'],
- 'command.delete_file': ['twoFactorPrompt.actions.deleteFile', 'Deleting a file on the device'],
- 'command.rename_file': ['twoFactorPrompt.actions.renameFile', 'Renaming a file on the device'],
- 'command.create_directory': ['twoFactorPrompt.actions.createDirectory', 'Creating a folder on the device'],
- 'remote.session_start': ['twoFactorPrompt.actions.remoteSessionStart', 'Starting a remote session'],
- 'command.disable_privacy_mode': ['twoFactorPrompt.actions.disablePrivacy', 'Disabling privacy mode'],
-};
+// key (the sentence stays "… is marked sensitive by your tenant admin"). None
+// today: an action absent from this map shows its key.
+const RESTRICTION_ACTIONS: Record<string, [key: string, fallback: string]> = {};
 
 export function TwoFactorPromptModal({
  actionLabel,

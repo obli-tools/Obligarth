@@ -8,10 +8,6 @@ export const reportApi = {
     const res = await apiClient.get<ApiResponse<Report[]>>('/reports');
     return res.data.data ?? [];
   },
-  async getById(id: number): Promise<Report> {
-    const res = await apiClient.get<ApiResponse<Report>>(`/reports/${id}`);
-    return res.data.data!;
-  },
   async create(data: Omit<Report, 'id' | 'createdAt' | 'updatedAt' | 'lastGeneratedAt' | 'createdBy'>): Promise<Report> {
     const res = await apiClient.post<ApiResponse<Report>>('/reports', data);
     return res.data.data!;
