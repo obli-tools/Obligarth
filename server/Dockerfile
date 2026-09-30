@@ -63,13 +63,6 @@ ARG CACHEBUST=1
 RUN mkdir -p ./agent/dist && echo "$CACHEBUST" > ./agent/dist/.cachebust
 COPY agent/dist/ ./agent/dist/
 
-# Oblireach Desktop App — served by GET /api/oblireach-desktop/{version,download}.
-# VERSION is plain text (single semver line). Binary + release notes are
-# optional: if dist/OblireachDesktop.msi is missing the version endpoint
-# still works, the download endpoint returns 404.
-RUN mkdir -p ./oblireach-desktop/dist
-COPY oblireach-desktop/ ./oblireach-desktop/
-
 # Obli mobile app (Android) — served by GET /api/mobile/android/{version,download}
 # (docs/obli-mobile.md §6). Drop zone written by the release script:
 # manifest.json (committed placeholder: versionCode 0 → available:false),
