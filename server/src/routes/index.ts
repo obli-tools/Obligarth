@@ -8,7 +8,6 @@ import authRoutes from './auth.routes';
 import twoFactorRoutes from './twoFactor.routes';
 import deviceKeyRoutes from './deviceKey.routes';
 import obligateCallbackRoutes from './obligateCallback.routes';
-import oblitoolsRoutes from './oblitools.routes';
 import profileRoutes from './profile.routes';
 import tenantRoutes from './tenant.routes';
 import usersRoutes from './users.routes';
@@ -40,7 +39,6 @@ const router = Router();
 // ── Public / auth ────────────────────────────────────────────────────────────
 router.use('/auth', authRoutes);
 router.use('/auth', obligateCallbackRoutes);  // sso-config, connected-apps, app-info (under /api/auth)
-router.use('/oblitools', oblitoolsRoutes); // ObliTools desktop manifest (auth required)
 router.use('/mobile', mobileAppRoutes);    // Public: Android app version + APK download (/api/mobile/android/*)
 router.use('/repo', repoPublicRoutes);   // script-facing software repo (per-tenant access key auth)
 router.use('/system', systemRoutes);       // system info / about (admin only, no tenant required)

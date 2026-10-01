@@ -53,16 +53,6 @@ COPY client/package.json ./client/
 RUN mkdir -p ./mobile/release
 COPY mobile/release/ ./mobile/release/
 
-# Obli.tools VERSION file — obli.tools/ is a symlink to an external directory and cannot be
-# followed by the Docker build context. The version is injected via --build-arg at build time;
-# defaults to "0.0.0" so the build never fails when the arg is omitted.
-ARG OBLITOOLS_VERSION=0.0.0
-RUN mkdir -p ./obli.tools && printf '%s' "${OBLITOOLS_VERSION}" > ./obli.tools/VERSION
-
-# Obli.tools release binaries (GET /downloads/:filename): obli.tools/ is not
-# part of this repository, so none are copied here and /downloads answers 404.
-RUN mkdir -p ./obli.tools/dist
-
 EXPOSE 3001
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
