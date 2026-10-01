@@ -2,6 +2,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
+import { JobError, safeErr } from '../jobs/errors';
 import { SocketEvents, isMasterTenant } from '@obligarth/shared';
 import type { Device, DeviceIdentityFingerprint } from '@obligarth/shared';
 import type { TenantView } from './deviceScope.service';
@@ -623,34 +624,49 @@ class DeviceService {
 
   /**
    * Self-healing: delete orphaned records that reference devices no longer
-   * in the platform. Runs periodically, tenant by tenant in the tenant's
-   * database context (modules/devices.ts), so the DB stays consistent even
-   * if a polymorphic reference (scope_id) has no FK at the DB level.
+   * in the platform. Run by the job devices.clean-orphans, tenant by tenant
+   * in the tenant's database context (modules/devices.ts), so the DB stays
+   * consistent even if a polymorphic reference (scope_id) has no FK at the
+   * DB level. The steps are independent: one that fails does not skip the
+   * next, and the run then fails (partial_failure: counted, retried and
+   * alerted by the job).
    */
   async cleanOrphans(tenantId: number) {
     let total = 0;
+    let failed = 0;
 
     // Polymorphic references (no DB FK — must be cleaned in code)
-    const c = await db.raw(`
-      DELETE FROM reports
-      WHERE tenant_id = ?
-        AND scope_type = 'device'
-        AND scope_id IS NOT NULL
-        AND scope_id NOT IN (SELECT id FROM devices WHERE tenant_id = ?)
-    `, [tenantId, tenantId]);
-    total += c?.rowCount ?? 0;
+    try {
+      const c = await db.raw(`
+        DELETE FROM reports
+        WHERE tenant_id = ?
+          AND scope_type = 'device'
+          AND scope_id IS NOT NULL
+          AND scope_id NOT IN (SELECT id FROM devices WHERE tenant_id = ?)
+      `, [tenantId, tenantId]);
+      total += c?.rowCount ?? 0;
+    } catch (err) {
+      failed++;
+      logger.error({ err: safeErr(err), tenantId }, 'cleanOrphans: reports of deleted devices not removed');
+    }
 
     // Live alerts: active incident rows of devices that no longer exist are
     // resolved (NOT deleted — resolved rows age out through the trim).
-    const { liveAlertService } = await import('./liveAlert.service');
-    const resolved = await liveAlertService.resolveOrphanIncidents(tenantId);
-    if (resolved.length > 0) {
-      logger.warn({ tenantId, count: resolved.length }, 'cleanOrphans: resolved live alerts of deleted devices');
+    try {
+      const { liveAlertService } = await import('./liveAlert.service');
+      const resolved = await liveAlertService.resolveOrphanIncidents(tenantId);
+      if (resolved.length > 0) {
+        logger.warn({ tenantId, count: resolved.length }, 'cleanOrphans: resolved live alerts of deleted devices');
+      }
+    } catch (err) {
+      failed++;
+      logger.error({ err: safeErr(err), tenantId }, 'cleanOrphans: live alerts of deleted devices not resolved');
     }
 
     if (total > 0) {
       logger.warn({ tenantId, total }, 'cleanOrphans: self-healing complete');
     }
+    if (failed > 0) throw new JobError('partial_failure', 'one cleanup step failed');
   }
 
   async bulkApprove(ids: number[], tenantId: number, approvedBy: number) {

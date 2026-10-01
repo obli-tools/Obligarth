@@ -31,7 +31,11 @@ const OUTPUT_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 const OUTPUT_MAX_KEYS = 20;
 /** The envelope gives up an attempt one second before pg-boss would expire
  *  it: the attempt then fails with { code: 'timeout' } (retried by the
- *  policy), instead of pg-boss storing its own error object, stack included. */
+ *  policy), instead of pg-boss storing its own error object, stack included.
+ *  pg-boss times the attempt from the moment it hands the job over, so the
+ *  envelope's deadline starts there as well (runJobs): the work before the
+ *  handler (tenant check, status write) counts, and a slow database there
+ *  can never let pg-boss's timer settle the job first. */
 const DEADLINE_MARGIN_MS = 1_000;
 
 /** `work`, or a retryable JobError('timeout') once `signal` aborts. The
@@ -103,7 +107,7 @@ function buildContext(
   };
 }
 
-async function runOne(def: RegisteredJob, job: Job<unknown>, actor: DbActor): Promise<BossJobResult> {
+async function runOne(def: RegisteredJob, job: Job<unknown>, actor: DbActor, deadline: AbortSignal): Promise<BossJobResult> {
   const started = Date.now();
   const attempt = (Number(job.retryCount) || 0) + 1;
   const retryLimit = def.retry.limit;
@@ -125,11 +129,12 @@ async function runOne(def: RegisteredJob, job: Job<unknown>, actor: DbActor): Pr
   const statusKey = def.trackStatus === 'tenant' && tenantId !== null ? `t:${tenantId}` : '';
   if (def.trackStatus !== 'none') await jobStatus.started(def.name, statusKey, job.id).catch(logStatusError);
   // The attempt's signal: pg-boss's (expiry, shutdown) or the envelope's
-  // deadline, whichever comes first.
-  const deadline = AbortSignal.timeout(Math.max(1_000, def.timeoutSeconds * 1000 - DEADLINE_MARGIN_MS));
+  // deadline (started by runJobs), whichever comes first.
   const signal = job.signal ? AbortSignal.any([job.signal, deadline]) : deadline;
   const ctx = buildContext(def, job, parsed.data, tenantId, attempt, actor, signal);
   try {
+    // Past the deadline already (slow database above): the handler never starts.
+    if (deadline.aborted) throw new JobError('timeout', 'attempt timed out');
     const result = await withinDeadline(Promise.resolve().then(() => def.handler(ctx)), deadline) as JobResult | void;
     const durationMs = Date.now() - started;
     if (def.trackStatus !== 'none') await jobStatus.succeeded(def.name, statusKey, durationMs).catch(logStatusError);
@@ -155,10 +160,18 @@ export async function runJobs(def: RegisteredJob, jobs: Array<Job<unknown>>): Pr
   const actor: DbActor = { type: 'job', name: def.name };
   const out: BossJobResult[] = [];
   for (const job of jobs) {
+    // From the hand-over, like pg-boss's own timer (DEADLINE_MARGIN_MS).
+    const deadline = AbortSignal.timeout(Math.max(1_000, def.timeoutSeconds * 1000 - DEADLINE_MARGIN_MS));
     const ctx: DbContext = { kind: 'none', tenantId: null, actor, grantId: null, origin: 'job', requestId: `job-${job.id}` };
     try {
-      out.push(await runWithDbContext(ctx, () => runOne(def, job, actor)));
+      out.push(await withinDeadline(runWithDbContext(ctx, () => runOne(def, job, actor, deadline)), deadline));
     } catch (err) {
+      if (err instanceof JobError && err.code === 'timeout') {
+        // The deadline passed before the run settled: retryable, as a handler
+        // that runs too long. The run logs, counts and records it as it ends.
+        out.push({ id: job.id, status: 'failed', output: { code: 'timeout', message: 'attempt timed out', attempt: (Number(job.retryCount) || 0) + 1 } });
+        continue;
+      }
       logger.error({ err: safeErr(err), job: def.name, jobId: job.id }, 'job envelope failed');
       out.push({ id: job.id, status: 'failed', output: { code: 'internal_error', message: 'internal error' } });
     }
