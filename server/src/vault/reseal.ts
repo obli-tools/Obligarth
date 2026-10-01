@@ -10,7 +10,9 @@
 //      transaction: SELECT … WHERE <col> LIKE 'v1:<retired id>:%' … FOR
 //      UPDATE SKIP LOCKED, then reseal and compare-and-set UPDATE;
 //   3. a pass without rows, a wait (60 s: requests that read the old id just
-//      before step 1), a second pass without rows: the retired DEK is
+//      before step 1), a second pass without rows, and no value left under
+//      the retired DEK (a plain read: the passes skip the rows another
+//      transaction holds, which would otherwise be lost): the retired DEK is
 //      destroyed, the operation done, vault.dek_rotated audited;
 //   4. a failure: the operation 'failed' (code and coordinates), the retired
 //      DEK kept (everything stays readable), an alert; the operation resumes
@@ -133,6 +135,24 @@ async function pass(tenantId: number | null, retiredDekId: string, o: RotationOp
   return counts;
 }
 
+/** Is a value of the registry (transient ones excepted) still sealed under
+ *  the retired DEK? A plain read, which no row lock hides: a row another
+ *  transaction held during both passes (FOR UPDATE SKIP LOCKED skips it) is
+ *  still sealed under that DEK, which must not be destroyed yet (review of
+ *  lot A4: the value would be lost for good). */
+async function stillSealedUnder(tenantId: number | null, retiredDekId: string, o: RotationOptions): Promise<boolean> {
+  for (const def of secretColumns()) {
+    if (def.transient) continue;
+    for (const scope of await scopesOf(def, o.actor, tenantId)) {
+      o.signal?.throwIfAborted();
+      const row = await scope.run(() => scope.filter(db(def.table)
+        .where(def.column, 'like', `v1:${retiredDekId}:%`)).first(def.pk));
+      if (row) return true;
+    }
+  }
+  return false;
+}
+
 /** Runs (or resumes) a DEK rotation. Throws on failure, the operation then
  *  being 'failed' (resumable). */
 export async function runDekRotation(operationId: string, o: RotationOptions): Promise<RotationResult> {
@@ -163,7 +183,10 @@ export async function runDekRotation(operationId: string, o: RotationOptions): P
       await sleepFor(o.settleMs ?? SETTLE_MS, undefined, o.signal ? { signal: o.signal } : undefined);
       const second = await pass(tenantId, retiredDekId, o);
       add(second);
-      if (!Object.keys(second).length) break;
+      if (Object.keys(second).length) continue;
+      // Rows held by other transactions were skipped: wait for them (the
+      // next passes reseal them) rather than destroy the DEK under them.
+      if (!(await stillSealedUnder(tenantId, retiredDekId, o))) break;
     }
 
     // Step 3: the retired DEK is destroyed; nothing is sealed under it any more.

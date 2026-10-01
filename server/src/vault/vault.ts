@@ -171,6 +171,21 @@ function checkRequestTenant(loc: SecretLocator, o: VaultCallOptions): void {
   if (loc.tenantId !== o.requestTenantId) throw new VaultError('tenant_mismatch', loc);
 }
 
+/** The coordinates a log line names: the error's, else those of the locator
+ *  (checked again): the keyring's refusals (tenant_mismatch, dek_not_found,
+ *  dek_destroyed, kek_mismatch) carry none, and coffre-secrets §5.7 logs
+ *  them with the code and the coordinates (review of lot A4). */
+function coordinatesOf(e: VaultError, loc: SecretLocator | null): { table: string; column: string; pk: string; tenantId: number | null } | undefined {
+  if (e.where) return { table: e.where.table, column: e.where.column, pk: e.where.pk, tenantId: e.where.tenantId };
+  if (!loc) return undefined;
+  try {
+    locatorDef(loc);
+  } catch {
+    return undefined;
+  }
+  return { table: loc.table, column: loc.column, pk: String(loc.pk), tenantId: loc.tenantId };
+}
+
 /** Logs, counts and alerts a failure, as coffre-secrets §5.7 says; returns
  *  the error to throw (a VaultError with the coordinates). */
 function failure(err: unknown, loc: SecretLocator | null, op: 'seal' | 'open'): unknown {
@@ -180,7 +195,7 @@ function failure(err: unknown, loc: SecretLocator | null, op: 'seal' | 'open'): 
   if (op === 'open') vaultMetrics.openFailed(table, e.code);
   if (op === 'seal') vaultMetrics.sealed(table, e.code);
   else vaultMetrics.opened(table, e.code);
-  const where = e.where ? { table: e.where.table, column: e.where.column, pk: e.where.pk, tenantId: e.where.tenantId } : undefined;
+  const where = coordinatesOf(e, loc);
   if (INTEGRITY_CODES.has(e.code)) {
     logger.error({ vault: { code: e.code, op, ...where } }, `vault: sealed value refused (${e.code})`);
     vaultAlert(`vault:refused:${table}`, 'Vault: a sealed value was refused',

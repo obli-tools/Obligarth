@@ -85,7 +85,8 @@ export const notificationsController = {
     try {
       const id = parseInt(req.params.id, 10);
       await assertChannelOwnership(id, req);
-      const channel = await notificationService.getChannelById(id);
+      // As the list answers it: read-only for a recipient of a shared channel.
+      const channel = await notificationService.getChannelById(id, req.tenantId);
       res.json({ success: true, data: channel });
     } catch (err) {
       next(err);

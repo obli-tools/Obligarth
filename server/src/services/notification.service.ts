@@ -175,10 +175,12 @@ export const notificationService = {
    *  row — pattern: check `channel.tenantId === req.tenantId` or that
    *  the caller's tenant has the channel via the junction table, or
    *  bypass on master. See `notification.routes.ts` for the canonical
-   *  guard. */
-  async getChannelById(id: number): Promise<NotificationChannel | null> {
+   *  guard. `currentTenantId`: the tenant of the request, for an answer to
+   *  it (a recipient of a shared channel gets it read-only, without the
+   *  names of its secret fields, as the list gives it). */
+  async getChannelById(id: number, currentTenantId?: number): Promise<NotificationChannel | null> {
     const row = await db('notification_channels').where({ id }).first(publicColumns()) as unknown as ChannelRow | undefined;
-    return row ? rowToChannel(row) : null;
+    return row ? rowToChannel(row, currentTenantId) : null;
   },
 
   /** A new channel: public fields in `config`, secret fields sealed (the id
