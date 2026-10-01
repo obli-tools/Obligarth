@@ -105,6 +105,11 @@ services:
       DATABASE_URL: postgres://obligarth:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
       # Signed database context (R12), same key as server-migrate's.
       RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
+      # Vault of secrets: the key-encryption key (KEK) is the Docker secret
+      # server_kek, never an environment variable — see .env.example
+      SERVER_KEK_FILE: /run/secrets/server_kek
+      VAULT_DEK_CACHE_TTL: ${VAULT_DEK_CACHE_TTL:-300}
+      VAULT_ALLOW_UNESCROWED: ${VAULT_ALLOW_UNESCROWED:-false}
       # Database context of the row level security (rls-tenant §7.10) — see .env.example
       DB_CONTEXT_MODE: ${DB_CONTEXT_MODE:-strict}
       DB_CONTEXT_ASSERT: ${DB_CONTEXT_ASSERT:-}
@@ -143,9 +148,14 @@ services:
       OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
     secrets:
       - rls_context_key
+      - server_kek
     volumes:
       # Persistent custom directory: reports, software repository, phone-key cache.
       - ${CUSTOM_DIR:-./custom}:/custom
+    # No core file: a dump of the process would hold the vault's keys
+    # (coffre-secrets §9.1).
+    ulimits:
+      core: 0
 
   client:
     build:
@@ -165,3 +175,8 @@ secrets:
   # 32 random bytes (base64), mode 600, created by install.sh; never in .env.
   rls_context_key:
     file: ./secrets/rls_context_key
+  # Key-encryption key of the server's vault (coffre-secrets §9.1): 32 random
+  # bytes (base64), mode 600, created by install.sh, never overwritten; never
+  # in .env, never in a backup of the database: escrow it (vault escrow split).
+  server_kek:
+    file: ./secrets/server_kek

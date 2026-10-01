@@ -148,6 +148,17 @@ if [ ! -s secrets/rls_context_key ]; then
   echo "  ✓ secrets/rls_context_key created (readable by you only)."
 fi
 
+# Key-encryption key of the vault (Docker secret server_kek): one per service,
+# never in .env, never in a backup of the database, NEVER overwritten (a
+# database restored with another key is refused at start, as it should be).
+# Without it, no backup of the database can be restored: escrow it.
+if [ ! -s secrets/server_kek ]; then
+  (umask 077 && random_key > secrets/server_kek) || { rm -f secrets/server_kek; exit 1; }
+  echo "  ✓ secrets/server_kek created (readable by you only): the vault's key."
+  echo "  ⚠ Escrow it now (see the documentation): without it, no backup of the database"
+  echo "    can be restored."
+fi
+
 # Persistent custom directory (reports, software repository, phone-key cache)
 mkdir -p custom
 
