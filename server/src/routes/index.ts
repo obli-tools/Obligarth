@@ -37,6 +37,7 @@ import { defaultRuntime } from '../jobs';
 import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
 import { createVaultAdminRouter } from '../vault/admin.routes';
+import { createAuditAdminRouter } from '../audit/admin.routes';
 
 const router = Router();
 
@@ -90,6 +91,9 @@ tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRun
 // The vault of secrets: state, escrow events, key rotations (master tenant,
 // platform administrators; vault/admin.routes.ts).
 tenantRouter.use('/admin/vault', createVaultAdminRouter());
+// The hardened audit journal: retention, legal holds, SIEM destinations,
+// seal keys (master tenant, platform administrators; audit/admin.routes.ts).
+tenantRouter.use('/admin/audit', createAuditAdminRouter());
 // A module's named platform settings are mounted before the core settings
 // router (its PUT /:key would take their paths).
 tenantRouter.use('/admin/config', adminRoutes);

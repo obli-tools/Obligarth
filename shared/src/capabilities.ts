@@ -26,6 +26,11 @@ export const TENANT_CAPABILITIES = [
   'reports',
   'settings',
   'users.manage',
+  // Read the tenant's audit log (audit-durci §9.1): the admin set shows it, the
+  // client sets approver and auditor (the DPO) hold it.
+  'audit.read',
+  // Review the approval requests of the tenant (audit-durci §10.4, lot A7).
+  'approvals.review',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -40,6 +45,8 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'reports':               'Reports',
   'settings':              'Settings',
   'users.manage':          'User Management',
+  'audit.read':            "Audit · Read the tenant's log",
+  'approvals.review':      'Approvals · Review requests',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

@@ -21,7 +21,7 @@ import { AppError } from '../middleware/errorHandler';
 import { approvalService } from '../services/approval.service';
 import { checkSecondFactor, sendStepUpFailure } from '../services/deviceKey/stepUpProof';
 import { clientIp } from '../utils/clientIp';
-import { writeVaultAudit } from './events';
+import { withVaultIntent, writeVaultAudit, writeVaultAuditInTx } from './events';
 import { sendDekRotation } from './jobs';
 import { OPERATION_KINDS, vaultOperations } from './operations';
 import { vault, vaultInternals } from './vault';
@@ -118,17 +118,17 @@ export function createVaultAdminRouter(): Router {
     const reason = text((req.body ?? {}).reason, 'reason', { min: 3, max: 500 });
     const operationId = crypto.randomUUID();
     const kekId = vault.kekId();
-    const approval = await approvalService.create({
+    // P2 (critical): the intent before the approval request is filed.
+    const approval = await withVaultIntent({
+      tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.kek_rotation_requested', resourceType: 'vault_operation',
+      resourcePath: operationId, details: { reason, kekId }, ipAddress: clientIp(req) || undefined,
+    }, () => approvalService.create({
       tenantId: MASTER_TENANT_ID,
       userId: req.session.userId!,
       requestType: 'vault_kek_rotation',
       description: `Rotate the vault's key-encryption key (current kek_id ${kekId}): ${reason}`,
       payload: { reason, operationId, kekId },
-    });
-    await writeVaultAudit([{
-      tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.kek_rotation_requested', resourceType: 'vault_operation',
-      resourcePath: operationId, details: { reason, approvalId: approval.id, kekId }, ipAddress: clientIp(req) || undefined,
-    }]);
+    }), (a) => ({ approvalId: a.id }));
     res.status(202).json({ success: true, data: { approvalId: approval.id, operationId } });
   }));
 
@@ -149,28 +149,25 @@ export function createVaultAdminRouter(): Router {
       .whereRaw("coalesce((params ->> 'tenantId')::int, 0) = coalesce(?::int, 0)", [tenantId]).first('id')) as { id: string } | undefined;
     if (busy) throw new AppError(409, 'A rotation of this key is already in progress (or failed and resumable)', 'rotationInProgress');
     if (!(await strictStepUp(req, res, 'vault.dek_rotation'))) return;
-    // The operation and its job together (the job exists iff the operation does).
+    // The operation, its job and its entries together (the job exists iff
+    // the operation does; P1, critical): the tenant's own log and the MSP's.
+    if (tenantId !== null) await asTargetTenant(req, tenantId, async () => undefined);   // one target per request
     const op = await vaultInternals.withVaultDb({}, (q) => q.transaction(async (trx) => {
       const created = await vaultOperations.create(trx, {
         kind: 'dek_rotation', state: 'authorized', tenantId, requestedBy: req.session.userId ?? null, reason,
         params: { tenantId },
       });
       await sendDekRotation(created.id, tenantId, trx);
+      const details = { operationId: created.id, tenantId, reason };
+      await writeVaultAuditInTx(trx, [
+        ...(tenantId !== null ? [{ tenantId, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault', details }] : []),
+        {
+          tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault_operation',
+          resourcePath: created.id, details, ipAddress: clientIp(req) || undefined,
+        },
+      ]);
       return created;
     }));
-    const details = { operationId: op.id, tenantId, reason };
-    // The tenant's own log gets the entry from its context (rls-tenant §6.3:
-    // the master tenant's global view writes into one target), the MSP's
-    // log from the request's.
-    if (tenantId !== null) {
-      await asTargetTenant(req, tenantId, () => writeVaultAudit([
-        { tenantId, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault', details },
-      ]));
-    }
-    await writeVaultAudit([{
-      tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault_operation',
-      resourcePath: op.id, details, ipAddress: clientIp(req) || undefined,
-    }]);
     res.status(202).json({ success: true, data: op });
   }));
 

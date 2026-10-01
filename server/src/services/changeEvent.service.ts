@@ -159,6 +159,8 @@ interface SourceContext {
   to: Date;
   callerUserId: number;
   callerIsAdmin: boolean;
+  /** The caller holds audit.read in the device's tenant (audit-durci §9.7). */
+  callerReadsAudit: boolean;
   /** The master tenant's global view (hasGlobalView(req)): see scope(). */
   globalView: boolean;
 }
@@ -176,9 +178,11 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
 
   const sources: Partial<Record<ChangeEventKind, EventSource[]>> = {};
 
-  // audit_logs is admin-only everywhere else (routes/audit.routes.ts) — do not
-  // widen it here. Non-admins simply get the kind omitted from `kinds`.
-  if (ctx.callerIsAdmin) {
+  // The journal is read by the platform administrators and by the holders of
+  // audit.read in the device's tenant (routes/audit.routes.ts, audit-durci
+  // §9.7) — do not widen it here. Anyone else gets the kind omitted from
+  // `kinds`.
+  if (ctx.callerIsAdmin || ctx.callerReadsAudit) {
     sources.config_change = [{
       table: 'audit_logs',
       base: () => scope('audit_logs', 'al', ctx)
@@ -262,6 +266,8 @@ export interface ChangeEventQueryOptions {
   limit?: number;
   callerUserId: number;
   callerIsAdmin: boolean;
+  /** Holds audit.read in the device's tenant (audit-durci §9.7). */
+  callerReadsAudit?: boolean;
   /** hasGlobalView(req) of the route: never inferred from the tenant id. */
   globalView?: boolean;
 }
@@ -279,7 +285,7 @@ export const changeEventService = {
     const limit = Math.min(MAX_LIMIT, Math.max(1, opts.limit ?? DEFAULT_LIMIT));
     const ctx: SourceContext = {
       deviceId, tenantId, from: opts.from, to: opts.to,
-      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, globalView: !!opts.globalView,
+      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, callerReadsAudit: !!opts.callerReadsAudit, globalView: !!opts.globalView,
     };
     const sources = buildSources(ctx);
     const kinds = resolveKinds(sources, opts.kinds);
@@ -327,7 +333,7 @@ export const changeEventService = {
   async getSummary(deviceId: number, tenantId: number, opts: Omit<ChangeEventQueryOptions, 'kinds' | 'limit'>) {
     const ctx: SourceContext = {
       deviceId, tenantId, from: opts.from, to: opts.to,
-      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, globalView: !!opts.globalView,
+      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, callerReadsAudit: !!opts.callerReadsAudit, globalView: !!opts.globalView,
     };
     const sources = buildSources(ctx);
     const kinds = resolveKinds(sources, undefined);

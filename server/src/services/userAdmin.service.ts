@@ -1,7 +1,10 @@
 import type { Request } from 'express';
+import type { Knex } from 'knex';
 import type { User } from '@obligarth/shared';
 import { db } from '../db';
-import { switchToIdentity } from '../db/context';
+import { switchToIdentity, userActor } from '../db/context';
+import { audit as journal, type AuditEntryInput, type AuditWriteContext } from '../audit';
+import { currentApprovalIds } from './approvalContext';
 import { AppError } from '../middleware/errorHandler';
 import { userService } from './user.service';
 import { userScope, type ScopeActor } from './userScope.service';
@@ -30,22 +33,47 @@ import { createUserSchema, updateUserSchema, type UpdateUserInput } from '../val
 
 export type UserAdminCtx = { req?: Request; auditTenantId?: number };
 
+/** The chain and context of an account change: the request's tenant, or
+ *  (approval) the approval's tenant as the requester, naming the approval. */
+async function auditTarget(actor: ScopeActor, ctx: UserAdminCtx): Promise<{ tenantId: number; wctx: AuditWriteContext; viaApproval: boolean }> {
+  if (ctx.req) {
+    const tenantId = Number(ctx.req.tenantId) || actor.tenantId;
+    return { tenantId, wctx: await journal.fromRequest(ctx.req, tenantId), viaApproval: false };
+  }
+  const tenantId = ctx.auditTenantId ?? actor.tenantId;
+  return { tenantId, wctx: await journal.fromDbActor(userActor(actor.userId), tenantId), viaApproval: true };
+}
+
+function accountEntry(tenantId: number, action: string, targetId: number, details: Record<string, unknown>, viaApproval: boolean): AuditEntryInput {
+  return {
+    tenantId, action, target: { type: 'user', id: String(targetId) },
+    approvalIds: viaApproval ? currentApprovalIds() : undefined,
+    details: viaApproval ? { ...details, viaApproval: true } : details,
+  };
+}
+
+/** P3 / P4: a standard or protective account change, after the fact; never
+ *  throws (the writer spools a failure). */
 async function audit(actor: ScopeActor, ctx: UserAdminCtx, action: string, targetId: number, details: Record<string, unknown>): Promise<void> {
   try {
-    const { auditService } = await import('./audit.service');
-    if (ctx.req) {
-      await auditService.logReq(ctx.req, action, { resourceType: 'user', resourcePath: String(targetId), details });
-    } else {
-      await auditService.log({
-        tenantId: ctx.auditTenantId ?? actor.tenantId,
-        userId: actor.userId,
-        action,
-        resourceType: 'user',
-        resourcePath: String(targetId),
-        details: { ...details, viaApproval: true },
-      });
-    }
-  } catch { /* the audit never breaks the action */ }
+    const t = await auditTarget(actor, ctx);
+    await journal.append(accountEntry(t.tenantId, action, targetId, details, t.viaApproval), t.wctx);
+  } catch { /* the writer logged it */ }
+}
+
+/** P1: the entry in the transaction of the change (critical when asked). */
+async function auditInTx(trx: Knex.Transaction, actor: ScopeActor, ctx: UserAdminCtx, action: string, targetId: number,
+  details: Record<string, unknown>, critical: boolean): Promise<void> {
+  const t = await auditTarget(actor, ctx);
+  await journal.appendInTx(trx, accountEntry(t.tenantId, action, targetId, details, t.viaApproval), t.wctx,
+    critical ? { criticality: 'critical' } : {});
+}
+
+/** P2: a critical account change (the intent before `fn`). */
+async function withAccountIntent<T>(actor: ScopeActor, ctx: UserAdminCtx, action: string, targetId: number,
+  details: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  const t = await auditTarget(actor, ctx);
+  return journal.withIntent(accountEntry(t.tenantId, action, targetId, details, t.viaApproval), t.wctx, fn);
 }
 
 async function otherActiveAdmins(exceptId: number): Promise<number> {
@@ -118,17 +146,18 @@ export async function createUserAccount(
       if (tenantId !== null) {
         await trx('user_tenants').insert({ user_id: created.id, tenant_id: tenantId, role: NEW_ACCOUNT_TENANT_ROLE });
       }
+      // P1, last statement: an administrator account is critical (§3.4).
+      await auditInTx(trx, actor, ctx, 'user.created', created.id, {
+        username: created.username,
+        role: created.role,
+        ...(tenantId !== null ? { tenantId, tenantRole: NEW_ACCOUNT_TENANT_ROLE } : {}),
+      }, created.role === 'admin');
       return created;
     }));
   } catch (err) {
     if (err instanceof Error && /unique/i.test(err.message)) throw new AppError(409, 'Username already exists');
     throw err;
   }
-  await audit(actor, ctx, 'user.created', user.id, {
-    username: user.username,
-    role: user.role,
-    ...(tenantId !== null ? { tenantId, tenantRole: NEW_ACCOUNT_TENANT_ROLE } : {}),
-  });
   return user;
 }
 
@@ -154,7 +183,13 @@ export async function updateUserAccount(
     if ((await otherActiveAdmins(targetId)) === 0) throw new AppError(400, 'Cannot remove the last active admin');
   }
 
-  const user = await switchToIdentity(() => userService.update(targetId, data));
+  const roleChanged = data.role !== undefined && data.role !== scoped.role;
+  const detailsBefore = { username: scoped.username, before: { role: scoped.role, isActive: scoped.is_active } };
+  // A platform role change is critical (P2): the intent before the change.
+  const user = roleChanged
+    ? await withAccountIntent(actor, ctx, 'user.role_changed', targetId, { ...detailsBefore, after: { role: data.role } },
+      () => switchToIdentity(() => userService.update(targetId, data)))
+    : await switchToIdentity(() => userService.update(targetId, data));
   if (!user) throw new AppError(404, 'User not found');
   // P6: the session guard caches is_active / role for a few seconds; a
   // deactivated user's sessions (and a demoted admin's, whose session still
@@ -177,12 +212,15 @@ export async function updateUserAccount(
       } catch { /* trigger */ }
     }
   }
-  const roleChanged = data.role !== undefined && data.role !== scoped.role;
-  await audit(actor, ctx, roleChanged ? 'user.role_changed' : 'user.updated', targetId, {
-    username: user.username,
-    before: { role: scoped.role, isActive: scoped.is_active },
-    after: { role: user.role, isActive: user.isActive },
-  });
+  if (!roleChanged) {
+    // A deactivation is protective (P4), any other change standard (P3).
+    const deactivated = data.isActive === false && scoped.is_active;
+    await audit(actor, ctx, deactivated ? 'user.deactivated' : 'user.updated', targetId, {
+      username: user.username,
+      before: { role: scoped.role, isActive: scoped.is_active },
+      after: { role: user.role, isActive: user.isActive },
+    });
+  }
   return user;
 }
 

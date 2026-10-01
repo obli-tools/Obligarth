@@ -61,6 +61,10 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof AppError) {
+    // A critical action refused because its audit entry could not be written
+    // (audit-durci §5.4): the client may retry later.
+    if (err.code === 'auditUnavailable' && !res.headersSent) res.setHeader('Retry-After', '30');
+    if (res.headersSent) { res.end(); return; }
     res.status(err.statusCode).json({
       success: false,
       error: err.message,

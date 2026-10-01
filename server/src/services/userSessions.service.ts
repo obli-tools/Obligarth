@@ -67,6 +67,11 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   // The cached global-view grants of its sessions (they expire by themselves
   // in the database; the base re-checks the administrator at every query).
   forgetGrantsOfUser(userId);
+  // The facts the journal froze for the user's entries (label, role, side).
+  try {
+    const { forgetAuditActor } = await import('../audit/actor');
+    forgetAuditActor(userId);
+  } catch { /* the audit module is not loaded (CLI) */ }
   try {
     getIO().in(`user:${userId}`).disconnectSockets(true);
   } catch { /* Socket.io not initialised (CLI) */ }

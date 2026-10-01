@@ -1,3 +1,4 @@
+import type { Knex } from 'knex';
 import { db } from '../db';
 import type { Request, Response } from 'express';
 import { AppError } from '../middleware/errorHandler';
@@ -67,7 +68,6 @@ const CORE_RESTRICTABLE_ACTIONS: readonly RestrictableAction[] = [
   { key: 'tenant.manage_permissions',    label: 'Edit team permissions / members', category: 'Tenant config' },
   { key: 'tenant.manage_settings',       label: 'Edit tenant settings',       category: 'Tenant config' },
   { key: 'tenant.manage_profile',        label: 'Edit own profile (local users)', category: 'Tenant config' },
-  { key: 'audit.clear',                  label: 'Clear the audit log',        category: 'Tenant config' },
   // Background jobs administration (/api/admin/jobs: manual run, cancel,
   // redrive, discard of a dead letter), master tenant only. No default
   // level, like the configuration actions above.
@@ -81,9 +81,8 @@ const CORE_RESTRICTABLE_ACTIONS: readonly RestrictableAction[] = [
  * stored map so the UI shows them blank and the admin can opt in later.
  */
 const CORE_DEFAULT_RESTRICTIONS: Readonly<Record<string, DefaultLevel>> = {
-  // Clearing the audit log deletes accountability — always require a
-  // second admin to approve. Doesn't need TOTP.
-  'audit.clear':                  'restricted',
+  // The audit log is never cleared any more (audit-durci J28, D25): only the
+  // retention job purges it. Its sensitive actions have floors instead.
   // Tenant-config management (users/teams/permissions/settings/profile/
   // restrictions-config) is intentionally NOT defaulted — admins opt in from
   // the matrix once they have TOTP deployed across privileged accounts,
@@ -93,8 +92,23 @@ const CORE_DEFAULT_RESTRICTIONS: Readonly<Record<string, DefaultLevel>> = {
 const moduleActions: RestrictableAction[] = [];
 const moduleDefaults: Record<string, DefaultLevel> = {};
 
-/** A module's restrictable actions and their recommended default levels. */
-export function registerRestrictableActions(actions: readonly RestrictableAction[], defaults: Readonly<Record<string, DefaultLevel>> = {}): void {
+/** A floor (audit-durci §12.2): the level an action never goes below,
+ *  whatever the tenant's matrix says (the matrix can raise it, never lower
+ *  it). `strictStepUp`: its step-up never takes the trusted-IP shortcut. */
+export interface RestrictionFloor {
+  level: DefaultLevel;
+  strictStepUp?: boolean;
+}
+
+const floors = new Map<string, RestrictionFloor>();
+
+/** A module's restrictable actions, their recommended default levels and
+ *  their floors (not configurable: a new version changes them). */
+export function registerRestrictableActions(
+  actions: readonly RestrictableAction[],
+  defaults: Readonly<Record<string, DefaultLevel>> = {},
+  actionFloors: Readonly<Record<string, RestrictionFloor>> = {},
+): void {
   for (const a of actions) {
     if (!isActionKey(a.key)) throw new Error(`Invalid restrictable action key: ${a.key}`);
     if (moduleActions.some((m) => m.key === a.key) || CORE_RESTRICTABLE_ACTIONS.some((c) => c.key === a.key)) {
@@ -103,6 +117,29 @@ export function registerRestrictableActions(actions: readonly RestrictableAction
     moduleActions.push({ key: a.key, label: a.label, category: a.category });
   }
   Object.assign(moduleDefaults, defaults);
+  for (const [key, f] of Object.entries(actionFloors)) {
+    if (!actions.some((a) => a.key === key)) throw new Error(`Floor of an unknown restrictable action: ${key}`);
+    if (f.level !== 'sensitive' && f.level !== 'restricted') throw new Error(`Invalid floor of ${key}`);
+    floors.set(key, Object.freeze({ level: f.level, strictStepUp: f.strictStepUp === true }));
+  }
+}
+
+/** The floor of an action, if it has one. */
+export function restrictionFloor(actionKey: string): RestrictionFloor | undefined {
+  return floors.get(actionKey);
+}
+
+/** Every floor, for the matrix of the console (GET /api/restrictions). */
+export function restrictionFloors(): Record<string, RestrictionFloor> {
+  return Object.fromEntries(floors);
+}
+
+const LEVEL_RANK: Record<RestrictionLevel, number> = { none: 0, sensitive: 1, restricted: 2 };
+
+/** The stricter of a matrix level and the action's floor. */
+function withFloor(actionKey: string, level: RestrictionLevel): RestrictionLevel {
+  const f = floors.get(actionKey);
+  return f && LEVEL_RANK[f.level] > LEVEL_RANK[level] ? f.level : level;
 }
 
 /** The matrix catalog: the modules' actions, then the core's. */
@@ -207,13 +244,15 @@ export const restrictionService = {
     return out;
   },
 
-  async setMap(tenantId: number, next: RestrictionMap): Promise<void> {
+  /** Replaces the matrix; in the caller's transaction when given (the
+   *  restrictions.updated entry is written in it, audit-durci §5.7). */
+  async setMap(tenantId: number, next: RestrictionMap, trx?: Knex.Transaction): Promise<void> {
     const clean: RestrictionMap = {};
     for (const [k, v] of Object.entries(next)) {
       const norm = normalizeEntry(v);
       if (norm) clean[k] = norm;
     }
-    await db('tenants').where({ id: tenantId }).update({
+    await (trx ?? db)('tenants').where({ id: tenantId }).update({
       action_restrictions: JSON.stringify(clean),
       updated_at: new Date(),
     });
@@ -230,17 +269,17 @@ export const restrictionService = {
   }): Promise<RestrictionLevel> {
     const map = await this.getMap(params.tenantId);
     const entry = map[params.actionKey];
-    if (!entry) return 'none';
+    if (!entry) return withFloor(params.actionKey, 'none');
 
-    if (entry.scope.mode === 'all' || !params.deviceIds?.length) return entry.level;
+    if (entry.scope.mode === 'all' || !params.deviceIds?.length) return withFloor(params.actionKey, entry.level);
 
     // For batch ops, gate as soon as one device is in scope.
     for (const id of params.deviceIds) {
       if (await scopeAppliesToDevice(entry.scope, id, params.tenantId)) {
-        return entry.level;
+        return withFloor(params.actionKey, entry.level);
       }
     }
-    return 'none';
+    return withFloor(params.actionKey, 'none');
   },
 
   /**
@@ -329,14 +368,16 @@ export const restrictionService = {
       // One verifier for every step-up (services/deviceKey/stepUpProof.ts):
       // trusted-IP shortcut, TOTP (anti-replay, caps) or Obligate TOTP for
       // SSO accounts. Proofs come from req.stepUpProof (P5), never req.body.
+      // The trusted-IP shortcut is refused to an action whose floor is strict;
+      // the proof used is kept on the request for its audit entry.
       const { checkSecondFactor } = await import('./deviceKey/stepUpProof');
       const outcome = await checkSecondFactor(req, {
         actionKey,
         deviceIds: params.deviceIds,
-        allowTrustedIp: true,
+        allowTrustedIp: floors.get(actionKey)?.strictStepUp !== true,
         allowDevice: true,
       });
-      if (outcome.ok) return { ok: true };
+      if (outcome.ok) { req.stepUpVia = outcome.via; return { ok: true }; }
       return { ok: false, status: outcome.status, body: outcome.body, headers: outcome.headers };
     }
 
@@ -361,7 +402,7 @@ export const restrictionService = {
           allowTrustedIp: false,
           allowDevice: true,
         });
-        if (outcome.ok) return { ok: true };
+        if (outcome.ok) { req.stepUpVia = outcome.via; return { ok: true }; }
         return { ok: false, status: outcome.status, body: outcome.body, headers: outcome.headers };
       }
       const approval = await approvalService.create({

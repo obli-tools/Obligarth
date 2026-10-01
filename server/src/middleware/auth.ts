@@ -1,5 +1,16 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from './errorHandler';
+import type { StepUpVia } from '../services/deviceKey/stepUpProof';
+
+declare global {
+  namespace Express {
+    interface Request {
+      /** The fresh proof a step-up of this request accepted (restriction
+       *  envelope), for its audit entry (audit-durci §5.3, actor.stepUp). */
+      stepUpVia?: StepUpVia;
+    }
+  }
+}
 
 // Extend express-session types
 declare module 'express-session' {
@@ -40,6 +51,14 @@ declare module 'express-session' {
      *  `until` (ms), like a local code (stepup mode, design §7.7). Only a
      *  hash is kept. */
     ssoStepUpCode?: { hash: string; userId: number; until: number };
+    /** How the session was opened (audit-durci §5.3, actor.auth): 'password',
+     *  'password+totp', 'password+email', 'password+device_key', 'sso'. */
+    authMethod?: string;
+    /** When the session was opened (ms). */
+    authAt?: number;
+    /** Tenants whose journal this session viewed, and the UTC day: one
+     *  audit.viewed entry per session, tenant and day (audit-durci §9.5). */
+    auditViewedOn?: Record<string, string>;
   }
 }
 

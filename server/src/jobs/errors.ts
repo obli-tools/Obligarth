@@ -45,6 +45,10 @@ export function sanitizeError(err: unknown): SanitizedError {
   if (err instanceof JobError) {
     return { code: err.code.slice(0, 64), message: err.message.slice(0, 200), retryable: err.retryable };
   }
+  // The journal refused a critical entry (audit-durci §5.4): transient.
+  if ((err as { code?: unknown } | null)?.code === 'auditUnavailable') {
+    return { code: 'audit_unavailable', message: 'the audit log is unavailable', retryable: true };
+  }
   const pg = err as { code?: unknown; constraint?: unknown } | null;
   if (pg && typeof pg.code === 'string' && SQLSTATE_RE.test(pg.code)) {
     const permanent = PERMANENT_PG_CODES.has(pg.code) || PERMANENT_PG_CLASSES.includes(pg.code.slice(0, 2));

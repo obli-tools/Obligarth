@@ -4,6 +4,7 @@ import { requireRole } from '../middleware/rbac';
 import { approvalService } from '../services/approval.service';
 import { AppError } from '../middleware/errorHandler';
 import { globalViewScope } from '../middleware/dbContext';
+import { audit } from '../audit';
 
 const router = Router();
 
@@ -31,6 +32,7 @@ router.post('/:id/approve', async (req, res, next) => {
       approvalId: id,
       reviewerId: req.session.userId!,
       reason: req.body?.reason,
+      auditCtx: await audit.fromRequest(req, req.tenantId!),
     });
     res.json({ data: approved });
   } catch (err: any) {
@@ -48,6 +50,7 @@ router.post('/:id/deny', async (req, res, next) => {
       approvalId: id,
       reviewerId: req.session.userId!,
       reason: req.body?.reason,
+      auditCtx: await audit.fromRequest(req, req.tenantId!),
     });
     res.json({ data: denied });
   } catch (err: any) {
@@ -64,6 +67,7 @@ router.post('/:id/cancel', async (req, res, next) => {
       tenantId: req.tenantId!,
       approvalId: id,
       userId: req.session.userId!,
+      auditCtx: await audit.fromRequest(req, req.tenantId!),
     });
     res.json({ data: cancelled });
   } catch (err: any) {

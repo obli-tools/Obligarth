@@ -424,6 +424,9 @@ export const twoFactorController = {
       req.session.userId = row.id;
       req.session.username = row.username;
       req.session.role = row.role;
+      // How the session was opened (audit-durci §5.3: actor.auth).
+      req.session.authMethod = via;
+      req.session.authAt = Date.now();
       delete req.session.pendingMfaUserId;
       delete req.session.pendingEmailOtp;
 

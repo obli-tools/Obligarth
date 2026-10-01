@@ -453,6 +453,9 @@ async function provisionObligateUser(assertion: import('../services/obligate.ser
   // hint survives from the pre-login session.
   await regenerateSession(req, ['requestedTenantSlug']);
   req.session.userId = localUserId;
+  // How the session was opened (audit-durci §5.3: actor.auth).
+  req.session.authMethod = 'sso';
+  req.session.authAt = Date.now();
   // A full Obligate sign-in lifts the step-up code lock (§6.8).
   const { clearCodeThrottle } = await import('../services/deviceKey/stepUpProof');
   await clearCodeThrottle(localUserId);

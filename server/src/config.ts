@@ -1,4 +1,5 @@
 import './env';
+import path from 'node:path';
 import { readJobsConfig } from './jobs/config';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
@@ -50,6 +51,48 @@ function dbContextAssertFromEnv(): 'throw' | 'log' | 'off' {
   if (raw === 'throw' || raw === 'log' || raw === 'off') return raw;
   const env = process.env.NODE_ENV;
   return env === 'development' || env === 'test' ? 'throw' : 'log';
+}
+
+interface AuditConfig {
+  /** Local spool of the entries not written (standard and protective). */
+  spoolDir: string;
+  /** Hourly seal (UTC). */
+  sealCron: string;
+  /** RFC 3161 time-stamping authority; empty: disabled. */
+  tsaUrl: string;
+  /** File (Docker secret) holding the Authorization header of a paid authority. */
+  tsaAuthFile: string;
+  /** SHA-256 (hex) of the authority's certificate, pinned; empty: no pinning. */
+  tsaCertSha256: string;
+  tsaTimeoutMs: number;
+  /** 'off' stops the SIEM exporter (laboratory only). */
+  export: 'on' | 'off' | 'invalid';
+  /** Refusal to start beyond this drift with the database clock. */
+  maxClockSkewSeconds: number;
+  /** An undeclared action refuses its body (development, test,
+   *  AUDIT_STRICT_CATALOG=true) instead of a warning. */
+  strictCatalog: boolean;
+  /** Laboratory only: a SIEM destination on the loopback (the test bench
+   *  receivers). Refused by default (SSRF towards the host's own services). */
+  siemAllowLoopback: boolean;
+}
+
+function auditConfigFromEnv(): AuditConfig {
+  const customDir = process.env.CUSTOM_DIR || './custom';
+  const exp = (process.env.AUDIT_EXPORT ?? '').trim();
+  const strict = (process.env.AUDIT_STRICT_CATALOG ?? '').trim();
+  return {
+    spoolDir: process.env.AUDIT_SPOOL_DIR || path.join(customDir, 'audit-spool'),
+    sealCron: (process.env.AUDIT_SEAL_CRON || '12 * * * *').trim(),
+    tsaUrl: (process.env.AUDIT_TSA_URL || '').trim(),
+    tsaAuthFile: (process.env.AUDIT_TSA_AUTH_FILE || '').trim(),
+    tsaCertSha256: (process.env.AUDIT_TSA_CERT_SHA256 || '').trim().toLowerCase().replace(/:/g, ''),
+    tsaTimeoutMs: intEnv('AUDIT_TSA_TIMEOUT_MS', 10_000),
+    export: exp === '' || exp === 'on' ? 'on' : exp === 'off' ? 'off' : 'invalid',
+    maxClockSkewSeconds: intEnv('AUDIT_MAX_CLOCK_SKEW_SECONDS', 240),
+    strictCatalog: strict === '' ? (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') : strict === 'true',
+    siemAllowLoopback: process.env.AUDIT_SIEM_ALLOW_LOOPBACK === 'true',
+  };
 }
 
 export const config = {
@@ -104,6 +147,9 @@ export const config = {
   defaultAdminPassword: process.env.DEFAULT_ADMIN_PASSWORD || '',
   disable2faForce: process.env.DISABLE_2FA_FORCE === 'true',
   customDir: process.env.CUSTOM_DIR || './custom',
+  /** Hardened audit journal (docs: audit-durci §13.1). Not configurable on
+   *  purpose: floors, delays, retention bounds (a new version changes them). */
+  audit: auditConfigFromEnv(),
   // Device-bound 2FA (docs/mobile/device-bound-2fa.md §9). Parsed and
   // validated by services/deviceKey/deviceKey.service.ts.
   deviceKeys: {
@@ -182,6 +228,18 @@ export function startupConfigErrors(): string[] {
   if (!Number.isInteger(keep) || keep < 30) {
     errors.push('PLATFORM_GRANT_RETENTION_DAYS must be an integer of at least 30 (365 by default).');
   }
+  // Hardened audit journal (audit-durci §13.1): refused in every environment.
+  const a = config.audit;
+  if (a.export === 'invalid') errors.push('AUDIT_EXPORT must be "on" (the default) or "off".');
+  if (!Number.isInteger(a.maxClockSkewSeconds) || a.maxClockSkewSeconds < 5 || a.maxClockSkewSeconds > 270) {
+    errors.push('AUDIT_MAX_CLOCK_SKEW_SECONDS must be an integer from 5 to 270 (240 by default): the database refuses entries beyond 5 minutes.');
+  }
+  if (!Number.isInteger(a.tsaTimeoutMs) || a.tsaTimeoutMs < 1_000 || a.tsaTimeoutMs > 60_000) {
+    errors.push('AUDIT_TSA_TIMEOUT_MS must be an integer from 1000 to 60000 (10000 by default).');
+  }
+  if (a.tsaUrl && !/^https?:\/\/[^\s]+$/i.test(a.tsaUrl)) errors.push('AUDIT_TSA_URL must be an http(s) URL of an RFC 3161 time-stamping authority.');
+  if (a.tsaCertSha256 && !/^[0-9a-f]{64}$/.test(a.tsaCertSha256)) errors.push('AUDIT_TSA_CERT_SHA256 must be the SHA-256 of a certificate (64 hexadecimal characters).');
+  if (a.sealCron.split(/\s+/).length !== 5) errors.push('AUDIT_SEAL_CRON must be a 5-field cron expression (12 * * * * by default).');
   // Background jobs: refused in every environment as well.
   errors.push(...jobsEnv.errors);
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {

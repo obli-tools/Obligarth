@@ -23,6 +23,9 @@ import { registerReportsModule } from './modules/reports';
 import { registerSsoSyncJobs } from './routes/obligateCallback.routes';
 import { BackfillError, backfillLegacySecrets, isVaultError, vault, vaultConfigErrors, VaultStartupError } from './vault';
 import { registerVaultJobs } from './vault/jobs';
+import { registerAuditModule } from './audit/module';
+import { AuditClockError, auditClockCheck } from './audit/clock';
+import { ensureSealKey } from './audit/sealKeys';
 
 // Start-up order (docs: specs README §4, rls-tenant §7.9, file-durable §3.3,
 // coffre-secrets §6.1): configuration (the vault's KEK file included),
@@ -86,6 +89,7 @@ async function main() {
   registerCoreJobs();
   registerSsoSyncJobs();
   registerVaultJobs();
+  registerAuditModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.
@@ -108,6 +112,20 @@ async function main() {
     throw err;
   }
 
+  // Clock of the audit entries (audit-durci §5.6, §12.2): the database refuses
+  // an entry more than 5 minutes away from its own clock; refused to start
+  // beyond AUDIT_MAX_CLOCK_SKEW_SECONDS.
+  try {
+    await auditClockCheck();
+  } catch (err) {
+    if (err instanceof AuditClockError) {
+      logger.fatal(err.message);
+      await db.destroy().catch(() => undefined);
+      process.exit(1);
+    }
+    throw err;
+  }
+
   // Vault (coffre-secrets §6.1; review COF-RC3): the KEK provider, the online
   // lock, the canary (a KEK that does not open this database's keys: message
   // A), an interrupted KEK rotation (message B), the first data key of every
@@ -125,6 +143,16 @@ async function main() {
     await vault.close().catch(() => undefined);
     await db.destroy().catch(() => undefined);
     process.exit(1);
+  }
+
+  // The key that signs the audit seals (audit-durci §6.3, §12.2), once the
+  // vault is ready: created on a fresh instance, replaced (and alerted) when
+  // it no longer matches the vault's. A failure does not stop the start: the
+  // job audit.seal-keys tries again.
+  try {
+    await ensureSealKey({ requestId: 'boot' });
+  } catch (err) {
+    logger.error({ err: safeErr(err) }, 'audit: seal key not checked at start (the audit.seal-keys job retries)');
   }
 
   // Initial administrator, on a database that has none (accounts: the

@@ -4,7 +4,7 @@ import { asIdentity } from '../db/context';
 import { purgePlatformGrants } from '../db/platformAccess';
 import { forEachTenant } from '../db/tenantContext';
 import { AppError } from '../middleware/errorHandler';
-import { approvalService, auditAs, refuse, registerApprovalExecutor, requirePlatformAdmin } from '../services/approval.service';
+import { approvalService, refuse, registerApprovalExecutor, requirePlatformAdmin, withAuditAs } from '../services/approval.service';
 import { liveAlertService } from '../services/liveAlert.service';
 import { tfaTrustService } from '../services/tfaTrust.service';
 import { createJobsAdmin } from './admin';
@@ -259,7 +259,7 @@ export function registerCoreJobs(): void {
     if (!parsed.success) refuse('Invalid background job request');
     try {
       await performJobsOp(admin, parsed.data as JobsManageOp,
-        (action, extras) => auditAs(tenantId, requesterId, action, extras));
+        (action, extras, fn, resultDetails) => withAuditAs(tenantId, requesterId, action, extras, fn, resultDetails));
     } catch (err) {
       if (err instanceof AppError || err instanceof JobError) refuse(err.message);
       throw err;

@@ -10,6 +10,17 @@ import { logger } from '../utils/logger';
 
 const router = Router();
 
+/** The caller reads the journal in the request's tenant (audit.read,
+ *  audit-durci §9.7): the device timeline then shows its configuration
+ *  changes. Platform administrators always do. */
+async function readsAudit(req: import('express').Request): Promise<boolean> {
+  if (req.session.role === 'admin') return true;
+  const userId = Number(req.session.userId);
+  const tenantId = Number(req.tenantId);
+  if (!Number.isSafeInteger(userId) || !Number.isSafeInteger(tenantId)) return false;
+  return permissionService.userHasTenantCapability(userId, tenantId, 'audit.read');
+}
+
 // Tenant rule of these routes: the devices of the session's tenant. The
 // master tenant's global view (every tenant) is a platform administrator's
 // only (hasGlobalView), never a master-tenant member's, and it covers the
@@ -567,6 +578,7 @@ router.get('/:id/change-events', requireDeviceRead(), globalViewScope('console.d
         ...parsed.data,
         callerUserId: req.session.userId!,
         callerIsAdmin: req.session.role === 'admin',
+        callerReadsAudit: await readsAudit(req),
         globalView: hasGlobalView(req),
       }),
     });
@@ -590,6 +602,7 @@ router.get('/:id/change-events/summary', requireDeviceRead(), globalViewScope('c
         ...parsed.data,
         callerUserId: req.session.userId!,
         callerIsAdmin: req.session.role === 'admin',
+        callerReadsAudit: await readsAudit(req),
         globalView: hasGlobalView(req),
       }),
     });

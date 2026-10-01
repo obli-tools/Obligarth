@@ -137,6 +137,9 @@ async function signIn(req: Request, res: Response, user: SignedInUser): Promise<
   req.session.userId = user.id;
   req.session.username = user.username;
   req.session.role = user.role;
+  // How the session was opened (audit-durci §5.3: actor.auth of its entries).
+  req.session.authMethod = 'password';
+  req.session.authAt = Date.now();
   req.session.currentTenantId = tenantId;
 
   try {

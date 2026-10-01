@@ -26,6 +26,7 @@ import { config } from '../config';
 import { db } from '../db';
 import { asNone, type DbActor } from '../db/context';
 import { auditService } from '../services/audit.service';
+import { withVaultIntent } from './events';
 import { logger } from '../utils/logger';
 import { registerDeviceModule } from '../modules/devices';
 import { backfillLegacySecrets, vault, vaultConfigErrors } from './index';
@@ -182,6 +183,11 @@ async function kekRotate(args: string[]): Promise<number> {
           out({ operationId: id, oldKekId: previous.id, newKekId: current.id, toRewrap: todo.length, done: rows.length - todo.length });
           return 0;
         }
+        // P2 (critical): the intent before any key is rewrapped, the result after.
+        const rewrapped = await withVaultIntent({
+          tenantId: MASTER_TENANT_ID, action: 'vault.kek_rotated', resourceType: 'vault_operation', resourcePath: id,
+          details: { operationId: id, oldKekId: previous.id, newKekId: current.id, resume, via: 'cli' },
+        }, async () => {
         await vaultOperations.update(db, id, {
           state: 'running', startedAt: op.startedAt ? new Date(op.startedAt) : new Date(), error: null,
           params: { ...op.params, oldKekId: previous.id, newKekId: current.id },
@@ -210,7 +216,8 @@ async function kekRotate(args: string[]): Promise<number> {
           throw err;
         }
         await vaultOperations.update(db, id, { state: 'done', finishedAt: new Date(), progress: { rewrapped, total: rows.length } });
-        await master('vault.kek_rotated', { operationId: id, oldKekId: previous.id, newKekId: current.id, keys: rewrapped }, id);
+        return rewrapped;
+        }, (n) => ({ keys: n }));
         out({ operationId: id, oldKekId: previous.id, newKekId: current.id, rewrapped });
         return 0;
       });
@@ -240,6 +247,11 @@ async function recoverLostKek(args: string[]): Promise<number> {
         throw new CliExit(1, `recover-lost-kek: no data key of this database is under kek_id ${lost} (found: ${ids.join(', ') || 'none'})`);
       }
       vaultInternals.keyring.configure(provider, 0);
+      // P2 (critical): the intent before any key or value is destroyed.
+      const recovered = await withVaultIntent({
+        tenantId: MASTER_TENANT_ID, action: 'vault.kek_loss_recovered', resourceType: 'vault_operation', resourcePath: 'kek_loss_recovery',
+        details: { lostKekId: lost, newKekId: provider.id, via: 'cli' },
+      }, async () => {
       // 1. Every DEK destroyed; a new one for the instance and each tenant.
       const destroyed = await db.transaction(async (trx) => {
         const before = await trx('data_keys').whereNot({ state: 'destroyed' }).forUpdate().select('id') as Array<{ id: string }>;
@@ -273,7 +285,9 @@ async function recoverLostKek(args: string[]): Promise<number> {
         kind: 'kek_loss_recovery', state: 'done', startedAt: new Date(), finishedAt: new Date(),
         params: { lostKekId: lost, newKekId: provider.id }, progress: { destroyedKeys: destroyed, report },
       });
-      await master('vault.kek_loss_recovered', { operationId: op.id, lostKekId: lost, newKekId: provider.id, destroyedKeys: destroyed, report }, op.id);
+      return { op, destroyed, report };
+      }, (r) => ({ operationId: r.op.id, destroyedKeys: r.destroyed, report: r.report }));
+      const { op, destroyed, report } = recovered;
       out({ operationId: op.id, lostKekId: lost, newKekId: provider.id, destroyedKeys: destroyed, toEnterAgain: report });
       return 0;
     });
@@ -298,6 +312,11 @@ async function main(): Promise<number> {
   // The modules' sealed columns, as index.ts registers them (no I/O): every
   // walk of the registry (verify, recovery) must see them all.
   registerDeviceModule();
+  // The journal's sealed column (SIEM destinations) and its seal key name.
+  const { registerDestinationSecretColumn } = await import('../audit/export/destinations');
+  const { registerSealKeySecretName } = await import('../audit/sealKeys');
+  registerDestinationSecretColumn();
+  registerSealKeySecretName();
   const [command, ...args] = process.argv.slice(2);
   const run = command ? COMMANDS[command] : undefined;
   if (!run) {

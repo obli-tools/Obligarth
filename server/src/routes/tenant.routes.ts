@@ -7,6 +7,8 @@ import { db } from '../db';
 import { asMember, asPlatform, switchToIdentity } from '../db/context';
 import { globalViewGrant } from '../db/platformAccess';
 import { AppError } from '../middleware/errorHandler';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { audit } from '../audit';
 
 // Database contexts (rls-tenant §8.2): these routes are outside the tenant
 // router. The list and one tenant: the request's base context (the tenants
@@ -140,7 +142,7 @@ router.post('/', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const { name, slug } = req.body as { name: string; slug: string };
     if (!name || !slug) throw new AppError(400, 'name and slug are required');
-    const tenant = await tenantService.create({ name, slug }, { ipAddress: clientIp(req) || undefined });
+    const tenant = await tenantService.create({ name, slug }, { auditCtx: await audit.fromRequest(req, MASTER_TENANT_ID) });
     res.status(201).json({ success: true, data: tenant });
   } catch (err) {
     next(err);
@@ -172,30 +174,11 @@ router.put('/:id', async (req, res, next) => {
   try {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const id = parseInt(req.params.id);
-    const before = await tenantService.getById(id);
+    if (!Number.isSafeInteger(id) || id <= 0) throw new AppError(404, 'Tenant not found');
     const { name, slug, twoStepApproval } = req.body as { name?: string; slug?: string; twoStepApproval?: boolean };
-    const tenant = await tenantService.update(id, { name, slug, twoStepApproval });
+    // The change and its tenant.updated entry in one transaction (P1).
+    const tenant = await tenantService.update(id, { name, slug, twoStepApproval }, { auditCtx: await audit.fromRequest(req, id) });
     if (!tenant) throw new AppError(404, 'Tenant not found');
-    try {
-      const { auditService } = await import('../services/audit.service');
-      const changes: Record<string, unknown> = {};
-      if (name !== undefined && name !== before?.name) changes.name = { from: before?.name, to: name };
-      if (slug !== undefined && slug !== before?.slug) changes.slug = { from: before?.slug, to: slug };
-      if (twoStepApproval !== undefined && twoStepApproval !== before?.twoStepApproval) {
-        changes.twoStepApproval = { from: before?.twoStepApproval, to: twoStepApproval };
-      }
-      if (Object.keys(changes).length > 0) {
-        await auditService.log({
-          tenantId: id,
-          userId: req.session.userId,
-          action: 'tenant.settings_changed',
-          resourceType: 'tenant',
-          resourcePath: String(id),
-          details: changes,
-          ipAddress: clientIp(req) || undefined,
-        });
-      }
-    } catch {}
     res.json({ success: true, data: tenant });
   } catch (err) {
     next(err);
@@ -208,7 +191,7 @@ router.delete('/:id', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const id = parseInt(req.params.id);
     if (id === 1) throw new AppError(400, 'Cannot delete the default tenant');
-    await tenantService.delete(id, { ipAddress: clientIp(req) || undefined });
+    await tenantService.delete(id, { auditCtx: await audit.fromRequest(req, MASTER_TENANT_ID) });
     res.json({ success: true });
   } catch (err) {
     next(err);
@@ -244,8 +227,13 @@ router.post('/:id/members', async (req, res, next) => {
     if (!Number.isInteger(tenantId) || tenantId <= 0 || !(await tenantService.getById(tenantId))) {
       throw new AppError(404, 'Tenant not found');
     }
-    if (!(await switchToIdentity(() => db('users').where({ id: userId }).first('id')))) throw new AppError(404, 'User not found');
-    await tenantService.addUser(tenantId, userId, role);
+    const target = await switchToIdentity(() => db('users').where({ id: userId }).first('id', 'username')) as { id: number; username: string } | undefined;
+    if (!target) throw new AppError(404, 'User not found');
+    // P2 (critical): the intent is written before the membership changes.
+    await audit.withIntent({
+      tenantId, action: 'tenant.member_added', target: { type: 'user', id: String(userId) },
+      details: { username: target.username, role: typeof role === 'string' ? role.slice(0, 64) : null },
+    }, await audit.fromRequest(req, tenantId), () => tenantService.addUser(tenantId, userId, role));
     res.json({ success: true });
   } catch (err) {
     next(err);
@@ -260,7 +248,11 @@ router.put('/:id/members/:uid', async (req, res, next) => {
     const userId = parseInt(req.params.uid);
     const { role } = req.body as { role?: unknown };
     if (!role) throw new AppError(400, 'role is required');
-    await tenantService.updateUserRole(tenantId, userId, role);
+    if (!Number.isSafeInteger(tenantId) || tenantId <= 0 || !Number.isSafeInteger(userId) || userId <= 0) throw new AppError(404, 'Not found');
+    await audit.withIntent({
+      tenantId, action: 'tenant.member_role_changed', target: { type: 'user', id: String(userId) },
+      details: { role: typeof role === 'string' ? role.slice(0, 64) : null },
+    }, await audit.fromRequest(req, tenantId), () => tenantService.updateUserRole(tenantId, userId, role));
     res.json({ success: true });
   } catch (err) {
     next(err);
@@ -275,7 +267,13 @@ router.delete('/:id/members/:uid', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const tenantId = parseInt(req.params.id);
     const userId = parseInt(req.params.uid);
-    await tenantService.removeUser(tenantId, userId);
+    if (!Number.isSafeInteger(tenantId) || tenantId <= 0 || !Number.isSafeInteger(userId) || userId <= 0) throw new AppError(404, 'Not found');
+    const removed = await tenantService.removeUser(tenantId, userId);
+    // P4 (protective): the removal is done whatever the journal says.
+    if (removed) {
+      await audit.append({ tenantId, action: 'tenant.member_removed', target: { type: 'user', id: String(userId) } },
+        await audit.fromRequest(req, tenantId));
+    }
     res.json({ success: true });
   } catch (err) {
     next(err);

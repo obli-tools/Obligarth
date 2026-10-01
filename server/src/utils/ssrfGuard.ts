@@ -73,3 +73,58 @@ export async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
   }
   return url;
 }
+
+// ── SIEM destinations (audit-durci §8.1) ────────────────────────────────────
+// A SIEM is often on the local network: the private ranges (RFC 1918, ULA,
+// CGNAT) are admitted. Refused: loopback (unless the laboratory switch
+// AUDIT_SIEM_ALLOW_LOOPBACK), link-local (169.254.0.0/16, fe80::/10, hence the
+// cloud metadata services), 0.0.0.0/8, multicast and unspecified addresses.
+// The name is resolved at every connection; the caller connects to one of the
+// addresses returned, never resolves again.
+
+function siemRefusalV4(ip: string, allowLoopback: boolean): string | null {
+  const o = ip.split('.').map(Number);
+  if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return 'invalid address';
+  if (o[0] === 127) return allowLoopback ? null : 'loopback';
+  if (o[0] === 169 && o[1] === 254) return 'link-local';
+  if (o[0] === 0) return 'unspecified';
+  if (o[0] >= 224) return o[0] < 240 ? 'multicast' : 'reserved';
+  return null;
+}
+
+function siemRefusalV6(ip: string, allowLoopback: boolean): string | null {
+  const lc = ip.toLowerCase();
+  if (lc === '::1') return allowLoopback ? null : 'loopback';
+  if (lc === '::') return 'unspecified';
+  if (/^fe[89ab]/.test(lc)) return 'link-local';
+  if (lc.startsWith('ff')) return 'multicast';
+  const mapped = lc.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (mapped) return siemRefusalV4(mapped[1], allowLoopback);
+  return null;
+}
+
+/** The addresses a SIEM destination `host` may be reached at, or an Error
+ *  that says why not (no DNS answer, a refused range). */
+export async function assertSiemTarget(host: string, o: { allowLoopback?: boolean } = {}): Promise<Array<{ address: string; family: number }>> {
+  const allowLoopback = o.allowLoopback === true;
+  const name = String(host ?? '').trim().replace(/^\[(.*)\]$/, '$1');
+  if (!name || name.length > 253) throw new Error('Invalid SIEM host');
+  if (!allowLoopback && /^(localhost|localhost\.localdomain)$/i.test(name)) throw new Error('Refused SIEM destination (loopback)');
+  const v = isIP(name);
+  let all: Array<{ address: string; family: number }>;
+  if (v) {
+    all = [{ address: name, family: v }];
+  } else {
+    try {
+      all = await lookup(name, { all: true });
+    } catch (err) {
+      throw new Error(`Could not resolve ${name}: ${(err as Error).message}`);
+    }
+  }
+  if (!all.length) throw new Error(`Could not resolve ${name}`);
+  for (const a of all) {
+    const why = a.family === 6 ? siemRefusalV6(a.address, allowLoopback) : siemRefusalV4(a.address, allowLoopback);
+    if (why) throw new Error(`Refused SIEM destination (${why}: ${name}${v ? '' : ` → ${a.address}`})`);
+  }
+  return all;
+}

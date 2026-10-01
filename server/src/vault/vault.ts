@@ -46,7 +46,7 @@ import { Keyring, UUID_RE, type Dek, type DekRow } from './keyring';
 import { OnlineLock } from './lock';
 import { vaultMetrics } from './metrics';
 import { isInstanceSecretName, secretColumn, secretColumns, type SecretColumnDef } from './registry';
-import { auditAfterCommit, currentUserId, masterEntry, vaultAlert, writeVaultAudit, type VaultAuditEntry } from './events';
+import { auditAfterCommit, currentUserId, masterEntry, vaultAlert, writeVaultAudit, writeVaultAuditInTx, type VaultAuditEntry } from './events';
 
 export { VAULT_NAMESPACE };
 
@@ -507,11 +507,16 @@ export const vault = {
          RETURNING version`, [name, sealed, userId]) as Rows<{ version: number }>;
       return { changed: true, version: Number(res.rows[0]?.version ?? 1) };
     };
-    const out = await withVaultDb(o, (q) => (isTransaction(q) ? run(q) : q.transaction((trx) => run(trx))));
-    if (out.changed) {
-      void auditAfterCommit(o.trx, [masterEntry('vault.instance_secret_changed',
-        { name, version: out.version, deleted: value === null }, { userId: userId ?? undefined, resourceType: 'instance_secret', resourcePath: name })]);
-    }
+    // P1 (critical): the secret and its entry in one transaction.
+    const runAudited = async (trx: Knex.Transaction) => {
+      const out = await run(trx);
+      if (out.changed) {
+        await writeVaultAuditInTx(trx, [masterEntry('vault.instance_secret_changed',
+          { name, version: out.version, deleted: value === null }, { userId: userId ?? undefined, resourceType: 'instance_secret', resourcePath: name })]);
+      }
+      return out;
+    };
+    const out = await withVaultDb(o, (q) => (isTransaction(q) ? runAudited(q) : q.transaction((trx) => runAudited(trx))));
     return out.changed;
   },
 
@@ -589,7 +594,7 @@ export const vault = {
       kekIds: [...new Set(rows.map((r) => r.kek_id))],
     }, { userId: actor?.userId ?? undefined, resourceType: 'tenant', resourcePath: String(tenantId) });
     if ((o.audit ?? 'write') === 'write') {
-      void auditAfterCommit(trx, [entry]);
+      await writeVaultAuditInTx(trx, [entry]);
       return { count: rows.length, auditEntry: null };
     }
     return { count: rows.length, auditEntry: entry };
@@ -603,7 +608,7 @@ export const vault = {
       .update({ destroy_after: at });
     keyring.invalidate({ tenantId });
     const details = { tenantId, destroyAfter: at.toISOString(), keys: n };
-    void auditAfterCommit(trx, [
+    await writeVaultAuditInTx(trx, [
       { tenantId, userId: currentUserId(), action: 'vault.dek_destruction_scheduled', resourceType: 'vault', details },
       masterEntry('vault.dek_destruction_scheduled', details, { resourceType: 'tenant', resourcePath: String(tenantId) }),
     ]);
@@ -615,7 +620,7 @@ export const vault = {
     keyring.invalidate({ tenantId });
     if (n > 0) {
       const details = { tenantId, keys: n };
-      void auditAfterCommit(trx, [
+      await writeVaultAuditInTx(trx, [
         { tenantId, userId: currentUserId(), action: 'vault.dek_destruction_cancelled', resourceType: 'vault', details },
         masterEntry('vault.dek_destruction_cancelled', details, { resourceType: 'tenant', resourcePath: String(tenantId) }),
       ]);
@@ -626,17 +631,21 @@ export const vault = {
    *  tenants.retire-due before it purges the tenant). Returns how many. */
   async destroyDueKeys(tenantId: number): Promise<number> {
     if (!(Number.isSafeInteger(tenantId) && tenantId > 0)) throw new VaultError('format', null, 'invalid tenant id');
-    const res = await withVaultDb({}, (q) => q.raw(
-      `UPDATE data_keys SET dek_wrapped = NULL, state = 'destroyed', destroyed_at = now()
-        WHERE tenant_id = ? AND destroy_after IS NOT NULL AND destroy_after <= now() AND state <> 'destroyed'
-        RETURNING id, version, kek_id`, [tenantId])) as Rows<{ id: string; version: number; kek_id: string }>;
+    // P1 (critical): the destruction and its entry in one transaction.
+    const res = await withVaultDb({}, (q) => q.transaction(async (trx) => {
+      const r = await trx.raw(
+        `UPDATE data_keys SET dek_wrapped = NULL, state = 'destroyed', destroyed_at = now()
+          WHERE tenant_id = ? AND destroy_after IS NOT NULL AND destroy_after <= now() AND state <> 'destroyed'
+          RETURNING id, version, kek_id`, [tenantId]) as Rows<{ id: string; version: number; kek_id: string }>;
+      if (r.rows.length) {
+        await writeVaultAuditInTx(trx, [masterEntry('vault.dek_destroyed', {
+          tenantId, reason: 'retired', keys: r.rows.map((x) => ({ id: x.id, version: Number(x.version) })),
+          kekIds: [...new Set(r.rows.map((x) => x.kek_id))],
+        }, { resourceType: 'tenant', resourcePath: String(tenantId) })]);
+      }
+      return r;
+    }));
     keyring.invalidate({ tenantId });
-    if (res.rows.length) {
-      await writeVaultAudit([masterEntry('vault.dek_destroyed', {
-        tenantId, reason: 'retired', keys: res.rows.map((r) => ({ id: r.id, version: Number(r.version) })),
-        kekIds: [...new Set(res.rows.map((r) => r.kek_id))],
-      }, { resourceType: 'tenant', resourcePath: String(tenantId) })]);
-    }
     return res.rows.length;
   },
 

@@ -1,11 +1,12 @@
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
-import { auditService } from './audit.service';
 import { userLabels } from './userLabels.service';
+import { audit, type AuditEntryInput, type AuditWriteContext } from '../audit';
+import { currentApprovalIds, runInApprovalScope } from './approvalContext';
 import { isMasterTenant } from '@obligarth/shared';
 import type { TenantCapability } from '@obligarth/shared';
-import { asPlatform, asTenant, currentDbContext, switchToTenant, userActor } from '../db/context';
+import { asPlatform, asTenant, currentDbContext, switchToTenant, userActor, type DbActor } from '../db/context';
 import { openPlatformGrant } from '../db/platformAccess';
 import { vault, type SecretLocator } from '../vault';
 
@@ -191,14 +192,43 @@ export async function requireTenantCapability(requesterId: number, tenantId: num
   return r;
 }
 
-export async function auditAs(tenantId: number, userId: number, action: string, extras: {
-  resourceType?: string; resourcePath?: string; deviceId?: number; details?: Record<string, unknown>;
-} = {}): Promise<void> {
-  await auditService.log({
-    tenantId, userId, action,
-    resourceType: extras.resourceType, resourcePath: extras.resourcePath, deviceId: extras.deviceId,
+type AuditExtras = { resourceType?: string; resourcePath?: string; deviceId?: number; details?: Record<string, unknown> };
+
+/** The entry of an executor's action, filed in `tenantId` as the requester,
+ *  naming the approval being executed (audit-durci §5.7). */
+function executorEntry(tenantId: number, action: string, extras: AuditExtras): AuditEntryInput {
+  const target = extras.resourceType || extras.deviceId !== undefined
+    ? {
+      type: extras.resourceType || 'device',
+      id: extras.resourcePath ?? String(extras.deviceId ?? ''),
+      ...(extras.deviceId !== undefined ? { device: extras.deviceId } : {}),
+    }
+    : undefined;
+  return {
+    tenantId, action, target, approvalIds: currentApprovalIds(),
     details: { ...(extras.details ?? {}), viaApproval: true },
-  }).catch(() => {});
+  };
+}
+
+/** P3 / P4: an executor's standard or protective action, after the fact.
+ *  Never throws (the writer spools a failure). A critical action goes
+ *  through withAuditAs instead (P2). */
+export async function auditAs(tenantId: number, userId: number, action: string, extras: AuditExtras = {}): Promise<void> {
+  const ctx = await audit.fromDbActor(userActor(userId), tenantId);
+  await audit.append(executorEntry(tenantId, action, extras), ctx);
+}
+
+/** P2: an executor's critical action — the intent is written before `fn`,
+ *  which runs only if it was (AuditUnavailableError otherwise). */
+export async function withAuditAs<T>(tenantId: number, userId: number, action: string, extras: AuditExtras, fn: () => Promise<T>,
+  resultDetails?: (r: T) => Record<string, unknown>): Promise<T> {
+  const ctx = await audit.fromDbActor(userActor(userId), tenantId);
+  return audit.withIntent(executorEntry(tenantId, action, extras), ctx, fn, { resultDetails });
+}
+
+/** The audit context of a reviewer (the route's, else the reviewer's). */
+async function reviewerContext(given: AuditWriteContext | undefined, reviewerId: number, tenantId: number): Promise<AuditWriteContext> {
+  return given ?? audit.fromDbActor(userActor(reviewerId), tenantId);
 }
 
 // ── Module executors ────────────────────────────────────────────────────────
@@ -301,15 +331,12 @@ export const approvalService = {
       }).returning('*');
     }));
 
-    // Audit trail, in the approval's tenant (from its context, like the row).
-    await inApprovalTenant(params.tenantId, () => auditService.log({
-      tenantId: params.tenantId,
-      userId: params.userId,
-      action: 'approval.requested',
-      resourceType: 'approval',
-      resourcePath: String(row.id),
+    // Audit trail (P3), in the approval's tenant (from its context, like the row).
+    await inApprovalTenant(params.tenantId, async () => audit.append({
+      tenantId: params.tenantId, action: 'approval.requested', target: { type: 'approval', id: String(row.id) },
+      approvalIds: [Number(row.id)],
       details: { requestType: params.requestType, description: capDescription(params.description) },
-    })).catch(() => {});
+    }, await audit.fromDbActor(userActor(params.userId), params.tenantId)));
 
     // Live push to all admins in the tenant so a red badge appears immediately.
     try { getIO().to(`tenant:${params.tenantId}`).emit('APPROVAL_CREATED', rowToApproval(row)); } catch {}
@@ -341,20 +368,34 @@ export const approvalService = {
     }));
   },
 
-  /** Approve and execute (as the requester). Blocks self-approval. */
-  async approve(params: { tenantId: number; approvalId: number; reviewerId: number; reason?: string }): Promise<PendingApproval> {
+  /** Approve and execute (as the requester). Blocks self-approval. The
+   *  decision is P1 (audit-durci §10.4, J27): the request is claimed and
+   *  approval.approved written in the same transaction, before the execution;
+   *  when the entry cannot be written the request stays pending and the
+   *  reviewer gets 503 auditUnavailable. */
+  async approve(params: { tenantId: number; approvalId: number; reviewerId: number; reason?: string; auditCtx?: AuditWriteContext }): Promise<PendingApproval> {
     const row = await this._openRow(params.tenantId, params.approvalId);
     if (row.requested_by === params.reviewerId) {
       throw Object.assign(new Error('Cannot approve your own request'), { status: 403 });
     }
+    const ctx = await reviewerContext(params.auditCtx, params.reviewerId, Number(row.tenant_id));
 
     // Conditional on 'pending' and the deadline: two approvers (or a double
     // click) racing on the same request execute it once.
-    const claimed = await stillOpen(db('pending_approvals').where({ id: row.id })).update({
-      status: 'approved',
-      reviewed_by: params.reviewerId,
-      reviewed_at: new Date(),
-      review_reason: params.reason ?? null,
+    const claimed = await db.transaction(async (trx) => {
+      const n = await stillOpen(trx('pending_approvals').where({ id: row.id })).update({
+        status: 'approved',
+        reviewed_by: params.reviewerId,
+        reviewed_at: new Date(),
+        review_reason: params.reason ?? null,
+      });
+      if (!n) return 0;
+      await audit.appendInTx(trx, {
+        tenantId: Number(row.tenant_id), action: 'approval.approved', target: { type: 'approval', id: String(row.id) },
+        approvalIds: [Number(row.id)], reason: typeof params.reason === 'string' && params.reason ? params.reason : undefined,
+        details: { requestType: row.request_type, requestedBy: Number(row.requested_by), description: capDescription(row.description) },
+      }, ctx);
+      return n;
     });
     if (!claimed) await this._lostRace(row.id);
 
@@ -368,8 +409,8 @@ export const approvalService = {
       const sealed = row.sealed_payload_enc
         ? await vault.openJson<Record<string, unknown>>(sealedAt(Number(row.id), Number(row.tenant_id)), row.sealed_payload_enc)
         : {};
-      partial = await asTenant(Number(row.tenant_id), userActor(Number(row.requested_by)),
-        () => this._execute(row, payload, sealed)) ?? null;
+      partial = await runInApprovalScope(Number(row.id), () => asTenant(Number(row.tenant_id), userActor(Number(row.requested_by)),
+        () => this._execute(row, payload, sealed))) ?? null;
     } catch (err) {
       failure = (err instanceof Error ? err.message : String(err)) || 'Execution failed';
       logger.error({ err, approvalId: row.id }, 'approval execution failed');
@@ -379,14 +420,14 @@ export const approvalService = {
       ? { execution_error: failure.slice(0, 1000), sealed_payload_enc: null, sealed_payload: null }
       : { status: 'executed', executed_at: new Date(), execution_error: partial ? partial.slice(0, 1000) : null, sealed_payload_enc: null, sealed_payload: null });
 
-    await auditService.log({
-      tenantId: row.tenant_id,
-      userId: params.reviewerId,
-      action: 'approval.approved',
-      resourceType: 'approval',
-      resourcePath: String(row.id),
-      details: { reason: params.reason, executed: !failure, ...(failure ? { error: failure.slice(0, 500) } : {}) },
-    }).catch(() => {});
+    // The outcome of the execution (P3): a refusal or a partial execution.
+    if (failure || partial) {
+      await audit.append({
+        tenantId: Number(row.tenant_id), action: 'approval.executed', outcome: failure ? 'failure' : 'success',
+        target: { type: 'approval', id: String(row.id) }, approvalIds: [Number(row.id)],
+        details: { requestType: row.request_type, ...(failure ? { error: failure.slice(0, 500) } : { partial: String(partial).slice(0, 500) }) },
+      }, ctx);
+    }
 
     const fresh = await db('pending_approvals').where({ id: row.id }).first();
     emitUpdated(fresh);
@@ -394,7 +435,7 @@ export const approvalService = {
   },
 
   /** Deny — no execution. */
-  async deny(params: { tenantId: number; approvalId: number; reviewerId: number; reason?: string }): Promise<PendingApproval> {
+  async deny(params: { tenantId: number; approvalId: number; reviewerId: number; reason?: string; auditCtx?: AuditWriteContext }): Promise<PendingApproval> {
     const row = await this._openRow(params.tenantId, params.approvalId);
     if (row.requested_by === params.reviewerId) {
       throw Object.assign(new Error('Cannot deny your own request'), { status: 403 });
@@ -408,21 +449,19 @@ export const approvalService = {
       sealed_payload: null,
     });
     if (!done) await this._lostRace(row.id);
-    await auditService.log({
-      tenantId: row.tenant_id,
-      userId: params.reviewerId,
-      action: 'approval.denied',
-      resourceType: 'approval',
-      resourcePath: String(row.id),
-      details: { reason: params.reason },
-    }).catch(() => {});
+    // P4 (protective): the refusal stands whatever the journal says.
+    await audit.append({
+      tenantId: Number(row.tenant_id), action: 'approval.denied', target: { type: 'approval', id: String(row.id) },
+      approvalIds: [Number(row.id)], reason: typeof params.reason === 'string' && params.reason ? params.reason : undefined,
+      details: { requestType: row.request_type },
+    }, await reviewerContext(params.auditCtx, params.reviewerId, Number(row.tenant_id)));
     const fresh = await db('pending_approvals').where({ id: row.id }).first();
     emitUpdated(fresh);
     return rowToApproval(fresh);
   },
 
   /** Requester cancels their own pending approval (no review needed). */
-  async cancel(params: { tenantId: number; approvalId: number; userId: number }): Promise<PendingApproval> {
+  async cancel(params: { tenantId: number; approvalId: number; userId: number; auditCtx?: AuditWriteContext }): Promise<PendingApproval> {
     const row = await this._openRow(params.tenantId, params.approvalId);
     if (row.requested_by !== params.userId) {
       throw Object.assign(new Error('Only the requester can cancel'), { status: 403 });
@@ -430,13 +469,11 @@ export const approvalService = {
     const done = await stillOpen(db('pending_approvals').where({ id: row.id }))
       .update({ status: 'cancelled', reviewed_at: new Date(), sealed_payload_enc: null, sealed_payload: null });
     if (!done) await this._lostRace(row.id);
-    await auditService.log({
-      tenantId: row.tenant_id,
-      userId: params.userId,
-      action: 'approval.cancelled',
-      resourceType: 'approval',
-      resourcePath: String(row.id),
-    }).catch(() => {});
+    // P4 (protective).
+    await audit.append({
+      tenantId: Number(row.tenant_id), action: 'approval.cancelled', target: { type: 'approval', id: String(row.id) },
+      approvalIds: [Number(row.id)], details: { requestType: row.request_type },
+    }, await reviewerContext(params.auditCtx, params.userId, Number(row.tenant_id)));
     const fresh = await db('pending_approvals').where({ id: row.id }).first();
     emitUpdated(fresh);
     return rowToApproval(fresh);
@@ -491,14 +528,18 @@ export const approvalService = {
       .andWhere('status', 'pending')
       .update({ status: 'expired', sealed_payload_enc: null, sealed_payload: null })
       .returning('*') as any[];
+    // P3, as the job (actor j:<queue>, request id job-<id>) or the caller.
+    const job = typeof auditDetails.actor === 'string' ? /^job:(.+)$/.exec(auditDetails.actor)?.[1] : undefined;
+    const actor: DbActor = job ? { type: 'job', name: job } : currentDbContext()?.actor ?? { type: 'job', name: 'core.approvals.expire' };
     for (const row of rows) {
-      await auditService.log({
-        tenantId: row.tenant_id,
-        action: 'approval.expired',
-        resourceType: 'approval',
-        resourcePath: String(row.id),
-        details: { requestType: row.request_type, description: row.description, requestedBy: row.requested_by, ...auditDetails },
-      }).catch(() => {});
+      const ctx = job
+        ? audit.fromJob({ name: job, requestId: typeof auditDetails.jobId === 'string' ? `job-${auditDetails.jobId}` : 'job' })
+        : await audit.fromDbActor(actor, Number(row.tenant_id));
+      await audit.append({
+        tenantId: Number(row.tenant_id), action: 'approval.expired', target: { type: 'approval', id: String(row.id) },
+        approvalIds: [Number(row.id)],
+        details: { requestType: row.request_type, description: capDescription(row.description), requestedBy: Number(row.requested_by) },
+      }, ctx);
       emitUpdated(row);
     }
     return rows.length;
@@ -542,7 +583,6 @@ export const approvalService = {
       await this._executeTeamAction(tenantId, userId, payload as unknown as Record<string, unknown>);
       return;
     }
-    if (action === 'audit_clear') { await this._executeAuditClear(tenantId, userId, payload as unknown as Record<string, unknown>); return; }
     if (action === 'restrictions_update') { await this._executeRestrictionsUpdate(tenantId, userId, payload as unknown as Record<string, unknown>); return; }
     // The modules' actions (registerApprovalExecutor), then their default.
     const x: ApprovalExecution = { tenantId, requesterId: userId, payload, sealed };
@@ -604,12 +644,11 @@ export const approvalService = {
       }
       case 'user_2fa_reset': {
         const target = await userScope.assertManageableTarget(actor, targetId);
-        if (!(await resetSecondFactors(targetId, requesterId, { auditTenantId: tenantId }))) refuse('User not found');
-        await auditService.log({
-          tenantId, userId: requesterId, action: 'user.2fa_reset',
-          resourceType: 'user', resourcePath: String(targetId),
-          details: { username: target.username, viaApproval: true },
-        }).catch(() => {});
+        // P2: the intent is written before the factors go.
+        const done = await withAuditAs(tenantId, requesterId, 'user.2fa_reset',
+          { resourceType: 'user', resourcePath: String(targetId), details: { username: target.username } },
+          () => resetSecondFactors(targetId, requesterId, { auditTenantId: tenantId }));
+        if (!done) refuse('User not found');
         return;
       }
       case 'user_tenants_set': {
@@ -617,12 +656,9 @@ export const approvalService = {
         if (target.foreign_source === 'obligate') refuse('SSO user tenant access is managed from Obligate');
         const assignments = await userScope.resolveTenantAssignments(actor, targetId, payload.assignments);
         const { userService } = await import('./user.service');
-        await userService.setUserTenantAssignments(targetId, assignments);
-        await auditService.log({
-          tenantId, userId: requesterId, action: 'user.tenants_changed',
-          resourceType: 'user', resourcePath: String(targetId),
-          details: { username: target.username, assignments, viaApproval: true },
-        }).catch(() => {});
+        await withAuditAs(tenantId, requesterId, 'user.tenants_changed',
+          { resourceType: 'user', resourcePath: String(targetId), details: { username: target.username, assignments } },
+          () => userService.setUserTenantAssignments(targetId, assignments));
         return;
       }
       case 'user_device_keys_revoke': {
@@ -634,11 +670,9 @@ export const approvalService = {
         const done = keyId
           ? await deviceKeyService.revoke([keyId], 'admin', { ownerId: targetId, byUserId: requesterId, auditTenantId: tenantId })
           : await deviceKeyService.revokeAllForUser(targetId, 'admin', { byUserId: requesterId, auditTenantId: tenantId });
-        await auditService.log({
-          tenantId, userId: requesterId, action: 'user.device_keys_revoked',
-          resourceType: 'user', resourcePath: String(targetId),
-          details: { username: target.username, keys: done.map((d) => d.id), viaApproval: true },
-        }).catch(() => {});
+        await auditAs(tenantId, requesterId, 'user.device_keys_revoked', {
+          resourceType: 'user', resourcePath: String(targetId), details: { username: target.username, keys: done.map((d) => d.id) },
+        });
         return;
       }
       default:
@@ -774,34 +808,23 @@ export const approvalService = {
         if (payload.memberIds === undefined) refuse(`This team request was filed without its content — ${REDO}`);
         const parsed = schemas.setTeamMembersSchema.safeParse({ memberIds: payload.memberIds });
         if (!parsed.success) invalidRequest(parsed.error);
-        await inTeamTenant(() => teamService.setMembers(teamId, parsed.data.memberIds));
-        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.members_changed', {
+        await inTeamTenant(() => withAuditAs(teamTenantId, requesterId, 'team.members_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { userCount: parsed.data.memberIds.length, memberIds: parsed.data.memberIds },
-        }));
+        }, () => teamService.setMembers(teamId, parsed.data.memberIds)));
         return;
       }
       case 'team_permissions_set': {
         if (payload.permissions === undefined) refuse(`This team request was filed without its content — ${REDO}`);
         const parsed = schemas.setTeamPermissionsSchema.safeParse({ permissions: payload.permissions });
         if (!parsed.success) invalidRequest(parsed.error);
-        await inTeamTenant(() => teamService.setPermissions(teamId, parsed.data.permissions));
-        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.permissions_changed', {
+        await inTeamTenant(() => withAuditAs(teamTenantId, requesterId, 'team.permissions_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { permissionCount: parsed.data.permissions.length },
-        }));
+        }, () => teamService.setPermissions(teamId, parsed.data.permissions)));
         return;
       }
       default:
         refuse(`Approval action '${action}' is not a known team action — ${REDO}`);
     }
-  },
-
-  /** Approved "clear the audit log" (audit.clear, 'restricted' by default). */
-  async _executeAuditClear(tenantId: number, requesterId: number, payload: Record<string, unknown>): Promise<void> {
-    await requirePlatformAdmin(requesterId);
-    if (Number(payload.tenantId) !== tenantId) refuse('The request targets another tenant\'s audit log');
-    const deleted = await db('audit_logs').where({ tenant_id: tenantId }).delete();
-    // The act of clearing leaves a mark (who, when, how many), as the route does.
-    await auditAs(tenantId, requesterId, 'audit.cleared', { resourceType: 'audit_log', resourcePath: 'tenant', details: { entriesDeleted: deleted } });
   },
 
   /** Approved restrictions matrix (tenant.manage_restrictions): exactly the
@@ -824,7 +847,13 @@ export const approvalService = {
       else map[key] = c.to;
       applied.push(key);
     }
-    await restrictionService.setMap(tenantId, map as any); // normalises (a bad entry → none)
-    await auditAs(tenantId, requesterId, 'restrictions.updated', { resourceType: 'restrictions', resourcePath: 'tenant', details: { changed: applied } });
+    // P1: the matrix and its entry in one transaction (normalised: a bad entry → none).
+    const ctx = await audit.fromDbActor(userActor(requesterId), tenantId);
+    await db.transaction(async (trx) => {
+      await restrictionService.setMap(tenantId, map as any, trx);
+      await audit.appendInTx(trx, executorEntry(tenantId, 'restrictions.updated', {
+        resourceType: 'restrictions', resourcePath: 'tenant', details: { changed: applied },
+      }), ctx);
+    });
   },
 };

@@ -24,7 +24,7 @@ import { db } from '../db';
 import { asNone, type DbActor } from '../db/context';
 import { logger } from '../utils/logger';
 import { VaultError } from './errors';
-import { masterEntry, vaultAlert, writeVaultAudit } from './events';
+import { masterEntry, vaultAlert, writeVaultAuditInTx } from './events';
 import { operationError, vaultOperations } from './operations';
 import { secretColumns } from './registry';
 import { scopesOf } from './scopes';
@@ -189,18 +189,19 @@ export async function runDekRotation(operationId: string, o: RotationOptions): P
       if (!(await stillSealedUnder(tenantId, retiredDekId, o))) break;
     }
 
-    // Step 3: the retired DEK is destroyed; nothing is sealed under it any more.
+    // Step 3: the retired DEK is destroyed; nothing is sealed under it any
+    // more. The entries in the same transaction (P1, critical).
+    const details = { operationId, tenantId, retiredDekId, newDekId, version: op.params.newVersion ?? null, resealed, reason: op.reason };
     await asNone(o.actor, () => db.transaction(async (trx) => {
       await trx('data_keys').where({ id: retiredDekId, state: 'retired' })
         .update({ state: 'destroyed', dek_wrapped: null, destroyed_at: trx.fn.now() });
       await vaultOperations.update(trx, operationId, { state: 'done', finishedAt: new Date(), progress: { resealed }, error: null });
+      await writeVaultAuditInTx(trx, [
+        ...(tenantId !== null ? [{ tenantId, action: 'vault.dek_rotated', resourceType: 'vault', details }] : []),
+        masterEntry('vault.dek_rotated', details, { resourceType: 'vault_operation', resourcePath: operationId }),
+      ]);
     }));
     vaultInternals.keyring.invalidate({ ids: [retiredDekId] });
-    const details = { operationId, tenantId, retiredDekId, newDekId, version: op.params.newVersion ?? null, resealed, reason: op.reason };
-    await asNone(o.actor, () => writeVaultAudit([
-      ...(tenantId !== null ? [{ tenantId, action: 'vault.dek_rotated', resourceType: 'vault', details }] : []),
-      masterEntry('vault.dek_rotated', details, { resourceType: 'vault_operation', resourcePath: operationId }),
-    ]));
     logger.info({ operationId, tenantId, resealed }, 'vault: DEK rotation done');
     return { tenantId, retiredDekId, newDekId, resealed };
   } catch (err) {

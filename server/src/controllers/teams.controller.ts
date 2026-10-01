@@ -95,6 +95,18 @@ async function auditTeam(req: Request, teamTenantId: number, action: string, tea
   } catch {}
 }
 
+/** A critical team change (P2, audit-durci §5.7): the intent is written in
+ *  the team's tenant before `fn` runs there (AuditUnavailableError, 503,
+ *  otherwise), its result after. */
+async function withTeamIntent<T>(req: Request, teamTenantId: number, action: string, teamId: number,
+  details: Record<string, unknown>, fn: () => Promise<T>): Promise<T> {
+  const { audit } = await import('../audit');
+  return asTargetTenant(req, teamTenantId, async () => audit.withIntent(
+    { tenantId: teamTenantId, action, target: { type: 'team', id: String(teamId) }, details },
+    await audit.fromRequest(req, teamTenantId), fn,
+  ));
+}
+
 export const teamsController = {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -249,8 +261,8 @@ export const teamsController = {
       });
       if (!gated) return;
 
-      await asTargetTenant(req, Number(team.tenantId), () => teamService.setMembers(team.id, memberIds));
-      await auditTeam(req, Number(team.tenantId), 'team.members_changed', team.id, { userCount: memberIds.length, memberIds });
+      await withTeamIntent(req, Number(team.tenantId), 'team.members_changed', team.id, { userCount: memberIds.length, memberIds },
+        () => teamService.setMembers(team.id, memberIds));
       res.json({ success: true, data: memberIds });
     } catch (err) {
       next(err);
@@ -289,8 +301,8 @@ export const teamsController = {
       });
       if (!gated) return;
 
-      const result = await asTargetTenant(req, Number(team.tenantId), () => teamService.setPermissions(team.id, permissions));
-      await auditTeam(req, Number(team.tenantId), 'team.permissions_changed', team.id, { permissionCount: permissions.length });
+      const result = await withTeamIntent(req, Number(team.tenantId), 'team.permissions_changed', team.id, { permissionCount: permissions.length },
+        () => teamService.setPermissions(team.id, permissions));
       res.json({ success: true, data: result });
     } catch (err) {
       next(err);
@@ -303,9 +315,9 @@ export const teamsController = {
       const team = await teamInScope(req);
       const permId = Number(req.params.permId);
       if (!Number.isInteger(permId) || permId <= 0) throw new AppError(404, 'Permission not found');
-      const deleted = await asTargetTenant(req, Number(team.tenantId), () => teamService.removePermission(team.id, permId));
-      if (!deleted) throw new AppError(404, 'Permission not found');
-      await auditTeam(req, Number(team.tenantId), 'team.permission_removed', team.id, { permissionId: permId });
+      await withTeamIntent(req, Number(team.tenantId), 'team.permission_removed', team.id, { permissionId: permId }, async () => {
+        if (!(await teamService.removePermission(team.id, permId))) throw new AppError(404, 'Permission not found');
+      });
       res.json({ success: true, message: 'Permission removed' });
     } catch (err) {
       next(err);

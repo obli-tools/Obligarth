@@ -1,8 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { isMasterTenant } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
-import { auditService } from '../services/audit.service';
 import { applyRestriction } from '../services/restriction.service';
+import { audit as journal, registerAuditActions } from '../audit';
 import { DEAD_LETTER_QUEUE } from './registry';
 import { isJobListState, isQueueName, UUID_RE, type JobsAdmin } from './admin';
 
@@ -18,6 +18,27 @@ import { isJobListState, isQueueName, UUID_RE, type JobsAdmin } from './admin';
 // =============================================================================
 
 const LIMIT_MAX = 200;
+
+// The audit actions of the jobs administration (audit-durci §3.4, FD-RC5):
+// critical, written as an intent before the operation (P2, threat S11).
+registerAuditActions([
+  { name: 'jobs.run_triggered', criticality: 'critical', label: 'Background job run by hand' },
+  { name: 'jobs.cancelled', criticality: 'critical', label: 'Background job cancelled' },
+  { name: 'jobs.redriven', criticality: 'critical', label: 'Dead letters redriven' },
+  { name: 'jobs.dead_letter_discarded', criticality: 'critical', label: 'Dead letter discarded' },
+  { name: 'outbox.dead_letter_viewed', criticality: 'critical', label: 'Outbox dead letter viewed' },
+  { name: 'outbox.dead_letter_redriven', criticality: 'critical', label: 'Outbox dead letter redriven' },
+  { name: 'outbox.dead_letter_discarded', criticality: 'critical', label: 'Outbox dead letter discarded' },
+]);
+
+/** How an operation's audit entry is written: P2, the intent before `fn`,
+ *  the result after (with its details). */
+export type JobsAuditRunner = <T>(
+  action: string,
+  extras: { resourceType: string; resourcePath: string; details: Record<string, unknown> },
+  fn: () => Promise<T>,
+  resultDetails?: (r: T) => Record<string, unknown>,
+) => Promise<T>;
 
 function limitOf(req: Request): number {
   const raw = req.query.limit;
@@ -56,35 +77,31 @@ export function describeJobsOp(o: JobsManageOp): string {
   }
 }
 
-/** Runs an operation and its audit entry (master tenant). */
-export async function performJobsOp(
-  admin: JobsAdmin, o: JobsManageOp,
-  audit: (action: string, extras: { resourceType: string; resourcePath: string; details: Record<string, unknown> }) => Promise<void>,
-): Promise<{ status: number; body: unknown }> {
+/** Runs an operation with its audit entry (master tenant): the intent is
+ *  written before the operation (critical, P2), the result after. */
+export async function performJobsOp(admin: JobsAdmin, o: JobsManageOp, audit: JobsAuditRunner): Promise<{ status: number; body: unknown }> {
   switch (o.op) {
     case 'run': {
-      const r = await admin.runNow(o.queue);
-      await audit('jobs.run_triggered', { resourceType: 'job_queue', resourcePath: o.queue, details: { queue: o.queue, jobId: r.jobId } });
+      const r = await audit('jobs.run_triggered', { resourceType: 'job_queue', resourcePath: o.queue, details: { queue: o.queue } },
+        () => admin.runNow(o.queue), (x) => ({ jobId: x.jobId }));
       return { status: 202, body: { data: r } };
     }
     case 'cancel': {
-      await admin.cancelJob(o.queue, o.jobId);
-      await audit('jobs.cancelled', { resourceType: 'job', resourcePath: o.jobId, details: { queue: o.queue, jobId: o.jobId } });
+      await audit('jobs.cancelled', { resourceType: 'job', resourcePath: o.jobId, details: { queue: o.queue, jobId: o.jobId } },
+        () => admin.cancelJob(o.queue, o.jobId));
       return { status: 200, body: { data: { cancelled: true } } };
     }
     case 'redrive': {
-      const r = await admin.redrive({ ids: o.ids, source: o.source });
-      await audit('jobs.redriven', {
+      const r = await audit('jobs.redriven', {
         resourceType: 'job_queue', resourcePath: DEAD_LETTER_QUEUE,
-        details: { moved: r.moved, sources: r.sources, ...(o.ids ? { ids: o.ids.length } : {}), ...(o.source ? { source: o.source } : {}) },
-      });
+        details: { ...(o.ids ? { ids: o.ids.length } : {}), ...(o.source ? { source: o.source } : {}) },
+      }, () => admin.redrive({ ids: o.ids, source: o.source }), (x) => ({ moved: x.moved, sources: x.sources }));
       return { status: 200, body: { data: { moved: r.moved } } };
     }
     case 'discard': {
-      const r = await admin.discard(o.id);
-      await audit('jobs.dead_letter_discarded', {
-        resourceType: 'job', resourcePath: o.id, details: { source: r.sourceName, sourceId: r.sourceId, id: o.id },
-      });
+      const r = await audit('jobs.dead_letter_discarded', { resourceType: 'job', resourcePath: o.id, details: { id: o.id } },
+        () => admin.discard(o.id), (x) => ({ source: x.sourceName, sourceId: x.sourceId }));
+      void r;
       return { status: 200, body: { data: { deleted: true } } };
     }
     default:
@@ -107,7 +124,10 @@ export function createJobsAdminRouter(admin: JobsAdmin): Router {
       approvalPayload: { action: 'jobs_manage', ...o },
     });
     if (!approved) return; // answered by applyRestriction (second factor, or approval filed)
-    const out = await performJobsOp(admin, o, (action, extras) => auditService.logReq(req, action, extras));
+    const out = await performJobsOp(admin, o, async (action, extras, fn, resultDetails) => journal.withIntent(
+      { tenantId: Number(req.tenantId), action, target: { type: extras.resourceType, id: extras.resourcePath }, details: extras.details },
+      await journal.fromRequest(req, Number(req.tenantId)), fn, { resultDetails },
+    ));
     res.status(out.status).json(out.body);
   });
 

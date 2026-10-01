@@ -38,11 +38,15 @@ function isPlatformAdmin(req: Request): boolean {
   return req.session.role === 'admin';
 }
 
-async function auditUserAction(req: Request, action: string, targetId: number, details: Record<string, unknown>): Promise<void> {
-  try {
-    const { auditService } = await import('../services/audit.service');
-    await auditService.logReq(req, action, { resourceType: 'user', resourcePath: String(targetId), details });
-  } catch {}
+/** A critical account change (P2, audit-durci §5.7): the intent is written
+ *  in the request's tenant before `fn` (AuditUnavailableError, 503,
+ *  otherwise), its result after. */
+async function withUserIntent<T>(req: Request, action: string, targetId: number, details: Record<string, unknown>,
+  fn: () => Promise<T>): Promise<T> {
+  const { audit } = await import('../audit');
+  const tenantId = Number(req.tenantId);
+  return audit.withIntent({ tenantId, action, target: { type: 'user', id: String(targetId) }, details },
+    await audit.fromRequest(req, tenantId), fn);
 }
 
 export const usersController = {
@@ -217,14 +221,15 @@ export const usersController = {
       }
 
       const data = req.body as ChangePasswordInput;
-      const success = await switchToIdentity(() => userService.changePassword(id, data.password));
-      if (!success) throw new AppError(404, 'User not found');
+      await withUserIntent(req, 'user.password_reset_admin', id, { username: target.username }, async () => {
+        const success = await switchToIdentity(() => userService.changePassword(id, data.password));
+        if (!success) throw new AppError(404, 'User not found');
+      });
       // §6.7: the account's phone keys die with the old password (trigger = safety net).
       try {
         const { deviceKeyService } = await import('../services/deviceKey/deviceKey.service');
         await deviceKeyService.revokeAllForUser(id, 'password_reset', { byUserId: req.session.userId, req });
       } catch { /* trigger */ }
-      await auditUserAction(req, 'user.password_reset_admin', id, { username: target.username });
       res.json({ success: true, message: 'Password changed' });
     } catch (err) {
       next(err);
@@ -330,8 +335,9 @@ export const usersController = {
 
       // Removes the factors, lifts the code lock (§6.8) and the IP trusts
       // that rested on the removed factor.
-      if (!(await resetSecondFactors(id, req.session.userId, { req }))) throw new AppError(404, 'User not found');
-      await auditUserAction(req, 'user.2fa_reset', id, { username: target.username });
+      await withUserIntent(req, 'user.2fa_reset', id, { username: target.username }, async () => {
+        if (!(await resetSecondFactors(id, req.session.userId, { req }))) throw new AppError(404, 'User not found');
+      });
       res.json({ success: true, message: 'MFA reset successfully' });
     } catch (err) {
       next(err);
@@ -429,8 +435,8 @@ export const usersController = {
       });
       if (!gated) return;
 
-      await userService.setUserTenantAssignments(id, assignments);
-      await auditUserAction(req, 'user.tenants_changed', id, { username: targetUser.username, assignments });
+      await withUserIntent(req, 'user.tenants_changed', id, { username: targetUser.username, assignments },
+        () => userService.setUserTenantAssignments(id, assignments));
       res.json({ success: true, message: 'Tenant assignments updated' });
     } catch (err) {
       next(err);

@@ -6,8 +6,9 @@ import type { Tenant, TenantWithRole } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import { clientIp } from '../utils/clientIp';
 import { normaliseTenantRole } from './userScope.service';
-import { currentDbContext, switchToIdentity, switchToNone, switchToTenant } from '../db/context';
+import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type DbActor } from '../db/context';
 import { vault } from '../vault';
+import { audit, type AuditWriteContext } from '../audit';
 
 // Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
 // caller's context (each sees the tenants it may: its own memberships, every
@@ -106,6 +107,14 @@ function actorUserId(): number | null {
   return actor?.type === 'user' ? actor.userId : null;
 }
 
+/** The audit context of a tenant change: the request's, else the current
+ *  database context's actor. */
+async function auditContextOf(given: AuditWriteContext | undefined, chainTenantId: number, ip?: string): Promise<AuditWriteContext> {
+  if (given) return given;
+  const actor: DbActor = currentDbContext()?.actor ?? { type: 'anonymous', name: 'unscoped' };
+  return audit.fromDbActor(actor, chainTenantId, { ip });
+}
+
 export const tenantService = {
   async getAll(): Promise<Tenant[]> {
     const rows = await db('tenants').select<TenantRow[]>('*').orderBy('id');
@@ -131,40 +140,60 @@ export const tenantService = {
    *  the database otherwise). Its first data key is created by the vault in
    *  the same transaction (coffre-secrets §6.2: no valid tenant lacks one);
    *  the apple-edge integration adds its provisioning (lot B). */
-  async create(data: { name: string; slug: string }, opts: { ipAddress?: string } = {}): Promise<Tenant> {
+  async create(data: { name: string; slug: string }, opts: { ipAddress?: string; auditCtx?: AuditWriteContext } = {}): Promise<Tenant> {
     const { defaultRestrictions } = await import('./restriction.service');
-    const tenant = await switchToNone(() => db.transaction(async (trx) => {
+    const ctx = await auditContextOf(opts.auditCtx, MASTER_TENANT_ID, opts.ipAddress);
+    return switchToNone(() => db.transaction(async (trx) => {
       const { rows } = await trx.raw('SELECT obligarth.tenant_create(?, ?, ?::jsonb) AS id',
         [data.name, data.slug, JSON.stringify(defaultRestrictions())]) as { rows: Array<{ id: number }> };
       const id = Number(rows[0].id);
       await vault.createTenantKey(trx, id);
-      const row = await trx('tenants').where({ id }).first();
-      return rowToTenant(row as TenantRow);
+      const row = await trx('tenants').where({ id }).first() as TenantRow;
+      // P1, last statement of the transaction (audit-durci §4.6): no tenant
+      // without its entry, no entry without its tenant.
+      await audit.appendInTx(trx, {
+        tenantId: MASTER_TENANT_ID, action: 'tenant.created', onBehalfOf: id,
+        target: { type: 'tenant', id: String(id) }, details: { slug: row.slug, name: row.name },
+      }, ctx);
+      return rowToTenant(row);
     }));
-    // Until the hardened journal (lot A6: audit.appendInTx, P1, last statement
-    // of the transaction), written once the tenant exists.
-    const { auditService } = await import('./audit.service');
-    await auditService.log({
-      tenantId: MASTER_TENANT_ID, userId: actorUserId() ?? undefined, action: 'tenant.created', resourceType: 'tenant',
-      resourcePath: String(tenant.id), details: { onBehalfOf: tenant.id, slug: tenant.slug }, ipAddress: opts.ipAddress,
-    });
-    return tenant;
   },
 
   /** Settings of a tenant, written in its own context. The slug is fixed at
    *  creation (join key with Obligate, R11): a different slug is refused. */
-  async update(id: number, data: { name?: string; slug?: string; twoStepApproval?: boolean }): Promise<Tenant | null> {
+  /** The change and its tenant.updated entry (P1, the tenant's chain) in one
+   *  transaction; no entry when nothing changes. */
+  async update(id: number, data: { name?: string; slug?: string; twoStepApproval?: boolean },
+    opts: { auditCtx?: AuditWriteContext } = {}): Promise<Tenant | null> {
     return switchToTenant(id, async () => {
-      if (data.slug !== undefined) {
-        const current = await db('tenants').where({ id }).first('slug') as { slug: string } | undefined;
+      const ctx = await auditContextOf(opts.auditCtx, id);
+      return db.transaction(async (trx) => {
+        const current = await trx('tenants').where({ id }).forUpdate().first() as TenantRow | undefined;
         if (!current) return null;
-        if (data.slug !== current.slug) throw new AppError(400, 'The slug of a tenant cannot be changed', 'tenantSlugImmutable');
-      }
-      const patch: any = { updated_at: db.fn.now() };
-      if (data.name !== undefined) patch.name = data.name;
-      if (data.twoStepApproval !== undefined) patch.two_step_approval = data.twoStepApproval;
-      const [row] = await db('tenants').where({ id }).update(patch).returning('*');
-      return row ? rowToTenant(row as TenantRow) : null;
+        if (data.slug !== undefined && data.slug !== current.slug) {
+          throw new AppError(400, 'The slug of a tenant cannot be changed', 'tenantSlugImmutable');
+        }
+        const patch: any = { updated_at: trx.fn.now() };
+        const changes: Record<string, unknown> = {};
+        if (data.name !== undefined) {
+          patch.name = data.name;
+          if (data.name !== current.name) changes.name = { from: current.name, to: data.name };
+        }
+        if (data.twoStepApproval !== undefined) {
+          patch.two_step_approval = data.twoStepApproval;
+          if (data.twoStepApproval !== !!current.two_step_approval) {
+            changes.twoStepApproval = { from: !!current.two_step_approval, to: data.twoStepApproval };
+          }
+        }
+        const [row] = await trx('tenants').where({ id }).update(patch).returning('*');
+        if (row && Object.keys(changes).length) {
+          await audit.appendInTx(trx, {
+            tenantId: id, action: 'tenant.updated', onBehalfOf: id === MASTER_TENANT_ID ? undefined : id,
+            target: { type: 'tenant', id: String(id) }, details: changes,
+          }, ctx);
+        }
+        return row ? rowToTenant(row as TenantRow) : null;
+      });
     });
   },
 
@@ -179,22 +208,26 @@ export const tenantService = {
    *  tenant. The entries vault.dek_destroyed and tenant.deleted (master
    *  tenant) come last (review COF-RC2): written once the transaction
    *  commits until the hardened journal (lot A6) writes them in it. */
-  async delete(id: number, opts: { ipAddress?: string } = {}): Promise<void> {
+  async delete(id: number, opts: { ipAddress?: string; auditCtx?: AuditWriteContext } = {}): Promise<void> {
     const userId = actorUserId();
-    const entries = await switchToNone(() => db.transaction(async (trx) => {
+    const ctx = await auditContextOf(opts.auditCtx, MASTER_TENANT_ID, opts.ipAddress);
+    await switchToNone(() => db.transaction(async (trx) => {
       const tenant = await trx('tenants').where({ id }).first('id', 'slug') as { id: number; slug: string } | undefined;
       const { auditEntry } = await vault.shredTenantKeys(trx, id, { userId }, { audit: 'return' });
       await trx.raw('SELECT obligarth.tenant_delete(?)', [id]);
-      return [
-        ...(auditEntry ? [{ ...auditEntry, ipAddress: opts.ipAddress }] : []),
+      // vault.dek_destroyed and tenant.deleted last (COF-RC2, AUD-RC8), P1:
+      // the head of the master chain is not held during the cascade.
+      await audit.appendManyInTx(trx, [
+        ...(auditEntry ? [{
+          tenantId: MASTER_TENANT_ID, action: auditEntry.action, onBehalfOf: id,
+          target: { type: 'tenant', id: String(id) }, details: auditEntry.details,
+        }] : []),
         {
-          tenantId: MASTER_TENANT_ID, userId: userId ?? undefined, action: 'tenant.deleted', resourceType: 'tenant',
-          resourcePath: String(id), details: { onBehalfOf: id, slug: tenant?.slug ?? null }, ipAddress: opts.ipAddress,
+          tenantId: MASTER_TENANT_ID, action: 'tenant.deleted', onBehalfOf: id,
+          target: { type: 'tenant', id: String(id) }, details: { slug: tenant?.slug ?? null },
         },
-      ];
+      ], ctx);
     }));
-    const { auditService } = await import('./audit.service');
-    for (const e of entries) await auditService.log(e);
   },
 
   /** Returns the first tenant accessible by userId (lowest id). */

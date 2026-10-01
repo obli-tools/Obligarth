@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
-import { restrictionService, restrictableActions, sanitizeMap, diffMaps } from '../services/restriction.service';
-import { auditService } from '../services/audit.service';
+import { restrictionService, restrictableActions, restrictionFloors, sanitizeMap, diffMaps } from '../services/restriction.service';
+import { db } from '../db';
+import { audit } from '../audit';
 
 const router = Router();
 
@@ -13,7 +14,8 @@ router.use(requireAuth, requireRole('admin'));
 router.get('/', async (req, res, next) => {
   try {
     const map = await restrictionService.getMap(req.tenantId!);
-    res.json({ data: { map, actions: restrictableActions() } });
+    // Floors: the levels an action never goes below (audit-durci §12.2).
+    res.json({ data: { map, actions: restrictableActions(), floors: restrictionFloors() } });
   } catch (err) { next(err); }
 });
 
@@ -46,14 +48,18 @@ router.put('/', async (req, res, next) => {
       if (!approved) return;
     }
 
-    await restrictionService.setMap(req.tenantId!, incoming);
-    await auditService.logReq(req, 'restrictions.updated', {
-      resourceType: 'restrictions',
-      resourcePath: 'tenant',
-      details: { keys: Object.keys(incoming), changed: changes.map((c) => c.key) },
+    // P1 (critical): the matrix and its entry in one transaction, the entry
+    // last; a matrix whose entry cannot be written is not changed (503).
+    const ctx = await audit.fromRequest(req, req.tenantId!);
+    await db.transaction(async (trx) => {
+      await restrictionService.setMap(req.tenantId!, incoming, trx);
+      await audit.appendInTx(trx, {
+        tenantId: req.tenantId!, action: 'restrictions.updated', target: { type: 'restrictions', id: 'tenant' },
+        details: { keys: Object.keys(incoming), changed: changes.map((c) => c.key) },
+      }, ctx);
     });
     const map = await restrictionService.getMap(req.tenantId!);
-    res.json({ data: { map, actions: restrictableActions() } });
+    res.json({ data: { map, actions: restrictableActions(), floors: restrictionFloors() } });
   } catch (err) { next(err); }
 });
 

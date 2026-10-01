@@ -5,6 +5,7 @@ import { db } from './index';
 import { actorToken, asNone, type DbActor } from './context';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { clientIp } from '../utils/clientIp';
 
 // =============================================================================
 // Cross-tenant read grants (rls-tenant §6.1, §6.2, §7.4)
@@ -49,6 +50,8 @@ export function sessionRef(sessionId: string): string {
 export async function openPlatformGrant(input: {
   actor: DbActor; reason: string; route?: string; requestId?: string;
   sessionRef?: string; tenantFilter?: number[] | null;
+  /** Origin of the request that opens a user's grant (its audit entry). */
+  origin?: { ip?: string; ua?: string };
 }): Promise<PlatformGrant> {
   const { actor } = input;
   if (actor.type !== 'user' && actor.type !== 'job' && actor.type !== 'integration') {
@@ -63,32 +66,36 @@ export async function openPlatformGrant(input: {
   const filter = Array.isArray(input.tenantFilter)
     ? input.tenantFilter.map(Number).filter((n) => Number.isInteger(n) && n > 0)
     : null;
-  await asNone(actor, () => db('platform_access_grants').insert({
-    id,
-    actor: token,
-    actor_type: actor.type,
-    user_id: actor.type === 'user' ? actor.userId : null,
-    reason,
-    route: shortText(input.route, 200),
-    request_id: shortText(input.requestId, 64),
-    session_ref: input.sessionRef && /^[0-9a-f]{64}$/.test(input.sessionRef) ? input.sessionRef : null,
-    tenant_filter: filter && filter.length > 0 ? filter : null,
-    created_at: new Date(now),
-    expires_at: new Date(expiresAt),
-  }));
-  if (actor.type === 'user') {
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await asNone(actor, () => auditService.log({
-        tenantId: MASTER_TENANT_ID,
-        userId: actor.userId,
-        action: 'platform.global_view_opened',
-        resourceType: 'platform_grant',
-        resourcePath: id,
+  const sessionHash = input.sessionRef && /^[0-9a-f]{64}$/.test(input.sessionRef) ? input.sessionRef : null;
+  // A user's grant and its audit entry in one transaction (audit-durci §3.4,
+  // P1, critical): a global view whose entry cannot be written is not opened.
+  const { audit } = await import('../audit');
+  const auditCtx = actor.type === 'user'
+    ? await audit.fromDbActor(actor, MASTER_TENANT_ID, { ip: input.origin?.ip, ua: input.origin?.ua, requestId: input.requestId, route: shortText(input.route, 120) ?? undefined })
+    : null;
+  if (auditCtx && sessionHash) auditCtx.actor.session = sessionHash;
+  await asNone(actor, () => db.transaction(async (trx) => {
+    await trx('platform_access_grants').insert({
+      id,
+      actor: token,
+      actor_type: actor.type,
+      user_id: actor.type === 'user' ? actor.userId : null,
+      reason,
+      route: shortText(input.route, 200),
+      request_id: shortText(input.requestId, 64),
+      session_ref: sessionHash,
+      tenant_filter: filter && filter.length > 0 ? filter : null,
+      created_at: new Date(now),
+      expires_at: new Date(expiresAt),
+    });
+    if (auditCtx) {
+      await audit.appendInTx(trx, {
+        tenantId: MASTER_TENANT_ID, action: 'platform.global_view_opened', target: { type: 'platform_grant', id },
+        links: { grant: id },
         details: { reason, route: shortText(input.route, 200), expiresAt: new Date(expiresAt).toISOString() },
-      }));
-    } catch { /* the audit never breaks the read */ }
-  }
+      }, auditCtx);
+    }
+  }));
   logger.info({ grantId: id, actor: token, reason, route: input.route, requestId: input.requestId }, 'platform grant opened');
   return { id, actor, expiresAt };
 }
@@ -142,6 +149,7 @@ export async function globalViewGrant(req: Request, reason = 'console.global_vie
     route: `${req.method} ${req.baseUrl ?? ''}${req.route?.path ?? req.path ?? ''}`,
     requestId: req.requestId,
     sessionRef: ref,
+    origin: { ip: clientIp(req) || undefined, ua: req.get?.('user-agent') || undefined },
   }));
 }
 
