@@ -96,6 +96,9 @@ export async function openPlatformGrant(input: {
 // ── Grants of the sessions (global view of the console) ─────────────────────
 
 const sessionGrants = new Map<string, PlatformGrant>();   // actor|sha256(sid) → grant
+/** Grants being opened, by key: concurrent requests of one session (the
+ *  dashboard's parallel reads) share one grant and one audit event. */
+const opening = new Map<string, Promise<PlatformGrant>>();
 
 function remember(map: Map<string, PlatformGrant>, key: string, grant: PlatformGrant): void {
   if (map.size >= MAX_CACHED) {
@@ -104,6 +107,24 @@ function remember(map: Map<string, PlatformGrant>, key: string, grant: PlatformG
     if (map.size >= MAX_CACHED) map.clear();
   }
   map.set(key, grant);
+}
+
+/** The cached grant of `key` while more than REUSE_MARGIN_MS is left of it,
+ *  else the one being opened, else a new one (`open`). */
+function reuseOrOpen(map: Map<string, PlatformGrant>, key: string, open: () => Promise<PlatformGrant>): Promise<PlatformGrant> {
+  const cached = map.get(key);
+  if (cached && cached.expiresAt - Date.now() > REUSE_MARGIN_MS) return Promise.resolve(cached);
+  const inFlight = opening.get(key);
+  if (inFlight) return inFlight;
+  const p: Promise<PlatformGrant> = open().then((grant) => {
+    // Not cached when forgotten meanwhile (sign-out, sessions killed).
+    if (opening.get(key) === p) remember(map, key, grant);
+    return grant;
+  }).finally(() => {
+    if (opening.get(key) === p) opening.delete(key);
+  });
+  opening.set(key, p);
+  return p;
 }
 
 /** The grant of the session's global view: reused within its window (more
@@ -115,17 +136,13 @@ export async function globalViewGrant(req: Request, reason = 'console.global_vie
   const sid = typeof req.sessionID === 'string' && req.sessionID ? req.sessionID : `request:${randomUUID()}`;
   const ref = sessionRef(sid);
   const key = `${actorToken(actor)}|${ref}`;
-  const cached = sessionGrants.get(key);
-  if (cached && cached.expiresAt - Date.now() > REUSE_MARGIN_MS) return cached;
-  const grant = await openPlatformGrant({
+  return reuseOrOpen(sessionGrants, key, () => openPlatformGrant({
     actor,
     reason,
     route: `${req.method} ${req.baseUrl ?? ''}${req.route?.path ?? req.path ?? ''}`,
     requestId: req.requestId,
     sessionRef: ref,
-  });
-  remember(sessionGrants, key, grant);
-  return grant;
+  }));
 }
 
 /** Drops the cached grant of a session (sign-out): the next global-view
@@ -134,12 +151,14 @@ export function forgetGrantsOfSession(sessionId: string): void {
   if (typeof sessionId !== 'string' || !sessionId) return;
   const suffix = `|${sessionRef(sessionId)}`;
   for (const key of sessionGrants.keys()) if (key.endsWith(suffix)) sessionGrants.delete(key);
+  for (const key of opening.keys()) if (key.endsWith(suffix)) opening.delete(key);
 }
 
 /** Drops every cached grant of a user (killSessionsForUser). */
 export function forgetGrantsOfUser(userId: number): void {
   const prefix = `u:${Number(userId)}|`;
   for (const key of sessionGrants.keys()) if (key.startsWith(prefix)) sessionGrants.delete(key);
+  for (const key of opening.keys()) if (key.startsWith(prefix)) opening.delete(key);
 }
 
 // ── Grants of integrations and jobs ─────────────────────────────────────────
@@ -151,11 +170,7 @@ const integrationGrants = new Map<string, PlatformGrant>();
 export async function integrationGrant(name: string, reason: string): Promise<PlatformGrant> {
   const actor: DbActor = { type: 'integration', name };
   const key = `${actorToken(actor)}|${reason}`;
-  const cached = integrationGrants.get(key);
-  if (cached && cached.expiresAt - Date.now() > REUSE_MARGIN_MS) return cached;
-  const grant = await openPlatformGrant({ actor, reason });
-  remember(integrationGrants, key, grant);
-  return grant;
+  return reuseOrOpen(integrationGrants, key, () => openPlatformGrant({ actor, reason }));
 }
 
 /** One grant per execution of a job (reason 'job:<queue>'). */

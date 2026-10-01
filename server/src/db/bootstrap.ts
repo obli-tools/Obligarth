@@ -84,14 +84,29 @@ END $$;
 `;
 
 /**
+ * The roles that would carry the runtime role past the row level security if
+ * it could take them on (rls-tenant §7.9, point 1): any role with SUPERUSER,
+ * BYPASSRLS, CREATEROLE or CREATEDB, the owner role, and PostgreSQL's
+ * predefined roles of the server's files and programs (superuser-level
+ * access, as PostgreSQL documents them). The caller appends the membership
+ * condition (pg_has_role … 'SET' or 'USAGE') and the ORDER BY. Checked by the
+ * boot guard and by server-migrate --check.
+ */
+export const PRIVILEGED_ROLES_SQL = String.raw`
+SELECT r.rolname FROM pg_catalog.pg_roles r
+ WHERE (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
+        OR r.rolname IN ('obligarth_owner', 'pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files'))`;
+
+/**
  * Privileges of the runtime role BEFORE the row level security is active
  * (step 1 of rls-tenant §10.4: the server runs as `obligarth`, the RLS
  * migration C is not applied yet). Plain DML on the tables of the schema —
  * read only for the reader role, never on the Knex tracking tables, insert
- * only on the grants journal — and the sequences of those tables. Applied by
- * server-migrate after the migrations, only while no table of the schema has
- * the RLS enabled: from migration C on, obligarth_private.rls_apply grants
- * per class (and revokes these first). Idempotent.
+ * only on the grants journal, never an update of the audit journal — and the
+ * sequences of those tables. Applied by server-migrate after the migrations,
+ * only while no table of the schema has the RLS enabled: from migration C
+ * on, obligarth_private.rls_apply grants per class (and revokes these first).
+ * Idempotent.
  */
 export const PRE_RLS_GRANTS_SQL = String.raw`
 DO $$
@@ -104,6 +119,12 @@ BEGIN
       CONTINUE;
     ELSIF r.relname = 'platform_access_grants' THEN
       EXECUTE format('GRANT SELECT, INSERT ON %s TO obligarth', r.qualified);
+    ELSIF r.relname = 'audit_logs' THEN
+      -- The audit journal is never updated (rls-tenant §5.3.5): what
+      -- migration C grants it (block C.8), and no more.
+      EXECUTE format('REVOKE UPDATE ON %s FROM obligarth', r.qualified);
+      EXECUTE format('GRANT SELECT, INSERT, DELETE ON %s TO obligarth', r.qualified);
+      EXECUTE format('GRANT SELECT ON %s TO obligarth_reader', r.qualified);
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO obligarth', r.qualified);
       -- The reader role (contexts member and platform) never reads the

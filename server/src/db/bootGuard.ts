@@ -1,4 +1,5 @@
 import { db } from './index';
+import { PRIVILEGED_ROLES_SQL } from './bootstrap';
 import { asNone, asTenant, contextMode, contextSigningEnabled, type DbActor } from './context';
 import { missingMigrations } from './migrationFiles';
 import { logger } from '../utils/logger';
@@ -11,7 +12,9 @@ import { logger } from '../utils/logger';
 // 'none' (actor a:boot). The server refuses to start (exit code 1) on any
 // finding:
 //   1. the current role is `obligarth`, without SUPERUSER, BYPASSRLS,
-//      CREATEROLE nor CREATEDB;
+//      CREATEROLE nor CREATEDB, and it cannot take on (SET ROLE, or an
+//      inherited membership) a role that has one of them, the owner role or
+//      a role of the server's files and programs;
 //   2. it owns no object of the schemas obligarth and obligarth_private;
 //   3. obligarth.rls_audit() is empty — once the RLS is active (migration
 //      C): before it, no table is classified yet;
@@ -50,6 +53,19 @@ export async function bootGuard(): Promise<void> {
     }
     if (r && (r.rolsuper || r.rolbypassrls || r.rolcreaterole || r.rolcreatedb)) {
       findings.push(`the role ${r.name} has SUPERUSER, BYPASSRLS, CREATEROLE or CREATEDB: row level security would not hold`);
+    }
+    // A membership carries the role past the row level security just as well
+    // (a GRANT made by hand on an external database, say): SET ROLE to a
+    // superuser or to the owner, or the owner's rights inherited.
+    if (r && !r.rolsuper) {
+      const reachable = await db.raw(`${PRIVILEGED_ROLES_SQL}
+           AND (pg_has_role(current_user, r.oid, 'SET') OR pg_has_role(current_user, r.oid, 'USAGE'))
+           AND r.rolname <> current_user
+         ORDER BY r.rolname`) as Rows<{ rolname: string }>;
+      if (reachable.rows.length > 0) {
+        findings.push(`the role ${r.name} can take on ${reachable.rows.map((x) => x.rolname).join(', ')} (SET ROLE or inherited ` +
+          'membership): row level security would not hold, revoke the membership');
+      }
     }
 
     // 2. ownership

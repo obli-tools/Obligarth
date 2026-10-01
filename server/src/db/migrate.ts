@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import knex from 'knex';
 import pg from 'pg';
 import { migrationConfig } from '../../knexfile';
-import { BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL } from './bootstrap';
+import { BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL, PRIVILEGED_ROLES_SQL } from './bootstrap';
 import { contextKeyId, loadContextKeyFile } from './context';
 import { missingMigrations, shippedMigrations } from './migrationFiles';
 import { logger } from '../utils/logger';
@@ -60,6 +60,19 @@ const ADOPTION_HINT =
   'This database was created before the row level security (rls-tenant §10.5): recreate the development volume ' +
   '(docker compose down -v; POSTGRES_USER=obligarth_admin only acts on a new volume), or adopt it once with the ' +
   'procedure of annex B (backup first).';
+
+/** PostgreSQL refused the administrator's sign-in (28P01, 28000). On a
+ *  volume created before the row level security, obligarth_admin does not
+ *  even exist: the refusal of step 1 cannot be reached, hence the hint. */
+function adminSignInRefused(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === '28P01' || code === '28000';
+}
+
+const SIGN_IN_HINT =
+  'The administrator of DATABASE_ADMIN_URL cannot sign in: check DB_ADMIN_PASSWORD. A database volume created before ' +
+  'the row level security has no role obligarth_admin (POSTGRES_USER only acts on a new volume): recreate it ' +
+  '(docker compose down -v), or adopt it once with the procedure of annex B of rls-tenant (backup first).';
 
 type Q = (sql: string, values?: unknown[]) => Promise<pg.QueryResult>;
 
@@ -232,7 +245,8 @@ export interface CheckReport {
   pending: string[];
 }
 
-/** `--check`: roles, schemas, migrations and RLS audit, without any change. */
+/** `--check`: roles (attributes and memberships), schemas, migrations and RLS
+ *  audit, without any change. */
 export async function checkDatabase(adminUrl: string): Promise<CheckReport> {
   if (!adminUrl) throw new MigrateRefusal('DATABASE_ADMIN_URL is not set.');
   return withAdmin(adminUrl, async (q) => {
@@ -245,6 +259,17 @@ export async function checkDatabase(adminUrl: string): Promise<CheckReport> {
       if (!r) { findings.push(`role ${name} missing (run server-migrate)`); continue; }
       if (r.rolsuper || r.rolbypassrls || r.rolcreaterole || r.rolcreatedb) findings.push(`role ${name} has a forbidden attribute`);
       if ((name === 'obligarth') !== r.rolcanlogin) findings.push(`role ${name}: unexpected LOGIN attribute`);
+    }
+    // The runtime role must not be able to take on a privileged role either
+    // (SET ROLE, or an inherited membership): same check as the boot guard.
+    if (byName.has('obligarth')) {
+      const reach = await q(`${PRIVILEGED_ROLES_SQL}
+           AND (pg_has_role('obligarth', r.oid, 'SET') OR pg_has_role('obligarth', r.oid, 'USAGE'))
+           AND r.rolname <> 'obligarth'
+         ORDER BY r.rolname`);
+      if (reach.rowCount) {
+        findings.push(`role obligarth can take on ${reach.rows.map((x) => String(x.rolname)).join(', ')} (membership): revoke it`);
+      }
     }
     const schemas = await q(`SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace
                               WHERE nspname IN ('obligarth', 'obligarth_private', 'pgboss')`);
@@ -298,7 +323,10 @@ async function main(): Promise<void> {
 if (require.main === module) {
   main().catch((err) => {
     if (err instanceof MigrateRefusal) logger.fatal(err.message);
-    else logger.fatal({ err }, 'server-migrate failed');
+    else {
+      logger.fatal({ err }, 'server-migrate failed');
+      if (adminSignInRefused(err)) logger.fatal(SIGN_IN_HINT);
+    }
     process.exitCode = 1;
   }).finally(() => {
     // pino writes asynchronously: give the last lines a moment.
