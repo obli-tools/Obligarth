@@ -205,6 +205,7 @@ export function isStepUpHandled(err: unknown): boolean {
   const body = e?.response?.data;
   if (isStepUpThrottleBody(status, body)) return true;
   if (status === 503 && body?.verifierUnavailable === true) return true;
+  if (status === 503 && body?.code === 'auditUnavailable') return true;
   const method = (e?.config?.method || 'get').toLowerCase();
   return (status === 401 || status === 403 || status === 423) && typeof body?.error === 'string' && method !== 'get';
 }
@@ -212,6 +213,13 @@ export function isStepUpHandled(err: unknown): boolean {
 apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
+    // A download (responseType 'blob', the audit log export) that fails
+    // answers JSON: read it back, so the step-up and the messages below see
+    // the same body as any other request.
+    const raw = error?.response?.data;
+    if (typeof Blob !== 'undefined' && raw instanceof Blob && /json/i.test(raw.type)) {
+      try { error.response.data = JSON.parse(await raw.text()); } catch { /* left as is */ }
+    }
     const status = error?.response?.status;
     const body = error?.response?.data;
     const config = error?.config ?? {};
@@ -299,6 +307,14 @@ apiClient.interceptors.response.use(
     // Step-up failures the server flags (code already used, wrong password,
     // Obligate unreachable, wrong code) get a translated text.
     const stepUpMsg = stepUpErrorMessage(status, body, (config as any)._tfaWithPassword === true);
+    // A critical action refused because its audit entry could not be
+    // written (the journal is unavailable): nothing was done.
+    if (status === 503 && body?.code === 'auditUnavailable') {
+      Promise.all([import('react-hot-toast'), import('i18next')]).then(([{ default: toast }, { default: i18n }]) => {
+        toast.error(i18n.t('audit.errors.unavailable', 'The action was not carried out: the audit log is unavailable.'), { duration: 8000 });
+      }).catch(() => {});
+      return Promise.reject(error);
+    }
     const shouldSurface =
       ((status === 401 || status === 403 || status === 423) || (stepUpMsg !== null))
       && body?.error

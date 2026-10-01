@@ -258,6 +258,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const hasAgentConfigCap =
     tenantCaps.has('agent_config:keys') ||
     tenantCaps.has('agent_config:approval');
+  //   - audit.read / approvals.review → Security (the journal; the approvals)
+  const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review');
   const { toggleSidebarFloating, toggleSidebarCollapsed } = useUiStore();
   // Effective (device-aware) mode — see useEffectiveSidebar(). The drawer is
   // always the full, expanded sidebar.
@@ -487,8 +489,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const adminNavItems: NavItem[] = [
     // Users / Teams / Permissions / Restrictions — admin only.
     ...(admin ? [{ label: t('nav.users'), path: '/admin/users', icon: <Users size={18} /> } as NavItem] : []),
-    // Security — audit log + approvals + 2FA, admin only.
-    ...(admin ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: pendingApprovalsCount } as NavItem] : []),
+    // Security — the journal (audit.read), the approvals (approvals.review)
+    // and, for platform administrators, the vault and the journal settings.
+    ...(admin || hasSecurityCap ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: admin ? pendingApprovalsCount : 0 } as NavItem] : []),
     // Supervision — reports. Visible if platform admin OR the user holds the
     // `supervision:read` tenant capability.
     ...(admin || hasSupervisionCap

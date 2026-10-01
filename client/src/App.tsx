@@ -73,6 +73,12 @@ export default function App() {
      "tenants admin"). Old URL kept as alias above so external
      bookmarks / saved deep-links keep resolving. */}
  <Route path="/workspace" element={<AdminTenantsPage />} />
+ </Route>
+
+ {/* Security — the journal for the holders of audit.read (tenant
+     administrators, the client sets approver and auditor), the
+     approvals; platform administrators always. */}
+ <Route element={<ProtectedRoute requiredCapabilities={['audit.read', 'approvals.review']} />}>
  <Route path="/admin/audit-log" element={<AuditLogPage />} />
  <Route path="/admin/security" element={<SecurityPage />} />
  </Route>

@@ -214,6 +214,11 @@ export function AppLayout() {
             desktop). */}
         <main className="flex min-w-0 flex-1 flex-col overflow-y-auto px-safe pb-safe">
           <Outlet />
+          {/* Information of the administrators (CNIL 2021-122): what they do
+              here is journaled, and for how long. */}
+          <footer className="mt-auto px-4 py-2 text-center text-[10px] text-text-muted/70 select-none">
+            {t('auth.loggingNotice') || 'The actions taken in this console are logged for security and traceability, and kept 12 months by default.'}
+          </footer>
         </main>
 
       </div>

@@ -324,6 +324,8 @@ export function LoginPage() {
  </div>
 
  <p className="fixed bottom-3 left-0 right-0 text-center text-xs text-text-secondary/50 select-none max-lg:static max-lg:mt-8 coarse:static coarse:mt-8">
+ {/* Information of the administrators (CNIL 2021-122): the console's actions are journaled. */}
+ <span className="block mb-1 mx-auto max-w-xl px-4">{t('auth.loggingNotice') || 'The actions taken in this console are logged for security and traceability, and kept 12 months by default.'}</span>
  {t('login.clientVersion', { version: __APP_VERSION__ })}
  {serverVersion && ` · ${t('login.serverVersion', { version: serverVersion })}`}
  </p>

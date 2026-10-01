@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield, FileText, ShieldCheck, KeyRound } from 'lucide-react';
+import { Shield, FileText, ShieldCheck, KeyRound, Settings2 } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { AuditLogPage } from './AuditLogPage';
@@ -12,22 +12,34 @@ import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { VaultPanel } from './admin/VaultPanel';
+import { AuditSettingsPage } from './admin/AuditSettingsPage';
 
-type Tab = 'audit' | 'approvals' | 'vault';
+type Tab = 'audit' | 'approvals' | 'vault' | 'auditSettings';
 
-// Single admin-level "Security" page that groups the audit log, the
-// two-step approval review queue and (platform administrators on the master
-// tenant) the vault of secrets as tabs. Tab selection is reflected in the URL
-// (?tab=audit|approvals|vault) so a deep-link stays stable.
+// The "Security" page groups, as tabs: the journal (holders of audit.read:
+// tenant administrators, the client sets approver and auditor, platform
+// administrators), the two-step approval review queue (platform
+// administrators), and, for the platform administrators on the master
+// tenant, the vault of secrets and the journal's settings (retention, SIEM
+// destinations, sealing). Tab selection is reflected in the URL
+// (?tab=audit|approvals|vault|auditSettings) so a deep-link stays stable.
 
 export function SecurityPage() {
  const { t } = useTranslation();
  const [searchParams, setSearchParams] = useSearchParams();
  const isPlatformAdmin = useAuthStore((st) => st.user?.role === 'admin');
+ const caps = useAuthStore((st) => st.permissions?.tenantCapabilities ?? []);
  const { currentTenantId } = useTenantStore();
- const vaultVisible = isPlatformAdmin && currentTenantId === MASTER_TENANT_ID;
- const asked = (searchParams.get('tab') as Tab) || 'audit';
- const initial: Tab = asked === 'vault' && !vaultVisible ? 'audit' : asked;
+ const platformOnMaster = isPlatformAdmin && currentTenantId === MASTER_TENANT_ID;
+ const visible: Record<Tab, boolean> = {
+ audit: isPlatformAdmin || caps.includes('audit.read'),
+ approvals: isPlatformAdmin,
+ vault: platformOnMaster,
+ auditSettings: platformOnMaster,
+ };
+ const firstVisible = (['audit', 'approvals', 'vault', 'auditSettings'] as Tab[]).find((k) => visible[k]) ?? 'audit';
+ const asked = searchParams.get('tab') as Tab | null;
+ const initial: Tab = asked && visible[asked] ? asked : firstVisible;
  const [tab, setTab] = useState<Tab>(initial);
  const [pendingCount, setPendingCount] = useState(0);
 
@@ -44,6 +56,7 @@ export function SecurityPage() {
  // Keep the in-tab Approvals badge count in sync so switching tabs is
  // instant even if the Approvals page itself hasn't loaded yet.
  useEffect(() => {
+ if (!visible.approvals) return;
  let cancelled = false;
  const load = async () => {
  try {
@@ -67,7 +80,8 @@ export function SecurityPage() {
  socket.off('APPROVAL_UPDATED', handler);
  }
  };
- }, []);
+ // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [visible.approvals]);
 
  return (
  <PageContainer>
@@ -75,35 +89,46 @@ export function SecurityPage() {
  <Shield className="w-6 h-6 text-accent" />
  <div>
  <h1 className="text-xl font-semibold text-text-primary">{t('security.title', 'Security')}</h1>
- <p className="text-sm text-text-muted">{t('security.description', 'Audit trail and pending approvals.')}</p>
+ <p className="text-sm text-text-muted">{t('security.description') || 'Audit trail and pending approvals.'}</p>
  </div>
  </div>
 
  <div className="flex items-center gap-1 rounded-lg bg-bg-secondary p-1 border border-transparent mb-4 inline-flex max-w-full overflow-x-auto scrollbar-none">
+ {visible.audit && (
  <TabBtn active={tab === 'audit'} onClick={() => setTab('audit')}>
  <FileText className="w-4 h-4" />
- {t('security.tabAudit', 'Audit log')}
+ {t('security.tabAudit') || 'Audit log'}
  </TabBtn>
+ )}
+ {visible.approvals && (
  <TabBtn active={tab === 'approvals'} onClick={() => setTab('approvals')}>
  <ShieldCheck className="w-4 h-4" />
- {t('security.tabApprovals', 'Approvals')}
+ {t('security.tabApprovals') || 'Approvals'}
  {pendingCount > 0 && (
  <span className="ml-1 min-w-[1.25rem] px-1.5 py-0.5 rounded-full bg-red-500/20 text-red-400 border border-red-500/30 text-[10px] font-semibold text-center">
  {pendingCount > 99 ? '99+' : pendingCount}
  </span>
  )}
  </TabBtn>
- {vaultVisible && (
+ )}
+ {visible.vault && (
  <TabBtn active={tab === 'vault'} onClick={() => setTab('vault')}>
  <KeyRound className="w-4 h-4" />
  {t('security.tabVault') || 'Vault'}
  </TabBtn>
  )}
+ {visible.auditSettings && (
+ <TabBtn active={tab === 'auditSettings'} onClick={() => setTab('auditSettings')}>
+ <Settings2 className="w-4 h-4" />
+ {t('security.tabAuditSettings') || 'Journal settings'}
+ </TabBtn>
+ )}
  </div>
 
- {tab === 'audit' && <AuditLogPage embedded />}
- {tab === 'approvals' && <ApprovalsPage embedded />}
- {tab === 'vault' && vaultVisible && <VaultPanel />}
+ {tab === 'audit' && visible.audit && <AuditLogPage embedded />}
+ {tab === 'approvals' && visible.approvals && <ApprovalsPage embedded />}
+ {tab === 'vault' && visible.vault && <VaultPanel />}
+ {tab === 'auditSettings' && visible.auditSettings && <AuditSettingsPage />}
  </PageContainer>
  );
 }
