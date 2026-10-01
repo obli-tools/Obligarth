@@ -168,13 +168,17 @@ export const notificationService = {
     return rows.map((r: { tenant_id: number }) => r.tenant_id);
   },
 
-  /** Replaces the sharing list for a channel (full replace — not additive). */
+  /** Replaces the sharing list for a channel (full replace — not additive).
+   *  Only a master-tenant channel is shared (owner_tenant_id = 1, checked by
+   *  the database), in the master tenant's context. */
   async setChannelTenants(channelId: number, tenantIds: number[]): Promise<void> {
     await db.transaction(async (trx) => {
+      const channel = await trx('notification_channels').where({ id: channelId }).first('tenant_id') as { tenant_id: number } | undefined;
+      if (!channel) throw new Error('Channel not found');
       await trx('notification_channel_tenants').where({ channel_id: channelId }).del();
       if (tenantIds.length > 0) {
         await trx('notification_channel_tenants').insert(
-          tenantIds.map((tenant_id) => ({ channel_id: channelId, tenant_id })),
+          tenantIds.map((tenant_id) => ({ owner_tenant_id: channel.tenant_id, channel_id: channelId, tenant_id })),
         );
       }
     });

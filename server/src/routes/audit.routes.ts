@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { auditService } from '../services/audit.service';
 import { isMasterTenant } from '@obligarth/shared';
+import { globalViewScope } from '../middleware/dbContext';
 
 const router = Router();
 
@@ -10,7 +11,9 @@ const router = Router();
 router.use(requireAuth, requireRole('admin'));
 
 // GET /api/audit-log?action=user.&userId=...&since=...&until=...&limit=100&offset=0
-router.get('/', async (req, res, next) => {
+// Reads accept the master tenant's global view (context 'platform'); the
+// clearing below writes in the session's tenant.
+router.get('/', globalViewScope('console.audit_log'), async (req, res, next) => {
   try {
     const parseDate = (v: any): Date | undefined => {
       if (!v || typeof v !== 'string') return undefined;
@@ -36,7 +39,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // GET /api/audit-log/distinct-actions — for filter dropdown in UI
-router.get('/distinct-actions', async (req, res, next) => {
+router.get('/distinct-actions', globalViewScope('console.audit_log'), async (req, res, next) => {
   try {
     const { db } = await import('../db');
     const isMaster = isMasterTenant(req.tenantId!);

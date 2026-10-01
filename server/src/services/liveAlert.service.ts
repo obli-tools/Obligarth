@@ -275,19 +275,20 @@ export const liveAlertService = {
   },
 
   /**
-   * Self-healing (deviceService.cleanOrphans): resolve the active incident
-   * rows whose device no longer exists (deleted by a path that did not
-   * resolve them, or before resolution existed). Returns the resolved ids.
+   * Self-healing (deviceService.cleanOrphans, tenant by tenant): resolve the
+   * active incident rows of `tenantId` whose device no longer exists
+   * (deleted by a path that did not resolve them, or before resolution
+   * existed). Returns the resolved ids.
    */
-  async resolveOrphanIncidents(): Promise<number[]> {
+  async resolveOrphanIncidents(tenantId: number): Promise<number[]> {
     const res = await db.raw(
       `SELECT DISTINCT x.device_id FROM (
          SELECT CASE WHEN stable_key ~ ? THEN split_part(stable_key, ':', 2)::int END AS device_id
-           FROM live_alerts WHERE resolved_at IS NULL AND stable_key LIKE 'device:%'
+           FROM live_alerts WHERE tenant_id = ? AND resolved_at IS NULL AND stable_key LIKE 'device:%'
        ) x
        WHERE x.device_id IS NOT NULL
-         AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.id = x.device_id)`,
-      [INCIDENT_KEY_REGEX],
+         AND NOT EXISTS (SELECT 1 FROM devices d WHERE d.id = x.device_id AND d.tenant_id = ?)`,
+      [INCIDENT_KEY_REGEX, tenantId, tenantId],
     );
     const deviceIds = ((res?.rows ?? []) as Array<{ device_id: number }>).map((r) => Number(r.device_id));
     if (deviceIds.length === 0) return [];
@@ -354,8 +355,8 @@ export const liveAlertService = {
       .update({ read_at: new Date() });
   },
 
-  async deleteAlert(id: number): Promise<void> {
-    await db('live_alerts').where({ id }).delete();
+  async deleteAlert(id: number, tenantId: number): Promise<void> {
+    await db('live_alerts').where({ id, tenant_id: tenantId }).delete();
   },
 
   async clearAll(tenantId: number): Promise<void> {

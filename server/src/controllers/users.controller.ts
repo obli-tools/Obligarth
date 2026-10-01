@@ -8,6 +8,8 @@ import {
 } from '../services/userAdmin.service';
 import { hashPassword } from '../utils/crypto';
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
+import { globalViewRead } from '../middleware/dbContext';
 import { isMasterTenant } from '@obligarth/shared';
 import type {
   CreateUserInput,
@@ -26,6 +28,11 @@ import type {
 // platform role, and may only change the current tenant's membership row.
 // Password and 2FA resets of one's own account go through the profile
 // (current password / current code), never through here.
+//
+// Database contexts (rls-tenant §8.2): a manager that is not a platform
+// admin reads in the tenant context (the tenant's members); a platform admin
+// reads every account in the identity context; every write to an account or
+// a membership runs in the identity context, after the P1 checks.
 
 function isPlatformAdmin(req: Request): boolean {
   return req.session.role === 'admin';
@@ -54,7 +61,7 @@ export const usersController = {
       const tenantId = Number(req.tenantId);
       if (!Number.isInteger(tenantId) || tenantId <= 0) throw new AppError(400, 'No tenant selected');
       const scopeAll = isPlatformAdmin(req) && isMasterTenant(tenantId);
-      const users = await userService.getAll(scopeAll ? null : tenantId);
+      const users = scopeAll ? await switchToIdentity(() => userService.getAll(null)) : await userService.getAll(tenantId);
       res.json({ success: true, data: users });
     } catch (err) {
       next(err);
@@ -68,7 +75,7 @@ export const usersController = {
       // Members of the current tenant; every account for a platform admin
       // (userScope.assertReadableTarget).
       await userScope.assertReadableTarget(actorFromReq(req), id);
-      const user = await userService.getById(id);
+      const user = isPlatformAdmin(req) ? await switchToIdentity(() => userService.getById(id)) : await userService.getById(id);
       if (!user) throw new AppError(404, 'User not found');
       res.json({ success: true, data: user });
     } catch (err) {
@@ -145,7 +152,7 @@ export const usersController = {
         if (data[k] !== undefined) body[k] = data[k];
       }
       const { change } = await import('../services/approvalDescribe');
-      const cur = await db('users').where({ id }).first('username', 'display_name', 'role', 'is_active') as
+      const cur = await switchToIdentity(() => db('users').where({ id }).first('username', 'display_name', 'role', 'is_active')) as
         { username: string; display_name: string | null; role: string; is_active: boolean } | undefined;
       const changes = [
         'username' in body ? change('username', cur?.username, body.username) : null,
@@ -210,7 +217,7 @@ export const usersController = {
       }
 
       const data = req.body as ChangePasswordInput;
-      const success = await userService.changePassword(id, data.password);
+      const success = await switchToIdentity(() => userService.changePassword(id, data.password));
       if (!success) throw new AppError(404, 'User not found');
       // §6.7: the account's phone keys die with the old password (trigger = safety net).
       try {
@@ -261,7 +268,9 @@ export const usersController = {
       const id = parseInt(req.params.id, 10);
       const actor = actorFromReq(req);
       await userScope.assertReadableTarget(actor, id);
-      let teams = await teamService.getUserTeams(id);
+      // Teams are tenant rows: every tenant's in the global view, the
+      // current tenant's otherwise.
+      let teams = await globalViewRead(req, () => teamService.getUserTeams(id));
       // A manager that is not a platform admin only sees the current
       // tenant's teams (the master tenant included: no global view for a
       // tenant administrator there).
@@ -280,7 +289,9 @@ export const usersController = {
       const id = parseInt(req.params.id, 10);
       const actor = actorFromReq(req);
       await userScope.assertReadableTarget(actor, id);
-      let assignments = await userService.getUserTenantAssignments(id);
+      let assignments = actor.isPlatformAdmin
+        ? await switchToIdentity(() => userService.getUserTenantAssignments(id))
+        : await userService.getUserTenantAssignments(id);
       // A manager that is not a platform admin sees (and may change) only
       // the current tenant's row: other tenants are neither listed nor
       // named. PUT /:id/tenants keeps the rows it does not send.
@@ -395,7 +406,7 @@ export const usersController = {
       // account outside the manager's reach answers 404, whatever it is.
       const actor = actorFromReq(req);
       const assignments = await userScope.resolveTenantAssignments(actor, id, (req.body as { assignments?: unknown })?.assignments);
-      const targetUser = await userService.getById(id);
+      const targetUser = await switchToIdentity(() => userService.getById(id));
       if (!targetUser) throw new AppError(404, 'User not found');
       if (targetUser.foreignSource === 'obligate') {
         throw new AppError(400, 'Cannot modify SSO user tenant access — manage from Obligate');

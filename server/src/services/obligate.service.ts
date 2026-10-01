@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { safeEqualSecret } from '../utils/safeCompare';
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 
 /**
@@ -457,7 +458,11 @@ export const obligateService = {
    */
   async getLinkedLocalUserId(obligateUserId: number): Promise<number | null> {
     if (!Number.isSafeInteger(obligateUserId) || obligateUserId <= 0) return null;
+    // A lookup by foreign identity: the identity context (rls-tenant §8.2).
+    return switchToIdentity(() => this.linkedLocalUserIdIn(obligateUserId));
+  },
 
+  async linkedLocalUserIdIn(obligateUserId: number): Promise<number | null> {
     const link = await db('sso_foreign_users as l')
       .join('users as u', 'u.id', 'l.local_user_id')
       .where({ 'l.foreign_source': 'obligate', 'l.foreign_user_id': obligateUserId })

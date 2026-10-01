@@ -3,6 +3,31 @@ import type { Knex } from 'knex';
 import { db } from '../db';
 import type { Request } from 'express';
 import { isMasterTenant } from '@obligarth/shared';
+import { asTenant, contextMode, countContextMissing, currentDbContext, type DbActor } from '../db/context';
+import { logger } from '../utils/logger';
+import { userLabels } from './userLabels.service';
+
+/**
+ * An entry is written in the database context of ITS tenant, as the current
+ * actor (rls-tenant §5.3.5, §8.2): a platform event filed under the master
+ * tenant from a sign-in, an action of the MSP filed in the client's tenant
+ * (logReqAs), all with the actor of the caller's context. Without a context
+ * (a defect): logged, and written only while DB_CONTEXT_MODE=audit.
+ */
+async function inEntryTenant(tenantId: number, fn: () => Promise<unknown>): Promise<void> {
+  const ctx = currentDbContext();
+  if (ctx?.kind === 'tenant' && ctx.tenantId === tenantId) { await fn(); return; }
+  let actor: DbActor;
+  if (ctx) {
+    actor = ctx.actor;
+  } else {
+    countContextMissing();
+    logger.warn({ code: 'DB_CONTEXT_MISSING', stack: new Error('audit entry').stack }, 'database query without context');
+    if (contextMode() !== 'audit') throw new Error('audit entry without a database context');
+    actor = { type: 'anonymous', name: 'unscoped' };
+  }
+  await asTenant(tenantId, actor, fn);
+}
 
 export interface AuditLogEntry {
   tenantId: number;
@@ -151,7 +176,7 @@ export const auditService = {
    *  request that's trying to be audited. */
   async log(entry: AuditLogEntry): Promise<void> {
     try {
-      await db('audit_logs').insert({
+      await inEntryTenant(entry.tenantId, () => db('audit_logs').insert({
         tenant_id: entry.tenantId,
         user_id: entry.userId ?? null,
         device_id: entry.deviceId ?? null,
@@ -160,10 +185,12 @@ export const auditService = {
         resource_path: entry.resourcePath ?? null,
         details: entry.details ? JSON.stringify(entry.details) : null,
         ip_address: entry.ipAddress ?? null,
-      });
-    } catch {
-      // Audit logging must never break the calling request. Any failure here
-      // (table missing during migration, JSON too large, etc.) is swallowed.
+      }));
+    } catch (err) {
+      // Audit logging must never break the calling request (until PLT-12
+      // makes it blocking for the critical actions), but a lost entry is
+      // logged, never swallowed.
+      logger.warn({ err, action: entry.action, tenantId: entry.tenantId }, 'audit entry not written');
     }
   },
 
@@ -205,18 +232,16 @@ export const auditService = {
 
   async getByDevice(deviceId: number, tenantId: number, limit = 50): Promise<AuditLogRow[]> {
     const rows = await db('audit_logs as al')
-      .leftJoin('users as u', 'u.id', 'al.user_id')
       .leftJoin('devices as d', deviceOfEntryTenant)
       .where({ 'al.device_id': deviceId, 'al.tenant_id': tenantId })
       .select(
         'al.*',
-        'u.username',
         db.raw('COALESCE(d.display_name, d.hostname) as device_name'),
         resourceNameSelect(),
       )
       .orderBy('al.created_at', 'desc')
       .limit(limit);
-    return rows.map(rowToAudit);
+    return withAuthorNames(rows);
   },
 
   /** Tenant-wide list with filters + pagination. */
@@ -282,7 +307,6 @@ export const auditService = {
     const rows = await base
       .select(
         'al.*',
-        'u.username',
         db.raw('COALESCE(d.display_name, d.hostname) as device_name'),
         'ten.name as tenant_name',
         resourceNameSelect(),
@@ -291,6 +315,14 @@ export const auditService = {
       .limit(limit)
       .offset(page);
 
-    return { items: rows.map(rowToAudit), total };
+    return { items: await withAuthorNames(rows), total };
   },
 };
+
+/** The rows with their authors' names (obligarth.user_labels: an MSP
+ *  administrator who acted in the tenant is named, an account of another
+ *  client never). */
+async function withAuthorNames(rows: any[]): Promise<AuditLogRow[]> {
+  const labels = await userLabels(rows.map((r) => r.user_id).filter((id) => id != null));
+  return rows.map((r) => rowToAudit({ ...r, username: r.user_id != null ? labels.get(Number(r.user_id))?.username ?? null : null }));
+}

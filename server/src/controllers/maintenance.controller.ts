@@ -3,14 +3,17 @@ import { maintenanceService, isWindowActive } from '../services/maintenance.serv
 import type { CreateMaintenanceWindowRequest, UpdateMaintenanceWindowRequest, MaintenanceScopeType } from '@obligarth/shared';
 import { isMasterTenant } from '@obligarth/shared';
 import { db } from '../db';
+import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
 
 // Tenant ownership gate. `maintenanceService.getById` is intentionally
 // tenant-agnostic (background scheduler uses it cross-tenant), so any
 // request-handler exposing / mutating a window MUST run this check
 // first. 404 on cross-tenant — same shape as "doesn't exist" so a
-// foreign window's existence isn't leaked.
+// foreign window's existence isn't leaked. Database context (rls-tenant
+// §6.3): read across tenants in the global view (context 'platform'); a
+// write then runs in the window's tenant (asTargetTenant).
 async function loadOwnedWindow(id: number, req: Request): Promise<Awaited<ReturnType<typeof maintenanceService.getById>> | null> {
-  const w = await maintenanceService.getById(id);
+  const w = await globalViewRead(req, () => maintenanceService.getById(id));
   if (!w) return null;
   if (!isMasterTenant(req.tenantId) && w.tenantId !== req.tenantId) return null;
   return w;
@@ -122,7 +125,7 @@ export const maintenanceController = {
       if (!owned) return res.status(404).json({ success: false, error: 'Not found' });
       const body: UpdateMaintenanceWindowRequest = req.body;
 
-      const updated = await maintenanceService.update(id, {
+      const updated = await asTargetTenant(req, owned.tenantId, () => maintenanceService.update(id, {
         name: body.name,
         scopeType: body.scopeType,
         scopeId: body.scopeId,
@@ -132,7 +135,7 @@ export const maintenanceController = {
         recurrenceRule: body.recurrenceRule ?? undefined,
         timezone: body.timezone,
         notificationChannels: body.notificationChannels ?? body.notifyChannelIds,
-      });
+      }));
       if (!updated) return res.status(404).json({ success: false, error: 'Not found' });
 
       const enriched = await enrichWindow(updated);
@@ -148,7 +151,7 @@ export const maintenanceController = {
       const id = Number(req.params.id);
       const existing = await loadOwnedWindow(id, req);
       if (!existing) return res.status(404).json({ success: false, error: 'Not found' });
-      await maintenanceService.delete(id);
+      await asTargetTenant(req, existing.tenantId, () => maintenanceService.delete(id));
       return res.json({ success: true });
     } catch (err) {
       console.error(err);
@@ -226,7 +229,8 @@ export const maintenanceController = {
         return res.status(404).json({ success: false, error: 'Scope not found' });
       }
 
-      await maintenanceService.disableWindowForScope(windowId, scopeType, Number(scopeId));
+      await asTargetTenant(req, existing.tenantId,
+        () => maintenanceService.disableWindowForScope(windowId, scopeType, Number(scopeId), existing.tenantId));
       return res.json({ success: true });
     } catch (err) {
       console.error(err);
@@ -257,7 +261,8 @@ export const maintenanceController = {
         return res.status(404).json({ success: false, error: 'Scope not found' });
       }
 
-      await maintenanceService.enableWindowForScope(windowId, scopeType, Number(scopeId));
+      await asTargetTenant(req, existing.tenantId,
+        () => maintenanceService.enableWindowForScope(windowId, scopeType, Number(scopeId), existing.tenantId));
       return res.json({ success: true });
     } catch (err) {
       console.error(err);
@@ -269,6 +274,6 @@ export const maintenanceController = {
 async function scopeBelongsToCallerTenant(scopeType: 'group' | 'device', scopeId: number, req: Request): Promise<boolean> {
   if (isMasterTenant(req.tenantId)) return true; // god view sees all
   const table = scopeType === 'group' ? 'device_groups' : 'devices';
-  const row = await db(table).where({ id: scopeId }).first('tenant_id') as { tenant_id: number } | undefined;
+  const row = await globalViewRead(req, () => db(table).where({ id: scopeId }).first('tenant_id')) as { tenant_id: number } | undefined;
   return !!row && row.tenant_id === req.tenantId;
 }

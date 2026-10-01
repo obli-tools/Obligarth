@@ -515,9 +515,11 @@ class ReportService {
   // Without this a stuck row polls "generating" forever and survives every
   // rebuild. Real generations finish in seconds, so a 15-min floor never
   // races a legitimate in-flight job.
-  async sweepStaleGenerating(maxAgeMinutes = 15): Promise<number> {
+  // Run tenant by tenant, in the tenant's database context (index.ts).
+  async sweepStaleGenerating(maxAgeMinutes: number, tenantId: number): Promise<number> {
     const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
     const n = await db('report_outputs')
+      .where({ tenant_id: tenantId })
       .where('status', 'generating')
       .where('created_at', '<', cutoff)
       .update({ status: 'error', error_message: 'Generation interrupted (server restart or timeout)' });

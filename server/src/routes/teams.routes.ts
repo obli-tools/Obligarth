@@ -3,6 +3,7 @@ import { teamsController } from '../controllers/teams.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
+import { globalViewScope } from '../middleware/dbContext';
 import {
   createTeamSchema,
   updateTeamSchema,
@@ -16,19 +17,21 @@ const router = Router();
 router.use(requireAuth);
 router.use(requireRole('admin'));
 
-// Team CRUD
-router.get('/', teamsController.list);
-router.get('/:id', teamsController.getById);
+// Team CRUD. The reads accept the master tenant's global view (context
+// 'platform'); the writes read their team there too, then write in the
+// team's tenant (teams.controller, asTargetTenant).
+router.get('/', globalViewScope('console.teams'), teamsController.list);
+router.get('/:id', globalViewScope('console.teams'), teamsController.getById);
 router.post('/', validate(createTeamSchema), teamsController.create);
 router.put('/:id', validate(updateTeamSchema), teamsController.update);
 router.delete('/:id', teamsController.delete);
 
 // Members
-router.get('/:id/members', teamsController.getMembers);
+router.get('/:id/members', globalViewScope('console.teams'), teamsController.getMembers);
 router.put('/:id/members', validate(setTeamMembersSchema), teamsController.setMembers);
 
 // Permissions
-router.get('/:id/permissions', teamsController.getPermissions);
+router.get('/:id/permissions', globalViewScope('console.teams'), teamsController.getPermissions);
 router.put('/:id/permissions', validate(setTeamPermissionsSchema), teamsController.setPermissions);
 router.delete('/:id/permissions/:permId', teamsController.removePermission);
 

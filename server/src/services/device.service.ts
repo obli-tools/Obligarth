@@ -623,37 +623,33 @@ class DeviceService {
 
   /**
    * Self-healing: delete orphaned records that reference devices no longer
-   * in the platform. Runs periodically so the DB stays consistent even if
-   * a polymorphic reference (scope_id) has no FK at the DB level.
+   * in the platform. Runs periodically, tenant by tenant in the tenant's
+   * database context (modules/devices.ts), so the DB stays consistent even
+   * if a polymorphic reference (scope_id) has no FK at the DB level.
    */
-  async cleanOrphans() {
+  async cleanOrphans(tenantId: number) {
     let total = 0;
 
     // Polymorphic references (no DB FK — must be cleaned in code)
-    try {
-      const c = await db.raw(`
-        DELETE FROM reports
-        WHERE scope_type = 'device'
-          AND scope_id IS NOT NULL
-          AND scope_id NOT IN (SELECT id FROM devices)
-      `);
-      total += c?.rowCount ?? 0;
-    } catch { /* ignore */ }
+    const c = await db.raw(`
+      DELETE FROM reports
+      WHERE tenant_id = ?
+        AND scope_type = 'device'
+        AND scope_id IS NOT NULL
+        AND scope_id NOT IN (SELECT id FROM devices WHERE tenant_id = ?)
+    `, [tenantId, tenantId]);
+    total += c?.rowCount ?? 0;
 
     // Live alerts: active incident rows of devices that no longer exist are
     // resolved (NOT deleted — resolved rows age out through the trim).
-    try {
-      const { liveAlertService } = await import('./liveAlert.service');
-      const resolved = await liveAlertService.resolveOrphanIncidents();
-      if (resolved.length > 0) {
-        logger.warn({ count: resolved.length }, 'cleanOrphans: resolved live alerts of deleted devices');
-      }
-    } catch (err) {
-      logger.error(err, 'cleanOrphans: resolving orphaned live alerts failed');
+    const { liveAlertService } = await import('./liveAlert.service');
+    const resolved = await liveAlertService.resolveOrphanIncidents(tenantId);
+    if (resolved.length > 0) {
+      logger.warn({ tenantId, count: resolved.length }, 'cleanOrphans: resolved live alerts of deleted devices');
     }
 
     if (total > 0) {
-      logger.warn({ total }, 'cleanOrphans: self-healing complete');
+      logger.warn({ tenantId, total }, 'cleanOrphans: self-healing complete');
     }
   }
 
@@ -680,40 +676,21 @@ class DeviceService {
     return deleted.map((r) => Number(r.id));
   }
 
-  /**
-   * After a tenant transfer: the device scopes that teams of any other
-   * tenant than `tenantId` (the devices' new one) held on these devices are
-   * removed. A team's scopes stay in its own tenant (teamService), and a
-   * device that left a tenant must not stay reachable through that
-   * tenant's teams. Keep in step with every transfer path (device.routes,
-   * deviceApproval.ts).
-   */
-  async dropForeignTeamScopes(deviceIds: number[], tenantId: number): Promise<void> {
-    if (deviceIds.length === 0) return;
-    await db('team_permissions')
-      .where({ scope: 'device' })
-      .whereIn('scope_id', deviceIds)
-      .whereIn('team_id', db('user_teams').whereNot({ tenant_id: tenantId }).select('id'))
-      .delete();
-  }
-
   // ─── Inventory pruning ────────────────────────────────────────────────────
-  async pruneInventory() {
-    try {
-      const cfg = await db('app_config').where({ key: 'inventory_retention_days' }).first();
-      const days = parseInt(cfg?.value || '90');
-      const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+  // Tenant by tenant, in the tenant's database context (modules/devices.ts).
+  async pruneInventory(tenantId: number) {
+    const cfg = await db('app_config').where({ key: 'inventory_retention_days' }).first();
+    const days = parseInt(cfg?.value || '90');
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 
-      // Keep only latest hardware snapshot per device
-      // Delete old software scans
-      await db('device_inventory_software')
-        .where('scanned_at', '<', cutoff)
-        .delete();
+    // Keep only latest hardware snapshot per device
+    // Delete old software scans
+    await db('device_inventory_software')
+      .where({ tenant_id: tenantId })
+      .where('scanned_at', '<', cutoff)
+      .delete();
 
-      logger.info({ days }, 'Inventory pruning complete');
-    } catch (err) {
-      logger.error(err, 'Error in inventory pruning job');
-    }
+    logger.debug({ tenantId, days }, 'Inventory pruning complete');
   }
 
   // ─── OS facets (Lot C 3-tier filter) ──────────────────────────────────────
@@ -944,46 +921,40 @@ class DeviceService {
   }
 
   // ─── Hourly snapshot job ─────────────────────────────────────────────────
-  // Called once per hour by a start task of modules/devices.ts. Writes one row
-  // per tenant in fleet_hourly_snapshot, used by the dashboard "Activité du
-  // parc" 24h view. Retention is 7 days — older rows are pruned in the same
-  // job so the table stays small (~168 rows per tenant max).
-  async snapshotFleetHourly() {
-    try {
-      // Round to the current hour boundary so onConflict-merge keeps a
-      // single row per hour even across multiple boots / clock skew.
-      const now = new Date();
-      now.setMinutes(0, 0, 0);
-      const tenants = await db('tenants').select('id');
-      for (const t of tenants) {
-        // strictTenantScope: same rationale as snapshotFleetDaily —
-        // master tenant snapshot must reflect master's OWN devices,
-        // not the cross-tenant aggregate (the read-time SUM does that).
-        const summary = await this.getFleetSummary(t.id, { strictTenantScope: true });
-        await db('fleet_hourly_snapshot')
-          .insert({
-            tenant_id: t.id,
-            hour: now,
-            total: summary.total,
-            online: summary.online,
-            offline: summary.offline,
-            warning: summary.warning,
-            critical: summary.critical,
-            pending_updates: summary.pendingUpdates,
-            stale_72h: summary.staleDevices,
-            active_remote_sessions: summary.activeRemoteSessions,
-          })
-          .onConflict(['tenant_id', 'hour'])
-          .merge();
-      }
-      // Retention sweep: keep 7 days of hourly history. The daily table
-      // covers anything beyond that.
-      const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      await db('fleet_hourly_snapshot').where('hour', '<', cutoff).del();
-      logger.info({ tenants: tenants.length }, 'Fleet hourly snapshot complete');
-    } catch (err) {
-      logger.error(err, 'Fleet hourly snapshot failed');
-    }
+  // Called once per hour by a start task of modules/devices.ts, tenant by
+  // tenant (in the tenant's database context). Writes the tenant's row in
+  // fleet_hourly_snapshot, used by the dashboard "Activité du parc" 24h
+  // view. Retention is 7 days — older rows of the tenant are pruned in the
+  // same run so the table stays small (~168 rows per tenant max).
+  async snapshotFleetHourly(tenantId: number) {
+    // Round to the current hour boundary so onConflict-merge keeps a
+    // single row per hour even across multiple boots / clock skew.
+    const now = new Date();
+    now.setMinutes(0, 0, 0);
+    // strictTenantScope: same rationale as snapshotFleetDaily —
+    // master tenant snapshot must reflect master's OWN devices,
+    // not the cross-tenant aggregate (the read-time SUM does that).
+    const summary = await this.getFleetSummary(tenantId, { strictTenantScope: true });
+    await db('fleet_hourly_snapshot')
+      .insert({
+        tenant_id: tenantId,
+        hour: now,
+        total: summary.total,
+        online: summary.online,
+        offline: summary.offline,
+        warning: summary.warning,
+        critical: summary.critical,
+        pending_updates: summary.pendingUpdates,
+        stale_72h: summary.staleDevices,
+        active_remote_sessions: summary.activeRemoteSessions,
+      })
+      .onConflict(['tenant_id', 'hour'])
+      .merge();
+    // Retention sweep: keep 7 days of hourly history. The daily table
+    // covers anything beyond that.
+    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    await db('fleet_hourly_snapshot').where({ tenant_id: tenantId }).where('hour', '<', cutoff).del();
+    logger.debug({ tenantId }, 'Fleet hourly snapshot complete');
   }
 
   // Returns up to N most-recent hourly points for the dashboard 24h view.
@@ -1036,39 +1007,33 @@ class DeviceService {
   }
 
   // ─── Daily snapshot job ──────────────────────────────────────────────────
-  // Called once a day by a start task of modules/devices.ts. Writes one row per
-  // tenant in fleet_daily_snapshot, used by the dashboard for week-over-week
-  // deltas and for the "Activité du parc" timeseries chart.
-  async snapshotFleetDaily() {
-    try {
-      const today = new Date().toISOString().slice(0, 10);
-      const tenants = await db('tenants').select('id');
-      for (const t of tenants) {
-        // strictTenantScope: snapshot reflects this tenant's OWN
-        // devices only. Without it the master tenant's row would be
-        // the install-wide aggregate, then the master timeseries
-        // would SUM that with each child tenant's row → ~2× counted.
-        const summary = await this.getFleetSummary(t.id, { strictTenantScope: true });
-        await db('fleet_daily_snapshot')
-          .insert({
-            tenant_id: t.id,
-            day: today,
-            total: summary.total,
-            online: summary.online,
-            offline: summary.offline,
-            warning: summary.warning,
-            critical: summary.critical,
-            pending_updates: summary.pendingUpdates,
-            stale_72h: summary.staleDevices,
-            active_remote_sessions: summary.activeRemoteSessions,
-          })
-          .onConflict(['tenant_id', 'day'])
-          .merge();
-      }
-      logger.info({ tenants: tenants.length }, 'Fleet daily snapshot complete');
-    } catch (err) {
-      logger.error(err, 'Fleet daily snapshot failed');
-    }
+  // Called once a day by a start task of modules/devices.ts, tenant by
+  // tenant (in the tenant's database context). Writes the tenant's row in
+  // fleet_daily_snapshot, used by the dashboard for week-over-week deltas
+  // and for the "Activité du parc" timeseries chart.
+  async snapshotFleetDaily(tenantId: number) {
+    const today = new Date().toISOString().slice(0, 10);
+    // strictTenantScope: snapshot reflects this tenant's OWN
+    // devices only. Without it the master tenant's row would be
+    // the install-wide aggregate, then the master timeseries
+    // would SUM that with each child tenant's row → ~2× counted.
+    const summary = await this.getFleetSummary(tenantId, { strictTenantScope: true });
+    await db('fleet_daily_snapshot')
+      .insert({
+        tenant_id: tenantId,
+        day: today,
+        total: summary.total,
+        online: summary.online,
+        offline: summary.offline,
+        warning: summary.warning,
+        critical: summary.critical,
+        pending_updates: summary.pendingUpdates,
+        stale_72h: summary.staleDevices,
+        active_remote_sessions: summary.activeRemoteSessions,
+      })
+      .onConflict(['tenant_id', 'day'])
+      .merge();
+    logger.debug({ tenantId }, 'Fleet daily snapshot complete');
   }
 }
 

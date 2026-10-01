@@ -3,6 +3,7 @@ import { groupsController } from '../controllers/groups.controller';
 import { requireAuth } from '../middleware/auth';
 import { requireTenantCapability, requireGroupWrite, requireCanCreate } from '../middleware/rbac';
 import { validate } from '../middleware/validate';
+import { globalViewScope } from '../middleware/dbContext';
 import {
   createGroupSchema,
   updateGroupSchema,
@@ -14,11 +15,13 @@ const router = Router();
 // All routes require authentication
 router.use(requireAuth);
 
-// Read routes (visibility filtering in controller)
-router.get('/', groupsController.list);
-router.get('/tree', groupsController.tree);
+// Read routes (visibility filtering in controller). The master tenant's
+// global view reads every tenant (context 'platform'); the writes below read
+// their group there too, then write in its tenant (groups.controller).
+router.get('/', globalViewScope('console.groups'), groupsController.list);
+router.get('/tree', globalViewScope('console.groups'), groupsController.tree);
 router.get('/stats', groupsController.stats);
-router.get('/:id', groupsController.getById);
+router.get('/:id', globalViewScope('console.groups'), groupsController.getById);
 
 // Write routes (permission-based: admin OR team RW)
 router.post('/', requireCanCreate(), validate(createGroupSchema), groupsController.create);

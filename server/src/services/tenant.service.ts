@@ -6,6 +6,15 @@ import type { Tenant, TenantWithRole } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import { clientIp } from '../utils/clientIp';
 import { normaliseTenantRole } from './userScope.service';
+import { switchToIdentity, switchToNone, switchToTenant } from '../db/context';
+
+// Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
+// caller's context (each sees the tenants it may: its own memberships, every
+// tenant for a platform administrator); a tenant's own settings are written
+// in its context; memberships are written in the identity context, after the
+// application's checks; creation and deletion go through the definer
+// functions obligarth.tenant_create / obligarth.tenant_delete, which require
+// an active platform administrator as the actor (context 'none').
 
 interface TenantRow {
   id: number;
@@ -37,18 +46,10 @@ function rowToTenant(row: TenantRow): Tenant {
 }
 
 // Tables whose `target_tenant_ids` (int[]) name the tenants a master-owned row
-// is fanned out to. The module that owns such a table registers it
-// (registerTenantFanoutTable): deleting a tenant strips its id from every
-// registered table.
-const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
-const fanoutTables: string[] = [];
-
-export function registerTenantFanoutTable(table: string): void {
-  // Inlined in the SQL of delete(): an identifier only.
-  if (!IDENT_RE.test(table)) throw new Error(`Invalid fan-out table name: ${table}`);
-  if (fanoutTables.includes(table)) throw new Error(`Fan-out table '${table}' registered twice`);
-  fanoutTables.push(table);
-}
+// is fanned out to are of the RLS class `tenant_shared` (rls-tenant §5.1):
+// obligarth.tenant_delete strips the deleted tenant's id from every table of
+// that class, found in the classification registry (the former
+// registerTenantFanoutTable registry is gone).
 
 // ── Membership of a session's tenant ────────────────────────────────────────
 // requireTenant (middleware/tenant.ts) re-checks on every request that a
@@ -116,44 +117,49 @@ export const tenantService = {
   /** A new tenant starts with the recommended restrictions matrix
    *  (defaultRestrictions: the core's and the registered modules'), like
    *  the master tenant the seed creates; the column default ('{}') would
-   *  leave it with no restriction at all. */
+   *  leave it with no restriction at all. Through obligarth.tenant_create
+   *  (rls-tenant §6.6; specs README §5), in one transaction, context 'none'
+   *  of the caller, who must be an active platform administrator (refused by
+   *  the database otherwise). The coffre (FND-03) adds the tenant's key to
+   *  this transaction, the apple-edge integration its provisioning. */
   async create(data: { name: string; slug: string }): Promise<Tenant> {
     const { defaultRestrictions } = await import('./restriction.service');
-    const [row] = await db('tenants')
-      .insert({ name: data.name, slug: data.slug, action_restrictions: JSON.stringify(defaultRestrictions()) })
-      .returning('*');
-    return rowToTenant(row as TenantRow);
+    return switchToNone(() => db.transaction(async (trx) => {
+      const { rows } = await trx.raw('SELECT obligarth.tenant_create(?, ?, ?::jsonb) AS id',
+        [data.name, data.slug, JSON.stringify(defaultRestrictions())]) as { rows: Array<{ id: number }> };
+      const id = Number(rows[0].id);
+      const row = await trx('tenants').where({ id }).first();
+      return rowToTenant(row as TenantRow);
+    }));
   },
 
+  /** Settings of a tenant, written in its own context. The slug is fixed at
+   *  creation (join key with Obligate, R11): a different slug is refused. */
   async update(id: number, data: { name?: string; slug?: string; twoStepApproval?: boolean }): Promise<Tenant | null> {
-    const patch: any = { updated_at: db.fn.now() };
-    if (data.name !== undefined) patch.name = data.name;
-    if (data.slug !== undefined) patch.slug = data.slug;
-    if (data.twoStepApproval !== undefined) patch.two_step_approval = data.twoStepApproval;
-    const [row] = await db('tenants').where({ id }).update(patch).returning('*');
-    return row ? rowToTenant(row as TenantRow) : null;
+    return switchToTenant(id, async () => {
+      if (data.slug !== undefined) {
+        const current = await db('tenants').where({ id }).first('slug') as { slug: string } | undefined;
+        if (!current) return null;
+        if (data.slug !== current.slug) throw new AppError(400, 'The slug of a tenant cannot be changed', 'tenantSlugImmutable');
+      }
+      const patch: any = { updated_at: db.fn.now() };
+      if (data.name !== undefined) patch.name = data.name;
+      if (data.twoStepApproval !== undefined) patch.two_step_approval = data.twoStepApproval;
+      const [row] = await db('tenants').where({ id }).update(patch).returning('*');
+      return row ? rowToTenant(row as TenantRow) : null;
+    });
   },
 
+  /** Hard deletion through obligarth.tenant_delete (temporary measure until
+   *  the tenant lifecycle specification: specs README §5): one transaction,
+   *  context 'none' of the caller, an active platform administrator. The
+   *  function strips the tenant's id from the `target_tenant_ids` of every
+   *  table of the class tenant_shared, then deletes the row (the foreign keys
+   *  cascade); it refuses the master tenant. */
   async delete(id: number): Promise<void> {
-    // Strip the tenant id from any master-owned fan-out array before
-    // dropping the row (registerTenantFanoutTable). Without this, the rows
-    // that targeted this tenant would carry a dangling id forever — and the
-    // cross-tenant read scope would perform a wasted `id = ANY(...)` test
-    // against the dead value. CASCADE on tenant_id covers the owner side;
-    // the array side is application-level and has to be cleaned explicitly.
-    await db.transaction(async (trx) => {
-      for (const table of fanoutTables) {
-        const has = await trx.schema.hasColumn(table, 'target_tenant_ids');
-        if (!has) continue;
-        await trx.raw(
-          `UPDATE ${table}
-              SET target_tenant_ids = NULLIF(array_remove(target_tenant_ids, ?), '{}')::int[]
-            WHERE ? = ANY(target_tenant_ids)`,
-          [id, id],
-        );
-      }
-      await trx('tenants').where({ id }).delete();
-    });
+    await switchToNone(() => db.transaction(async (trx) => {
+      await trx.raw('SELECT obligarth.tenant_delete(?)', [id]);
+    }));
   },
 
   /** Returns the first tenant accessible by userId (lowest id). */
@@ -233,8 +239,10 @@ export const tenantService = {
     return slug;
   },
 
+  /** Members of a tenant (platform administrators' tenant panel): identity
+   *  context, after the route's check. */
   async getMembers(tenantId: number): Promise<(UserRow & { tenantRole: string })[]> {
-    return db('users')
+    return switchToIdentity(() => db('users')
       .join('user_tenants', 'users.id', 'user_tenants.user_id')
       .where('user_tenants.tenant_id', tenantId)
       .select<(UserRow & { tenantRole: string })[]>(
@@ -246,17 +254,18 @@ export const tenantService = {
         'users.email',
         db.raw('user_tenants.role as "tenantRole"'),
       )
-      .orderBy('users.username');
+      .orderBy('users.username'));
   },
 
   /** Adds a membership (or changes its role). `role`: see resolveTenantRole
-   *  ('user' when none is given). */
+   *  ('user' when none is given). Identity context, after the route's
+   *  checks. */
   async addUser(tenantId: number, userId: number, role?: unknown): Promise<void> {
     const slug = await this.resolveTenantRole(role);
-    await db('user_tenants')
+    await switchToIdentity(() => db('user_tenants')
       .insert({ tenant_id: tenantId, user_id: userId, role: slug })
       .onConflict(['user_id', 'tenant_id'])
-      .merge({ role: slug });
+      .merge({ role: slug }));
     forgetTenantMemberships(userId);
   },
 
@@ -266,16 +275,17 @@ export const tenantService = {
     // membership left behind kept its device grants and capabilities on the
     // tenant's devices. Same rule as the Obligate callback's tenant
     // reconciliation.
+    // Team memberships are tenant rows (context of that tenant), the
+    // membership itself an identity row: two transactions, the teams first.
     let removed = 0;
-    await db.transaction(async (trx) => {
-      const teamIds = await trx('team_memberships')
-        .join('user_teams', 'user_teams.id', 'team_memberships.team_id')
-        .where({ 'team_memberships.user_id': userId, 'user_teams.tenant_id': tenantId })
-        .pluck('team_memberships.team_id') as number[];
-      if (teamIds.length > 0) {
-        await trx('team_memberships').where({ user_id: userId }).whereIn('team_id', teamIds).delete();
-      }
-      removed = await trx('user_tenants').where({ tenant_id: tenantId, user_id: userId }).delete();
+    await switchToTenant(tenantId, () => db.transaction(async (trx) => {
+      await trx('team_memberships')
+        .where({ user_id: userId, tenant_id: tenantId })
+        .whereIn('team_id', trx('user_teams').where({ tenant_id: tenantId }).select('id'))
+        .delete();
+    }));
+    await switchToIdentity(async () => {
+      removed = await db('user_tenants').where({ tenant_id: tenantId, user_id: userId }).delete();
     });
     forgetTenantMemberships(userId);
     if (removed > 0) {
@@ -291,8 +301,8 @@ export const tenantService = {
   /** Changes the role of a membership. `role`: see resolveTenantRole. */
   async updateUserRole(tenantId: number, userId: number, role: unknown): Promise<void> {
     const slug = await this.resolveTenantRole(role);
-    await db('user_tenants')
+    await switchToIdentity(() => db('user_tenants')
       .where({ tenant_id: tenantId, user_id: userId })
-      .update({ role: slug });
+      .update({ role: slug }));
   },
 };

@@ -4,6 +4,7 @@ import { logger } from '../utils/logger';
 import { forgetSessionUser } from '../middleware/sessionUserGuard';
 import { sessionHash, sessionRoom } from '../utils/sessionHash';
 import { forgetTenantMemberships } from './tenant.service';
+import { forgetGrantsOfUser } from '../db/platformAccess';
 
 // Session kill-switch for one user (P6, docs/mobile/device-bound-2fa.md §6.0).
 //
@@ -63,6 +64,9 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   const count = Number(res?.rowCount ?? 0);
   forgetSessionUser(userId);
   forgetTenantMemberships(userId);
+  // The cached global-view grants of its sessions (they expire by themselves
+  // in the database; the base re-checks the administrator at every query).
+  forgetGrantsOfUser(userId);
   try {
     getIO().in(`user:${userId}`).disconnectSockets(true);
   } catch { /* Socket.io not initialised (CLI) */ }

@@ -1,5 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import { softwareRepoService, RepoError } from '../services/softwareRepo.service';
+import { enterDbContext } from '../db/context';
 
 /**
  * Script-facing software-repository API. Unlike the session-authenticated
@@ -15,6 +16,11 @@ import { softwareRepoService, RepoError } from '../services/softwareRepo.service
  *
  * The key resolves the tenant; the depot must be enabled for that tenant,
  * otherwise every call 403s (disable = block upload AND download).
+ *
+ * Database context (rls-tenant §7.7): the key is resolved by
+ * obligarth.tenant_lookup_by_repo_key_hash in the request's base context
+ * (anonymous), then the call runs in the context 'tenant' of the key's
+ * tenant, actor a:repo.
  */
 const router = Router();
 
@@ -23,9 +29,15 @@ async function repoKeyAuth(req: Request, res: Response, next: NextFunction) {
     const key = (req.headers['x-repo-key'] as string) || (req.query.key as string) || '';
     const tenantId = await softwareRepoService.resolveTenantByKey(key);
     if (!tenantId) return res.status(401).json({ error: 'Invalid or missing repository access key' });
-    await softwareRepoService.assertEnabled(tenantId);
     (req as any).repoTenantId = tenantId;
-    next();
+    enterDbContext({
+      kind: 'tenant', tenantId, actor: { type: 'anonymous', name: 'repo' }, grantId: null, origin: 'request', requestId: req.requestId,
+    }, () => {
+      softwareRepoService.assertEnabled(tenantId).then(() => next(), (err) => {
+        if (err instanceof RepoError) res.status(err.status).json({ error: err.message });
+        else next(err);
+      });
+    });
   } catch (err) {
     if (err instanceof RepoError) return res.status(err.status).json({ error: err.message });
     next(err);

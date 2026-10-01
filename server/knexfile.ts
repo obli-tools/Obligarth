@@ -1,6 +1,7 @@
 import path from 'path';
 import type { Knex } from 'knex';
 import { config as appConfig, DATABASE_URL_MISSING } from './src/config';
+import { ContextAwarePgClient } from './src/db/contextPgClient';
 
 const isCompiled = __filename.endsWith('.js');
 
@@ -11,38 +12,40 @@ function missingDatabaseUrl(): never {
   throw new Error(DATABASE_URL_MISSING);
 }
 
-const config: Knex.Config = {
-  client: 'pg',
+// Schema and roles (rls-tenant §3): every table of the server lives in the
+// schema `obligarth`, owned by `obligarth_owner`; the server runs as
+// `obligarth` (no superuser, no BYPASSRLS, owner of nothing) and never runs
+// a migration (R3): the server-migrate service does (src/db/migrate.ts),
+// with an administration DSN the server never sees.
+
+/** The migrations of this image, as Knex loads them. */
+export const MIGRATIONS: Knex.MigratorConfig = {
+  directory: path.join(__dirname, 'src/db/migrations'),
+  extension: isCompiled ? 'js' : 'ts',
+  loadExtensions: isCompiled ? ['.js'] : ['.ts'],
+  schemaName: 'obligarth',
+  // Obligarth's own tracking table (and obligarth_migrations_lock), not
+  // Knex's default knex_migrations: pointed by mistake at a database of
+  // another product (an Obliance one), the migration finds none of its
+  // migrations applied, fails on the base schema's first CREATE TABLE and
+  // stops, instead of "migrating" that database.
+  tableName: 'obligarth_migrations',
+  // Rolling the server image back to an OLDER version must still migrate
+  // and boot: the tracking table then lists migrations the old image does
+  // not ship, which Knex's list validation would refuse ("The migration
+  // directory is corrupt"). Newer tables / columns / triggers are simply
+  // ignored by older code.
+  disableMigrationsListValidation: true,
+};
+
+/**
+ * The server's pool (src/db/index.ts): the context-aware client sets the
+ * database context at every lease (src/db/contextPgClient.ts).
+ */
+export const runtimeConfig: Knex.Config = {
+  client: ContextAwarePgClient,
   connection: appConfig.databaseUrl || missingDatabaseUrl,
-  searchPath: ['public'],
-  migrations: {
-    directory: isCompiled
-      ? path.join(__dirname, 'src/db/migrations')
-      : './src/db/migrations',
-    extension: isCompiled ? 'js' : 'ts',
-    loadExtensions: isCompiled ? ['.js'] : ['.ts'],
-    schemaName: 'public',
-    // Obligarth's own tracking table (and obligarth_migrations_lock), not
-    // Knex's default knex_migrations: pointed by mistake at a database of
-    // another product (an Obliance one), the server finds none of its
-    // migrations applied, fails on the base schema's first CREATE TABLE and
-    // stops, instead of "migrating" that database.
-    tableName: 'obligarth_migrations',
-    // Rolling the server image back to an OLDER version must still boot:
-    // the tracking table then lists migrations the old image does not ship,
-    // and knex's list validation ("The migration directory is corrupt")
-    // would make db.migrate.latest() — run at every boot (index.ts) — exit
-    // the server. Newer tables / columns / triggers are simply ignored by
-    // older code (docs/mobile/device-bound-2fa.md §11).
-    disableMigrationsListValidation: true,
-  },
-  seeds: {
-    directory: isCompiled
-      ? path.join(__dirname, 'src/db/seeds')
-      : './src/db/seeds',
-    extension: isCompiled ? 'js' : 'ts',
-    loadExtensions: isCompiled ? ['.js'] : ['.ts'],
-  },
+  searchPath: ['obligarth'],
   pool: {
     // Sized for the push traffic of the former RMM agent (2000+ devices, where
     // max:10 kept the pool saturated and every UI request queued behind it);
@@ -59,4 +62,28 @@ const config: Knex.Config = {
   acquireConnectionTimeout: 20_000,
 };
 
-export default config;
+/**
+ * The migrations' pool (server-migrate, src/db/migrate.ts): the
+ * administration DSN, one connection, every object created by the owner
+ * role (SET ROLE obligarth_owner when the connection opens).
+ */
+export function migrationConfig(adminUrl: string): Knex.Config {
+  return {
+    client: 'pg',
+    connection: adminUrl,
+    searchPath: ['obligarth'],
+    pool: {
+      min: 0,
+      max: 1,
+      afterCreate: (conn: { query: (sql: string, cb: (err: Error | null) => void) => void }, done: (err: Error | null, conn: unknown) => void) => {
+        conn.query('SET ROLE obligarth_owner', (err) => done(err, conn));
+      },
+    },
+    acquireConnectionTimeout: 60_000,
+    migrations: MIGRATIONS,
+  };
+}
+
+// Knex CLI (npm run migrate:make): only the migrations settings are used.
+const cliConfig: Knex.Config = { client: 'pg', migrations: MIGRATIONS };
+export default cliConfig;

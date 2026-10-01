@@ -2,8 +2,13 @@ import { Router, Request, Response, NextFunction } from 'express';
 import { inventoryService } from '../services/inventory.service';
 import { resolveRequestDevice } from '../services/deviceScope.service';
 import { AppError } from '../middleware/errorHandler';
+import { globalViewScope } from '../middleware/dbContext';
 
 const router = Router();
+
+// Read only: the master tenant's global view reads across tenants (context
+// 'platform'), before the device is resolved below.
+router.use(globalViewScope('console.inventory'));
 
 // All inventory routes require read access to the device, with the REST
 // tenant rule (resolveRequestDevice): a device of the session's tenant (of

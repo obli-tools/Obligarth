@@ -4,7 +4,15 @@ import { requireAuth } from '../middleware/auth';
 import { tenantService, forgetTenantMemberships } from '../services/tenant.service';
 import { permissionService } from '../services/permission.service';
 import { db } from '../db';
+import { asMember, asPlatform, switchToIdentity } from '../db/context';
+import { globalViewGrant } from '../db/platformAccess';
 import { AppError } from '../middleware/errorHandler';
+
+// Database contexts (rls-tenant §8.2): these routes are outside the tenant
+// router. The list and one tenant: the request's base context (the tenants
+// the user may see); locate-device: across tenants; settings: the tenant's
+// own context (tenantService.update); members: identity; creation and
+// deletion: definer functions (tenantService).
 
 const router = Router();
 
@@ -30,32 +38,39 @@ router.get('/locate-device/:id', async (req, res, next) => {
     const userId = req.session.userId!;
     const isPlatformAdmin = req.session.role === 'admin';
 
-    const row = await db('devices')
-      .leftJoin('tenants', 'devices.tenant_id', 'tenants.id')
-      .where('devices.id', deviceId)
-      .first(
-        'devices.id as id',
-        'devices.tenant_id as tenantId',
-        'devices.hostname as hostname',
-        'devices.display_name as displayName',
-        'tenants.name as tenantName',
-        'tenants.slug as tenantSlug',
-      );
+    // Across tenants: a platform administrator reads with a grant (context
+    // 'platform'), anyone else within its own tenants (context 'member').
+    const lookup = async () => {
+      const row = await db('devices')
+        .leftJoin('tenants', 'devices.tenant_id', 'tenants.id')
+        .where('devices.id', deviceId)
+        .first(
+          'devices.id as id',
+          'devices.tenant_id as tenantId',
+          'devices.hostname as hostname',
+          'devices.display_name as displayName',
+          'tenants.name as tenantName',
+          'tenants.slug as tenantSlug',
+        );
+      if (!row) return null;
 
-    if (!row) return res.status(404).json({ error: 'Device not found' });
-
-    // Access gate: platform admins always pass; otherwise the user must
-    // be a member of the device's tenant AND have device-read permission
-    // through one of their teams. Mirrors the requireDeviceRead middleware
-    // used by /api/devices/:id, so no privilege escalation here.
-    let allowed = isPlatformAdmin;
-    if (!allowed) {
-      const hasTenantMembership = await tenantService.userHasAccess(userId, row.tenantId);
-      if (hasTenantMembership) {
-        allowed = await permissionService.canReadDevice(userId, deviceId, false);
+      // Access gate: platform admins always pass; otherwise the user must
+      // be a member of the device's tenant AND have device-read permission
+      // through one of their teams. Mirrors the requireDeviceRead middleware
+      // used by /api/devices/:id, so no privilege escalation here.
+      let allowed = isPlatformAdmin;
+      if (!allowed) {
+        const hasTenantMembership = await tenantService.userHasAccess(userId, row.tenantId);
+        if (hasTenantMembership) {
+          allowed = await permissionService.canReadDevice(userId, deviceId, false);
+        }
       }
-    }
-    if (!allowed) return res.status(404).json({ error: 'Device not found' });
+      return allowed ? row : null;
+    };
+    const row = isPlatformAdmin
+      ? await asPlatform(await globalViewGrant(req, 'console.locate_device'), lookup)
+      : await asMember(userId, lookup);
+    if (!row) return res.status(404).json({ error: 'Device not found' });
 
     res.json({
       data: {
@@ -76,7 +91,9 @@ router.get('/locate-device/:id', async (req, res, next) => {
 router.post('/switch', async (req, res, next) => {
   try {
     const { tenantId } = req.body as { tenantId: number };
-    if (!tenantId || typeof tenantId !== 'number') {
+    // A tenant id the database can hold (integer column): any other value
+    // would only fail later, on every request of the session.
+    if (typeof tenantId !== 'number' || !Number.isInteger(tenantId) || tenantId <= 0 || tenantId > 2147483647) {
       throw new AppError(400, 'tenantId is required');
     }
 
@@ -227,7 +244,7 @@ router.post('/:id/members', async (req, res, next) => {
     if (!Number.isInteger(tenantId) || tenantId <= 0 || !(await tenantService.getById(tenantId))) {
       throw new AppError(404, 'Tenant not found');
     }
-    if (!(await db('users').where({ id: userId }).first('id'))) throw new AppError(404, 'User not found');
+    if (!(await switchToIdentity(() => db('users').where({ id: userId }).first('id')))) throw new AppError(404, 'User not found');
     await tenantService.addUser(tenantId, userId, role);
     res.json({ success: true });
   } catch (err) {

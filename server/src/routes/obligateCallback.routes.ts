@@ -3,6 +3,9 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import crypto from 'crypto';
 import { db } from '../db';
+import { asIdentity, asPlatform, switchToTenant, type DbActor } from '../db/context';
+import { globalViewGrant } from '../db/platformAccess';
+import { asIntegrationPlatform } from '../middleware/dbContext';
 import { obligateService, moduleDashboardStats, type ObligateDashboardStat, type ObligateRoster } from '../services/obligate.service';
 import { tenantService, refuseSignInWithoutTenant, forgetTenantMemberships } from '../services/tenant.service';
 import { appConfigService } from '../services/appConfig.service';
@@ -15,6 +18,14 @@ import { MASTER_TENANT_ID, isMasterTenant } from '@obligarth/shared';
 import { permissionService } from '../services/permission.service';
 
 const router = Router();
+
+// Database contexts (rls-tenant §7.7, §8.2): Obligate's sign-in and its user
+// sync write accounts, links and memberships in the identity context of the
+// integration (actor i:obligate); the team memberships of each tenant in that
+// tenant's context; its transverse reads (app-info, dashboard-stats) in the
+// context 'platform' with the integration's grant, once its Bearer secret is
+// verified.
+const OBLIGATE_ACTOR: DbActor = { type: 'integration', name: 'obligate' };
 
 /**
  * Public origin used to build the OAuth redirect_uri. Host / X-Forwarded-*
@@ -61,7 +72,8 @@ async function applySsoMemberships(
 
   for (const t of tenants) {
     if (!t || typeof t.slug !== 'string') continue;
-    const tenant = await db('tenants').where({ slug: t.slug }).first('id') as { id: number } | undefined;
+    const found = await db.raw('SELECT obligarth.tenant_lookup_by_slug(?) AS id', [t.slug]) as { rows: Array<{ id: number | null }> };
+    const tenant = found.rows[0]?.id ? { id: Number(found.rows[0].id) } : undefined;
     if (!tenant) continue;
     keep.add(tenant.id);
     // Store the raw role slug Obligate sent. `permission_sets.slug`
@@ -79,24 +91,27 @@ async function applySsoMemberships(
     // a flat list of team NAMES across the user's tenants (Obligate's
     // role-binding model), matched by name within this tenant_id so the same
     // name in another tenant doesn't cross-contaminate.
-    const wantedTeamIds = teams.length
-      ? await db('user_teams').where({ tenant_id: tenant.id }).whereIn('name', teams).pluck('id') as number[]
-      : [];
-    const currentTeamIds = await db('team_memberships')
-      .join('user_teams', 'user_teams.id', 'team_memberships.team_id')
-      .where({ 'team_memberships.user_id': localUserId, 'user_teams.tenant_id': tenant.id })
-      .pluck('team_memberships.team_id') as number[];
-    const toAdd = wantedTeamIds.filter((id) => !currentTeamIds.includes(id));
-    const toRemove = currentTeamIds.filter((id) => !wantedTeamIds.includes(id));
-    if (toAdd.length > 0) {
-      await db('team_memberships')
-        .insert(toAdd.map((team_id) => ({ team_id, user_id: localUserId })))
-        .onConflict(['team_id', 'user_id'])
-        .ignore();
-    }
-    if (toRemove.length > 0) {
-      await db('team_memberships').where({ user_id: localUserId }).whereIn('team_id', toRemove).del();
-    }
+    // Teams are rows of the tenant: reconciled in its context.
+    await switchToTenant(tenant.id, async () => {
+      const wantedTeamIds = teams.length
+        ? await db('user_teams').where({ tenant_id: tenant.id }).whereIn('name', teams).pluck('id') as number[]
+        : [];
+      const currentTeamIds = await db('team_memberships')
+        .join('user_teams', 'user_teams.id', 'team_memberships.team_id')
+        .where({ 'team_memberships.user_id': localUserId, 'user_teams.tenant_id': tenant.id })
+        .pluck('team_memberships.team_id') as number[];
+      const toAdd = wantedTeamIds.filter((id) => !currentTeamIds.includes(id));
+      const toRemove = currentTeamIds.filter((id) => !wantedTeamIds.includes(id));
+      if (toAdd.length > 0) {
+        await db('team_memberships')
+          .insert(toAdd.map((team_id) => ({ tenant_id: tenant.id, team_id, user_id: localUserId })))
+          .onConflict(['team_id', 'user_id'])
+          .ignore();
+      }
+      if (toRemove.length > 0) {
+        await db('team_memberships').where({ user_id: localUserId, tenant_id: tenant.id }).whereIn('team_id', toRemove).del();
+      }
+    });
 
     // Capabilities from Obligate are intentionally ignored: they live on
     // team_permissions (Obligarth) and are configured per-team via
@@ -122,13 +137,10 @@ async function applySsoMemberships(
     .where({ user_id: localUserId })
     .modify((q) => { if (keepIds.length) q.whereNotIn('tenant_id', keepIds); })
     .pluck('tenant_id') as number[];
-  const staleTeamIds = await db('team_memberships')
-    .join('user_teams', 'user_teams.id', 'team_memberships.team_id')
-    .where({ 'team_memberships.user_id': localUserId })
-    .modify((q) => { if (keepIds.length) q.whereNotIn('user_teams.tenant_id', keepIds); })
-    .pluck('team_memberships.team_id') as number[];
-  if (staleTeamIds.length > 0) {
-    await db('team_memberships').where({ user_id: localUserId }).whereIn('team_id', staleTeamIds).del();
+  // The teams of each tenant no longer granted, in that tenant's context.
+  for (const staleTenantId of staleTenants) {
+    await switchToTenant(Number(staleTenantId), () => db('team_memberships')
+      .where({ user_id: localUserId, tenant_id: Number(staleTenantId) }).del());
   }
   if (staleTenants.length > 0) {
     await db('user_tenants').where({ user_id: localUserId }).whereIn('tenant_id', staleTenants).del();
@@ -566,8 +578,8 @@ router.get('/callback', async (req, res) => {
       return;
     }
 
-    // Provision user and create session
-    const localUserId = await provisionObligateUser(assertion, req);
+    // Provision user and create session (identity context of the integration)
+    const localUserId = await asIdentity(OBLIGATE_ACTOR, () => provisionObligateUser(assertion, req));
     logger.info(`Obligate SSO: user ${assertion.username} (obligate #${assertion.obligateUserId}) → local #${localUserId}`);
 
     // Save session, then redirect via HTML meta refresh to ensure Set-Cookie header
@@ -740,21 +752,25 @@ router.get('/app-info', async (req, res) => {
       return;
     }
 
-    // Fetch all teams across all tenants
-    const teams = await db('user_teams')
-      .join('tenants', 'user_teams.tenant_id', 'tenants.id')
-      .select('user_teams.name', 'tenants.slug as tenant_slug', 'tenants.name as tenant_name')
-      .orderBy('tenants.name')
-      .orderBy('user_teams.name') as Array<{ name: string; tenant_slug: string; tenant_name: string }>;
+    // Every tenant's teams: a transverse read with the integration's grant.
+    const { teams, tenants, permissionSets } = await asIntegrationPlatform(req, 'obligate', 'app-info', async () => {
+      // Fetch all teams across all tenants
+      const teams = await db('user_teams')
+        .join('tenants', 'user_teams.tenant_id', 'tenants.id')
+        .select('user_teams.name', 'tenants.slug as tenant_slug', 'tenants.name as tenant_name')
+        .orderBy('tenants.name')
+        .orderBy('user_teams.name') as Array<{ name: string; tenant_slug: string; tenant_name: string }>;
 
-    // Fetch all tenants
-    const tenants = await db('tenants')
-      .select('name', 'slug')
-      .orderBy('name') as Array<{ name: string; slug: string }>;
+      // Fetch all tenants
+      const tenants = await db('tenants')
+        .select('name', 'slug')
+        .orderBy('name') as Array<{ name: string; slug: string }>;
 
-    // Permission sets: Obligate offers them as role choices (slug + label)
-    const permissionSets = (await permissionSetService.getAll())
-      .map((p) => ({ slug: p.slug, name: p.name, isDefault: p.isDefault }));
+      // Permission sets: Obligate offers them as role choices (slug + label)
+      const permissionSets = (await permissionSetService.getAll())
+        .map((p) => ({ slug: p.slug, name: p.name, isDefault: p.isDefault }));
+      return { teams, tenants, permissionSets };
+    });
 
     res.json({
       success: true,
@@ -786,7 +802,8 @@ router.get('/dashboard-stats', async (req, res) => {
       { label: 'Online', color: '#2ea043', count: async () => Number(((await db('devices').where({ approval_status: 'approved', status: 'online' }).count('id as c').first()) as any)?.c ?? 0) },
       ...moduleDashboardStats(),
     ];
-    const values = await Promise.all(counters.map((s) => s.count()));
+    // Fleet-wide counters: a transverse read with the integration's grant.
+    const values = await asIntegrationPlatform(req, 'obligate', 'dashboard-stats', () => Promise.all(counters.map((s) => s.count())));
     res.json({ success: true, data: { stats: counters.map((s, i) => ({ label: s.label, value: values[i], color: s.color })) } });
   } catch { res.json({ success: true, data: null }); }
 });
@@ -875,10 +892,20 @@ router.get('/device-links', async (req, res) => {
     // platform admin on the master tenant: any tenant) — the links name the
     // device in the other apps, and are fetched with our key.
     const isAdmin = req.session.role === 'admin';
-    const q = db('devices').where({ uuid });
-    if (!(isAdmin && isMasterTenant(tenantId))) q.where({ tenant_id: tenantId });
-    const device = await q.first('id') as { id: number } | undefined;
-    if (!device || (!isAdmin && !(await permissionService.canReadDevice(userId, device.id, false)))) {
+    // The global view of a platform administrator on the master tenant reads
+    // every tenant (its grant); anyone else reads in its session's tenant.
+    const globalView = isAdmin && isMasterTenant(tenantId);
+    const lookup = async () => {
+      const q = db('devices').where({ uuid });
+      if (!globalView) q.where({ tenant_id: tenantId });
+      const found = await q.first('id') as { id: number } | undefined;
+      if (!found || (!isAdmin && !(await permissionService.canReadDevice(userId, found.id, false)))) return null;
+      return found;
+    };
+    const device = globalView
+      ? await asPlatform(await globalViewGrant(req, 'console.device_links'), lookup)
+      : await switchToTenant(Number(tenantId), lookup);
+    if (!device) {
       res.json({ success: true, data: [] });
       return;
     }
@@ -1177,7 +1204,9 @@ function scheduleSyncRecheck(obligateId: number, localId: number, action: SyncAc
       let outcome: SyncResult = { retry: 'roster_unavailable' };
       try {
         const rr = await obligateService.rosterForPush();
-        if (rr.kind === 'ok') outcome = await applyConfirmedSync(obligateId, localId, action, rr.roster, audit);
+        if (rr.kind === 'ok') {
+          outcome = await asIdentity(OBLIGATE_ACTOR, () => applyConfirmedSync(obligateId, localId, action, rr.roster, audit));
+        }
       } catch (err) {
         logger.error(err, 'SSO sync: re-check failed');
       }
@@ -1265,6 +1294,16 @@ const RETRY_ERRORS: Record<string, string> = {
 router.post('/sso-user-sync', async (req, res) => {
   try {
     if (!(await obligateService.verifyInboundBearer(req.headers.authorization))) { res.status(401).json({ success: false }); return; }
+    // Accounts, links and memberships: the identity context of the integration.
+    await asIdentity(OBLIGATE_ACTOR, () => ssoUserSync(req, res));
+  } catch (err) {
+    logger.error(err, 'sso-user-sync error');
+    res.status(500).json({ success: false, error: 'Sync failed' });
+  }
+});
+
+async function ssoUserSync(req: Request, res: import('express').Response): Promise<void> {
+  {
 
     const body = (req.body ?? {}) as Record<string, unknown>;
     const obligateId = positiveInt(body.obligateUserId);
@@ -1341,10 +1380,7 @@ router.post('/sso-user-sync', async (req, res) => {
     }
 
     res.json({ success: true });
-  } catch (err) {
-    logger.error(err, 'sso-user-sync error');
-    res.status(500).json({ success: false, error: 'Sync failed' });
   }
-});
+}
 
 export default router;

@@ -1,5 +1,9 @@
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import type { TenantCapability } from '@obligarth/shared';
+
+// Permission sets are a catalog (rls-tenant §5.2): read in any context,
+// written in the identity context (after the route's checks).
 import { TENANT_CAPABILITIES, TENANT_CAPABILITY_LABELS, knownTenantCapabilities } from '@obligarth/shared';
 
 interface PermissionSetRow {
@@ -55,14 +59,14 @@ export const permissionSetService = {
   },
 
   async create(data: { name: string; slug: string; capabilities: unknown }): Promise<PermissionSet> {
-    const [row] = await db('permission_sets')
+    const [row] = await switchToIdentity(() => db('permission_sets')
       .insert({
         name: data.name,
         slug: data.slug,
         capabilities: JSON.stringify(knownTenantCapabilities(data.capabilities)),
         is_default: false,
       })
-      .returning('*') as PermissionSetRow[];
+      .returning('*')) as PermissionSetRow[];
     return rowToPermissionSet(row);
   },
 
@@ -75,7 +79,7 @@ export const permissionSetService = {
     if (data.capabilities !== undefined) update.capabilities = JSON.stringify(knownTenantCapabilities(data.capabilities));
 
     if (Object.keys(update).length > 0) {
-      await db('permission_sets').where({ id }).update(update);
+      await switchToIdentity(() => db('permission_sets').where({ id }).update(update));
     }
 
     const row = await db('permission_sets').where({ id }).first() as PermissionSetRow;
@@ -87,7 +91,7 @@ export const permissionSetService = {
     if (!existing) return { success: false, error: 'Permission set not found' };
     if (existing.is_default) return { success: false, error: 'Cannot delete default permission sets' };
 
-    await db('permission_sets').where({ id }).del();
+    await switchToIdentity(() => db('permission_sets').where({ id }).del());
     return { success: true };
   },
 

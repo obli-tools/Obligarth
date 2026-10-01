@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import { knownTenantCapabilities } from '@obligarth/shared';
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import { AppError } from '../middleware/errorHandler';
 
 // ── Scope of `users.manage` (P1, docs/mobile/device-bound-2fa.md §6.0) ─────
@@ -20,6 +21,12 @@ import { AppError } from '../middleware/errorHandler';
 //
 // The same rules are re-run by the approval executor (approval.service.ts)
 // as the REQUESTER, because rights may change while a request waits.
+//
+// Database context (rls-tenant §8.2): the checks read the GLOBAL account and
+// ALL its memberships (a tenant context would only show the current
+// tenant's rows, and a check that does not see a membership would pass):
+// every read of this file runs in the identity context, the caller's actor
+// kept. The writes that follow are made by the callers, in identity too.
 
 export type ScopeActor = { userId: number; isPlatformAdmin: boolean; tenantId: number };
 export type ManagedTarget = {
@@ -87,23 +94,7 @@ export const userScope = {
   /** Write access (password / 2FA reset, edit, enable/disable, delete,
    *  tenant access). Throws 400 / 403 / 404 (AppError). */
   async assertManageableTarget(actor: ScopeActor, targetId: number): Promise<ManagedTarget> {
-    if (!Number.isInteger(targetId) || targetId <= 0) throw new AppError(400, 'Invalid user id');
-    const target = await db('users').where({ id: targetId })
-      .first('id', 'username', 'role', 'is_active', 'foreign_source') as ManagedTarget | undefined;
-    if (!target) throw new AppError(404, 'User not found');
-    if (actor.isPlatformAdmin) return target;
-    // Outside the current tenant, an account answers like an unknown one
-    // (404) before anything else is said about it (a platform admin, say).
-    const rows = await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>;
-    if (!rows.some((r) => Number(r.tenant_id) === actor.tenantId)) throw new AppError(404, 'User not found');
-    if (target.role === 'admin') {
-      throw new AppError(403, 'Only a platform administrator can manage an administrator account');
-    }
-    for (const r of rows) {
-      const refusal = await refusalFor(actor, Number(r.tenant_id), normaliseTenantRole(r.role));
-      if (refusal) throw new AppError(403, refusal);
-    }
-    return target;
+    return switchToIdentity(() => assertManageableTargetIn(actor, targetId));
   },
 
   /** Read access (GET /users/:id, /:id/tenants, /:id/teams): every account
@@ -114,7 +105,7 @@ export const userScope = {
   async assertReadableTarget(actor: ScopeActor, targetId: number): Promise<void> {
     if (!Number.isInteger(targetId) || targetId <= 0) throw new AppError(400, 'Invalid user id');
     if (actor.isPlatformAdmin) return;
-    const member = await db('user_tenants').where({ user_id: targetId, tenant_id: actor.tenantId }).first('user_id');
+    const member = await switchToIdentity(() => db('user_tenants').where({ user_id: targetId, tenant_id: actor.tenantId }).first('user_id'));
     if (!member) throw new AppError(404, 'User not found');
   },
 
@@ -126,33 +117,7 @@ export const userScope = {
    * absent from the list or repeated unchanged, never altered.
    */
   async resolveTenantAssignments(actor: ScopeActor, targetId: number, assignments: unknown): Promise<TenantAssignment[]> {
-    if (!Array.isArray(assignments)) throw new AppError(400, 'assignments must be an array');
-    const wanted: TenantAssignment[] = [];
-    const seen = new Set<number>();
-    for (const a of assignments as Array<{ tenantId?: unknown; role?: unknown }>) {
-      const tenantId = Number(a?.tenantId);
-      if (!Number.isInteger(tenantId) || tenantId <= 0) throw new AppError(400, 'Invalid tenant id');
-      if (seen.has(tenantId)) throw new AppError(400, 'Duplicate tenant in assignments');
-      seen.add(tenantId);
-      wanted.push({ tenantId, role: normaliseTenantRole(a?.role) });
-    }
-    if (actor.isPlatformAdmin) return wanted;
-
-    if (targetId === actor.userId) throw new AppError(403, 'You cannot change your own tenant access');
-    await this.assertManageableTarget(actor, targetId); // member of the current tenant, dominated everywhere
-
-    const current = (await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>)
-      .map((r) => ({ tenantId: Number(r.tenant_id), role: normaliseTenantRole(r.role) }));
-    const kept = current.filter((r) => r.tenantId !== actor.tenantId);
-    for (const w of wanted) {
-      if (w.tenantId === actor.tenantId) continue;
-      const same = kept.find((k) => k.tenantId === w.tenantId);
-      if (!same || same.role !== w.role) throw new AppError(403, 'You can only change access to the current tenant');
-    }
-
-    const next = wanted.find((w) => w.tenantId === actor.tenantId);
-    if (next) await this.assertGrantableRole(actor, actor.tenantId, next.role);
-    return next ? [...kept, next] : kept;
+    return switchToIdentity(() => resolveTenantAssignmentsIn(actor, targetId, assignments));
   },
 
   /**
@@ -162,19 +127,73 @@ export const userScope = {
    * never widen the caller's rights). Throws 400 (unknown role) or 403.
    */
   async assertGrantableRole(actor: ScopeActor, tenantId: number, role: string): Promise<void> {
-    if (actor.isPlatformAdmin) return;
-    if (role === 'admin') {
-      if ((await membershipRole(actor.userId, tenantId)) !== 'admin') {
-        throw new AppError(403, 'Only a tenant administrator can grant the tenant administrator role');
-      }
-      return;
-    }
-    if (!(await capsOfRole(role))) throw new AppError(400, `Unknown role: ${role}`);
-    const refusal = await refusalFor(actor, tenantId, role);
-    if (refusal) throw new AppError(403, 'You can only grant a role whose permissions you hold');
+    return switchToIdentity(() => assertGrantableRoleIn(actor, tenantId, role));
   },
 
 };
+
+async function assertManageableTargetIn(actor: ScopeActor, targetId: number): Promise<ManagedTarget> {
+  if (!Number.isInteger(targetId) || targetId <= 0) throw new AppError(400, 'Invalid user id');
+  const target = await db('users').where({ id: targetId })
+    .first('id', 'username', 'role', 'is_active', 'foreign_source') as ManagedTarget | undefined;
+  if (!target) throw new AppError(404, 'User not found');
+  if (actor.isPlatformAdmin) return target;
+  // Outside the current tenant, an account answers like an unknown one
+  // (404) before anything else is said about it (a platform admin, say).
+  const rows = await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>;
+  if (!rows.some((r) => Number(r.tenant_id) === actor.tenantId)) throw new AppError(404, 'User not found');
+  if (target.role === 'admin') {
+    throw new AppError(403, 'Only a platform administrator can manage an administrator account');
+  }
+  for (const r of rows) {
+    const refusal = await refusalFor(actor, Number(r.tenant_id), normaliseTenantRole(r.role));
+    if (refusal) throw new AppError(403, refusal);
+  }
+  return target;
+}
+
+async function resolveTenantAssignmentsIn(actor: ScopeActor, targetId: number, assignments: unknown): Promise<TenantAssignment[]> {
+  if (!Array.isArray(assignments)) throw new AppError(400, 'assignments must be an array');
+  const wanted: TenantAssignment[] = [];
+  const seen = new Set<number>();
+  for (const a of assignments as Array<{ tenantId?: unknown; role?: unknown }>) {
+    const tenantId = Number(a?.tenantId);
+    if (!Number.isInteger(tenantId) || tenantId <= 0) throw new AppError(400, 'Invalid tenant id');
+    if (seen.has(tenantId)) throw new AppError(400, 'Duplicate tenant in assignments');
+    seen.add(tenantId);
+    wanted.push({ tenantId, role: normaliseTenantRole(a?.role) });
+  }
+  if (actor.isPlatformAdmin) return wanted;
+
+  if (targetId === actor.userId) throw new AppError(403, 'You cannot change your own tenant access');
+  await assertManageableTargetIn(actor, targetId); // member of the current tenant, dominated everywhere
+
+  const current = (await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>)
+    .map((r) => ({ tenantId: Number(r.tenant_id), role: normaliseTenantRole(r.role) }));
+  const kept = current.filter((r) => r.tenantId !== actor.tenantId);
+  for (const w of wanted) {
+    if (w.tenantId === actor.tenantId) continue;
+    const same = kept.find((k) => k.tenantId === w.tenantId);
+    if (!same || same.role !== w.role) throw new AppError(403, 'You can only change access to the current tenant');
+  }
+
+  const next = wanted.find((w) => w.tenantId === actor.tenantId);
+  if (next) await assertGrantableRoleIn(actor, actor.tenantId, next.role);
+  return next ? [...kept, next] : kept;
+}
+
+async function assertGrantableRoleIn(actor: ScopeActor, tenantId: number, role: string): Promise<void> {
+  if (actor.isPlatformAdmin) return;
+  if (role === 'admin') {
+    if ((await membershipRole(actor.userId, tenantId)) !== 'admin') {
+      throw new AppError(403, 'Only a tenant administrator can grant the tenant administrator role');
+    }
+    return;
+  }
+  if (!(await capsOfRole(role))) throw new AppError(400, `Unknown role: ${role}`);
+  const refusal = await refusalFor(actor, tenantId, role);
+  if (refusal) throw new AppError(403, 'You can only grant a role whose permissions you hold');
+}
 
 /** Admin MFA reset: removes every local second factor, lifts the code lock
  *  (§6.8), drops the IP trusts that rested on the removed factor and revokes
@@ -187,6 +206,15 @@ export async function resetSecondFactors(
   userId: number,
   byUserId?: number,
   ctx: { req?: Request; auditTenantId?: number | null } = {},
+): Promise<boolean> {
+  // Another account's factors, code lock and trusts: the identity context.
+  return switchToIdentity(() => resetSecondFactorsIn(userId, byUserId, ctx));
+}
+
+async function resetSecondFactorsIn(
+  userId: number,
+  byUserId: number | undefined,
+  ctx: { req?: Request; auditTenantId?: number | null },
 ): Promise<boolean> {
   const count = await db('users').where({ id: userId }).update({
     totp_secret: null,

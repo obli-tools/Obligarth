@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import type { User } from '@obligarth/shared';
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import { AppError } from '../middleware/errorHandler';
 import { userService } from './user.service';
 import { userScope, type ScopeActor } from './userScope.service';
@@ -23,6 +24,9 @@ import { createUserSchema, updateUserSchema, type UpdateUserInput } from '../val
 // `ctx.req`: the caller's request (audit with its tenant and IP). Without it
 // (approval): audited as `actor.userId` in `ctx.auditTenantId`, flagged
 // `viaApproval`.
+// Database context (rls-tenant §8.2): accounts and memberships are identity
+// rows, read and written in the identity context (the caller's actor kept),
+// after the P1 checks; the audit goes to the caller's tenant.
 
 export type UserAdminCtx = { req?: Request; auditTenantId?: number };
 
@@ -45,14 +49,14 @@ async function audit(actor: ScopeActor, ctx: UserAdminCtx, action: string, targe
 }
 
 async function otherActiveAdmins(exceptId: number): Promise<number> {
-  const row = await db('users').where({ role: 'admin', is_active: true }).whereNot({ id: exceptId })
-    .count('* as n').first() as { n: string | number } | undefined;
+  const row = await switchToIdentity(() => db('users').where({ role: 'admin', is_active: true }).whereNot({ id: exceptId })
+    .count('* as n').first()) as { n: string | number } | undefined;
   return Number(row?.n ?? 0);
 }
 
 /** Same comparison as the sign-in and the `users.username` unique index. */
 export async function usernameTaken(username: string): Promise<boolean> {
-  const row = await db('users').where({ username }).first('id');
+  const row = await switchToIdentity(() => db('users').where({ username }).first('id'));
   return !!row;
 }
 
@@ -104,7 +108,7 @@ export async function createUserAccount(
   if (await usernameTaken(data.username)) throw new AppError(409, 'Username already exists');
   let user: User;
   try {
-    user = await db.transaction(async (trx) => {
+    user = await switchToIdentity(() => db.transaction(async (trx) => {
       const created = await userService.createWithPasswordHash({
         username: data.username,
         passwordHash,
@@ -115,7 +119,7 @@ export async function createUserAccount(
         await trx('user_tenants').insert({ user_id: created.id, tenant_id: tenantId, role: NEW_ACCOUNT_TENANT_ROLE });
       }
       return created;
-    });
+    }));
   } catch (err) {
     if (err instanceof Error && /unique/i.test(err.message)) throw new AppError(409, 'Username already exists');
     throw err;
@@ -150,7 +154,7 @@ export async function updateUserAccount(
     if ((await otherActiveAdmins(targetId)) === 0) throw new AppError(400, 'Cannot remove the last active admin');
   }
 
-  const user = await userService.update(targetId, data);
+  const user = await switchToIdentity(() => userService.update(targetId, data));
   if (!user) throw new AppError(404, 'User not found');
   // P6: the session guard caches is_active / role for a few seconds; a
   // deactivated user's sessions (and a demoted admin's, whose session still
@@ -163,7 +167,7 @@ export async function updateUserAccount(
     await killSessionsForUser(targetId, data.isActive === false ? 'user_disabled' : 'role_demoted');
     if (data.isActive === false) {
       const { tfaTrustService } = await import('./tfaTrust.service');
-      await tfaTrustService.revokeAllForUser(targetId);
+      await switchToIdentity(() => tfaTrustService.revokeAllForUser(targetId));
       // P6 / §6.7: a disabled account's phone keys are revoked.
       try {
         const { deviceKeyService } = await import('./deviceKey/deviceKey.service');
@@ -192,7 +196,7 @@ export async function deleteUserAccount(actor: ScopeActor, targetId: number, ctx
   if (scoped.role === 'admin' && (await otherActiveAdmins(targetId)) === 0) {
     throw new AppError(400, 'Cannot delete the last admin');
   }
-  const deleted = await userService.delete(targetId);
+  const deleted = await switchToIdentity(() => userService.delete(targetId));
   if (!deleted) throw new AppError(404, 'User not found');
   // P6: a deleted user's sessions would keep their role (admin bypasses).
   const { forgetSessionUser } = await import('../middleware/sessionUserGuard');

@@ -7,10 +7,10 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/src/index.js",
-    "migrate": "knex migrate:latest --knexfile knexfile.ts",
+    "migrate": "node dist/src/db/migrate.js",
+    "migrate:dev": "tsx src/db/migrate.ts",
     "migrate:make": "knex migrate:make --knexfile knexfile.ts",
     "seed": "knex seed:run --knexfile knexfile.ts",
-    "migrate:rollback": "knex migrate:rollback --knexfile knexfile.ts",
     "test:device-keys": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/services/deviceKey/*.test.ts\""
   },
   "dependencies": {
@@ -25,7 +25,7 @@
     "express-rate-limit": "^7.2.0",
     "express-session": "^1.18.0",
     "helmet": "^7.1.0",
-    "knex": "^3.1.0",
+    "knex": "3.3.0",
     "multer": "^1.4.5-lts.2",
     "nodemailer": "^8.0.1",
     "otpauth": "^9.5.0",

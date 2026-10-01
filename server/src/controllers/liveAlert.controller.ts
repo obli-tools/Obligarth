@@ -1,6 +1,21 @@
 import type { Request, Response, NextFunction } from 'express';
 import { liveAlertService } from '../services/liveAlert.service';
 import { db } from '../db';
+import { asMember, asTenant, userActor } from '../db/context';
+
+/** An alert of one of the user's tenants (read in the context 'member'),
+ *  or undefined. */
+async function alertOfUser(userId: number, id: number): Promise<{ id: number; tenant_id: number } | undefined> {
+  return asMember(userId, async () => {
+    const userTenantIds = await db('user_tenants')
+      .where('user_id', userId)
+      .pluck('tenant_id') as number[];
+    return await db('live_alerts')
+      .where({ id })
+      .whereIn('tenant_id', userTenantIds)
+      .first('id', 'tenant_id') as { id: number; tenant_id: number } | undefined;
+  });
+}
 
 /** GET /api/live-alerts — current tenant */
 export async function getAlerts(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -37,17 +52,11 @@ export async function markRead(req: Request, res: Response, next: NextFunction):
   try {
     const id = parseInt(req.params.id, 10);
     // Verify the alert belongs to a tenant the user can access
-    const userTenantIds = await db('user_tenants')
-      .where('user_id', req.session.userId!)
-      .pluck('tenant_id') as number[];
-
-    const alert = await db('live_alerts')
-      .where({ id })
-      .whereIn('tenant_id', userTenantIds)
-      .first() as { id: number; tenant_id: number } | undefined;
+    const userId = Number(req.session.userId);
+    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id) : undefined;
     if (!alert) { res.status(404).json({ error: 'Alert not found' }); return; }
 
-    await liveAlertService.markRead(id, alert.tenant_id);
+    await asTenant(Number(alert.tenant_id), userActor(userId), () => liveAlertService.markRead(id, alert.tenant_id));
     res.json({ ok: true });
   } catch (err) { next(err); }
 }
@@ -64,17 +73,11 @@ export async function markAllRead(req: Request, res: Response, next: NextFunctio
 export async function deleteAlert(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const id = parseInt(req.params.id, 10);
-    const userTenantIds = await db('user_tenants')
-      .where('user_id', req.session.userId!)
-      .pluck('tenant_id') as number[];
-
-    const alert = await db('live_alerts')
-      .where({ id })
-      .whereIn('tenant_id', userTenantIds)
-      .first() as { id: number } | undefined;
+    const userId = Number(req.session.userId);
+    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id) : undefined;
     if (!alert) { res.status(404).json({ error: 'Alert not found' }); return; }
 
-    await liveAlertService.deleteAlert(id);
+    await asTenant(Number(alert.tenant_id), userActor(userId), () => liveAlertService.deleteAlert(id, Number(alert.tenant_id)));
     res.json({ ok: true });
   } catch (err) { next(err); }
 }

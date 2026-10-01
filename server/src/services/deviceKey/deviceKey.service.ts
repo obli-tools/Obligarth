@@ -10,6 +10,7 @@ import {
   type DeviceKeyAttestationFailureReason, type DeviceKeyEligibilityReason,
 } from '@obligarth/shared';
 import { db } from '../../db';
+import { switchToIdentity } from '../../db/context';
 import { config } from '../../config';
 import { logger } from '../../utils/logger';
 import { clientAddress } from '../../utils/clientIp';
@@ -564,8 +565,8 @@ async function ssoKeyState(row: KeyRow, req?: Request): Promise<'ok' | 'disabled
 export async function applySsoCredentialsChanged(
   localUserId: number, e: ObligateMfaEpoch | null,
 ): Promise<{ outcome: 'none' | 'unconfirmed' | 'revoked'; count: number }> {
-  const keys = await db('user_device_keys').where({ user_id: localUserId, status: 'active' })
-    .select('id', 'sso_epoch') as Array<{ id: string; sso_epoch: number | null }>;
+  const keys = await switchToIdentity(() => db('user_device_keys').where({ user_id: localUserId, status: 'active' })
+    .select('id', 'sso_epoch')) as Array<{ id: string; sso_epoch: number | null }>;
   if (keys.length === 0) return { outcome: 'none', count: 0 };
   const stale = keys
     .filter((k) => !e || !e.active || k.sso_epoch == null || Number(k.sso_epoch) !== e.mfaEpoch)
@@ -696,12 +697,14 @@ export async function eligibilityOf(
   return { ok: true };
 }
 
-/** Active keys of a user, newest first (§6.5 GET /api/profile/device-keys). */
+/** Active keys of a user, newest first (§6.5 GET /api/profile/device-keys).
+ *  Identity context: one's own keys, or an account the caller manages (the
+ *  route checked the scope). */
 export async function list(userId: number, currentKeyId?: string | null): Promise<DeviceKeyInfo[]> {
-  const rows = await db('user_device_keys')
+  const rows = await switchToIdentity(() => db('user_device_keys')
     .where({ user_id: userId, status: 'active' })
     .orderBy('created_at', 'desc')
-    .select('id', 'label', 'platform', 'security_level', 'attestation', 'created_at', 'last_used_at', 'last_used_ip', 'use_count') as Array<{
+    .select('id', 'label', 'platform', 'security_level', 'attestation', 'created_at', 'last_used_at', 'last_used_ip', 'use_count')) as Array<{
       id: string; label: string | null; platform: string; security_level: string; attestation: unknown;
       created_at: Date | string; last_used_at: Date | string | null; last_used_ip: string | null; use_count: number;
     }>;
@@ -766,6 +769,8 @@ export interface RevokeOptions {
  * modules' hooks close for them), and one `device_key.revoked` audit row is
  * written per key.
  * Only active keys are affected; returns them.
+ * Identity context: the keys and trusts of one's own account, or of an
+ * account the caller manages (checked by the caller), or of the jobs.
  */
 export async function revoke(
   keyIds: string | ReadonlyArray<string>,
@@ -774,7 +779,7 @@ export async function revoke(
 ): Promise<Array<{ id: string; userId: number; sessionsKilled: number }>> {
   const ids = [...new Set((typeof keyIds === 'string' ? [keyIds] : [...keyIds]).filter(isUuid))];
   if (ids.length === 0) return [];
-  const done = await db.transaction(async (trx) => {
+  const done = await switchToIdentity(() => db.transaction(async (trx) => {
     let q = trx('user_device_keys').whereIn('id', ids).andWhere({ status: 'active' });
     if (opts.ownerId != null) q = q.andWhere({ user_id: opts.ownerId });
     const rows = await q.update({
@@ -801,7 +806,7 @@ export async function revoke(
       await trx('tfa_trusted_sessions').whereIn('user_id', users).delete();
     }
     return out;
-  });
+  }));
   const ctx: AuditContext = { tenantId: opts.auditTenantId ?? null, actorId: opts.actorId ?? opts.byUserId ?? null };
   for (const r of done) forgetKeyStatus(r.id);
   // After the commit: the rows are gone, so a channel closed now cannot come
@@ -826,13 +831,13 @@ export async function revokeAllForUser(
   reason: DeviceKeyRevokeReason,
   opts: Omit<RevokeOptions, 'ownerId'> = {},
 ): Promise<Array<{ id: string; userId: number; sessionsKilled: number }>> {
-  const rows = await db('user_device_keys').where({ user_id: userId, status: 'active' }).select('id') as Array<{ id: string }>;
+  const rows = await switchToIdentity(() => db('user_device_keys').where({ user_id: userId, status: 'active' }).select('id')) as Array<{ id: string }>;
   return revoke(rows.map((r) => r.id), reason, { ...opts, ownerId: userId });
 }
 
 /** `device_keys_require_attestation` switched to 'true': unverified keys die ('policy'). */
 export async function revokeUnverifiedKeys(opts: Omit<RevokeOptions, 'ownerId'> = {}): Promise<number> {
-  const rows = await db('user_device_keys').where({ status: 'active', security_level: 'unverified' }).select('id') as Array<{ id: string }>;
+  const rows = await switchToIdentity(() => db('user_device_keys').where({ status: 'active', security_level: 'unverified' }).select('id')) as Array<{ id: string }>;
   return (await revoke(rows.map((r) => r.id), 'policy', opts)).length;
 }
 
@@ -1601,7 +1606,7 @@ export async function sweepChallenges(): Promise<number> {
 export const PAUSED_AT_KEY = 'device_keys_paused_at';
 
 async function markPaused(): Promise<void> {
-  await db('app_config').insert({ key: PAUSED_AT_KEY, value: new Date().toISOString() }).onConflict('key').merge();
+  await switchToIdentity(() => db('app_config').insert({ key: PAUSED_AT_KEY, value: new Date().toISOString() }).onConflict('key').merge());
 }
 
 /**
@@ -1695,9 +1700,10 @@ export async function setDeviceKeySetting(
 ): Promise<{ before: string | null; revoked: number }> {
   if (!Object.prototype.hasOwnProperty.call(DEVICE_KEY_CONFIG_DEFAULTS, key)) throw new Error(`not a device-key setting: ${key}`);
   if (value !== 'true' && value !== 'false') throw new Error(`${key} must be 'true' or 'false'`);
+  // Platform settings: written in the identity context (catalog, rls-tenant §5.2).
   const beforeRow = await db('app_config').where({ key }).first('value') as { value: string | null } | undefined;
   const before = beforeRow?.value ?? null;
-  await db('app_config').insert({ key, value }).onConflict('key').merge();
+  await switchToIdentity(() => db('app_config').insert({ key, value }).onConflict('key').merge());
   invalidatePolicyCache();
   if (key === 'device_keys_enabled' && value === 'true' && (before ?? DEVICE_KEY_CONFIG_DEFAULTS.device_keys_enabled) !== 'true') {
     await markPaused().catch(() => undefined);

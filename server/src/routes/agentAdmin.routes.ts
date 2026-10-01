@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { db } from '../db';
 import { requireRole, requireAnyTenantCapability } from '../middleware/rbac';
 import { hasGlobalView } from '../services/deviceScope.service';
+import { globalViewScope } from '../middleware/dbContext';
 
 const router = Router();
 
@@ -159,7 +160,9 @@ async function deleteKey(req: Request, res: Response): Promise<void> {
 // `agent_config:approval` (since approving agents naturally implies
 // being able to enroll them too). CUD on keys stays admin-only —
 // minting and revoking enrolment credentials is takeover-level.
-router.get('/keys', requireAnyTenantCapability('agent_config:keys', 'agent_config:approval'), listKeys);
+// The list accepts the global view (context 'platform'); the writes stay in
+// the session tenant's context.
+router.get('/keys', requireAnyTenantCapability('agent_config:keys', 'agent_config:approval'), globalViewScope('console.enrollment_keys'), listKeys);
 router.post('/keys',       requireRole('admin'), createKey);
 router.put('/keys/:id',    requireRole('admin'), updateKey);
 router.delete('/keys/:id', requireRole('admin'), deleteKey);

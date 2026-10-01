@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { isMasterTenant } from '@obligarth/shared';
 import { logger } from '../utils/logger';
+import { userLabels } from './userLabels.service';
 
 /**
  * Change-event timeline — "what changed on this device, when, and who did it".
@@ -162,7 +163,10 @@ interface SourceContext {
   globalView: boolean;
 }
 
-const USER_COLUMNS = ['u.username as actor_username', 'u.display_name as actor_display_name'];
+// The actors' names come from obligarth.user_labels (rls-tenant §5.3.3): an
+// MSP administrator who acted on a client's device is named, an account of
+// another client never (a join on users would only name the members the row
+// level security shows).
 
 /** Every source for a kind, in the order they are merged. A kind absent from
  *  the returned map is one the caller is not allowed to read (config_change
@@ -178,11 +182,10 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
     sources.config_change = [{
       table: 'audit_logs',
       base: () => scope('audit_logs', 'al', ctx)
-        .leftJoin('users as u', 'u.id', 'al.user_id')
         .whereBetween('al.created_at', [from, to]),
       columns: [
         'al.id', 'al.action', 'al.resource_type', 'al.resource_path', 'al.details',
-        'al.user_id', 'al.ip_address', ...USER_COLUMNS, 'al.created_at as at',
+        'al.user_id', 'al.ip_address', 'al.created_at as at',
       ],
       order: 'al.created_at',
       countOn: 'al.id',
@@ -287,7 +290,11 @@ export const changeEventService = {
           .select(src.columns)
           .orderByRaw(`${src.order} DESC`)
           .limit(limit + 1);
-        return rows.map(src.map);
+        const labels = await userLabels(rows.map((r: any) => r.user_id).filter((id: unknown) => id != null));
+        return rows.map((r: any) => {
+          const label = r.user_id != null ? labels.get(Number(r.user_id)) : undefined;
+          return src.map({ ...r, actor_username: label?.username ?? null, actor_display_name: label?.displayName ?? null });
+        });
       })),
     );
 

@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { AppError } from './errorHandler';
+import { enterTenantContext } from './dbContext';
 import { tenantService, noTenantAccessError } from '../services/tenant.service';
 
 // Extend Express.Request to carry the resolved tenantId
@@ -29,10 +30,14 @@ function sessionTenantId(req: Request): number | null {
  * a request in flight that saved its session back) is refused here — 403,
  * never a silent switch to another tenant, which would apply the request to
  * that tenant's data. Platform admins have access to every tenant.
+ *
+ * Once checked, the rest of the chain runs in the database context 'tenant'
+ * of that tenant, actor = the session's user (rls-tenant §7.4).
  */
 export async function requireTenant(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  let tid: number | null;
   try {
-    const tid = sessionTenantId(req);
+    tid = sessionTenantId(req);
     if (!tid) {
       next(new AppError(400, 'No tenant selected'));
       return;
@@ -45,10 +50,11 @@ export async function requireTenant(req: Request, _res: Response, next: NextFunc
       }
     }
     req.tenantId = tid;
-    next();
   } catch (err) {
     next(err);
+    return;
   }
+  enterTenantContext(req, tid, next);
 }
 
 /**
@@ -62,12 +68,16 @@ export async function requireTenant(req: Request, _res: Response, next: NextFunc
  * tenant the user belongs to. An account without any tenant is refused
  * (403): it never gets the master tenant it is not a member of, and cannot
  * sign in either.
+ *
+ * With a tenant, the rest of the chain runs in its database context (the
+ * user's own rows stay readable in every context).
  */
 export async function attachSessionTenant(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  let tid: number | null = null;
   try {
     const userId = Number(req.session?.userId);
     if (Number.isInteger(userId) && userId > 0) {
-      let tid = sessionTenantId(req);
+      tid = sessionTenantId(req);
       if (tid && req.session.role !== 'admin' && !(await tenantService.isMemberCached(userId, tid))) tid = null;
       if (!tid) {
         tid = await tenantService.sessionTenantFor(userId, req.session.role);
@@ -79,8 +89,10 @@ export async function attachSessionTenant(req: Request, _res: Response, next: Ne
       }
       req.tenantId = tid;
     }
-    next();
   } catch (err) {
     next(err);
+    return;
   }
+  if (tid) enterTenantContext(req, tid, next);
+  else next();
 }

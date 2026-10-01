@@ -3,6 +3,7 @@ import { deviceService } from '../services/device.service';
 import { requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
 import { hasGlobalView, parseRequestDeviceId } from '../services/deviceScope.service';
+import { asTargetTenant, globalViewRead, globalViewScope } from '../middleware/dbContext';
 import { db } from '../db';
 import { launchChromium } from '../utils/chromium';
 import { logger } from '../utils/logger';
@@ -13,14 +14,20 @@ const router = Router();
 // master tenant's global view (every tenant) is a platform administrator's
 // only (hasGlobalView), never a master-tenant member's, and it covers the
 // reads and the device update (PATCH /:id); the state changes (approve,
-// refuse, suspend, unsuspend, transfer, delete, bulk delete) stay on the
-// session's tenant for everyone. A device out of reach answers like an
-// unknown one (404).
+// refuse, suspend, unsuspend, delete, bulk delete) stay on the session's
+// tenant for everyone. A device out of reach answers like an unknown one
+// (404).
+//
+// Database contexts (rls-tenant §6.3, §8.2): the reads that accept the
+// global view run in the context 'platform' (globalViewScope); the device
+// update from the global view reads the device there, then writes in the
+// context of the device's tenant (asTargetTenant); everything else runs in
+// the session tenant's context.
 
 // ── Static / collection routes (must come before /:id routes) ─────────────────
 
 // GET /api/devices
-router.get('/', async (req, res, next) => {
+router.get('/', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const { groupId, includeSubgroups, status, approvalStatus, search, osType, osName, osVersion, page, pageSize, sortBy, sortOrder, ungrouped, staleHours, tags, tenantIds } = req.query as any;
 
@@ -83,7 +90,7 @@ router.get('/', async (req, res, next) => {
 });
 
 // GET /api/devices/export
-router.get('/export', async (req, res, next) => {
+router.get('/export', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const { format, groupId, includeSubgroups, status, approvalStatus, search, osType, sortBy, sortOrder, ungrouped } = req.query as any;
     const fmt = (format ?? 'csv').toString().toLowerCase();
@@ -224,7 +231,7 @@ tr:nth-child(even) td { background: #f9fafb; }
 });
 
 // GET /api/devices/summary
-router.get('/summary', async (req, res, next) => {
+router.get('/summary', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const summary = await deviceService.getFleetSummary(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: summary });
@@ -236,7 +243,7 @@ router.get('/summary', async (req, res, next) => {
 // last N days. Used by the dashboard hero sparklines and the "Activité du
 // parc" chart. The current-day point is always synthesized from live state
 // (no waiting for the nightly snapshot job).
-router.get('/fleet-timeseries', async (req, res, next) => {
+router.get('/fleet-timeseries', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const days = Math.min(parseInt(String(req.query.days ?? '14')) || 14, 90);
     const series = await deviceService.getFleetTimeseries(req.tenantId!, days, { globalView: hasGlobalView(req) });
@@ -248,7 +255,7 @@ router.get('/fleet-timeseries', async (req, res, next) => {
 // Hourly granularity timeseries for the dashboard "Activité du parc" 24h
 // view. Returns one point per hour (capped 7d), each with total / online /
 // offline / pending_updates / stale_72h.
-router.get('/fleet-hourly', async (req, res, next) => {
+router.get('/fleet-hourly', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const hours = Math.min(168, Math.max(2, parseInt(String(req.query.hours ?? '24')) || 24));
     const series = await deviceService.getFleetHourlySeries(req.tenantId!, hours, { globalView: hasGlobalView(req) });
@@ -260,7 +267,7 @@ router.get('/fleet-hourly', async (req, res, next) => {
 // Grouped facets used by the /devices 3-tier OS filter (family → name → build).
 // Returns one row per (osType, osName, osVersion) triplet with a count, so the
 // client can render dropdowns showing only options that actually have devices.
-router.get('/os-facets', async (req, res, next) => {
+router.get('/os-facets', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const facets = await deviceService.getOsFacets(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: facets });
@@ -271,7 +278,7 @@ router.get('/os-facets', async (req, res, next) => {
 // Distinct tag list for the tenant with per-tag device counts. Drives the
 // /devices tag-filter chip popover so admins pick from existing tags
 // (typo-free) rather than retyping. Returns [{ tag, count }] desc by count.
-router.get('/tags', async (req, res, next) => {
+router.get('/tags', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const tags = await deviceService.getTagFacets(req.tenantId!, { globalView: hasGlobalView(req) });
     res.json({ data: tags });
@@ -279,7 +286,7 @@ router.get('/tags', async (req, res, next) => {
 });
 
 // GET /api/devices/group-stats — stats per group for dashboard
-router.get('/group-stats', async (req, res, next) => {
+router.get('/group-stats', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const tenantId = req.tenantId!;
     const isMaster = hasGlobalView(req);
@@ -421,104 +428,6 @@ router.delete('/bulk/delete', requireTenantCapability('devices.manage'), async (
   } catch (err) { next(err); }
 });
 
-// POST /api/devices/batch/transfer — move N devices to another tenant in
-// one shot. All devices must currently belong to `req.tenantId` and the
-// caller must be admin in both source and target (or platform admin).
-// Honours the tenant's `device.transfer_tenant` restriction policy — if
-// the action is Sensitive the whole batch prompts for TOTP once; if
-// Restricted the batch hits the approvals queue as a single request.
-router.post('/batch/transfer', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const { deviceIds, targetTenantId, targetApiKeyId } = req.body as {
-      deviceIds: number[]; targetTenantId: number; targetApiKeyId: number;
-    };
-    if (!Array.isArray(deviceIds) || deviceIds.length === 0) {
-      return res.status(400).json({ error: 'deviceIds required' });
-    }
-    if (!targetTenantId || !targetApiKeyId) {
-      return res.status(400).json({ error: 'targetTenantId and targetApiKeyId required' });
-    }
-    if (targetTenantId === req.tenantId!) {
-      return res.status(400).json({ error: 'Target tenant is the same as source' });
-    }
-
-    const userId = req.session.userId!;
-    const isPlatformAdmin = req.session.role === 'admin';
-    if (!isPlatformAdmin) {
-      const [sourceMembership, targetMembership] = await Promise.all([
-        db('user_tenants').where({ user_id: userId, tenant_id: req.tenantId!, role: 'admin' }).first(),
-        db('user_tenants').where({ user_id: userId, tenant_id: targetTenantId, role: 'admin' }).first(),
-      ]);
-      if (!sourceMembership || !targetMembership) {
-        return res.status(403).json({ error: 'You must be admin of both tenants' });
-      }
-    }
-
-    const targetKey = await db('agent_api_keys')
-      .where({ id: targetApiKeyId, tenant_id: targetTenantId })
-      .first();
-    if (!targetKey) return res.status(400).json({ error: 'Target API key not found in target tenant' });
-
-    // Ensure every device belongs to the source tenant — prevents a
-    // malicious admin from stuffing arbitrary device ids into the batch.
-    const validDevices = await db('devices')
-      .whereIn('id', deviceIds)
-      .andWhere({ tenant_id: req.tenantId! })
-      .select('id', 'hostname');
-    if (validDevices.length === 0) {
-      return res.status(404).json({ error: 'No matching devices in this tenant' });
-    }
-
-    // Gate via the transfer restriction policy. deviceIds drives scope
-    // evaluation (e.g. "Sensitive only for prod group") — same semantics
-    // as the single-device transfer.
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'device.transfer_tenant',
-      deviceIds: validDevices.map((d: any) => d.id),
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Transfer to ${await (await import('../services/approvalDescribe')).tenantLabel(targetTenantId)} (agent key "${targetKey.name ?? targetApiKeyId}") — ${await (await import('../services/approvalDescribe')).deviceList(req.tenantId!, validDevices.map((d: any) => d.id))}`,
-      approvalPayload: { action: 'transfer_tenant', deviceIds: validDevices.map((d: any) => d.id), params: { targetTenantId, targetApiKeyId } },
-    });
-    if (!approved) return;
-
-    // Each device joins the target tenant, attached to the target key (its
-    // pre-approval claim, permissionService) and ungrouped; the source
-    // tenant's teams lose their scopes on it. Keep in sync with
-    // deviceApproval.ts (transferDevices).
-    const results = { transferred: 0, failed: 0 };
-    const moved: number[] = [];
-    for (const device of validDevices) {
-      try {
-        await db('devices').where({ id: device.id }).update({
-          tenant_id: targetTenantId,
-          api_key_id: targetApiKeyId,
-          group_id: null,
-          updated_at: new Date(),
-        });
-        results.transferred++;
-        moved.push(Number(device.id));
-      } catch (err) {
-        logger.error({ err, deviceId: device.id }, 'bulk transfer: failed for device');
-        results.failed++;
-      }
-    }
-    await deviceService.dropForeignTeamScopes(moved, targetTenantId);
-
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.bulk_transferred', {
-        resourceType: 'device',
-        resourcePath: validDevices.map((d: any) => d.id).join(','),
-        details: { fromTenantId: req.tenantId, toTenantId: targetTenantId, count: validDevices.length, transferred: results.transferred, failed: results.failed },
-      });
-    } catch {}
-
-    res.json({ data: results });
-  } catch (err) { next(err); }
-});
-
 // POST /api/devices/batch/change-group — move N devices to a new group in one shot.
 // Body: { deviceIds: number[], groupId: number | null }
 router.post('/batch/change-group', requireTenantCapability('devices.manage'), async (req, res, next) => {
@@ -578,7 +487,7 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
 // ── Single-device routes (:id) ────────────────────────────────────────────────
 
 // GET /api/devices/:id
-router.get('/:id', requireDeviceRead(), async (req, res, next) => {
+router.get('/:id', requireDeviceRead(), globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const device = await deviceService.getDeviceById(parseInt(req.params.id), req.tenantId!, { globalView: hasGlobalView(req) });
     if (!device) return res.status(404).json({ error: 'Device not found' });
@@ -592,9 +501,21 @@ router.get('/:id', requireDeviceRead(), async (req, res, next) => {
 router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
-    const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body ?? {}, { globalView: hasGlobalView(req) }, {
+    const view = { globalView: hasGlobalView(req) };
+    // From the global view: the device is found across tenants (context
+    // 'platform'), then written in its own tenant's context (one target per
+    // request); otherwise in the session's tenant.
+    let targetTenantId = req.tenantId!;
+    if (view.globalView) {
+      const found = Number.isSafeInteger(deviceId) && deviceId > 0
+        ? await globalViewRead(req, () => db('devices').where({ id: deviceId }).first('tenant_id')) as { tenant_id: number } | undefined
+        : undefined;
+      if (!found) return res.status(404).json({ error: 'Device not found' });
+      targetTenantId = Number(found.tenant_id);
+    }
+    const device = await asTargetTenant(req, targetTenantId, () => deviceService.updateDevice(deviceId, req.tenantId!, req.body ?? {}, view, {
       groupWriterId: req.session.role === 'admin' ? undefined : req.session.userId!,
-    });
+    }));
     if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
@@ -608,7 +529,7 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
 //
 // The service also filters per CALLER (a non-admin does not see another user's
 // audit rows), so the session identity is passed through rather than assumed.
-router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => {
+router.get('/:id/change-events', requireDeviceRead(), globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
     // Same tenant rule as GET /:id; the service applies it to the rows too
@@ -633,7 +554,7 @@ router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => 
 });
 
 // GET /api/devices/:id/change-events/summary?from=&to= — counts per kind
-router.get('/:id/change-events/summary', requireDeviceRead(), async (req, res, next) => {
+router.get('/:id/change-events/summary', requireDeviceRead(), globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
     if (!(await deviceService.getDeviceById(deviceId, req.tenantId!, { globalView: hasGlobalView(req) }))) {
@@ -723,166 +644,10 @@ router.post('/:id/unsuspend', requireTenantCapability('devices.manage'), async (
   } catch (err) { next(err); }
 });
 
-// GET /api/devices/transfer/candidates — tenant-level list, same body
-// shape as the per-device variant below. Used by the bulk transfer UI
-// where no single deviceId is relevant.
-router.get('/transfer/candidates', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const userId = req.session.userId!;
-    const isPlatformAdmin = req.session.role === 'admin';
-
-    let tenantsQ = db('tenants').select('id', 'name', 'slug').orderBy('name');
-    if (!isPlatformAdmin) {
-      tenantsQ = tenantsQ
-        .join('user_tenants', 'user_tenants.tenant_id', 'tenants.id')
-        .where({ 'user_tenants.user_id': userId, 'user_tenants.role': 'admin' })
-        .select('tenants.id', 'tenants.name', 'tenants.slug');
-    }
-    const tenants = (await tenantsQ).filter((t: any) => t.id !== req.tenantId!);
-
-    if (tenants.length === 0) return res.json({ data: [] });
-
-    const keys = await db('agent_api_keys')
-      .whereIn('tenant_id', tenants.map((t: any) => t.id))
-      .select('id', 'tenant_id', 'name', 'default_group_id');
-    const keysByTenant = new Map<number, any[]>();
-    for (const k of keys) {
-      if (!keysByTenant.has(k.tenant_id)) keysByTenant.set(k.tenant_id, []);
-      keysByTenant.get(k.tenant_id)!.push({ id: k.id, label: k.name, defaultGroupId: k.default_group_id ?? null });
-    }
-
-    res.json({
-      data: tenants.map((t: any) => ({
-        tenantId: t.id, tenantName: t.name, tenantSlug: t.slug,
-        apiKeys: keysByTenant.get(t.id) ?? [],
-      })),
-    });
-  } catch (err) { next(err); }
-});
-
-// GET /api/devices/:id/transfer/candidates — list the tenants the caller
-// can transfer INTO (must be admin there, or platform admin) along with
-// their API keys. Excludes the current tenant.
-router.get('/:id/transfer/candidates', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const userId = req.session.userId!;
-    const isPlatformAdmin = req.session.role === 'admin';
-
-    let tenantsQ = db('tenants').select('id', 'name', 'slug').orderBy('name');
-    if (!isPlatformAdmin) {
-      // Only tenants where the user has admin membership.
-      tenantsQ = tenantsQ
-        .join('user_tenants', 'user_tenants.tenant_id', 'tenants.id')
-        .where({ 'user_tenants.user_id': userId, 'user_tenants.role': 'admin' })
-        .select('tenants.id', 'tenants.name', 'tenants.slug');
-    }
-    const tenants = (await tenantsQ).filter((t: any) => t.id !== req.tenantId!);
-
-    if (tenants.length === 0) {
-      return res.json({ data: [] });
-    }
-
-    const keys = await db('agent_api_keys')
-      .whereIn('tenant_id', tenants.map((t: any) => t.id))
-      .select('id', 'tenant_id', 'name', 'default_group_id');
-
-    const keysByTenant = new Map<number, any[]>();
-    for (const k of keys) {
-      if (!keysByTenant.has(k.tenant_id)) keysByTenant.set(k.tenant_id, []);
-      keysByTenant.get(k.tenant_id)!.push({
-        id: k.id,
-        label: k.name,        // client contract is still `label`
-        defaultGroupId: k.default_group_id ?? null,
-      });
-    }
-
-    res.json({
-      data: tenants.map((t: any) => ({
-        tenantId: t.id,
-        tenantName: t.name,
-        tenantSlug: t.slug,
-        apiKeys: keysByTenant.get(t.id) ?? [],
-      })),
-    });
-  } catch (err) { next(err); }
-});
-
-// POST /api/devices/:id/transfer — move a device from the current tenant
-// to another tenant. Caller must be admin in BOTH tenants (or platform
-// admin). The device's tenant_id + api_key_id (the target tenant's key,
-// its pre-approval claim) are updated and group_id is cleared.
-//
-// Body: { targetTenantId: number, targetApiKeyId: number }
-router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (req, res, next) => {
-  try {
-    const deviceId = parseInt(req.params.id);
-    const { targetTenantId, targetApiKeyId } = req.body as { targetTenantId: number; targetApiKeyId: number };
-    if (!targetTenantId || !targetApiKeyId) {
-      return res.status(400).json({ error: 'targetTenantId and targetApiKeyId required' });
-    }
-    if (targetTenantId === req.tenantId!) {
-      return res.status(400).json({ error: 'Target tenant is the same as source' });
-    }
-
-    const userId = req.session.userId!;
-    const isPlatformAdmin = req.session.role === 'admin';
-    // Platform admin bypasses tenant-level admin check. Otherwise the
-    // caller must be an admin in BOTH the source and the destination.
-    if (!isPlatformAdmin) {
-      const [sourceMembership, targetMembership] = await Promise.all([
-        db('user_tenants').where({ user_id: userId, tenant_id: req.tenantId!, role: 'admin' }).first(),
-        db('user_tenants').where({ user_id: userId, tenant_id: targetTenantId, role: 'admin' }).first(),
-      ]);
-      if (!sourceMembership || !targetMembership) {
-        return res.status(403).json({ error: 'You must be admin of both tenants' });
-      }
-    }
-
-    const device = await db('devices').where({ id: deviceId, tenant_id: req.tenantId! }).first();
-    if (!device) return res.status(404).json({ error: 'Device not found' });
-
-    const targetKey = await db('agent_api_keys').where({ id: targetApiKeyId, tenant_id: targetTenantId }).first();
-    if (!targetKey) return res.status(400).json({ error: 'Target API key not found in target tenant' });
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'device.transfer_tenant',
-      deviceIds: [deviceId],
-      approvalRequestType: 'device_uninstall',
-      approvalDescription: `Transfer ${device.hostname} to ${await (await import('../services/approvalDescribe')).tenantLabel(targetTenantId)} (agent key "${targetKey.name ?? targetApiKeyId}")`,
-      approvalPayload: { deviceId, targetTenantId, targetApiKeyId },
-    });
-    if (!approved) return;
-
-    // Move the device record, and drop the source tenant's team scopes on
-    // it (keep in sync with deviceApproval.ts, transferDevices).
-    await db('devices').where({ id: deviceId }).update({
-      tenant_id: targetTenantId,
-      api_key_id: targetApiKeyId,
-      group_id: null,
-      updated_at: new Date(),
-    });
-    await deviceService.dropForeignTeamScopes([deviceId], targetTenantId);
-
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.transferred', {
-        deviceId,
-        resourceType: 'device',
-        resourcePath: String(deviceId),
-        details: {
-          fromTenantId: req.tenantId,
-          toTenantId: targetTenantId,
-          targetApiKeyId,
-          hostname: device.hostname,
-        },
-      });
-    } catch {}
-
-    res.json({ data: { ok: true } });
-  } catch (err) { next(err); }
-});
+// The transfer of a device to another tenant (POST /:id/transfer,
+// /batch/transfer and their candidate lists) is gone (rls-tenant R10): a row
+// never moves from one tenant to another. In an MDM a device changes client
+// by a verified retirement, then a new enrollment.
 
 // DELETE /api/devices/:id
 router.delete('/:id', requireTenantCapability('devices.manage'), async (req, res, next) => {

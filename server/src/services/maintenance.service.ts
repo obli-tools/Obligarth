@@ -286,9 +286,12 @@ export const maintenanceService = {
     windowId: number,
     scopeType: 'group' | 'device',
     scopeId: number,
+    tenantId: number,
   ): Promise<void> {
+    // A row of the window's tenant (the database refuses a scope of another
+    // tenant: maintenance_window_disables_scope_tenant).
     await db('maintenance_window_disables')
-      .insert({ window_id: windowId, scope_type: scopeType, scope_id: scopeId })
+      .insert({ tenant_id: tenantId, window_id: windowId, scope_type: scopeType, scope_id: scopeId })
       .onConflict(['window_id', 'scope_type', 'scope_id'])
       .ignore();
     maintenanceCache.clear();
@@ -301,9 +304,10 @@ export const maintenanceService = {
     windowId: number,
     scopeType: 'group' | 'device',
     scopeId: number,
+    tenantId: number,
   ): Promise<void> {
     await db('maintenance_window_disables')
-      .where({ window_id: windowId, scope_type: scopeType, scope_id: scopeId })
+      .where({ tenant_id: tenantId, window_id: windowId, scope_type: scopeType, scope_id: scopeId })
       .del();
     maintenanceCache.clear();
   },
@@ -722,6 +726,9 @@ export const maintenanceService = {
     }
   },
 
+  // Never started today (no caller). Before starting them: one database
+  // context per run and per tenant (db/tenantContext.ts runJob and
+  // forEachTenant, or the durable queue of FND-04), as the other jobs.
   startJobs(): void {
     cleanupTimer = setInterval(() => {
       this.cleanupExpiredOneTime().catch((err) =>

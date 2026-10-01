@@ -11,7 +11,7 @@ import { approvalService, type ApprovalRequestType } from './approval.service';
 //   "device.delete": "restricted"
 //
 //   // Full form with scope:
-//   "device.transfer_tenant": {
+//   "device.bulk_group_change": {
 //     "level": "sensitive",
 //     "scope": { "mode": "exclude", "deviceIds": [42], "groupIds": [7] }
 //   }

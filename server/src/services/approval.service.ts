@@ -2,8 +2,33 @@ import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
 import { auditService } from './audit.service';
+import { userLabels } from './userLabels.service';
 import { isMasterTenant } from '@obligarth/shared';
 import type { TenantCapability } from '@obligarth/shared';
+import { asPlatform, asTenant, currentDbContext, switchToTenant, userActor } from '../db/context';
+import { forEachTenant, runJob } from '../db/tenantContext';
+import { openPlatformGrant } from '../db/platformAccess';
+
+// Database contexts (rls-tenant §8.2): a request is filed, read and resolved
+// in the database context of its tenant; an approved request is executed AS
+// THE REQUESTER (actor u:<requester>) in that tenant's context; the expiry
+// sweeper is a job that works tenant by tenant.
+
+/** Runs fn in the context 'tenant' of `tenantId`, keeping the current actor
+ *  (an approval filed in the tenant that imposes the level). */
+function inApprovalTenant<T>(tenantId: number, fn: () => Promise<T>): Promise<T> {
+  const ctx = currentDbContext();
+  if (ctx?.kind === 'tenant' && ctx.tenantId === tenantId) return fn();
+  return switchToTenant(tenantId, fn);
+}
+
+/** A read across tenants by a platform administrator requester (an approval
+ *  filed from the master tenant's global view): a grant of its own, then
+ *  the context 'platform'. */
+async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise<T>): Promise<T> {
+  const grant = await openPlatformGrant({ actor: userActor(requesterId), reason: 'approval.execute' });
+  return asPlatform(grant, fn);
+}
 
 // Two-step approval service — creates pending requests, handles approve/deny,
 // and executes the approved actions. Designed so the existing handlers only
@@ -38,7 +63,7 @@ const SWEEP_INTERVAL_MS = 60_000;
 export type ApprovalRequestType = 'batch_command' | 'device_uninstall';
 
 export interface BatchCommandPayload {
-  action: string;              // 'change_group' | 'transfer_tenant' | 'settings_update' | ...
+  action: string;              // 'change_group' | 'delete_devices' | 'settings_update' | ...
   deviceIds: number[];
   params?: Record<string, any>;
 }
@@ -253,7 +278,7 @@ export const approvalService = {
       logger.warn({ requestType: params.requestType, removed }, 'approval payload: secret fields dropped');
     }
     const expiresAt = new Date(Date.now() + EXPIRY_MINUTES * 60 * 1000);
-    const [row] = await db('pending_approvals').insert({
+    const [row] = await inApprovalTenant(params.tenantId, () => db('pending_approvals').insert({
       tenant_id: params.tenantId,
       requested_by: params.userId,
       request_type: params.requestType,
@@ -262,7 +287,7 @@ export const approvalService = {
       sealed_payload: params.sealed ? JSON.stringify(params.sealed) : null,
       status: 'pending',
       expires_at: expiresAt,
-    }).returning('*');
+    }).returning('*'));
 
     // Audit trail
     await auditService.log({
@@ -287,19 +312,21 @@ export const approvalService = {
   async list(tenantId: number, opts: { includeResolved?: boolean; limit?: number } = {}): Promise<PendingApproval[]> {
     const isMaster = isMasterTenant(tenantId);
     const q = db('pending_approvals as pa')
-      .leftJoin('users as u1', 'u1.id', 'pa.requested_by')
-      .leftJoin('users as u2', 'u2.id', 'pa.reviewed_by')
-      .select(
-        'pa.*',
-        'u1.username as requested_by_name',
-        'u2.username as reviewed_by_name',
-      )
+      .select('pa.*')
       .orderBy('pa.created_at', 'desc');
     if (!isMaster) q.where({ 'pa.tenant_id': tenantId });
     if (!opts.includeResolved) q.where('pa.status', 'pending').andWhere('pa.expires_at', '>', new Date(Date.now()));
     if (opts.limit) q.limit(opts.limit);
     const rows = await q;
-    return rows.map(rowToApproval);
+    // Requesters' and reviewers' names: obligarth.user_labels (an MSP
+    // administrator is named in the client's list, another client's
+    // account never).
+    const labels = await userLabels(rows.flatMap((r: any) => [r.requested_by, r.reviewed_by]).filter((id: unknown) => id != null));
+    return rows.map((r: any) => rowToApproval({
+      ...r,
+      requested_by_name: labels.get(Number(r.requested_by))?.username ?? null,
+      reviewed_by_name: r.reviewed_by != null ? labels.get(Number(r.reviewed_by))?.username ?? null : null,
+    }));
   },
 
   /** Approve and execute (as the requester). Blocks self-approval. */
@@ -319,13 +346,15 @@ export const approvalService = {
     });
     if (!claimed) await this._lostRace(row.id);
 
-    // Execute the underlying action, as the requester.
+    // Execute the underlying action, as the requester: the database context
+    // of the approval's tenant, actor = the requester.
     let failure: string | null = null;
     let partial: string | null = null;
     try {
       const payload = parseJson(row.payload) ?? {};
       const sealed = parseJson(row.sealed_payload) ?? {};
-      partial = await this._execute(row, payload, sealed) ?? null;
+      partial = await asTenant(Number(row.tenant_id), userActor(Number(row.requested_by)),
+        () => this._execute(row, payload, sealed)) ?? null;
     } catch (err) {
       failure = (err instanceof Error ? err.message : String(err)) || 'Execution failed';
       logger.error({ err, approvalId: row.id }, 'approval execution failed');
@@ -425,20 +454,27 @@ export const approvalService = {
   /** Expire stale pending approvals — the sweeper (startSweeper). Each one:
    *  'expired', sealed part wiped, audited ('approval.expired'),
    *  APPROVAL_UPDATED pushed. Returns how many expired. */
-  async sweepExpired(): Promise<number> {
+  async sweepExpired(tenantId: number): Promise<number> {
     const ids = await db('pending_approvals')
-      .where('status', 'pending')
+      .where({ tenant_id: tenantId })
+      .andWhere('status', 'pending')
       .andWhere('expires_at', '<=', new Date(Date.now()))
       .pluck('id') as number[];
     if (!ids.length) return 0;
     const n = await this._expire(ids);
-    if (n > 0) logger.info({ count: n }, 'expired pending approvals');
+    if (n > 0) logger.info({ tenantId, count: n }, 'expired pending approvals');
     return n;
   },
 
-  /** Starts the periodic expiry sweep (index.ts). Returns the timer. */
+  /** Starts the periodic expiry sweep (index.ts): a job, tenant by tenant
+   *  in each tenant's database context. Returns the timer. */
   startSweeper(intervalMs = SWEEP_INTERVAL_MS): NodeJS.Timeout {
-    const run = () => { this.sweepExpired().catch((err) => logger.warn({ err }, 'approval expiry sweep failed')); };
+    const run = () => {
+      void runJob('approvals.expire', async (actor) => {
+        const { failed } = await forEachTenant(actor, async (tenantId) => { await this.sweepExpired(tenantId); });
+        if (failed > 0) logger.warn({ failed }, 'approval expiry sweep failed for some tenants');
+      });
+    };
     run();
     const timer = setInterval(run, intervalMs);
     timer.unref?.();
@@ -696,26 +732,33 @@ export const approvalService = {
         targetTenantId = data.tenantId;
       }
       if (!(await db('tenants').where({ id: targetTenantId }).first('id'))) refuse('Target tenant not found');
-      const team = await teamService.create(data, targetTenantId);
+      const team = await asTenant(targetTenantId, userActor(requesterId), () => teamService.create(data, targetTenantId));
       await auditAs(targetTenantId, requesterId, 'team.created', { resourceType: 'team', resourcePath: String(team.id), details: { name: team.name } });
       return;
     }
     const teamId = Number(payload.teamId);
-    const team = Number.isInteger(teamId) && teamId > 0 ? await teamService.getById(teamId) : null;
+    // From the master tenant, the team may be another tenant's: read across
+    // tenants, then written in the team's tenant as the requester.
+    const team = Number.isInteger(teamId) && teamId > 0
+      ? (isMasterTenant(tenantId)
+        ? await readAsPlatformRequester(requesterId, () => teamService.getById(teamId))
+        : await teamService.getById(teamId))
+      : null;
     if (!team || (!isMasterTenant(tenantId) && Number(team.tenantId) !== tenantId)) refuse('Team not found');
     const teamTenantId = Number(team.tenantId);
+    const inTeamTenant = <T>(fn: () => Promise<T>): Promise<T> => asTenant(teamTenantId, userActor(requesterId), fn);
     switch (action) {
       case 'team_update': {
         if (payload.body === undefined) refuse(`This team request was filed without its content — ${REDO}`);
         const parsed = schemas.updateTeamSchema.safeParse(payload.body);
         if (!parsed.success) invalidRequest(parsed.error);
-        const updated = await teamService.update(teamId, parsed.data);
+        const updated = await inTeamTenant(() => teamService.update(teamId, parsed.data));
         if (!updated) refuse('Team not found');
         await auditAs(teamTenantId, requesterId, 'team.updated', { resourceType: 'team', resourcePath: String(teamId), details: { name: updated.name } });
         return;
       }
       case 'team_delete': {
-        if (!(await teamService.delete(teamId))) refuse('Team not found');
+        if (!(await inTeamTenant(() => teamService.delete(teamId)))) refuse('Team not found');
         await auditAs(teamTenantId, requesterId, 'team.deleted', { resourceType: 'team', resourcePath: String(teamId), details: { name: team.name } });
         return;
       }
@@ -723,7 +766,7 @@ export const approvalService = {
         if (payload.memberIds === undefined) refuse(`This team request was filed without its content — ${REDO}`);
         const parsed = schemas.setTeamMembersSchema.safeParse({ memberIds: payload.memberIds });
         if (!parsed.success) invalidRequest(parsed.error);
-        await teamService.setMembers(teamId, parsed.data.memberIds);
+        await inTeamTenant(() => teamService.setMembers(teamId, parsed.data.memberIds));
         await auditAs(teamTenantId, requesterId, 'team.members_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { userCount: parsed.data.memberIds.length, memberIds: parsed.data.memberIds },
         });
@@ -733,7 +776,7 @@ export const approvalService = {
         if (payload.permissions === undefined) refuse(`This team request was filed without its content — ${REDO}`);
         const parsed = schemas.setTeamPermissionsSchema.safeParse({ permissions: payload.permissions });
         if (!parsed.success) invalidRequest(parsed.error);
-        await teamService.setPermissions(teamId, parsed.data.permissions);
+        await inTeamTenant(() => teamService.setPermissions(teamId, parsed.data.permissions));
         await auditAs(teamTenantId, requesterId, 'team.permissions_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { permissionCount: parsed.data.permissions.length },
         });

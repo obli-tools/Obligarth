@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { db } from '../db';
+import { asIdentity, type DbActor } from '../db/context';
 import { hashPassword } from '../utils/crypto';
 import { appConfigService } from './appConfig.service';
 import { smtpServerService } from './smtpServer.service';
@@ -16,6 +17,11 @@ const TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
  */
 const notSso = (q: any) => q.whereNull('users.foreign_source').orWhereNot('users.foreign_source', 'obligate');
 
+// Public endpoints (no session): accounts and reset tokens are identity rows,
+// read and written in the identity context of the anonymous actor
+// a:password-reset (rls-tenant §8.2).
+const RESET_ACTOR: DbActor = { type: 'anonymous', name: 'password-reset' };
+
 export const passwordResetService = {
   /**
    * Generate a reset token, store its hash, send the email. Always resolves
@@ -23,6 +29,10 @@ export const passwordResetService = {
    * answer, and nothing is stored or sent for them.
    */
   async requestReset(email: string): Promise<void> {
+    return asIdentity(RESET_ACTOR, () => this.requestResetIn(email));
+  },
+
+  async requestResetIn(email: string): Promise<void> {
     const user = await db('users').where({ email }).where(notSso).orderBy('id').first();
     if (!user) {
       // Silently succeed to prevent email enumeration
@@ -87,7 +97,7 @@ export const passwordResetService = {
 
   /** Validate a raw token. Returns the user_id if valid, null otherwise. */
   async validateToken(rawToken: string): Promise<number | null> {
-    const row = await this.findUsableToken(rawToken);
+    const row = await asIdentity(RESET_ACTOR, () => this.findUsableToken(rawToken));
     return row ? row.user_id : null;
   },
 
@@ -107,6 +117,10 @@ export const passwordResetService = {
 
   /** Consume a raw token and update the user's password. */
   async resetPassword(rawToken: string, newPassword: string): Promise<boolean> {
+    return asIdentity(RESET_ACTOR, () => this.resetPasswordIn(rawToken, newPassword));
+  },
+
+  async resetPasswordIn(rawToken: string, newPassword: string): Promise<boolean> {
     const row = await this.findUsableToken(rawToken);
     if (!row) return false;
 

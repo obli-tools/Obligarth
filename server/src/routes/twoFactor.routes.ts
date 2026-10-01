@@ -3,6 +3,7 @@ import { twoFactorController } from '../controllers/twoFactor.controller';
 import { requireAuth } from '../middleware/auth';
 import { attachSessionTenant } from '../middleware/tenant';
 import { mfaLimiter, mfaAccountLimiter } from '../middleware/rateLimiter';
+import { pendingSignInContext } from '../middleware/dbContext';
 
 const router = Router();
 
@@ -20,10 +21,11 @@ router.post('/email/setup', requireAuth, twoFactorController.emailSetup);
 router.post('/email/enable', requireAuth, twoFactorController.emailEnable);
 router.delete('/email', requireAuth, twoFactorController.emailDisable);
 
-// Auth 2FA routes (rate-limited, no requireAuth — session has pendingMfaUserId)
-router.post('/verify', mfaLimiter, mfaAccountLimiter, twoFactorController.verify);
+// Auth 2FA routes (rate-limited, no requireAuth — session has pendingMfaUserId).
+// Database context: the pending account's own rows (its password is proven).
+router.post('/verify', mfaLimiter, mfaAccountLimiter, pendingSignInContext, twoFactorController.verify);
 // Device-bound 2FA sign-in: a fresh 'login' challenge (10 / 15 min per pending session).
-router.post('/device-challenge', mfaLimiter, twoFactorController.deviceChallenge);
-router.post('/resend-email', mfaLimiter, twoFactorController.resendEmail);
+router.post('/device-challenge', mfaLimiter, pendingSignInContext, twoFactorController.deviceChallenge);
+router.post('/resend-email', mfaLimiter, pendingSignInContext, twoFactorController.resendEmail);
 
 export default router;

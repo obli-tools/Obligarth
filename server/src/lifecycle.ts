@@ -1,6 +1,7 @@
 import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import type { Server as SocketIOServer } from 'socket.io';
+import { asNone } from './db/context';
 
 // ── Module lifecycle ────────────────────────────────────────────────────────
 //
@@ -18,6 +19,10 @@ import type { Server as SocketIOServer } from 'socket.io';
 //           closes.
 // An error of a task is not caught here: each task handles its own, as the
 // inline code of index.ts did.
+//
+// Boot and start tasks run in the database context 'none' of their own job
+// actor (j:<task name>): a periodic job they start opens its own context at
+// every run (db/tenantContext.ts runJob, forEachTenant; rls-tenant §7.6).
 //
 // Raw WebSocket upgrades that are not Socket.io's (a device channel, a relay;
 // none today) are served by the modules' upgrade handlers
@@ -57,11 +62,11 @@ export function registerStopTask(name: string, run: StopTask): void {
 }
 
 export async function runBootTasks(): Promise<void> {
-  for (const t of bootTasks) await t.run();
+  for (const t of bootTasks) await asNone({ type: 'job', name: t.name }, () => t.run());
 }
 
 export async function runStartTasks(ctx: StartContext): Promise<void> {
-  for (const t of startTasks) await t.run(ctx);
+  for (const t of startTasks) await asNone({ type: 'job', name: t.name }, () => t.run(ctx));
 }
 
 export function runStopTasks(): void {

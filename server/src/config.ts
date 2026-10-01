@@ -22,12 +22,57 @@ const explicitDevelopment = process.env.NODE_ENV === 'development';
 const DEV_DATABASE_URL = 'postgres://obligarth:changeme@localhost:5432/obligarth';
 const DEV_SESSION_SECRET = 'change-this-secret';
 
+/** An integer variable, or `fallback` when unset or not an integer. */
+function intEnv(name: string, fallback: number): number {
+  const raw = (process.env[name] ?? '').trim();
+  return /^-?[0-9]+$/.test(raw) ? parseInt(raw, 10) : fallback;
+}
+
+// Row level security (docs: rls-tenant §7.10). DB_CONTEXT_MODE: 'strict'
+// (default) refuses a query without a database context; 'audit' logs it and
+// runs it in the context 'none' (only while the RLS migration C is not
+// applied: the boot guard refuses it afterwards). DB_CONTEXT_ASSERT: what a
+// query on a lease opened in another context does ('throw' in development
+// and test, 'log' in production).
+function dbContextModeFromEnv(): 'strict' | 'audit' | 'invalid' {
+  const raw = (process.env.DB_CONTEXT_MODE ?? '').trim();
+  if (raw === '' || raw === 'strict') return 'strict';
+  return raw === 'audit' ? 'audit' : 'invalid';
+}
+
+function dbContextAssertFromEnv(): 'throw' | 'log' | 'off' {
+  const raw = (process.env.DB_CONTEXT_ASSERT ?? '').trim();
+  if (raw === 'throw' || raw === 'log' || raw === 'off') return raw;
+  const env = process.env.NODE_ENV;
+  return env === 'development' || env === 'test' ? 'throw' : 'log';
+}
+
 export const config = {
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
   isDev: process.env.NODE_ENV !== 'production',
-  /** Empty when DATABASE_URL is unset outside development (refused at start). */
+  /** Empty when DATABASE_URL is unset outside development (refused at start).
+   *  The runtime role `obligarth`: no superuser, no BYPASSRLS, owner of
+   *  nothing (db/bootGuard.ts refuses to start otherwise). */
   databaseUrl: process.env.DATABASE_URL || (explicitDevelopment ? DEV_DATABASE_URL : ''),
+  /** Administration DSN (obligarth_admin): read by server-migrate
+   *  (db/migrate.ts) only, and by the server itself with MIGRATE_ON_BOOT in
+   *  development. Never given to the `server` service in production. */
+  databaseAdminUrl: process.env.DATABASE_ADMIN_URL || '',
+  /** Development only (NODE_ENV=development and DATABASE_ADMIN_URL): the
+   *  server runs the migrations itself at start, as server-migrate would. */
+  migrateOnBoot: process.env.MIGRATE_ON_BOOT === 'true',
+  /** 'strict' | 'audit' | 'invalid' (refused at start): see above. */
+  dbContextMode: dbContextModeFromEnv(),
+  dbContextAssert: dbContextAssertFromEnv(),
+  /** Signed database context (rls-tenant §4.6, R12): key file of the
+   *  current key and, during a rotation, of the previous one. */
+  rlsContextKeyFile: process.env.RLS_CONTEXT_KEY_FILE || '',
+  rlsContextKeyPreviousFile: process.env.RLS_CONTEXT_KEY_PREVIOUS_FILE || '',
+  /** Lifetime of a cross-tenant read grant (60 to 3600 s, 900 by default),
+   *  and how long the grants journal is kept (30 days at least). */
+  platformGrantTtlSeconds: intEnv('PLATFORM_GRANT_TTL_SECONDS', 900),
+  platformGrantRetentionDays: intEnv('PLATFORM_GRANT_RETENTION_DAYS', 365),
   /** Empty when SESSION_SECRET is unset outside development (refused at start). */
   sessionSecret: process.env.SESSION_SECRET || (explicitDevelopment ? DEV_SESSION_SECRET : ''),
   // Own session cookie name (Oblimap model): Obli* apps sharing a host name
@@ -115,9 +160,30 @@ export function sessionSecretError(): string | null {
  * touches the database.
  */
 export function startupConfigErrors(): string[] {
-  if (explicitDevelopment) return [];
+  // Database context settings: refused in every environment (a typo must
+  // never silently weaken the row level security).
   const errors: string[] = [];
+  if (config.dbContextMode === 'invalid') {
+    errors.push('DB_CONTEXT_MODE must be "strict" (the default) or "audit".');
+  }
+  const ttl = config.platformGrantTtlSeconds;
+  if (!Number.isInteger(ttl) || ttl < 60 || ttl > 3600) {
+    errors.push('PLATFORM_GRANT_TTL_SECONDS must be an integer between 60 and 3600 (900 by default).');
+  }
+  const keep = config.platformGrantRetentionDays;
+  if (!Number.isInteger(keep) || keep < 30) {
+    errors.push('PLATFORM_GRANT_RETENTION_DAYS must be an integer of at least 30 (365 by default).');
+  }
+  if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
+    errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
+      'outside development, the migrations run in the server-migrate service.');
+  }
+  if (explicitDevelopment) return errors;
   if (!config.databaseUrl) errors.push(DATABASE_URL_MISSING);
+  if (config.databaseAdminUrl) {
+    errors.push('DATABASE_ADMIN_URL is set: the server never holds the administration credentials outside ' +
+      'development (only the server-migrate service does). Remove it from the server\'s environment.');
+  }
   const secretError = sessionSecretError();
   if (secretError) errors.push(secretError);
   if (config.defaultAdminPassword && isWeakAdminPassword(config.defaultAdminPassword)) {

@@ -1,9 +1,15 @@
 import { Server as HttpServer } from 'http';
 import { Server as SocketIOServer, type Socket } from 'socket.io';
 import { db } from './db';
+import { asNone, asTenant, type DbActor } from './db/context';
 import { logger } from './utils/logger';
 import { getSessionMiddleware } from './app';
 import { sessionRoom } from './utils/sessionHash';
+
+// Database context (rls-tenant §7.5): the handshake reads the account and
+// its memberships in the context 'none' of the session's user (its own
+// rows); every event a module handles runs in the context 'tenant' of the
+// socket's tenant (SocketConnection.on, runInTenant), never without one.
 
 let io: SocketIOServer;
 
@@ -34,6 +40,12 @@ export interface SocketConnection {
   liveSession: () => Promise<LiveSession | null>;
   /** The device belongs to the handshake's tenant. */
   verifyDevice: (deviceId: number) => Promise<boolean>;
+  /** Runs fn in the database context of the socket: 'tenant' of the
+   *  handshake's tenant (or 'none' without a tenant), actor = its user. */
+  runInTenant: <T>(fn: () => T | PromiseLike<T>) => Promise<T>;
+  /** socket.on(event, handler) with the handler run in runInTenant: what a
+   *  module's handler registers its events with. Errors are logged. */
+  on: (event: string, handler: (...args: any[]) => unknown) => void;
 }
 
 export type SocketHandler = (conn: SocketConnection) => void;
@@ -83,37 +95,48 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
   io.use(async (socket, next) => {
     try {
       const sess = (socket.request as any).session as { userId?: number; currentTenantId?: number; deviceKeyId?: string } | undefined;
-      const userId = sess?.userId;
-      if (!userId) return next(new Error('Unauthorized'));
-
-      // Device-bound 2FA (docs/mobile/device-bound-2fa.md §6.4, §6.7): the
-      // handshake is the ONLY check a socket gets. A session bound to a
-      // phone key that is dead (revoked, credentials changed, …) — e.g. a
-      // row brought back by a concurrent save after the revocation deleted
-      // it — must not open a new socket (same rule as deviceKeySession).
-      if (sess?.deviceKeyId) {
-        const { boundSessionDead } = await import('./services/deviceKey/deviceKey.service');
-        if (await boundSessionDead(sess.deviceKeyId, userId)) return next(new Error('Unauthorized'));
-      }
+      const userId = Number(sess?.userId);
+      if (!Number.isSafeInteger(userId) || userId <= 0) return next(new Error('Unauthorized'));
+      const actor: DbActor = { type: 'user', userId };
 
       // Tenant: the session's current tenant (what the REST API uses); the
       // client-supplied one is only a fallback and is membership-checked below.
-      const tenantId = sess?.currentTenantId ?? socket.handshake.auth?.tenantId;
+      const rawTenant = sess?.currentTenantId ?? socket.handshake.auth?.tenantId;
+      const tenantId = rawTenant !== undefined && rawTenant !== null && Number.isSafeInteger(Number(rawTenant)) && Number(rawTenant) > 0
+        ? Number(rawTenant) : undefined;
 
-      const user = await db('users').where({ id: userId, is_active: true }).first();
-      if (!user) return next(new Error('Unauthorized'));
+      const verdict = await asNone(actor, async () => {
+        // Device-bound 2FA (docs/mobile/device-bound-2fa.md §6.4, §6.7): the
+        // handshake is the ONLY check a socket gets. A session bound to a
+        // phone key that is dead (revoked, credentials changed, …) — e.g. a
+        // row brought back by a concurrent save after the revocation deleted
+        // it — must not open a new socket (same rule as deviceKeySession).
+        if (sess?.deviceKeyId) {
+          const { boundSessionDead } = await import('./services/deviceKey/deviceKey.service');
+          if (await boundSessionDead(sess.deviceKeyId, userId)) return { error: 'Unauthorized' };
+        }
 
-      // Validate tenant membership — prevent cross-tenant spoofing.
-      // Admins bypass this check (they can access any tenant, matching REST behaviour).
-      if (tenantId && user.role !== 'admin') {
-        const membership = await db('user_tenants')
-          .where({ user_id: user.id, tenant_id: tenantId })
-          .first();
-        if (!membership) return next(new Error('Unauthorized — not a member of this tenant'));
-      }
+        const user = await db('users').where({ id: userId, is_active: true }).first();
+        if (!user) return { error: 'Unauthorized' };
 
-      (socket as any).user = user;
+        // Validate tenant membership — prevent cross-tenant spoofing.
+        // Admins bypass this check (they can access any tenant, matching REST behaviour).
+        if (tenantId && user.role !== 'admin') {
+          const membership = await db('user_tenants')
+            .where({ user_id: user.id, tenant_id: tenantId })
+            .first();
+          if (!membership) return { error: 'Unauthorized — not a member of this tenant' };
+        }
+        // Every tenant of the user (multi-tenant live alerts), read now:
+        // its own membership rows.
+        const memberships = await db('user_tenants').where({ user_id: user.id }).pluck('tenant_id') as number[];
+        return { user, memberships };
+      });
+      if ('error' in verdict) return next(new Error(verdict.error));
+
+      (socket as any).user = verdict.user;
       (socket as any).tenantId = tenantId;
+      (socket as any).memberTenantIds = verdict.memberships;
       next();
     } catch (err) {
       logger.error(err, 'Socket auth error');
@@ -143,14 +166,23 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
     }
     socket.join('general');
 
-    // Join all accessible tenant rooms (for multi-tenant live alerts)
-    db('user_tenants').where({ user_id: user.id }).then((memberships) => {
-      for (const m of memberships) {
-        socket.join(`tenant:${m.tenant_id}:notifications`);
-      }
-    }).catch(() => {});
+    // Join all accessible tenant rooms (for multi-tenant live alerts): the
+    // memberships read at the handshake.
+    for (const memberTenantId of ((socket as any).memberTenantIds ?? []) as number[]) {
+      socket.join(`tenant:${memberTenantId}:notifications`);
+    }
 
     logger.debug({ userId: user.id, tenantId }, 'Socket connected');
+
+    // Database context of the socket's work: its tenant, its user.
+    const actor: DbActor = { type: 'user', userId: Number(user.id) };
+    const runInTenant = <T>(fn: () => T | PromiseLike<T>): Promise<T> =>
+      (tenantId ? asTenant(Number(tenantId), actor, fn) : asNone(actor, fn));
+    const on = (event: string, handler: (...args: any[]) => unknown): void => {
+      socket.on(event, (...args: any[]) => {
+        runInTenant(() => handler(...args)).catch((err) => logger.error({ err, event, userId: user.id }, 'socket handler failed'));
+      });
+    };
 
     // ── Live session ────────────────────────────────────────────────────────
     // The handshake identity (user, tenant) is frozen for the socket's life,
@@ -181,7 +213,7 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
     // ── Helper: verify device belongs to tenant ─────────────────────────────
     const verifyDevice = async (deviceId: number): Promise<boolean> => {
       if (!tenantId) return false;
-      const device = await db('devices').where({ id: deviceId, tenant_id: tenantId }).first();
+      const device = await asTenant(Number(tenantId), actor, () => db('devices').where({ id: deviceId, tenant_id: tenantId }).first());
       return !!device;
     };
 
@@ -194,8 +226,14 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
       sid: typeof sid === 'string' && sid ? sid : undefined,
       liveSession,
       verifyDevice,
+      runInTenant,
+      on,
     };
-    for (const h of socketHandlers) h.install(conn);
+    // A module's handler installs its events in the socket's context (its
+    // events themselves through conn.on).
+    for (const h of socketHandlers) {
+      runInTenant(() => h.install(conn)).catch((err) => logger.error({ err, handler: h.name }, 'socket handler install failed'));
+    }
 
     socket.on('disconnect', () => {
       logger.debug({ userId: user.id }, 'Socket disconnected');

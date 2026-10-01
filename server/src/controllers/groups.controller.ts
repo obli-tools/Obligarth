@@ -6,6 +6,8 @@ import { teamService } from '../services/team.service';
 import { groupNotificationService } from '../services/groupNotification.service';
 import { hasGlobalView } from '../services/deviceScope.service';
 import { AppError } from '../middleware/errorHandler';
+import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
+import { db } from '../db';
 import type { CreateGroupInput, UpdateGroupInput, MoveGroupInput } from '../validators/group.schema';
 
 /**
@@ -13,10 +15,12 @@ import type { CreateGroupInput, UpdateGroupInput, MoveGroupInput } from '../vali
  * tenant, or of any tenant for the master tenant's global view (platform
  * administrators only, hasGlobalView). Anything else answers like an
  * unknown group (404 over 403, so that a guessed id does not reveal that
- * the group exists).
+ * the group exists). Database context (rls-tenant §6.3): the group is read
+ * across tenants in the global view (context 'platform'); a write then runs
+ * in the context of the group's tenant (asTargetTenant).
  */
 async function groupInReach(req: Request, id: number): Promise<DeviceGroup> {
-  const group = Number.isSafeInteger(id) && id > 0 ? await groupService.getById(id) : null;
+  const group = Number.isSafeInteger(id) && id > 0 ? await globalViewRead(req, () => groupService.getById(id)) : null;
   if (!group || (group.tenantId !== req.tenantId && !hasGlobalView(req))) {
     throw new AppError(404, 'Group not found');
   }
@@ -106,7 +110,8 @@ export const groupsController = {
       // be able to write the parent, as for a move.
       let tenantId = req.tenantId;
       if (data.parentId) {
-        const parent = await groupService.getById(data.parentId);
+        const parentId = data.parentId;
+        const parent = await globalViewRead(req, () => groupService.getById(parentId));
         if (!parent || (parent.tenantId !== req.tenantId && !hasGlobalView(req))) {
           throw new AppError(400, 'Parent group not found');
         }
@@ -122,18 +127,22 @@ export const groupsController = {
       const creatorTeamIds = isAdmin ? [] : await groupService.creatorTeamIds(req.session.userId!, tenantId);
       if (!isAdmin && creatorTeamIds.length === 0) throw new AppError(403, 'Insufficient permissions');
 
-      const group = await groupService.create(data, tenantId);
+      // Written in the group's tenant (the parent's, from the global view).
+      const group = await asTargetTenant(req, tenantId, async () => {
+        const created = await groupService.create(data, tenantId);
 
-      // Auto-assign RW to the creator's can_create teams of the tenant. A
-      // failure undoes the creation: never a group its creator cannot reach.
-      try {
-        for (const teamId of creatorTeamIds) {
-          await teamService.addPermission(teamId, 'group', group.id, 'rw');
+        // Auto-assign RW to the creator's can_create teams of the tenant. A
+        // failure undoes the creation: never a group its creator cannot reach.
+        try {
+          for (const teamId of creatorTeamIds) {
+            await teamService.addPermission(teamId, 'group', created.id, 'rw');
+          }
+        } catch (err) {
+          await groupService.delete(created.id).catch(() => {});
+          throw err;
         }
-      } catch (err) {
-        await groupService.delete(group.id).catch(() => {});
-        throw err;
-      }
+        return created;
+      });
 
       try {
         const { auditService } = await import('../services/audit.service');
@@ -153,9 +162,9 @@ export const groupsController = {
     try {
       const id = parseInt(req.params.id, 10);
       // Tenant ownership gate before any write.
-      await groupInReach(req, id);
+      const current = await groupInReach(req, id);
       const data = req.body as UpdateGroupInput;
-      const group = await groupService.update(id, data);
+      const group = await asTargetTenant(req, current.tenantId, () => groupService.update(id, data));
 
       if (!group) throw new AppError(404, 'Group not found');
 
@@ -188,7 +197,7 @@ export const groupsController = {
       // unknown one.
       const existing = await groupInReach(req, id);
       if (newParentId !== null) {
-        const parent = await groupService.getById(newParentId);
+        const parent = await globalViewRead(req, () => groupService.getById(newParentId));
         if (!parent || parent.tenantId !== existing.tenantId) {
           throw new AppError(400, 'Parent group not found');
         }
@@ -201,7 +210,7 @@ export const groupsController = {
         if (!canWriteTarget) throw new AppError(403, 'No write permission on target group');
       }
 
-      const group = await groupService.move(id, newParentId);
+      const group = await asTargetTenant(req, existing.tenantId, () => groupService.move(id, newParentId));
       if (!group) throw new AppError(404, 'Group not found');
 
       res.json({ success: true, data: group });
@@ -219,11 +228,11 @@ export const groupsController = {
       const id = parseInt(req.params.id, 10);
 
       // Same tenant gate as update.
-      await groupInReach(req, id);
+      const current = await groupInReach(req, id);
 
       groupNotificationService.removeGroup(id);
 
-      const deleted = await groupService.delete(id);
+      const deleted = await asTargetTenant(req, current.tenantId, () => groupService.delete(id));
       if (!deleted) throw new AppError(404, 'Group not found');
 
       try {
@@ -258,8 +267,18 @@ export const groupsController = {
         throw new AppError(400, 'Invalid items');
       }
       // Groups of the session's tenant only (any tenant for the global
-      // view): one id out of reach and nothing is reordered.
-      const done = await groupService.reorder(items, req.tenantId, { globalView: hasGlobalView(req) });
+      // view): one id out of reach and nothing is reordered. From the global
+      // view, the groups of ONE tenant only (409 otherwise: a request never
+      // writes to several clients), written in that tenant's context.
+      const view = { globalView: hasGlobalView(req) };
+      let targetTenantId = req.tenantId;
+      if (view.globalView) {
+        const ids = [...new Set(items.map((i) => i.id))];
+        const tenants = await globalViewRead(req, () => db('device_groups').whereIn('id', ids).distinct('tenant_id').pluck('tenant_id')) as number[];
+        if (tenants.length > 1) throw new AppError(409, 'One request acts on one tenant only', 'crossTenantBatch');
+        if (tenants.length === 1) targetTenantId = Number(tenants[0]);
+      }
+      const done = await asTargetTenant(req, targetTenantId, () => groupService.reorder(items, req.tenantId, view));
       if (!done) throw new AppError(404, 'Group not found');
 
       res.json({ success: true, message: 'Groups reordered' });

@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import { db } from '../db';
+import { switchToIdentity, switchToTenant } from '../db/context';
 import { hashPassword } from '../utils/crypto';
 import { forgetTenantMemberships } from './tenant.service';
 import type { User, UserRole, UserTenantAssignment } from '@obligarth/shared';
@@ -161,10 +162,13 @@ export const userService = {
     assignments: { tenantId: number; role: string }[],
   ): Promise<void> {
     const kept = [...new Set(assignments.map((a) => Number(a.tenantId)))];
-    let removedTenants = 0;
-    await db.transaction(async (trx) => {
+    let removed: number[] = [];
+    // Memberships: identity rows (identity context, after the caller's P1
+    // checks). Team memberships: rows of each tenant, purged below in that
+    // tenant's context.
+    await switchToIdentity(() => db.transaction(async (trx) => {
       const before = (await trx('user_tenants').where({ user_id: userId }).pluck('tenant_id') as number[]).map(Number);
-      removedTenants = before.filter((t) => !kept.includes(t)).length;
+      removed = before.filter((t) => !kept.includes(t));
       await trx('user_tenants').where({ user_id: userId }).del();
       if (assignments.length > 0) {
         await trx('user_tenants').insert(
@@ -178,12 +182,12 @@ export const userService = {
           })),
         );
       }
-      const outside = trx('user_teams').select('id');
-      if (kept.length > 0) outside.whereNotIn('tenant_id', kept);
-      await trx('team_memberships').where({ user_id: userId }).whereIn('team_id', outside).del();
-    });
+    }));
+    for (const tenantId of removed) {
+      await switchToTenant(tenantId, () => db('team_memberships').where({ user_id: userId, tenant_id: tenantId }).del());
+    }
     forgetTenantMemberships(userId);
-    if (removedTenants > 0) {
+    if (removed.length > 0) {
       const { killSessionsForUser } = await import('./userSessions.service');
       await killSessionsForUser(userId, 'tenant_access_removed');
     }

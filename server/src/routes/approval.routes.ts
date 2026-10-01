@@ -3,6 +3,7 @@ import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
 import { approvalService } from '../services/approval.service';
 import { AppError } from '../middleware/errorHandler';
+import { globalViewScope } from '../middleware/dbContext';
 
 const router = Router();
 
@@ -10,8 +11,9 @@ const router = Router();
 // or cancel destructive-action approvals.
 router.use(requireAuth, requireRole('admin'));
 
-// List pending (default) or all approvals for the tenant.
-router.get('/', async (req, res, next) => {
+// List pending (default) or all approvals for the tenant (the master tenant's
+// global view lists every tenant's: context 'platform').
+router.get('/', globalViewScope('console.approvals'), async (req, res, next) => {
   try {
     const includeResolved = req.query.includeResolved === 'true';
     const limit = Math.min(200, parseInt((req.query.limit as string) || '50'));

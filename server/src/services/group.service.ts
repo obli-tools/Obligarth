@@ -135,6 +135,7 @@ export const groupService = {
       // Maintain closure table
       // Self-reference (depth 0)
       await trx('device_group_closure').insert({
+        tenant_id: tenantId,
         ancestor_id: created.id,
         descendant_id: created.id,
         depth: 0,
@@ -143,11 +144,11 @@ export const groupService = {
       // Copy ancestor paths from parent
       if (data.parentId) {
         await trx.raw(
-          `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
-           SELECT gc.ancestor_id, ?, gc.depth + 1
+          `INSERT INTO device_group_closure (tenant_id, ancestor_id, descendant_id, depth)
+           SELECT gc.tenant_id, gc.ancestor_id, ?, gc.depth + 1
            FROM device_group_closure gc
-           WHERE gc.descendant_id = ?`,
-          [created.id, data.parentId],
+           WHERE gc.descendant_id = ? AND gc.tenant_id = ?`,
+          [created.id, data.parentId, tenantId],
         );
       }
       return created;
@@ -225,13 +226,14 @@ export const groupService = {
       // Reconnect: for each ancestor of newParent, create links to every node in subtree
       if (newParentId !== null) {
         await trx.raw(
-          `INSERT INTO device_group_closure (ancestor_id, descendant_id, depth)
-           SELECT p.ancestor_id, s.descendant_id, p.depth + s.depth + 1
+          `INSERT INTO device_group_closure (tenant_id, ancestor_id, descendant_id, depth)
+           SELECT p.tenant_id, p.ancestor_id, s.descendant_id, p.depth + s.depth + 1
            FROM device_group_closure p
            CROSS JOIN device_group_closure s
            WHERE p.descendant_id = ?
-             AND s.ancestor_id = ?`,
-          [newParentId, id],
+             AND s.ancestor_id = ?
+             AND p.tenant_id = ? AND s.tenant_id = ?`,
+          [newParentId, id, group.tenant_id, group.tenant_id],
         );
       }
 

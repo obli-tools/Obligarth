@@ -21,6 +21,7 @@ import { apiLimiter } from './middleware/rateLimiter';
 import { captureStepUpProof } from './middleware/captureStepUpProof';
 import { sessionUserGuard } from './middleware/sessionUserGuard';
 import { deviceKeySession } from './middleware/deviceKeySession';
+import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
 import { logger } from './utils/logger';
 
@@ -88,8 +89,11 @@ export function createApp() {
   // rate limiting to avoid shared-IP false positives behind a reverse proxy).
   // Log errors so we can diagnose DB connection drops that would otherwise
   // silently cause "Invalid username or password" on the login page.
+  // Its own small pool, without database context: the table `session` is a
+  // technical table, outside the row level security (rls-tenant §5.2).
   const sessionStore = new PgSession({
     conString: config.databaseUrl,
+    schemaName: 'obligarth',
     tableName: 'session',
     createTableIfMissing: false,
   });
@@ -130,6 +134,11 @@ export function createApp() {
       },
     });
   app.use(sessionMiddleware);
+
+  // Database context of the request (rls-tenant §7.4): 'none', actor = the
+  // session's user (or anonymous), request id. requireTenant, the global
+  // view and the identity paths narrow or switch it.
+  app.use(dbContextBase);
 
   // Step-up proofs (twoFactorCode, trustIp, …) are MOVED out of req.body into
   // req.stepUpProof before any router: validate() can no longer strip them,

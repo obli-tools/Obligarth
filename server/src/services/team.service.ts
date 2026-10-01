@@ -201,10 +201,10 @@ export const teamService = {
     const ids = [...new Set(userIds.map(Number))];
     await this.assertMembersInTenant(tenantId, ids);
     await db.transaction(async (trx) => {
-      await trx('team_memberships').where({ team_id: teamId }).del();
+      await trx('team_memberships').where({ team_id: teamId, tenant_id: tenantId }).del();
       if (ids.length > 0) {
         await trx('team_memberships').insert(
-          ids.map((uid) => ({ team_id: teamId, user_id: uid })),
+          ids.map((uid) => ({ tenant_id: tenantId, team_id: teamId, user_id: uid })),
         );
       }
     });

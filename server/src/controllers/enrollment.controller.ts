@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import { AppError } from '../middleware/errorHandler';
 import { z } from 'zod';
 import { refuseSsoEmailChange } from './profile.controller';
@@ -35,10 +36,12 @@ export const enrollmentController = {
       const emailData: { email?: string | null } = { email };
       if (isSso && await refuseSsoEmailChange(req.session.userId!, emailData, res)) return;
       if (!isSso) {
-        const existing = await db('users')
+        // Another account's address: an identity lookup (rls-tenant §8.2);
+        // the update below is the user's own row.
+        const existing = await switchToIdentity(() => db('users')
           .where({ email })
           .whereNot({ id: req.session.userId })
-          .first();
+          .first('id'));
         if (existing) {
           throw new AppError(409, 'This email address is already in use');
         }

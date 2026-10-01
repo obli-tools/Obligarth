@@ -115,10 +115,11 @@ class SoftwareRepoService {
    *  hash lookup). Returns null for unknown keys. */
   async resolveTenantByKey(key: string): Promise<number | null> {
     if (!key) return null;
-    const row = await db('tenants')
-      .where({ repo_access_key_hash: hashKey(key) })
-      .first('id');
-    return row ? row.id : null;
+    // An explicit lookup (rls-tenant §6.6): the caller has no tenant yet.
+    const res = await db.raw('SELECT obligarth.tenant_lookup_by_repo_key_hash(?) AS id', [hashKey(key)]) as
+      { rows: Array<{ id: number | null }> };
+    const id = res.rows[0]?.id;
+    return id ? Number(id) : null;
   }
 
   /** True when the tenant's depot is enabled (defaults to true). */

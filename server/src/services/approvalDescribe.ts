@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { isSecretKey } from './approvalSecrets';
+import { userLabels } from './userLabels.service';
 
 // ── What a two-step approval will execute, in words ────────────────────────
 //
@@ -88,12 +89,12 @@ export async function groupLabel(tenantId: number, id: unknown): Promise<string>
   return row ? `group "${row.name}" (#${n})` : `group #${short(id)}`;
 }
 
+/** Usernames (obligarth.user_labels: the accounts the caller may name). */
 export async function userList(rawIds: unknown): Promise<string> {
   const list = ids(rawIds);
   if (!list.length) return 'nobody';
-  const rows = await db('users').whereIn('id', list).select('id', 'username') as Array<{ id: number; username: string }>;
-  const byId = new Map(rows.map((r) => [Number(r.id), r.username]));
-  return capList(list.map((id) => byId.get(id) ?? `#${id}`));
+  const labels = await userLabels(list);
+  return capList(list.map((id) => labels.get(id)?.username ?? `#${id}`));
 }
 
 /** One line per restriction entry ("sensitive", "restricted (include: …)"). */

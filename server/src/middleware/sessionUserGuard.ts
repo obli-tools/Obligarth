@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { performance } from 'node:perf_hooks';
 import { db } from '../db';
+import { rebaseDbContext } from './dbContext';
 
 // P6 (docs/mobile/device-bound-2fa.md §6.0) — the session's user is re-read.
 //
@@ -48,7 +49,8 @@ export async function sessionUserGuard(req: Request, _res: Response, next: NextF
     const state = await stateOf(userId);
     if (!state || !state.active) {
       await new Promise<void>((resolve) => req.session.regenerate(() => resolve()));
-      next();
+      // The request goes on anonymous: so does its database context.
+      rebaseDbContext(req, next);
       return;
     }
     if (req.session.role !== state.role) req.session.role = state.role;

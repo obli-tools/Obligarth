@@ -18,7 +18,6 @@ import type { Knex } from 'knex';
 const MASTER_TENANT_RESTRICTIONS = {
   'device.delete': 'sensitive',
   'device.bulk_group_change': 'sensitive',
-  'device.transfer_tenant': 'sensitive',
   'audit.clear': 'restricted',
 };
 

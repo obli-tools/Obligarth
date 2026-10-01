@@ -9,6 +9,14 @@ import {
   type DelegationFailureReason,
 } from '../services/delegationVerify.service';
 import { logger } from '../utils/logger';
+import { asIdentity, type DbActor } from '../db/context';
+import { rebaseDbContext } from './dbContext';
+
+// Database context (rls-tenant §7.7, §8.2): the token is verified and its
+// local account and tenant resolved in the identity context of the
+// delegation (actor i:delegation); the request then goes on as the delegated
+// user, through the normal chain (requireTenant).
+const DELEGATION_ACTOR: DbActor = { type: 'integration', name: 'delegation' };
 
 /**
  * Delegated authentication — an ADDITIONAL way to authenticate, never a way to
@@ -276,6 +284,130 @@ async function refuse(
 }
 
 /**
+ * The verification of a delegated token and the resolution of its local
+ * identity, in the identity context of the delegation (rls-tenant §7.7):
+ * true when the request goes on as the delegated user.
+ */
+async function verifyDelegation(req: Request, res: Response, token: string): Promise<boolean> {
+  // Route gate first: cheap, and it means an unreviewed route can never
+  // drive a JWKS fetch, let alone a read. Delegated access is read-only, so
+  // the method is part of the allowlist.
+  if (req.method !== 'GET' || !DELEGATED_ROUTES.some((re) => re.test(req.path))) {
+    await refuse(req, res, 'route_not_allowed');
+    return false;
+  }
+
+  // Switched off by the operator: refused before any JWKS fetch.
+  const policy = delegationPolicy();
+  if (!policy.enabled) {
+    await refuse(req, res, 'delegation_disabled');
+    return false;
+  }
+
+  const result = await delegationVerifyService.verify(token);
+  if (!result.ok) {
+    await refuse(req, res, result.reason, {
+      claims: result.claims ?? null,
+      kid: result.kid,
+      detail: result.detail,
+    });
+    return false;
+  }
+
+  const { claims, subject, kid } = result;
+
+  // Source app allowlist, on the SIGNED azp (see delegationPolicy).
+  if (!policy.apps.has(claims.azp)) {
+    await refuse(req, res, 'azp_not_allowed', { claims, kid, localUserId: subject.localUserId });
+    return false;
+  }
+  // A platform-admin subject reads every tenant: only when the operator
+  // accepts it (see delegationPolicy).
+  if (subject.role === 'admin' && !policy.allowPlatformAdmin) {
+    await refuse(req, res, 'subject_admin_not_allowed', { claims, kid, localUserId: subject.localUserId });
+    return false;
+  }
+
+  // Tenant comes from the SIGNED slug, never from X-Obli-Tenant-Slug or any
+  // other unsigned header: an unsigned tenant hint is a tenant of the
+  // caller's choosing. Compared byte-exactly (Postgres text equality), case
+  // included, because the slug is the join key between apps (HARD RULE 13).
+  const tenant = await tenantService.getBySlug(claims.ost);
+  if (!tenant) {
+    await refuse(req, res, 'tenant_unknown', { claims, kid, localUserId: subject.localUserId });
+    return false;
+  }
+
+  // Membership check, mirroring the SSO login path exactly (see
+  // obligateCallback.routes.ts): a platform admin has implicit access to
+  // every tenant and gets no user_tenants row materialised, everyone else
+  // must hold one. Being stricter here would deny a delegated read that the
+  // same person can do in the UI; being looser is not possible, since a
+  // non-admin still needs the row.
+  const isPlatformAdmin = subject.role === 'admin';
+  if (!isPlatformAdmin && !(await tenantService.userHasAccess(subject.localUserId, tenant.id))) {
+    await refuse(req, res, 'tenant_not_permitted', { claims, kid, tenantId: tenant.id, localUserId: subject.localUserId });
+    return false;
+  }
+
+  // Install the LOCAL identity in the shape every downstream guard reads.
+  // Nothing here grants anything: role and tenant come from Obligarth's own
+  // tables, and requireDeviceRead / getVisibleDeviceIds run next, unchanged.
+  //
+  // req.session is replaced with a detached stand-in and req.sessionID is
+  // dropped, so express-session neither writes a session row nor sets a
+  // cookie for a machine-to-machine call: both of its end-of-response hooks
+  // (shouldSave, shouldSetCookie) bail out when sessionID is not a string.
+  // A delegated request must leave no login behind it. Dropping any cookie
+  // session the caller also happened to send is deliberate: one request, one
+  // identity, and it is the signed one.
+  //
+  // The no-op methods are not optional: express-session calls
+  // req.session.touch() unconditionally while ending EVERY response, and a
+  // handler may call save()/destroy(). For a token-authenticated request
+  // there is nothing to persist, so doing nothing is the correct answer
+  // rather than an omission.
+  const noop = (cb?: (err?: unknown) => void) => {
+    if (typeof cb === 'function') cb(null);
+  };
+  const carrier = req as unknown as { session: unknown; sessionID?: string };
+  carrier.session = {
+    userId: subject.localUserId,
+    username: subject.username,
+    role: subject.role,
+    currentTenantId: tenant.id,
+    touch: noop,
+    save: noop,
+    reload: noop,
+    destroy: noop,
+    regenerate: noop,
+  };
+  delete carrier.sessionID;
+
+  req.delegation = {
+    jti: claims.jti,
+    azp: claims.azp,
+    sub: claims.sub,
+    ost: claims.ost,
+    kid,
+    scp: claims.scp,
+  };
+
+  await auditDelegation(req, 'accepted', {
+    tenantId: tenant.id,
+    localUserId: subject.localUserId,
+    claims,
+    kid,
+  });
+  logger.debug(
+    { azp: claims.azp, jti: claims.jti, sub: claims.sub, ost: claims.ost, localUserId: subject.localUserId },
+    '[delegation] accepted',
+  );
+
+  return true;
+}
+
+/**
  * Accept EITHER the existing session OR a delegated token.
  *
  * No header means no change at all: the request falls through to requireAuth
@@ -290,122 +422,10 @@ export async function delegatedAuth(req: Request, res: Response, next: NextFunct
   }
 
   try {
-    // Route gate first: cheap, and it means an unreviewed route can never
-    // drive a JWKS fetch, let alone a read. Delegated access is read-only, so
-    // the method is part of the allowlist.
-    if (req.method !== 'GET' || !DELEGATED_ROUTES.some((re) => re.test(req.path))) {
-      await refuse(req, res, 'route_not_allowed');
-      return;
-    }
-
-    // Switched off by the operator: refused before any JWKS fetch.
-    const policy = delegationPolicy();
-    if (!policy.enabled) {
-      await refuse(req, res, 'delegation_disabled');
-      return;
-    }
-
-    const result = await delegationVerifyService.verify(token);
-    if (!result.ok) {
-      await refuse(req, res, result.reason, {
-        claims: result.claims ?? null,
-        kid: result.kid,
-        detail: result.detail,
-      });
-      return;
-    }
-
-    const { claims, subject, kid } = result;
-
-    // Source app allowlist, on the SIGNED azp (see delegationPolicy).
-    if (!policy.apps.has(claims.azp)) {
-      await refuse(req, res, 'azp_not_allowed', { claims, kid, localUserId: subject.localUserId });
-      return;
-    }
-    // A platform-admin subject reads every tenant: only when the operator
-    // accepts it (see delegationPolicy).
-    if (subject.role === 'admin' && !policy.allowPlatformAdmin) {
-      await refuse(req, res, 'subject_admin_not_allowed', { claims, kid, localUserId: subject.localUserId });
-      return;
-    }
-
-    // Tenant comes from the SIGNED slug, never from X-Obli-Tenant-Slug or any
-    // other unsigned header: an unsigned tenant hint is a tenant of the
-    // caller's choosing. Compared byte-exactly (Postgres text equality), case
-    // included, because the slug is the join key between apps (HARD RULE 13).
-    const tenant = await tenantService.getBySlug(claims.ost);
-    if (!tenant) {
-      await refuse(req, res, 'tenant_unknown', { claims, kid, localUserId: subject.localUserId });
-      return;
-    }
-
-    // Membership check, mirroring the SSO login path exactly (see
-    // obligateCallback.routes.ts): a platform admin has implicit access to
-    // every tenant and gets no user_tenants row materialised, everyone else
-    // must hold one. Being stricter here would deny a delegated read that the
-    // same person can do in the UI; being looser is not possible, since a
-    // non-admin still needs the row.
-    const isPlatformAdmin = subject.role === 'admin';
-    if (!isPlatformAdmin && !(await tenantService.userHasAccess(subject.localUserId, tenant.id))) {
-      await refuse(req, res, 'tenant_not_permitted', { claims, kid, tenantId: tenant.id, localUserId: subject.localUserId });
-      return;
-    }
-
-    // Install the LOCAL identity in the shape every downstream guard reads.
-    // Nothing here grants anything: role and tenant come from Obligarth's own
-    // tables, and requireDeviceRead / getVisibleDeviceIds run next, unchanged.
-    //
-    // req.session is replaced with a detached stand-in and req.sessionID is
-    // dropped, so express-session neither writes a session row nor sets a
-    // cookie for a machine-to-machine call: both of its end-of-response hooks
-    // (shouldSave, shouldSetCookie) bail out when sessionID is not a string.
-    // A delegated request must leave no login behind it. Dropping any cookie
-    // session the caller also happened to send is deliberate: one request, one
-    // identity, and it is the signed one.
-    //
-    // The no-op methods are not optional: express-session calls
-    // req.session.touch() unconditionally while ending EVERY response, and a
-    // handler may call save()/destroy(). For a token-authenticated request
-    // there is nothing to persist, so doing nothing is the correct answer
-    // rather than an omission.
-    const noop = (cb?: (err?: unknown) => void) => {
-      if (typeof cb === 'function') cb(null);
-    };
-    const carrier = req as unknown as { session: unknown; sessionID?: string };
-    carrier.session = {
-      userId: subject.localUserId,
-      username: subject.username,
-      role: subject.role,
-      currentTenantId: tenant.id,
-      touch: noop,
-      save: noop,
-      reload: noop,
-      destroy: noop,
-      regenerate: noop,
-    };
-    delete carrier.sessionID;
-
-    req.delegation = {
-      jti: claims.jti,
-      azp: claims.azp,
-      sub: claims.sub,
-      ost: claims.ost,
-      kid,
-      scp: claims.scp,
-    };
-
-    await auditDelegation(req, 'accepted', {
-      tenantId: tenant.id,
-      localUserId: subject.localUserId,
-      claims,
-      kid,
-    });
-    logger.debug(
-      { azp: claims.azp, jti: claims.jti, sub: claims.sub, ost: claims.ost, localUserId: subject.localUserId },
-      '[delegation] accepted',
-    );
-
-    next();
+    const proceed = await asIdentity(DELEGATION_ACTOR, () => verifyDelegation(req, res, token));
+    // The rest of the chain runs as the delegated user (requireTenant then
+    // enters its tenant's context).
+    if (proceed) rebaseDbContext(req, next);
   } catch (err) {
     // Fail closed. An unexpected error here must never fall through to the
     // session path, where a request carrying a token nobody verified would

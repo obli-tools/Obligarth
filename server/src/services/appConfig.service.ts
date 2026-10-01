@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { switchToIdentity } from '../db/context';
 import type { AppConfigData, ObligateConfig } from '@obligarth/shared';
 
 // ── Platform settings of the modules ────────────────────────────────────────
@@ -69,11 +70,13 @@ export const appConfigService = {
     return row?.value ?? null;
   },
 
+  /** Platform settings are a catalog (rls-tenant §5.2): read in any
+   *  context, written in the identity context (after the route's checks). */
   async set(key: string, value: string): Promise<void> {
-    await db('app_config')
+    await switchToIdentity(() => db('app_config')
       .insert({ key, value })
       .onConflict('key')
-      .merge({ value });
+      .merge({ value }));
   },
 
   /** The platform settings. The rows of the removed RMM's keys (the agent's

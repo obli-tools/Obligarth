@@ -4,6 +4,7 @@ import { hasGlobalView } from '../services/deviceScope.service';
 import type { SettingScope } from '@obligarth/shared';
 import type { SettingKey } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
+import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
 import type { SetSettingInput, SetSettingsBulkInput } from '../validators/settings.schema';
 
 function parseScope(req: Request): { scope: SettingScope; scopeId: number | null } {
@@ -22,10 +23,14 @@ function parseScope(req: Request): { scope: SettingScope; scopeId: number | null
  * The tenant whose settings rows this request reads or writes: a group or a
  * device of the session's tenant (a group of any tenant for the master
  * tenant's global view, whose rows then live in the group's tenant).
- * Anything else answers like an unknown id (404).
+ * Anything else answers like an unknown id (404). Database context
+ * (rls-tenant §6.3): resolved and read across tenants in the global view
+ * (context 'platform'), written in the context of the rows' tenant
+ * (asTargetTenant).
  */
 async function scopeTenantId(req: Request, scope: SettingScope, scopeId: number | null): Promise<number> {
-  const tenantId = await settingsService.scopeTenantId(req.tenantId!, scope, scopeId, { globalView: hasGlobalView(req) });
+  const tenantId = await globalViewRead(req,
+    () => settingsService.scopeTenantId(req.tenantId!, scope, scopeId, { globalView: hasGlobalView(req) }));
   if (tenantId === null) throw new AppError(404, scope === 'device' ? 'Device not found' : 'Group not found');
   return tenantId;
 }
@@ -47,7 +52,7 @@ export const settingsController = {
       const groupId = parseInt(req.params.scopeId, 10);
       if (isNaN(groupId)) throw new AppError(400, 'Invalid group ID');
       const tenantId = await scopeTenantId(req, 'group', groupId);
-      const result = await settingsService.resolveForGroup(tenantId, groupId);
+      const result = await globalViewRead(req, () => settingsService.resolveForGroup(tenantId, groupId));
       res.json({ success: true, data: result });
     } catch (err) {
       next(err);
@@ -83,7 +88,7 @@ export const settingsController = {
       const { key, value } = req.body as SetSettingInput;
       const tenantId = await scopeTenantId(req, scope, scopeId);
 
-      await settingsService.set(tenantId, scope, scopeId, key as SettingKey, value);
+      await asTargetTenant(req, tenantId, () => settingsService.set(tenantId, scope, scopeId, key as SettingKey, value));
 
       res.json({ success: true, message: 'Setting saved' });
     } catch (err: unknown) {
@@ -102,12 +107,12 @@ export const settingsController = {
       const { overrides } = req.body as SetSettingsBulkInput;
       const tenantId = await scopeTenantId(req, scope, scopeId);
 
-      await settingsService.setBulk(
+      await asTargetTenant(req, tenantId, () => settingsService.setBulk(
         tenantId,
         scope,
         scopeId,
         overrides.map((o) => ({ key: o.key as SettingKey, value: o.value })),
-      );
+      ));
 
       res.json({ success: true, message: 'Settings saved' });
     } catch (err) {
@@ -122,7 +127,7 @@ export const settingsController = {
       const { key } = req.params;
       const tenantId = await scopeTenantId(req, scope, scopeId);
 
-      const deleted = await settingsService.remove(tenantId, scope, scopeId, key as SettingKey);
+      const deleted = await asTargetTenant(req, tenantId, () => settingsService.remove(tenantId, scope, scopeId, key as SettingKey));
 
       res.json({ success: true, message: deleted ? 'Setting reset to inherited' : 'No override found' });
     } catch (err) {
