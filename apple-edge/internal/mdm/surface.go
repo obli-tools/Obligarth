@@ -24,6 +24,7 @@ import (
 	"github.com/MeeJay/Obligarth/apple-edge/internal/config"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/plistlimit"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ratelimit"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/reqctx"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/tenant"
@@ -36,6 +37,23 @@ const (
 	SCEPRate, SCEPBurst           = 20, 100
 	FailWindow, FailBlock         = time.Minute, 5 * time.Minute
 	largeBody               int64 = 1 << 20
+)
+
+// Bounds of a property list sent by a device, examined once its identity
+// is verified and before any decoder. A check-in message holds a few dozen
+// nodes; the largest command results (InstalledApplicationList of a few
+// thousand applications) a few hundred thousand.
+var (
+	CheckinPlist = plistlimit.Limits{MaxDepth: 64, MaxElements: 10_000}
+	CommandPlist = plistlimit.Limits{MaxDepth: 64, MaxElements: 500_000}
+)
+
+const (
+	// HeavyPlist is the number of nodes above which decoding a body needs
+	// one of the large-body slots, like a body above 1 MiB.
+	HeavyPlist = 50_000
+	// plistScanTimeout bounds the examination of a body.
+	plistScanTimeout = 2 * time.Second
 )
 
 // Retry-After values (seconds).
@@ -54,6 +72,9 @@ type state struct {
 	stage     string // signature, verified, refused
 	certSHA   string
 	issued    *issuedInfo
+	body      []byte // buffered body, examined only once the identity is verified
+	checkin   bool   // check-in message (route or Content-Type)
+	largeHeld bool   // the request holds a large-body slot
 }
 
 func stateFrom(ctx context.Context) *state {
@@ -92,7 +113,10 @@ func NewSurface(cfg *config.Config, reg *tenant.Registry, g *Guard, v *Verifier,
 	}
 	nano := logger.With("component", "nanomdm").Nano()
 	sigVerifier := httpmdm.MdmSignatureVerifierFunc(cryptoutil.VerifyMdmSignature)
+	// Signature over the raw body, identity checked against the URL
+	// tenant, device limiter, then only the examination of the body.
 	wrap := func(h http.Handler) http.Handler {
+		h = s.bodyGate(h)
 		h = s.deviceLimit(h)
 		h = httpmdm.CertVerifyMiddleware(h, v, nano)
 		return httpmdm.CertExtractMdmSignatureMiddleware(h, sigVerifier, httpmdm.SigLogWithLogger(nano))
@@ -297,30 +321,23 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	if op == "checkin" {
 		limit, timeout = s.cfg.BodyCheckin, s.cfg.TimeoutCheckin
 	}
-	body, release, code := s.readBody(r, limit)
+	body, held, code := s.readBody(r, limit)
 	if code != 0 {
 		fail(w, code, retryIfOverload(code))
 		return
 	}
-	defer release()
+	st.largeHeld = held
+	defer func() {
+		if st.largeHeld {
+			s.releaseLarge()
+		}
+	}()
 	// Query parameters would reach NanoMDM as forgeable Params.
 	r.URL.RawQuery = ""
-	isCheckin := op == "checkin" || strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-apple-aspen-mdm-checkin")
-	var out http.ResponseWriter = w
-	if isCheckin {
-		var mt struct{ MessageType string }
-		if err := plist.Unmarshal(body, &mt); err == nil {
-			switch mt.MessageType {
-			case "ReturnToService":
-				s.metrics.Checkins.Inc(st.tenant.Key, "ReturnToService", "refused")
-				fail(w, http.StatusBadRequest, "")
-				return
-			case "DeclarativeManagement":
-				// DDM answers (tokens, items, declarations) are JSON.
-				out = &jsonOnSuccess{ResponseWriter: w}
-			}
-		}
-	}
+	// The body is only hashed (Mdm-Signature) until the identity of the
+	// device is verified: bodyGate examines it afterwards.
+	st.body = body
+	st.checkin = op == "checkin" || strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-apple-aspen-mdm-checkin")
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 	r = r.WithContext(ctx)
@@ -328,9 +345,9 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	r.ContentLength = int64(len(body))
 	st.stage = "signature"
 	if op == "checkin" {
-		s.checkin.ServeHTTP(out, r)
+		s.checkin.ServeHTTP(w, r)
 	} else {
-		s.mdm.ServeHTTP(out, r)
+		s.mdm.ServeHTTP(w, r)
 	}
 	if w.status == http.StatusBadRequest && st.stage == "signature" {
 		if h := r.Header.Get("Mdm-Signature"); h != "" {
@@ -349,39 +366,81 @@ func retryIfOverload(code int) string {
 	return ""
 }
 
-// readBody reads the whole body within limit. Bodies above 1 MiB need one
-// of the large-body slots. It returns a status code on failure.
-func (s *Surface) readBody(r *http.Request, limit int64) ([]byte, func(), int) {
-	release := func() {}
-	if r.ContentLength > limit {
-		return nil, release, http.StatusRequestEntityTooLarge
+// tryLarge takes one of the large-body slots, without waiting.
+func (s *Surface) tryLarge() bool {
+	select {
+	case s.large <- struct{}{}:
+		return true
+	default:
+		s.metrics.RateLimited.Inc("large_body")
+		return false
 	}
-	takeSlot := func() bool {
-		select {
-		case s.large <- struct{}{}:
-			release = func() { <-s.large }
-			return true
-		default:
-			s.metrics.RateLimited.Inc("large_body")
-			return false
+}
+
+func (s *Surface) releaseLarge() { <-s.large }
+
+// readBody reads the whole body within limit. Beyond 1 MiB, announced or
+// read (chunked body), a body needs one of the large-body slots, taken
+// before the rest is read: without a slot, a request holds at most 1 MiB.
+// It reports whether a slot is held (the caller releases it), or a status
+// code on failure.
+func (s *Surface) readBody(r *http.Request, limit int64) (body []byte, held bool, code int) {
+	if r.ContentLength > limit {
+		return nil, false, http.StatusRequestEntityTooLarge
+	}
+	defer func() {
+		if code != 0 && held {
+			s.releaseLarge()
+			held = false
+		}
+	}()
+	var err error
+	if r.ContentLength > largeBody {
+		if !s.tryLarge() {
+			return nil, false, http.StatusServiceUnavailable
+		}
+		held = true
+		// One buffer of the announced length (one byte more detects a
+		// longer body), bounded by the slots.
+		body, err = readInto(make([]byte, 0, r.ContentLength+1), r.Body)
+	} else {
+		// Grows with what arrives: an announced length costs nothing.
+		body, err = io.ReadAll(io.LimitReader(r.Body, min(limit, largeBody)+1))
+	}
+	if err != nil {
+		return nil, held, http.StatusBadRequest
+	}
+	if !held && int64(len(body)) > largeBody && int64(len(body)) <= limit {
+		// Unknown length beyond 1 MiB: a slot before the rest is read.
+		if !s.tryLarge() {
+			return nil, held, http.StatusServiceUnavailable
+		}
+		held = true
+		full := make([]byte, len(body), limit+1)
+		copy(full, body)
+		if body, err = readInto(full, r.Body); err != nil {
+			return nil, held, http.StatusBadRequest
 		}
 	}
-	if r.ContentLength > largeBody && !takeSlot() {
-		return nil, release, http.StatusServiceUnavailable
-	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, limit+1))
-	if err != nil {
-		release()
-		return nil, func() {}, http.StatusBadRequest
-	}
 	if int64(len(body)) > limit {
-		release()
-		return nil, func() {}, http.StatusRequestEntityTooLarge
+		return nil, held, http.StatusRequestEntityTooLarge
 	}
-	if r.ContentLength < 0 && int64(len(body)) > largeBody && !takeSlot() {
-		return nil, func() {}, http.StatusServiceUnavailable
+	return body, held, 0
+}
+
+// readInto appends what r yields to buf, up to the capacity of buf.
+func readInto(buf []byte, r io.Reader) ([]byte, error) {
+	for len(buf) < cap(buf) {
+		n, err := r.Read(buf[len(buf):cap(buf)])
+		buf = buf[:len(buf)+n]
+		if err == io.EOF {
+			return buf, nil
+		}
+		if err != nil {
+			return buf, err
+		}
 	}
-	return body, release, 0
+	return buf, nil
 }
 
 func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant) {
@@ -410,12 +469,14 @@ func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant) 
 		return
 	}
 	if r.Method == http.MethodPost {
-		body, release, code := s.readBody(r, s.cfg.BodySCEP)
+		body, held, code := s.readBody(r, s.cfg.BodySCEP)
 		if code != 0 {
 			fail(w, code, retryIfOverload(code))
 			return
 		}
-		defer release()
+		if held {
+			defer s.releaseLarge()
+		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
 	} else if len(r.URL.RawQuery) > int(s.cfg.BodySCEP) {
@@ -467,6 +528,60 @@ func (s *Surface) deviceLimit(next http.Handler) http.Handler {
 			s.metrics.RateLimited.Inc("device")
 			fail(w, http.StatusServiceUnavailable, retryDevice)
 			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// bodyGate examines the body of a device whose identity is verified,
+// before any decoder: nesting, nodes and time are bounded (a heavy body
+// takes a large-body slot). It then reads MessageType to refuse
+// ReturnToService and to label DDM answers as JSON.
+func (s *Surface) bodyGate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		st := stateFrom(r.Context())
+		if st == nil || st.tenant == nil || st.stage != "verified" {
+			fail(w, http.StatusBadRequest, "")
+			return
+		}
+		lim := CommandPlist
+		if st.checkin {
+			lim = CheckinPlist
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), plistScanTimeout)
+		stats, err := plistlimit.Check(ctx, st.body, lim)
+		cancel()
+		switch {
+		case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled):
+			s.metrics.RateLimited.Inc("plist_scan")
+			fail(w, http.StatusServiceUnavailable, retryOverload)
+			return
+		case err != nil:
+			s.metrics.SecurityEvents.Inc(st.tenant.Key, "plist_refused")
+			s.logger.Info("msg", "property list refused", "tenant", st.tenant.Key, "request_id", st.requestID, "err", err)
+			fail(w, http.StatusBadRequest, "")
+			return
+		}
+		if stats.Elements > HeavyPlist && !st.largeHeld {
+			if !s.tryLarge() {
+				fail(w, http.StatusServiceUnavailable, retryOverload)
+				return
+			}
+			st.largeHeld = true
+		}
+		if st.checkin {
+			var mt struct{ MessageType string }
+			if plist.Unmarshal(st.body, &mt) == nil {
+				switch mt.MessageType {
+				case "ReturnToService":
+					s.metrics.Checkins.Inc(st.tenant.Key, "ReturnToService", "refused")
+					fail(w, http.StatusBadRequest, "")
+					return
+				case "DeclarativeManagement":
+					// DDM answers (tokens, items, declarations) are JSON.
+					w = &jsonOnSuccess{ResponseWriter: w}
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})

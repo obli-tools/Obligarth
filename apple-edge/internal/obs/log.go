@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/netip"
 	"regexp"
 	"strings"
 	"sync"
@@ -219,22 +220,86 @@ var (
 	uuidRe  = regexp.MustCompile(`[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}`)
 	longRe  = regexp.MustCompile(`[A-Za-z0-9+/=_-]{17,}`)
 	ipv4Re  = regexp.MustCompile(`\b\d{1,3}(\.\d{1,3}){3}(:\d{1,5})?\b`)
-	ipv6Re  = regexp.MustCompile(`\[?\b([0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}\b\]?(:\d{1,5})?`)
+	macRe   = regexp.MustCompile(`\b[0-9A-Fa-f]{2}([:-][0-9A-Fa-f]{2}){5}\b`)
+	// ipv6Candidate finds what may be an IPv6 address: hexadecimal digits,
+	// colons and dots (embedded IPv4) with at least two colons, an optional
+	// zone, optionally in brackets with a port. maskIPv6 keeps only the
+	// candidates that parse as IPv6 addresses.
+	ipv6Candidate = regexp.MustCompile(`\[?[0-9A-Fa-f.]*:[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*(%[0-9A-Za-z_~-]+(\.[0-9A-Za-z_~-]+)*)?\]?(:\d{1,5})?`)
 )
 
 // Mask hides everything that may identify a device in a free-text message:
-// plists, UUIDs, IP addresses, and hex, base64 or identifier-like strings
-// longer than 16 characters.
+// plists, UUIDs, IP and MAC addresses, and hex, base64 or identifier-like
+// strings longer than 16 characters.
 func Mask(s string) string {
 	s = plistRe.ReplaceAllString(s, "[plist]")
 	s = uuidRe.ReplaceAllString(s, "[uuid]")
+	s = maskIPv6(s)
 	s = ipv4Re.ReplaceAllString(s, "[ip]")
-	s = ipv6Re.ReplaceAllString(s, "[ip]")
+	s = macRe.ReplaceAllString(s, "[mac]")
 	s = longRe.ReplaceAllString(s, "[redacted]")
 	if len(s) > 500 {
 		s = s[:500]
 	}
 	return s
+}
+
+// maskIPv6 masks the IPv6 addresses of s, and only them: times
+// ("10:20:30"), "::" separators or other colon-separated values that are
+// not addresses are kept. A candidate glued to a word (letter, digit or
+// underscore) is not an address either.
+func maskIPv6(s string) string {
+	idx := ipv6Candidate.FindAllStringIndex(s, -1)
+	if idx == nil {
+		return s
+	}
+	var b strings.Builder
+	last := 0
+	for _, m := range idx {
+		start, end := m[0], m[1]
+		if start > 0 && isWordByte(s[start-1]) {
+			if s[start] != ':' {
+				continue
+			}
+			start++ // "host:2001:db8::1": the colon separates a word and an address
+		}
+		// A colon or a dot ending a sentence is punctuation.
+		for end > start && !isIPv6(s[start:end]) && (s[end-1] == ':' || s[end-1] == '.') {
+			end--
+		}
+		if end == start || !isIPv6(s[start:end]) || end < len(s) && isWordByte(s[end]) {
+			continue
+		}
+		b.WriteString(s[last:start])
+		b.WriteString("[ip]")
+		last = end
+	}
+	b.WriteString(s[last:])
+	return b.String()
+}
+
+func isWordByte(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || c == '_'
+}
+
+// isIPv6 reports whether c is an IPv6 address, possibly with a zone, or in
+// brackets followed by a port.
+func isIPv6(c string) bool {
+	host := c
+	if strings.HasPrefix(host, "[") {
+		end := strings.IndexByte(host, ']')
+		if end < 0 {
+			return false
+		}
+		host = host[1:end]
+	} else if strings.ContainsRune(host, ']') {
+		return false
+	}
+	if !strings.ContainsAny(host, "0123456789abcdefABCDEF") {
+		return false // "::" alone
+	}
+	a, err := netip.ParseAddr(host)
+	return err == nil && a.Is6()
 }
 
 // Nano adapts l to the logger interface of NanoMDM and nanolib.

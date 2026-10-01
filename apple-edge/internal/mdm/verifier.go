@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
-	"encoding/asn1"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/smallstep/pkcs7"
 
+	"github.com/MeeJay/Obligarth/apple-edge/internal/crypto/cmssig"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/outbox"
@@ -184,46 +184,12 @@ func expiredSigner(header string, body []byte, now time.Time) *x509.Certificate 
 		return nil
 	}
 	si := p7.Signers[0]
-	alg := signatureAlgorithm(si.DigestEncryptionAlgorithm.Algorithm, si.DigestAlgorithm.Algorithm)
-	if alg == x509.UnknownSignatureAlgorithm || len(si.AuthenticatedAttributes) == 0 {
-		return nil
-	}
-	// DER of the authenticated attributes as signed: a SET OF in the
-	// received order (what the library verifies).
-	attrs, err := asn1.Marshal(si.AuthenticatedAttributes)
-	if err != nil || len(attrs) == 0 {
-		return nil
-	}
-	attrs[0] = 0x31
-	if signer.CheckSignature(alg, attrs, si.EncryptedDigest) != nil {
+	alg := cmssig.SignatureAlgorithm(si.DigestEncryptionAlgorithm.Algorithm, si.DigestAlgorithm.Algorithm)
+	attrs, err := cmssig.SignedAttributes(p7)
+	if alg == x509.UnknownSignatureAlgorithm || err != nil || signer.CheckSignature(alg, attrs, si.EncryptedDigest) != nil {
 		return nil
 	}
 	return signer
-}
-
-// signatureAlgorithm mirrors the mapping of the CMS library (devices and
-// simulators commonly sign with SHA-1, accepted for data signatures).
-func signatureAlgorithm(enc, digest asn1.ObjectIdentifier) x509.SignatureAlgorithm {
-	rsa := enc.Equal(pkcs7.OIDEncryptionAlgorithmRSA) || enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA1) ||
-		enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA256) || enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA384) ||
-		enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA512)
-	switch {
-	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA1):
-		return x509.SHA1WithRSA
-	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA256):
-		return x509.SHA256WithRSA
-	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA384):
-		return x509.SHA384WithRSA
-	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA512):
-		return x509.SHA512WithRSA
-	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA256):
-		return x509.ECDSAWithSHA256
-	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA384):
-		return x509.ECDSAWithSHA384
-	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA512):
-		return x509.ECDSAWithSHA512
-	}
-	return x509.UnknownSignatureAlgorithm
 }
 
 func (v *Verifier) emitOnce(ctx context.Context, sha, typ string, ev outbox.Event) {

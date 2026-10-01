@@ -60,8 +60,9 @@ type Config struct {
 	ADEProtocolVersion int
 	ADESyncInterval    time.Duration
 
-	// MachineInfoExtraRootFile adds a test root for MachineInfo signatures
-	// (development only).
+	// MachineInfoExtraRootFile adds a test PKI for MachineInfo signatures
+	// (development only): its self-signed certificates as roots, its other
+	// CA certificates as pinned device CAs.
 	MachineInfoExtraRootFile string
 
 	CrossTenantPolicy string

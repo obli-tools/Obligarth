@@ -63,7 +63,7 @@ type Service struct {
 	BaseURL    string
 	UserAgent  string
 	HTTP       *http.Client
-	Roots      []*x509.Certificate // MachineInfo roots
+	Trust      *Trust // MachineInfo: roots and pinned device CAs
 	Now        func() time.Time
 
 	clientOnce sync.Once

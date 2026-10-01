@@ -14,6 +14,37 @@ import (
 // to this root.
 const AppleRootCASHA256 = "b0b1730ecbc7ff4505142c49f1295e6eda6bcaed7e2c68c5be91b5a11001f024"
 
+// AppleIPhoneDeviceCASPKISHA256 pins the public key (SHA-256 of the DER
+// SubjectPublicKeyInfo) of "Apple iPhone Device CA" (C=US, O=Apple Inc.,
+// OU=Apple iPhone), the Apple CA that issues the device identity
+// certificates signing MachineInfo. Apple publishes its certificate
+// (SHA-256 76f27d00e1333bc88de0e2916c38c9a7f2b75774c25a794c092a80e3c4c66cce,
+// RSA 1024, SHA-1, valid 2007-2014) in its over-the-air enrollment guide,
+// which asks to check that a device certificate is issued by this CA and
+// to ignore the validity dates. It is issued by "Apple iPhone
+// Certification Authority" (SHA-256
+// e4e2936d3c076ec4aea8ac37277524950ca005894b39bba2d347fa33155ae5fa, valid
+// 2007-2022), itself issued by Apple Root CA: both intermediates are
+// expired and still sign current device identities.
+const AppleIPhoneDeviceCASPKISHA256 = "13686ec675f9fd26a123adb17b5533f593cf451edd6105ae39b748277a3922e5"
+
+// appleDeviceCAPins lists, by public key, the Apple CAs allowed to issue
+// the signer of a MachineInfo. A certificate issued under Apple Root CA
+// by any other CA (developer, push, application integration...) is
+// refused.
+//
+// Rotation: when Apple introduces another device CA (a genuine device
+// refused with "issuer not pinned", or a publication by Apple), take its
+// certificate from Apple and from a genuine MachineInfo, check that both
+// match and chain to Apple Root CA, add the SHA-256 of its
+// SubjectPublicKeyInfo here with its name, and release. Keep a pin as long
+// as devices may present identities issued under it (validity dates are
+// ignored): remove it when Apple retires the CA, or at once by a release
+// if it is compromised.
+var appleDeviceCAPins = map[string]string{
+	AppleIPhoneDeviceCASPKISHA256: "Apple iPhone Device CA",
+}
+
 // appleRootCAPEM is the public certificate of Apple Root CA, kept as a Go
 // constant (certificate files are not versioned).
 const appleRootCAPEM = `-----BEGIN CERTIFICATE-----

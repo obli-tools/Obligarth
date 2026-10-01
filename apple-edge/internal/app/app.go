@@ -301,20 +301,21 @@ func StartWithOptions(ctx context.Context, cfg *config.Config, sec Secrets, logg
 		RetryDelays: opt.APNsRetryDelays, BackoffMin: opt.APNsBackoffMin, ThrottleReport: opt.APNsThrottleRep}
 
 	// ADE.
-	appleRoot, err := ade.AppleRootCA()
+	miTrust, err := ade.AppleTrust()
 	if err != nil {
 		return fail(err)
 	}
-	miRoots := []*x509.Certificate{appleRoot}
 	if cfg.MachineInfoExtraRootFile != "" {
 		extra, err := readCerts(cfg.MachineInfoExtraRootFile)
+		if err == nil {
+			miTrust, err = miTrust.WithTestPKI(extra)
+		}
 		if err != nil {
 			return fail(fmt.Errorf("EDGE_MACHINE_INFO_EXTRA_ROOT_FILE: %w", err))
 		}
-		miRoots = append(miRoots, extra...)
 	}
 	a.ADE = &ade.Service{DB: a.DB, Keys: a.Keys, Out: a.Out, Logger: logger, Metrics: a.Metrics, PublicBase: cfg.PublicBase,
-		BaseURL: cfg.ADEBaseURL, UserAgent: "Obligarth-apple-edge/" + version, HTTP: ade.NewHTTPClient(cfg.ADEProtocolVersion), Roots: miRoots}
+		BaseURL: cfg.ADEBaseURL, UserAgent: "Obligarth-apple-edge/" + version, HTTP: ade.NewHTTPClient(cfg.ADEProtocolVersion), Trust: miTrust}
 
 	a.API = &api.Server{Cfg: cfg, DB: a.DB, Keys: a.Keys, Tenants: a.Tenants, Reg: a.Registry, Queue: a.Queue, Disabler: nanoStore,
 		Secrets: secrets, Out: a.Out, Verifier: a.Verifier, Push: a.Push, ADE: a.ADE, Logger: logger, Metrics: a.Metrics,
