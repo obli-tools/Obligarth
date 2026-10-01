@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { useSessionState } from '@/hooks/useSessionState';
 import {
  Search, RefreshCw, ChevronRight, ChevronDown, X, Trash2, Download,
- ShieldCheck, Loader2, MoreHorizontal, SortAsc, SortDesc, FolderOpen, MousePointerClick, Check, ArrowRightLeft, FolderX, Tag, Building2,
+ ShieldCheck, Loader2, MoreHorizontal, SortAsc, SortDesc, FolderOpen, MousePointerClick, Check, FolderX, Tag, Building2,
  SlidersHorizontal, Columns3, FolderTree,
 } from 'lucide-react';
 import { deviceApi } from '@/api/device.api';
@@ -245,9 +245,8 @@ export function DeviceTable({
  // becomes a selection toggle (no navigation). Lets the user pick devices
  // without having to aim a tiny checkbox target.
  const [selectionMode, setSelectionMode] = useState(false);
- // Change-group + transfer-tenant modal state
+ // Change-group modal state
  const [changeGroupOpen, setChangeGroupOpen] = useState(false);
- const [transferOpen, setTransferOpen] = useState(false);
  const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obligarth:devices:tenantFilters', new Set<number>());
  const toggleTenantFilter = (tid: number) => {
  setTenantFilters((prev) => {
@@ -958,12 +957,6 @@ export function DeviceTable({
  const batchItems: Array<{ key: string; icon: ReactNode; label: string; onClick: () => void; danger?: boolean; show?: boolean }> = [
  { key: 'approve', show: canManageApproval && approvalFilter === 'pending', icon: <ShieldCheck className="w-3.5 h-3.5 text-green-400" />, label: t('devices.batch.approve'), onClick: () => handleBatchAction('approve') },
  { key: 'change_group', icon: <FolderOpen className="w-3.5 h-3.5 text-accent" />, label: t('devices.batch.changeGroup', 'Change group'), onClick: closeBatchMenuThen(() => setChangeGroupOpen(true)) },
- // Tenant transfer is structurally an admin action: it
- // moves a device row's tenant_id, which only the
- // master-tenant god view can resolve cross-tenant
- // references for. Users never see the foreign tenant
- // they'd transfer TO, so leave this admin-only.
- { key: 'transfer', show: isAdmin(), icon: <ArrowRightLeft className="w-3.5 h-3.5 text-accent" />, label: t('devices.batch.transferTenant', 'Transfer to another tenant'), onClick: closeBatchMenuThen(() => setTransferOpen(true)) },
  { key: 'delete', show: isAdmin(), danger: true, icon: <Trash2 className="w-3.5 h-3.5" />, label: t('devices.batch.delete'), onClick: () => handleBatchAction('delete') },
  ];
  const batchContent = (
@@ -1440,32 +1433,6 @@ export function DeviceTable({
  }}
  />
  )}
-
- {transferOpen && (
- <BulkTransferTenantModal
- count={selectedIds.size}
- onCancel={() => setTransferOpen(false)}
- onConfirm={async (targetTenantId, targetApiKeyId) => {
- setTransferOpen(false);
- setIsBatchRunning(true);
- try {
- const ids = Array.from(selectedIds);
- const r = await deviceApi.bulkTransfer(ids, targetTenantId, targetApiKeyId);
- if (r.transferred > 0) toast.success(t('devices.transfer.bulkDone', 'Transferred {{n}} device(s)', { n: r.transferred }));
- if (r.failed > 0) toast.error(t('devices.transfer.bulkFailed', '{{n}} transfer(s) failed — see audit log', { n: r.failed }));
- setSelectedIds(new Set());
- setSelectAllGroup(false);
- await load(true);
- } catch (err: any) {
- if (err?.response?.status !== 202) {
- toast.error(err?.response?.data?.error || t('common.error'));
- }
- } finally {
- setIsBatchRunning(false);
- }
- }}
- />
- )}
  </div>
  );
 }
@@ -1584,107 +1551,6 @@ function ChangeGroupModal({
  {t('devices.batch.changeGroupHint', 'Pick a target group, or leave blank to move to "Ungrouped".')}
  </p>
  <GroupTreePicker value={groupId} onChange={(id) => setGroupId(id)} />
- </Modal>
- );
-}
-
-// ── Bulk transfer-tenant modal ────────────────────────────────────────────
-function BulkTransferTenantModal({
- count, onCancel, onConfirm,
-}: {
- count: number;
- onCancel: () => void;
- onConfirm: (targetTenantId: number, targetApiKeyId: number) => void;
-}) {
- const { t } = useTranslation();
- const [candidates, setCandidates] = useState<Array<{ tenantId: number; tenantName: string; tenantSlug: string; apiKeys: Array<{ id: number; label: string; defaultGroupId: number | null }> }>>([]);
- const [loading, setLoading] = useState(true);
- const [tenantId, setTenantId] = useState<number | null>(null);
- const [keyId, setKeyId] = useState<number | null>(null);
-
- useEffect(() => {
- deviceApi.listTransferCandidatesForBatch()
- .then((rows) => {
- setCandidates(rows);
- if (rows.length === 1) {
- setTenantId(rows[0].tenantId);
- if (rows[0].apiKeys.length > 0) setKeyId(rows[0].apiKeys[0].id);
- }
- })
- .catch(() => toast.error(t('devices.transfer.loadFailed', 'Failed to load target tenants')))
- .finally(() => setLoading(false));
- }, [t]);
-
- const selectedTenant = candidates.find((c) => c.tenantId === tenantId);
-
- return (
- <Modal
- open
- onClose={onCancel}
- size="md"
- icon={<ArrowRightLeft className="w-4 h-4 text-accent" />}
- title={t('devices.transfer.bulkTitle', 'Transfer {{n}} device(s) to another tenant', { n: count })}
- bodyClassName="px-4 py-4 space-y-4"
- footer={
- <>
- <button onClick={onCancel} className="px-3 py-1.5 text-xs rounded text-text-muted hover:text-text-primary coarse:min-h-10">
- {t('common.cancel', 'Cancel')}
- </button>
- <button
- disabled={!tenantId || !keyId}
- onClick={() => { if (tenantId && keyId) onConfirm(tenantId, keyId); }}
- className="px-3 py-1.5 text-xs bg-accent text-white rounded hover:bg-accent/90 disabled:opacity-50 coarse:min-h-10"
- >
- {t('devices.transfer.submit', 'Transfer')}
- </button>
- </>
- }
- >
- <div className="flex items-start gap-2 p-2.5 rounded bg-orange-400/10 text-[11px] text-orange-400/90">
- {t('devices.transfer.bulkWarning', "Group assignment, custom metrics and compliance results in the current tenant will be cleared for every selected device. Each agent is reconfigured with the target tenant's API key on its next check-in.")}
- </div>
- {loading ? (
- <div className="py-8 flex justify-center text-text-muted"><Loader2 className="w-5 h-5 animate-spin" /></div>
- ) : candidates.length === 0 ? (
- <p className="text-sm text-text-muted italic">{t('devices.transfer.noCandidatesShort', 'You are not admin in any other tenant.')}</p>
- ) : (
- <>
- <div>
- <label className="block text-[10px] uppercase font-semibold text-text-muted mb-1.5">{t('devices.transfer.targetTenant', 'Target tenant')}</label>
- <select
- value={tenantId ?? ''}
- onChange={(e) => {
- const id = e.target.value ? parseInt(e.target.value) : null;
- setTenantId(id);
- const tc = candidates.find((c) => c.tenantId === id);
- setKeyId(tc && tc.apiKeys.length > 0 ? tc.apiKeys[0].id : null);
- }}
- className="w-full px-3 py-2 text-sm bg-bg-tertiary rounded text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
- >
- <option value="">{t('devices.transfer.selectShort', '— Select —')}</option>
- {candidates.map((c) => (
- <option key={c.tenantId} value={c.tenantId}>
- {c.tenantName} ({c.tenantSlug}){c.apiKeys.length === 0 ? ` — ${t('devices.transfer.noApiKeys', 'no API keys')}` : ''}
- </option>
- ))}
- </select>
- </div>
- {selectedTenant && selectedTenant.apiKeys.length > 0 && (
- <div>
- <label className="block text-[10px] uppercase font-semibold text-text-muted mb-1.5">{t('devices.transfer.targetKey', 'Target API key')}</label>
- <select
- value={keyId ?? ''}
- onChange={(e) => setKeyId(e.target.value ? parseInt(e.target.value) : null)}
- className="w-full px-3 py-2 text-sm bg-bg-tertiary rounded text-text-primary focus:outline-none focus:ring-2 focus:ring-accent/50"
- >
- {selectedTenant.apiKeys.map((k) => (
- <option key={k.id} value={k.id}>{k.label || t('devices.transfer.keyFallback', 'Key #{{id}}', { id: k.id })}</option>
- ))}
- </select>
- </div>
- )}
- </>
- )}
  </Modal>
  );
 }
