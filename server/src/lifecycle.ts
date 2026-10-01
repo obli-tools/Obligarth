@@ -2,27 +2,35 @@ import type { IncomingMessage, Server as HttpServer } from 'http';
 import type { Duplex } from 'stream';
 import type { Server as SocketIOServer } from 'socket.io';
 import { asNone } from './db/context';
+import { logger } from './utils/logger';
+import { safeErr } from './jobs/errors';
 
 // ── Module lifecycle ────────────────────────────────────────────────────────
 //
-// index.ts wires the core start-up (migrations, default admin, HTTP server,
-// Socket.io, the core's own periodic jobs). A module adds its background work
-// here instead of in index.ts, so removing the module removes its
-// registration, never a line of index.ts (modules/devices.ts registers the
-// device registry's):
-//   boot  — awaited one after the other, after the migrations and the default
-//           admin, before the HTTP app is created (no request can arrive);
+// index.ts wires the core start-up (boot guard, default admin, durable jobs,
+// HTTP server, Socket.io). A module adds its start-up work here instead of in
+// index.ts, so removing the module removes its registration, never a line of
+// index.ts:
+//   boot  — awaited one after the other, after the default admin and the
+//           start of the durable jobs (a boot task may send a job), before
+//           the HTTP app is created (no request can arrive);
 //   start — one after the other once the HTTP and Socket.io servers exist,
-//           before the port is opened; a task that returns a promise is
-//           awaited (a task that must not hold the start-up returns nothing);
-//   stop  — one after the other at SIGTERM / SIGINT, before the HTTP server
-//           closes.
-// An error of a task is not caught here: each task handles its own, as the
-// inline code of index.ts did.
+//           before the job workers and the port; a task that returns a
+//           promise is awaited (a task that must not hold the start-up
+//           returns nothing);
+//   stop  — one after the other at SIGTERM / SIGINT, after the HTTP server
+//           and the jobs stopped; each awaited, an error logged and never
+//           propagated.
+// An error of a boot or start task is not caught here: each task handles its
+// own.
+//
+// Periodic and deferred work never goes through a task of this file (nor
+// through a timer): a module registers durable jobs (jobs/, registerJob),
+// which survive a restart, run once across instances, and are retried and
+// watched. A task here never creates a timer.
 //
 // Boot and start tasks run in the database context 'none' of their own job
-// actor (j:<task name>): a periodic job they start opens its own context at
-// every run (db/tenantContext.ts runJob, forEachTenant; rls-tenant §7.6).
+// actor (j:<task name>).
 //
 // Raw WebSocket upgrades that are not Socket.io's (a device channel, a relay;
 // none today) are served by the modules' upgrade handlers
@@ -36,7 +44,7 @@ export interface StartContext {
 // A task's result is awaited (a promise holds the start-up until it settles).
 type BootTask = () => unknown;
 type StartTask = (ctx: StartContext) => unknown;
-type StopTask = () => void;
+type StopTask = () => void | Promise<void>;
 
 const bootTasks: Array<{ name: string; run: BootTask }> = [];
 const startTasks: Array<{ name: string; run: StartTask }> = [];
@@ -69,8 +77,16 @@ export async function runStartTasks(ctx: StartContext): Promise<void> {
   for (const t of startTasks) await asNone({ type: 'job', name: t.name }, () => t.run(ctx));
 }
 
-export function runStopTasks(): void {
-  for (const t of stopTasks) t.run();
+/** Each stop task in turn, awaited; an error is logged, never propagated
+ *  (the shutdown carries on). */
+export async function runStopTasks(): Promise<void> {
+  for (const t of stopTasks) {
+    try {
+      await t.run();
+    } catch (err) {
+      logger.warn({ err: safeErr(err), task: t.name }, 'stop task failed');
+    }
+  }
 }
 
 // ── Raw WebSocket upgrades ──────────────────────────────────────────────────

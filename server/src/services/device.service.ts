@@ -921,7 +921,7 @@ class DeviceService {
   }
 
   // ─── Hourly snapshot job ─────────────────────────────────────────────────
-  // Called once per hour by a start task of modules/devices.ts, tenant by
+  // Run every hour (and at start) by the job devices.fleet-hourly, tenant by
   // tenant (in the tenant's database context). Writes the tenant's row in
   // fleet_hourly_snapshot, used by the dashboard "Activité du parc" 24h
   // view. Retention is 7 days — older rows of the tenant are pruned in the
@@ -1007,7 +1007,7 @@ class DeviceService {
   }
 
   // ─── Daily snapshot job ──────────────────────────────────────────────────
-  // Called once a day by a start task of modules/devices.ts, tenant by
+  // Run every day (and at start) by the job devices.fleet-daily, tenant by
   // tenant (in the tenant's database context). Writes the tenant's row in
   // fleet_daily_snapshot, used by the dashboard for week-over-week deltas
   // and for the "Activité du parc" timeseries chart.

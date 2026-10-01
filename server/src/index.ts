@@ -4,29 +4,38 @@ import { config, isWeakAdminPassword, startupConfigErrors } from './config';
 import { db } from './db';
 import { asIdentity, configureContextSigning, loadContextKeyFile } from './db/context';
 import { bootGuard, BootGuardError } from './db/bootGuard';
-import { forEachTenant, runJob } from './db/tenantContext';
-import { purgePlatformGrants } from './db/platformAccess';
 import { createApp } from './app';
 import { createSocketServer } from './socket';
 import { logger } from './utils/logger';
 import { generatePassword, hashPassword } from './utils/crypto';
 import { deviceService } from './services/device.service';
 import { setLiveAlertIO } from './services/liveAlert.service';
-import { obligateService } from './services/obligate.service';
 import {
   installUpgradeDispatcher,
   runBootTasks,
   runStartTasks,
   runStopTasks,
 } from './lifecycle';
+import { jobs, JobsStartError, safeErr } from './jobs';
+import { registerCoreJobs } from './jobs/core.jobs';
 import { registerDeviceModule } from './modules/devices';
+import { registerReportsModule } from './modules/reports';
+import { registerSsoSyncJobs } from './routes/obligateCallback.routes';
 
-// Start-up order (docs: specs README §4, rls-tenant §7.9): configuration,
-// registries, (development only) migrations, database boot guard, initial
-// administrator, boot tasks, HTTP and Socket.io, start tasks, listen. The
-// server never migrates in production: the server-migrate service does
-// (src/db/migrate.ts), and the boot guard refuses a schema it did not bring
-// up to date.
+// Start-up order (docs: specs README §4, rls-tenant §7.9, file-durable §3.3):
+// configuration, registries (no I/O), (development only) migrations,
+// database boot guard, initial administrator, durable jobs (pg-boss: queues
+// and schedules), boot tasks, HTTP and Socket.io, start tasks, job workers,
+// listen. The server never migrates in production: the server-migrate
+// service does (src/db/migrate.ts), and the boot guard refuses a schema it
+// did not bring up to date. No timer of this process does periodic work:
+// the modules' durable jobs do (jobs/).
+
+/** Exit budget of a shutdown: forced exit past it (the compose gives the
+ *  server 30 s, stop_grace_period). */
+const SHUTDOWN_DEADLINE_MS = 25_000;
+/** Longest wait for the HTTP server to close (open keep-alive connections). */
+const HTTP_CLOSE_WAIT_MS = 5_000;
 
 /** Development only (MIGRATE_ON_BOOT): the runtime role's password the
  *  migration sets — DB_APP_PASSWORD(_FILE), else the one of DATABASE_URL. */
@@ -64,10 +73,13 @@ async function main() {
   // given; checked against the database by the boot guard.
   configureContextSigning(contextKey);
 
-  // Modules hook into the core's registries (lifecycle tasks, upgrades,
-  // Socket.io handlers, approvals, restrictions, settings…) before anything
-  // starts.
+  // Modules hook into the core's registries (durable jobs, lifecycle tasks,
+  // upgrades, Socket.io handlers, approvals, restrictions, settings…) before
+  // anything starts. No I/O: the job registry is frozen by jobs.start().
   registerDeviceModule();
+  registerReportsModule();
+  registerCoreJobs();
+  registerSsoSyncJobs();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.
@@ -94,7 +106,22 @@ async function main() {
   // identity context).
   await asIdentity({ type: 'job', name: 'boot.default-admin' }, () => ensureDefaultAdmin());
 
-  // Modules' boot tasks: awaited, before any request can reach the API.
+  // Durable jobs (file-durable §5.9): pg-boss installs or migrates its schema
+  // (pgboss, owned by the runtime role), queues and schedules follow the
+  // registry, the jobs "at start" are sent (JOBS_MODE=all). A failure stops
+  // the server: no periodic work would run.
+  try {
+    await jobs.start();
+  } catch (err) {
+    if (err instanceof JobsStartError) logger.fatal(err.message);
+    else logger.fatal({ err: safeErr(err) }, 'background jobs could not start');
+    logger.fatal('Background jobs not started: refusing to start.');
+    await db.destroy().catch(() => undefined);
+    process.exit(1);
+  }
+
+  // Modules' boot tasks: awaited, before any request can reach the API (a
+  // boot task may send a job).
   await runBootTasks();
 
   // Create Express app and HTTP server
@@ -111,91 +138,38 @@ async function main() {
   deviceService.setIO(io);
   setLiveAlertIO(io);
 
-  // Modules' background jobs (lifecycle.ts): in registration order.
+  // Modules' start tasks (lifecycle.ts): in registration order.
   await runStartTasks({ server, io });
 
-  // Device-bound 2FA periodic tasks (docs/mobile/device-bound-2fa.md §6.9):
-  //  - hourly: delete challenges expired for more than 7 days;
-  //  - daily, ONLY while the feature is on (runDailyTasks): revoke ('stale')
-  //    keys unused for 180 days [D14] (time spent with the feature off does
-  //    not count), refresh the Google attestation revocation list (no effect
-  //    when unreachable) and revoke the keys whose chain it now marks
-  //    revoked ('attestation_revoked', [D4]). Off: no sweep, no call to Google.
-  // First run 2 min after start (never in the boot path). Accounts and phone
-  // keys: the identity context (rls-tenant §6.5).
-  {
-    const dk = () => import('./services/deviceKey/deviceKey.service');
-    const hourly = () => runJob('deviceKeys.sweepChallenges', (actor) => asIdentity(actor, async () => {
-      const { deviceKeyService } = await dk();
-      await deviceKeyService.sweepChallenges();
-    }));
-    const daily = () => runJob('deviceKeys.daily', (actor) => asIdentity(actor, async () => {
-      const { deviceKeyService } = await dk();
-      await deviceKeyService.runDailyTasks();
-    }));
-    setTimeout(() => { void hourly(); void daily(); }, 2 * 60 * 1000);
-    setInterval(() => { void hourly(); }, 60 * 60 * 1000);
-    setInterval(() => { void daily(); }, 24 * 60 * 60 * 1000);
-  }
-
-  // Self-healing: reports left stuck in 'generating' by a mid-generation
-  // restart never resolve on their own (generation is fire-and-forget). Mark
-  // orphaned rows (>15 min) as errored — once at startup so pre-existing
-  // zombies clear on deploy, then every 15 min for runtime crashes. Tenant
-  // by tenant.
-  {
-    const { reportService } = require('./services/report.service');
-    const sweep = () => runJob('reports.sweepStale', async (actor) => {
-      await forEachTenant(actor, (tenantId) => reportService.sweepStaleGenerating(15, tenantId));
-    });
-    void sweep();
-    setInterval(() => { void sweep(); }, 15 * 60 * 1000);
-  }
-
-  // Two-step approvals: pending requests past their 30-min expiry become
-  // 'expired' (audited 'approval.expired', APPROVAL_UPDATED pushed, sealed
-  // executor data wiped) — once at startup, then every minute.
-  {
-    const { approvalService } = require('./services/approval.service');
-    approvalService.startSweeper();
-  }
-
-  // Journal of the cross-tenant read grants: daily purge
-  // (PLATFORM_GRANT_RETENTION_DAYS, rls-tenant §6.2).
-  {
-    const purge = () => runJob('platform.grantsPurge', async () => {
-      const n = await purgePlatformGrants();
-      if (n > 0) logger.info({ count: n }, 'platform grants journal purged');
-    });
-    setTimeout(() => { void purge(); }, 5 * 60 * 1000).unref();
-    setInterval(() => { void purge(); }, 24 * 60 * 60 * 1000).unref();
-  }
+  // Job workers (JOBS_MODE=all), after Socket.io: handlers emit real-time
+  // events (approvals expired, fleet snapshots…).
+  await jobs.startWorkers();
 
   server.listen(config.port, () => {
-    logger.info({ port: config.port, env: config.nodeEnv }, `Obligarth MDM started`);
-
-    // Sync preference schemas with Obligate (non-blocking)
-    void runJob('obligate.syncPreferenceSchemas', () => obligateService.syncPreferenceSchemas());
-    // Capability schemas USED to be pushed to Obligate so admins could
-    // tick per-user capability boxes from there. Dropped: capabilities
-    // live entirely in Obligarth now (role = what / team = where), and
-    // pushing them to Obligate created confusing user-level toggles
-    // that didn't map to anything on the Obligarth side. Obligate-side
-    // cleanup is handled separately.
+    logger.info({ port: config.port, env: config.nodeEnv, jobsMode: jobs.mode() }, 'Obligarth MDM started');
   });
 
-  // Graceful shutdown
-  const shutdown = async () => {
-    logger.info('Shutting down...');
-    runStopTasks();
-    server.close(() => {
-      db.destroy();
-      process.exit(0);
-    });
-    setTimeout(() => process.exit(1), 10_000);
+  // Shutdown (SIGTERM, SIGINT; once): forced exit past 25 s; no new HTTP
+  // connection (5 s at most for the open ones); the jobs stop gracefully
+  // (running handlers finish, or their jobs are failed and retried later);
+  // the modules' stop tasks; the database pool.
+  let stopping = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (stopping) return;
+    stopping = true;
+    logger.info({ signal }, 'Shutting down...');
+    setTimeout(() => process.exit(1), SHUTDOWN_DEADLINE_MS).unref();
+    await Promise.race([
+      new Promise<void>((resolve) => server.close(() => resolve())),
+      new Promise<void>((resolve) => setTimeout(resolve, HTTP_CLOSE_WAIT_MS).unref()),
+    ]);
+    await jobs.stop().catch((err) => logger.error({ err: safeErr(err) }, 'jobs stop failed'));
+    await runStopTasks();
+    await db.destroy().catch(() => undefined);
+    process.exit(0);
   };
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
 }
 
 /**

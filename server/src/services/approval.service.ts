@@ -6,13 +6,13 @@ import { userLabels } from './userLabels.service';
 import { isMasterTenant } from '@obligarth/shared';
 import type { TenantCapability } from '@obligarth/shared';
 import { asPlatform, asTenant, currentDbContext, switchToTenant, userActor } from '../db/context';
-import { forEachTenant, runJob } from '../db/tenantContext';
 import { openPlatformGrant } from '../db/platformAccess';
 
 // Database contexts (rls-tenant §8.2): a request is filed, read and resolved
 // in the database context of its tenant; an approved request is executed AS
 // THE REQUESTER (actor u:<requester>) in that tenant's context; the expiry
-// sweeper is a job that works tenant by tenant.
+// sweep is a durable job (core.approvals.expire, jobs/core.jobs.ts) that
+// works tenant by tenant.
 
 /** Runs fn in the context 'tenant' of `tenantId`, keeping the current actor
  *  (an approval filed in the tenant that imposes the level). */
@@ -40,9 +40,10 @@ async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise
 //
 // Safety:
 //   - Requester cannot approve (nor deny) their own request.
-//   - Requests expire after EXPIRY_MINUTES (default 30); the sweeper
-//     (startSweeper, started by index.ts) marks them 'expired', audits and
-//     pushes APPROVAL_UPDATED.
+//   - Requests expire after EXPIRY_MINUTES (default 30); the job
+//     core.approvals.expire (every minute) marks them 'expired', audits and
+//     pushes APPROVAL_UPDATED; an access past the deadline expires the
+//     request on the spot (_openRow) between two runs.
 //   - Executions are idempotent: the request is claimed pending → approved
 //     by one conditional UPDATE, so two approvers (or a double click) execute
 //     it once; once resolved, a second approval attempt is rejected (409).
@@ -58,7 +59,6 @@ async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise
 //     resolved (executed, failed, denied, cancelled, expired).
 
 const EXPIRY_MINUTES = 30;
-const SWEEP_INTERVAL_MS = 60_000;
 
 export type ApprovalRequestType = 'batch_command' | 'device_uninstall';
 
@@ -451,37 +451,24 @@ export const approvalService = {
     throw Object.assign(new Error('Already handled'), { status: 409 });
   },
 
-  /** Expire stale pending approvals — the sweeper (startSweeper). Each one:
-   *  'expired', sealed part wiped, audited ('approval.expired'),
-   *  APPROVAL_UPDATED pushed. Returns how many expired. */
-  async sweepExpired(tenantId: number): Promise<number> {
+  /** Expire stale pending approvals of a tenant — the job
+   *  core.approvals.expire, in the tenant's database context. Each one:
+   *  'expired', sealed part wiped, audited ('approval.expired', with the
+   *  job's `auditDetails`: actor job:<queue>, job id), APPROVAL_UPDATED
+   *  pushed. Returns how many expired. */
+  async sweepExpired(tenantId: number, auditDetails: Record<string, unknown> = {}): Promise<number> {
     const ids = await db('pending_approvals')
       .where({ tenant_id: tenantId })
       .andWhere('status', 'pending')
       .andWhere('expires_at', '<=', new Date(Date.now()))
       .pluck('id') as number[];
     if (!ids.length) return 0;
-    const n = await this._expire(ids);
+    const n = await this._expire(ids, auditDetails);
     if (n > 0) logger.info({ tenantId, count: n }, 'expired pending approvals');
     return n;
   },
 
-  /** Starts the periodic expiry sweep (index.ts): a job, tenant by tenant
-   *  in each tenant's database context. Returns the timer. */
-  startSweeper(intervalMs = SWEEP_INTERVAL_MS): NodeJS.Timeout {
-    const run = () => {
-      void runJob('approvals.expire', async (actor) => {
-        const { failed } = await forEachTenant(actor, async (tenantId) => { await this.sweepExpired(tenantId); });
-        if (failed > 0) logger.warn({ failed }, 'approval expiry sweep failed for some tenants');
-      });
-    };
-    run();
-    const timer = setInterval(run, intervalMs);
-    timer.unref?.();
-    return timer;
-  },
-
-  async _expire(ids: number[]): Promise<number> {
+  async _expire(ids: number[], auditDetails: Record<string, unknown> = {}): Promise<number> {
     if (!ids.length) return 0;
     const rows = await db('pending_approvals')
       .whereIn('id', ids)
@@ -494,7 +481,7 @@ export const approvalService = {
         action: 'approval.expired',
         resourceType: 'approval',
         resourcePath: String(row.id),
-        details: { requestType: row.request_type, description: row.description, requestedBy: row.requested_by },
+        details: { requestType: row.request_type, description: row.description, requestedBy: row.requested_by, ...auditDetails },
       }).catch(() => {});
       emitUpdated(row);
     }

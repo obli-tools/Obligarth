@@ -2,7 +2,9 @@ import { regenerateSession } from '../utils/session';
 import { Router } from 'express';
 import type { Request } from 'express';
 import crypto from 'crypto';
+import { z } from 'zod';
 import { db } from '../db';
+import { registerJob, safeErr, type JobHandle, type JobResult } from '../jobs';
 import { asIdentity, asPlatform, switchToTenant, type DbActor } from '../db/context';
 import { globalViewGrant } from '../db/platformAccess';
 import { asIntegrationPlatform } from '../middleware/dbContext';
@@ -1185,36 +1187,93 @@ async function applyCredentialsChanged(obligateId: number, localId: number, audi
  * retries itself on a 5xx. Exported for the verification harness only.
  */
 export const SYNC_RECHECK_DELAYS_MS: number[] = [15_000, 60_000, 180_000];
-const pendingSyncRechecks = new Set<string>();
 
-/** Keyed on the account OUR records resolved (`localId`), never on the pushed pointer. */
-function scheduleSyncRecheck(obligateId: number, localId: number, action: SyncAction, audit: SyncAudit): void {
-  const key = `${localId}:${action}`;
-  if (pendingSyncRechecks.has(key)) return;
-  pendingSyncRechecks.add(key);
-  const attempt = (i: number): void => {
-    if (i >= SYNC_RECHECK_DELAYS_MS.length) {
-      pendingSyncRechecks.delete(key);
-      logger.warn({ obligateUserId: obligateId, localUserId: localId, action },
-        'SSO sync: change not confirmed by Obligate in time — not applied');
-      void audit('recheck_expired');
-      return;
-    }
-    setTimeout(async () => {
+/**
+ * A re-check, as a durable job (core.sso.sync-recheck): what the audit of
+ * the push needs, serialisable — never the closure. The client address is
+ * the only personal data of a job payload (kept one day).
+ */
+const RecheckPayload = z.object({
+  obligateId: z.number().int().positive(),
+  localId: z.number().int().positive(),
+  action: z.enum(SYNC_ACTIONS),
+  pushedPointer: z.number().int().positive().nullable(),
+  ip: z.string().max(64).nullable(),
+  extra: z.object({
+    role: z.string().max(64).optional(),
+    pointerMismatch: z.boolean().optional(),
+    linkedLocalUserId: z.number().int().positive().nullable().optional(),
+  }).strict(),
+  step: z.number().int().min(0).max(2),
+}).strict();
+type RecheckPayload = z.infer<typeof RecheckPayload>;
+
+let recheckJob: JobHandle<RecheckPayload> | null = null;
+
+/**
+ * The chain of re-checks (+15 s, +75 s, +255 s, then 'recheck_expired'):
+ * one job per step, the next one sent by the handler. Policy 'stately' on
+ * the key `<account>:<action>`: a push of the same account and action while
+ * a re-check is queued is the same chain (the Set in memory it replaces was
+ * lost at each restart: now the chain survives one). Registered by index.ts
+ * before the start.
+ */
+export function registerSsoSyncJobs(): void {
+  if (recheckJob) return;
+  recheckJob = registerJob({
+    name: 'core.sso.sync-recheck',
+    scope: 'platform',
+    description: 'Re-check an Obligate user-sync push against the roster (15 s, 60 s, 180 s)',
+    payload: RecheckPayload,
+    policy: 'stately',
+    // The chain is the retry.
+    retry: { limit: 0 },
+    timeoutSeconds: 60,
+    // The client address in the payload: one day at most.
+    keepFinishedSeconds: 86_400,
+    keepPendingSeconds: 86_400,
+    deadLetter: false,
+    handler: async (ctx): Promise<JobResult> => {
+      const p = ctx.payload;
+      const audit = syncAuditFor(p.obligateId, p.pushedPointer, p.localId, p.action, p.ip ?? undefined,
+        { ...p.extra, actor: ctx.actor, jobId: ctx.jobId });
       let outcome: SyncResult = { retry: 'roster_unavailable' };
       try {
         const rr = await obligateService.rosterForPush();
-        if (rr.kind === 'ok') {
-          outcome = await asIdentity(OBLIGATE_ACTOR, () => applyConfirmedSync(obligateId, localId, action, rr.roster, audit));
-        }
+        // Accounts and links: the identity context, as the job.
+        if (rr.kind === 'ok') outcome = await asIdentity(ctx.dbActor, () => applyConfirmedSync(p.obligateId, p.localId, p.action, rr.roster, audit));
       } catch (err) {
-        logger.error(err, 'SSO sync: re-check failed');
+        ctx.log.error({ err: safeErr(err) }, 'SSO sync: re-check failed');
       }
-      if (outcome === 'done') pendingSyncRechecks.delete(key);
-      else attempt(i + 1);
-    }, SYNC_RECHECK_DELAYS_MS[i]).unref();
+      if (outcome === 'done') return { output: { outcome: 'done' } };
+      const next = p.step + 1;
+      if (next < SYNC_RECHECK_DELAYS_MS.length) {
+        const id = await recheckJob!.send({ ...p, step: next },
+          { singletonKey: `${p.localId}:${p.action}`, startAfter: SYNC_RECHECK_DELAYS_MS[next] / 1000 });
+        // null: a newer push of the same account and action is already queued; it carries on.
+        return { output: { outcome: id ? 'rescheduled' : 'superseded', step: next } };
+      }
+      ctx.log.warn({ obligateUserId: p.obligateId, localUserId: p.localId, action: p.action },
+        'SSO sync: change not confirmed by Obligate in time — not applied');
+      await audit('recheck_expired');
+      return { output: { outcome: 'recheck_expired' } };
+    },
+  });
+}
+
+/** Keyed on the account OUR records resolved (`localId`), never on the pushed pointer. */
+async function scheduleSyncRecheck(p: Omit<RecheckPayload, 'step'>): Promise<void> {
+  if (!recheckJob) throw new Error('SSO sync re-checks not registered (registerSsoSyncJobs)');
+  await recheckJob.send({ ...p, step: 0 },
+    { singletonKey: `${p.localId}:${p.action}`, startAfter: SYNC_RECHECK_DELAYS_MS[0] / 1000 });
+}
+
+/** The re-check payload's copy of the push's audit extras (role cut to 64). */
+function recheckExtra(role: string | undefined, pointerMismatch: boolean, linkedId: number | null): RecheckPayload['extra'] {
+  return {
+    ...(role !== undefined ? { role: role.slice(0, 64) } : {}),
+    ...(pointerMismatch ? { pointerMismatch: true, linkedLocalUserId: linkedId } : {}),
   };
-  attempt(0);
 }
 
 // Bursts of sync pushes are unusual for a real Obligate (an admin changes one
@@ -1364,9 +1423,14 @@ async function ssoUserSync(req: Request, res: import('express').Response): Promi
     }
 
     // The push itself proves nothing: confirm it with Obligate's roster.
+    // Not confirmed (or not readable) now: a durable re-check (+15 s, +75 s,
+    // +255 s) carries the audit's elements, the same as this push's.
+    const recheck = () => scheduleSyncRecheck({
+      obligateId, localId, action, pushedPointer, ip: ip ?? null, extra: recheckExtra(role, pointerMismatch, linkedId),
+    });
     const rr = await obligateService.rosterForPush();
     if (rr.kind !== 'ok') {
-      scheduleSyncRecheck(obligateId, localId, action, audit);
+      await recheck();
       logger.warn({ obligateUserId: obligateId, localUserId: localId, action, reason: rr.kind },
         'SSO sync: Obligate roster not read — change re-checked later');
       await audit('recheck_scheduled', { reason: rr.kind === 'throttled' ? 'throttled' : 'roster_unavailable', username: user.username });
@@ -1375,7 +1439,7 @@ async function ssoUserSync(req: Request, res: import('express').Response): Promi
     }
     const r = await applyConfirmedSync(obligateId, localId, action, rr.roster, audit);
     if (r !== 'done') {
-      scheduleSyncRecheck(obligateId, localId, action, audit);
+      await recheck();
       await audit('recheck_scheduled', { reason: r.retry, username: user.username });
     }
 

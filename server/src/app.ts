@@ -23,6 +23,7 @@ import { sessionUserGuard } from './middleware/sessionUserGuard';
 import { deviceKeySession } from './middleware/deviceKeySession';
 import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
+import { jobs } from './jobs';
 import { logger } from './utils/logger';
 
 const PgSession = connectPgSimple(session);
@@ -183,6 +184,11 @@ export function createApp() {
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok', app: 'obligarth', version: serverVersion, timestamp: new Date().toISOString() });
   });
+
+  // Heartbeat of the scheduler (public, no detail; jobs/health.ts): 200 while
+  // the durable jobs run, 503 when the scheduler or the workers stopped, or
+  // in JOBS_MODE=paused. Watched from outside the instance (Obliview).
+  app.get('/health/jobs', jobs.healthHandler());
 
   // Serve static client build in production. The server image ships no
   // client build (nginx of the client image serves it): an unknown path then

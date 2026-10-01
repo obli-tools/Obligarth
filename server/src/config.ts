@@ -1,4 +1,9 @@
 import './env';
+import { readJobsConfig } from './jobs/config';
+
+// Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
+// at start when invalid (startupConfigErrors), in every environment.
+const jobsEnv = readJobsConfig(process.env);
 
 function publicUrlFromEnv(): string {
   const appUrl = (process.env.APP_URL || '').trim();
@@ -78,6 +83,9 @@ export const config = {
   // Own session cookie name (Oblimap model): Obli* apps sharing a host name
   // would otherwise overwrite each other's connect.sid (cookies ignore ports).
   sessionCookieName: process.env.SESSION_COOKIE_NAME || 'obligarth.sid',
+  /** Background jobs (pg-boss, schema pgboss): mode, pool, stop budget,
+   *  health threshold. See jobs/config.ts. */
+  jobs: jobsEnv.config,
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
   appName: process.env.APP_NAME || 'Obligarth',
@@ -174,6 +182,8 @@ export function startupConfigErrors(): string[] {
   if (!Number.isInteger(keep) || keep < 30) {
     errors.push('PLATFORM_GRANT_RETENTION_DAYS must be an integer of at least 30 (365 by default).');
   }
+  // Background jobs: refused in every environment as well.
+  errors.push(...jobsEnv.errors);
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
     errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
       'outside development, the migrations run in the server-migrate service.');

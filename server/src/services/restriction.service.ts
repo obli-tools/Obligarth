@@ -68,6 +68,10 @@ const CORE_RESTRICTABLE_ACTIONS: readonly RestrictableAction[] = [
   { key: 'tenant.manage_settings',       label: 'Edit tenant settings',       category: 'Tenant config' },
   { key: 'tenant.manage_profile',        label: 'Edit own profile (local users)', category: 'Tenant config' },
   { key: 'audit.clear',                  label: 'Clear the audit log',        category: 'Tenant config' },
+  // Background jobs administration (/api/admin/jobs: manual run, cancel,
+  // redrive, discard of a dead letter), master tenant only. No default
+  // level, like the configuration actions above.
+  { key: 'jobs.manage',                  label: 'Run, cancel or redrive background jobs (master tenant)', category: 'Platform' },
 ];
 
 /**

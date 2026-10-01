@@ -726,9 +726,11 @@ export const maintenanceService = {
     }
   },
 
-  // Never started today (no caller). Before starting them: one database
-  // context per run and per tenant (db/tenantContext.ts runJob and
-  // forEachTenant, or the durable queue of FND-04), as the other jobs.
+  // Never started today (no caller). Kept only while the maintenance windows
+  // are not decided (lot D): if they stay, these become durable jobs
+  // (registerJob, names maintenance.cleanup-one-time and
+  // maintenance.transitions), working tenant by tenant (forEachTenant),
+  // and the timers below go.
   startJobs(): void {
     cleanupTimer = setInterval(() => {
       this.cleanupExpiredOneTime().catch((err) =>

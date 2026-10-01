@@ -30,6 +30,7 @@
     "nodemailer": "^8.0.1",
     "otpauth": "^9.5.0",
     "pg": "^8.12.0",
+    "pg-boss": "12.35.1",
     "pino": "^8.19.0",
     "pino-pretty": "^11.0.0",
     "playwright-chromium": "^1.58.2",

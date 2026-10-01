@@ -1,11 +1,21 @@
 import { db } from '../db';
 import path from 'path';
 import fs from 'fs/promises';
+import { z } from 'zod';
 import type { Report, ReportOutput, ReportSection } from '@obligarth/shared';
 import { config } from '../config';
+import { forEachTenant } from '../db/tenantContext';
+import { JobError, registerJob, sanitizeError, type JobContext, type JobHandle, type JobResult } from '../jobs';
 import { logger } from '../utils/logger';
 import { renderReportHtml } from './reportRenderer';
 import { launchChromium } from '../utils/chromium';
+
+/** A ready output is kept 7 days, an output in error 30 days. */
+const OUTPUT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const ERROR_OUTPUT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+/** Cutoff of the sweep of outputs stuck in 'generating' (minutes). */
+const STALE_GENERATING_MINUTES = 60;
+const PURGE_BATCH = 500;
 
 class ReportService {
   // Persist under the mounted CUSTOM_DIR volume (/custom), NOT process.cwd()
@@ -75,58 +85,102 @@ class ReportService {
     return this.rowToReport(row);
   }
 
+  /**
+   * Files a generation: the output row ('generating') and its durable job
+   * (reports.generate) in ONE transaction — the job exists if and only if
+   * the row does, and survives a restart. In the request's tenant context.
+   */
   async generateReport(reportId: number, tenantId: number): Promise<ReportOutput> {
-    const report = await db('reports').where({ id: reportId, tenant_id: tenantId }).first();
+    const report = await db('reports').where({ id: reportId, tenant_id: tenantId }).first('id');
     if (!report) throw new Error('Report not found');
+    const job = reportJobs.generate;
+    if (!job) throw new JobError('jobs_not_registered', 'report jobs not registered (registerReportsModule)', false);
 
-    // Create output record
-    const [output] = await db('report_outputs').insert({
-      report_id: reportId, tenant_id: tenantId, status: 'generating',
-    }).returning('*');
-
-    // Generate async
-    this.generateAsync(report, output.id).catch(() => {});
-
+    const output = await db.transaction(async (trx) => {
+      const [row] = await trx('report_outputs').insert({
+        report_id: reportId, tenant_id: tenantId, status: 'generating',
+      }).returning('*');
+      await job.sendInTx(trx, { tenantId, reportId, outputId: Number(row.id) },
+        { singletonKey: `output:${row.id}`, tenantId, priority: 10 });
+      return row;
+    });
     return this.rowToOutput(output);
   }
 
-  private async generateAsync(report: any, outputId: number) {
+  /**
+   * The job reports.generate: reloads the output and the report by (id,
+   * tenant) — skipped when gone or no longer 'generating' (cancelled) —,
+   * produces the file (no transaction held: the renderer can take minutes),
+   * then marks the output 'ready' only if it is still 'generating' (a cancel
+   * in between wins: the file is removed). Its last failed attempt marks the
+   * output 'error' with a fixed message (never the exception's).
+   */
+  async runGeneration(ctx: JobContext<{ tenantId: number; reportId: number; outputId: number }>): Promise<JobResult> {
+    const { tenantId, reportId, outputId } = ctx.payload;
+    const { output, report } = await ctx.inTenant(async () => ({
+      output: await db('report_outputs').where({ id: outputId, tenant_id: tenantId }).first('id', 'report_id', 'status') as
+        { id: number; report_id: number; status: string } | undefined,
+      report: await db('reports').where({ id: reportId, tenant_id: tenantId }).first(),
+    }));
+    if (!output || !report || Number(output.report_id) !== reportId) return { output: { skipped: 'resource_gone' } };
+    if (output.status !== 'generating') return { output: { skipped: 'not_generating' } };
+
+    let file: { filePath: string; size: number };
     try {
-      await fs.mkdir(this.outputDir, { recursive: true });
-
-      const data = await this.collectData(report);
-      const tenantRow = await db('tenants').where({ id: report.tenant_id }).first();
-      const tenantName = tenantRow?.name || `Tenant #${report.tenant_id}`;
-      const filename = `report_${report.id}_${Date.now()}.${this.extForFormat(report.format)}`;
-      const filePath = path.join(this.outputDir, filename);
-
-      // string (json/csv/html) or Buffer (pdf/excel) — fs.writeFile handles both.
-      let content: string | Buffer;
-      switch (report.format) {
-        case 'json':  content = JSON.stringify(data, null, 2); break;
-        case 'csv':   content = this.toCSV(data); break;
-        case 'html':  content = renderReportHtml(data, report, { tenantName }); break;
-        case 'excel': content = await this.toXlsx(data, report); break;
-        case 'pdf':   content = await this.toPdf(data, report, tenantName); break;
-        default:      content = JSON.stringify(data, null, 2);
+      file = await ctx.inTenant(() => this.produceFile(report, () => ctx.throwIfAborted()));
+    } catch (err) {
+      if (ctx.isLastAttempt || !sanitizeError(err).retryable) {
+        await ctx.inTenant(() => db('report_outputs')
+          .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
+          .update({ status: 'error', error_message: 'Generation failed' }));
       }
-
-      await fs.writeFile(filePath, content);
-      const stat = await fs.stat(filePath);
-
-      await db('report_outputs').where({ id: outputId }).update({
-        status: 'ready', file_path: filePath,
-        file_size_bytes: stat.size,
-        generated_at: new Date(),
-        expires_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      });
-
-      await db('reports').where({ id: report.id }).update({ last_generated_at: new Date() });
-    } catch (err: any) {
-      await db('report_outputs').where({ id: outputId }).update({
-        status: 'error', error_message: err?.message || 'Unknown error',
-      });
+      throw err;
     }
+
+    const updated = await ctx.inTenant(() => db('report_outputs')
+      .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
+      .update({
+        status: 'ready', file_path: file.filePath,
+        file_size_bytes: file.size,
+        generated_at: new Date(),
+        expires_at: new Date(Date.now() + OUTPUT_TTL_MS),
+      }));
+    if (updated === 0) {
+      // Cancelled (or swept) while it was generated: the output stays so.
+      await fs.unlink(file.filePath).catch(() => undefined);
+      return { output: { skipped: 'cancelled' } };
+    }
+    await ctx.inTenant(() => db('reports').where({ id: reportId, tenant_id: tenantId }).update({ last_generated_at: new Date() }));
+    return { output: { outputId, bytes: file.size } };
+  }
+
+  /** Renders `report` into a new file of the reports folder; throws on any
+   *  failure. In the report's tenant context. */
+  private async produceFile(report: any, checkpoint: () => void): Promise<{ filePath: string; size: number }> {
+    await fs.mkdir(this.outputDir, { recursive: true });
+
+    const data = await this.collectData(report);
+    checkpoint();
+    const tenantRow = await db('tenants').where({ id: report.tenant_id }).first();
+    const tenantName = tenantRow?.name || `Tenant #${report.tenant_id}`;
+    const filename = `report_${report.id}_${Date.now()}.${this.extForFormat(report.format)}`;
+    const filePath = path.join(this.outputDir, filename);
+
+    // string (json/csv/html) or Buffer (pdf/excel) — fs.writeFile handles both.
+    let content: string | Buffer;
+    switch (report.format) {
+      case 'json':  content = JSON.stringify(data, null, 2); break;
+      case 'csv':   content = this.toCSV(data); break;
+      case 'html':  content = renderReportHtml(data, report, { tenantName }); break;
+      case 'excel': content = await this.toXlsx(data, report); break;
+      case 'pdf':   content = await this.toPdf(data, report, tenantName); break;
+      default:      content = JSON.stringify(data, null, 2);
+    }
+    checkpoint();
+
+    await fs.writeFile(filePath, content);
+    const stat = await fs.stat(filePath);
+    return { filePath, size: stat.size };
   }
 
   // Map the logical report format to the on-disk extension. Matters because
@@ -494,13 +548,13 @@ class ReportService {
     return rows.map((r) => this.rowToOutput(r));
   }
 
-  // Manually cancel an output stuck in 'generating'. The generation runs
-  // fire-and-forget (generateAsync().catch()), so if the server process
-  // dies mid-generation the row never resolves. `report_status` has no
+  // Manually cancel an output stuck in 'generating'. `report_status` has no
   // 'cancelled' value — we mark it 'error' with a clear message so the
-  // existing error rendering (badge + message) shows why it stopped.
-  // Only 'generating' rows can be cancelled: a finished 'ready' output
-  // must be deleted via deleteReport, not silently flipped to error.
+  // existing error rendering (badge + message) shows why it stopped. The
+  // job (reports.generate) then finds it no longer 'generating': it skips
+  // it, or removes the file it was producing. Only 'generating' rows can be
+  // cancelled: a finished 'ready' output must be deleted via deleteReport,
+  // not silently flipped to error.
   async cancelOutput(outputId: number, tenantId: number): Promise<ReportOutput | null> {
     const [row] = await db('report_outputs')
       .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
@@ -509,13 +563,12 @@ class ReportService {
     return row ? this.rowToOutput(row) : null;
   }
 
-  // Startup + periodic sweep: any output left in 'generating' for longer
-  // than the cutoff is orphaned (the process that would have completed it
-  // is gone — a restart/redeploy killed the in-flight generateAsync).
-  // Without this a stuck row polls "generating" forever and survives every
-  // rebuild. Real generations finish in seconds, so a 15-min floor never
-  // races a legitimate in-flight job.
-  // Run tenant by tenant, in the tenant's database context (index.ts).
+  // The job reports.sweep-stale (at start, then every 15 min), tenant by
+  // tenant in the tenant's database context: an output left in 'generating'
+  // longer than the cutoff is given up (its job ran out of attempts, or was
+  // lost with a dead letter). The generation is durable now and may wait in
+  // the queue then run two attempts of up to 15 min: the job passes a cutoff
+  // of 60 min, which never races a legitimate generation.
   async sweepStaleGenerating(maxAgeMinutes: number, tenantId: number): Promise<number> {
     const cutoff = new Date(Date.now() - maxAgeMinutes * 60 * 1000);
     const n = await db('report_outputs')
@@ -525,6 +578,50 @@ class ReportService {
       .update({ status: 'error', error_message: 'Generation interrupted (server restart or timeout)' });
     if (n > 0) logger.info(`[reports] Swept ${n} stale 'generating' report output(s)`);
     return n;
+  }
+
+  /**
+   * Retention of the outputs (job reports.purge-expired, daily, tenant by
+   * tenant): 'ready' outputs past their expires_at, 'error' outputs older
+   * than 30 days, by batches of 500. A file is removed only when its
+   * resolved path is inside the reports folder (otherwise: warning, file
+   * left in place), a missing file is ignored; the row goes after its file.
+   * `checkpoint` throws when the job must stop (expiry, shutdown). Returns
+   * how many outputs were removed.
+   */
+  async purgeExpiredOutputs(tenantId: number, checkpoint: () => void): Promise<number> {
+    const root = path.resolve(this.outputDir);
+    let removed = 0;
+    for (;;) {
+      checkpoint();
+      const rows = await db('report_outputs')
+        .where({ tenant_id: tenantId })
+        .where((q) => q
+          .where((w) => w.where('status', 'ready').where('expires_at', '<', new Date()))
+          .orWhere((w) => w.where('status', 'error').where('created_at', '<', new Date(Date.now() - ERROR_OUTPUT_TTL_MS))))
+        .orderBy('id')
+        .limit(PURGE_BATCH)
+        .select('id', 'file_path') as Array<{ id: number; file_path: string | null }>;
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        if (!r.file_path) continue;
+        const file = path.resolve(String(r.file_path));
+        if (!file.startsWith(root + path.sep)) {
+          logger.warn({ outputId: r.id, tenantId }, 'report output file outside the reports folder: left in place');
+          continue;
+        }
+        try {
+          await fs.unlink(file);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+        }
+      }
+      await db('report_outputs').whereIn('id', rows.map((r) => r.id)).where({ tenant_id: tenantId }).delete();
+      removed += rows.length;
+      if (rows.length < PURGE_BATCH) break;
+    }
+    if (removed > 0) logger.info({ tenantId, removed }, 'expired report outputs purged');
+    return removed;
   }
 
   async deleteReport(id: number, tenantId: number) {
@@ -537,3 +634,71 @@ class ReportService {
 }
 
 export const reportService = new ReportService();
+
+// ── Durable jobs of the reports (registered by modules/reports.ts) ──────────
+// The handles live here, next to the code that enqueues them (no import
+// cycle with the module).
+
+const empty = z.object({}).strict();
+const GeneratePayload = z.object({
+  tenantId: z.number().int().positive(),
+  reportId: z.number().int().positive(),
+  outputId: z.number().int().positive(),
+}).strict();
+
+const reportJobs: { generate: JobHandle<z.infer<typeof GeneratePayload>> | null } = { generate: null };
+
+/** Tenant by tenant (forEachTenant): a tenant that fails does not stop the
+ *  others; the run fails as a whole afterwards (partial_failure). */
+async function eachTenant(ctx: JobContext<unknown>, step: (tenantId: number) => Promise<number>): Promise<JobResult> {
+  let total = 0;
+  const { ok, failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
+    ctx.throwIfAborted();
+    total += await step(tenantId);
+  });
+  if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed, ${ok} done`);
+  return { output: { tenants: ok, rows: total } };
+}
+
+export function registerReportJobs(): void {
+  if (reportJobs.generate) return;
+  reportJobs.generate = registerJob({
+    name: 'reports.generate',
+    scope: 'tenant',
+    description: 'Generate one report output (a file of the reports folder)',
+    payload: GeneratePayload,
+    policy: 'standard',
+    retry: { limit: 1, delaySeconds: 60, backoff: false },
+    timeoutSeconds: 900,
+    heartbeatSeconds: 60,
+    notify: true,
+    pollSeconds: 2,
+    // One generation at a time on this instance: the PDF renderer is heavy.
+    concurrency: { local: 1 },
+    deadLetter: true,
+    handler: (ctx) => reportService.runGeneration(ctx),
+  });
+
+  registerJob({
+    name: 'reports.sweep-stale',
+    scope: 'platform',
+    description: 'Give up the report outputs left generating for more than 60 minutes',
+    payload: empty,
+    schedule: { cron: '*/15 * * * *' },
+    runAtStart: true,
+    retry: { limit: 0 },
+    timeoutSeconds: 120,
+    handler: (ctx) => eachTenant(ctx, (tenantId) => reportService.sweepStaleGenerating(STALE_GENERATING_MINUTES, tenantId)),
+  });
+
+  registerJob({
+    name: 'reports.purge-expired',
+    scope: 'platform',
+    description: 'Delete the expired report outputs and their files',
+    payload: empty,
+    schedule: { cron: '50 3 * * *' },
+    timeoutSeconds: 900,
+    heartbeatSeconds: 60,
+    handler: (ctx) => eachTenant(ctx, (tenantId) => reportService.purgeExpiredOutputs(tenantId, () => ctx.throwIfAborted())),
+  });
+}

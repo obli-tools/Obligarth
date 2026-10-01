@@ -363,10 +363,17 @@ export const liveAlertService = {
     await db('live_alerts').where({ tenant_id: tenantId }).delete();
   },
 
-  /** Periodic cleanup: remove alerts older than daysOld. */
-  async cleanup(daysOld = 30): Promise<void> {
-    await db('live_alerts')
-      .where('created_at', '<', new Date(Date.now() - daysOld * 86_400_000))
+  /**
+   * Retention (job core.live-alerts.purge, tenant by tenant in the tenant's
+   * database context): deletes the alerts of `tenantId` older than `days`
+   * that were read or resolved — never an incident still active and unread.
+   * Returns how many rows were deleted.
+   */
+  async purgeOld(days: number, tenantId: number): Promise<number> {
+    return db('live_alerts')
+      .where({ tenant_id: tenantId })
+      .where('created_at', '<', new Date(Date.now() - days * 86_400_000))
+      .where((q) => q.whereNotNull('read_at').orWhereNotNull('resolved_at'))
       .delete();
   },
 };

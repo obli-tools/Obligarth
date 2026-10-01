@@ -100,10 +100,9 @@ export const tfaTrustService = {
     } catch { return []; }
   },
 
-  /** Periodic sweeper — called from the cron tick in index.ts. */
+  /** Deletes the expired trusts — the job core.tfa-trust.sweep (hourly, in
+   *  the identity context). An error is the job's: counted, retried, alerted. */
   async sweepExpired(): Promise<number> {
-    try {
-      return await db('tfa_trusted_sessions').where('trusted_until', '<', new Date()).delete();
-    } catch { return 0; }
+    return db('tfa_trusted_sessions').where('trusted_until', '<', new Date()).delete();
   },
 };

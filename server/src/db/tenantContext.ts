@@ -6,6 +6,7 @@ import {
 } from './context';
 import type { PgConnection } from './contextPgClient';
 import { logger } from '../utils/logger';
+import { safeErr } from '../jobs/errors';
 
 // =============================================================================
 // Tenant contexts of background work (rls-tenant §4.5, §7.6; file-durable §5.8)
@@ -78,18 +79,10 @@ export async function withTenantInTransaction<T>(
   return result;
 }
 
-// ── Timers of the core until the durable queue (FND-04) replaces them ──────
-
-/** A timer job in its own context ('none', actor j:<name>); errors logged,
- *  never thrown. */
-export async function runJob(name: string, fn: (actor: DbActor) => Promise<void>): Promise<void> {
-  const actor: DbActor = { type: 'job', name };
-  try {
-    await runWithDbContext({ kind: 'none', tenantId: null, actor, grantId: null, origin: 'job' }, () => fn(actor));
-  } catch (err) {
-    logger.warn({ err, job: name }, 'background job failed');
-  }
-}
+// ── Platform jobs that work tenant by tenant (jobs/, rls-tenant §7.6) ──────
+// A durable job runs in its own context ('none', actor j:<queue>: the
+// execution envelope, jobs/wrapper.ts); one that visits every tenant lists
+// them, then works in each tenant's context in turn.
 
 /** The ids of every tenant (obligarth.tenant_ids_all(), callable in any
  *  context: ids only). */
@@ -113,7 +106,7 @@ export async function forEachTenant(
       ok++;
     } catch (err) {
       failed++;
-      logger.warn({ err, tenantId, actor: actorToken(actor) }, 'per-tenant job step failed');
+      logger.warn({ err: safeErr(err), tenantId, actor: actorToken(actor) }, 'per-tenant job step failed');
     }
   }
   return { ok, failed };

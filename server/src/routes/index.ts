@@ -33,6 +33,9 @@ import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
 import restrictionRoutes from './restriction.routes';
 import mobileAppRoutes from './mobileApp.routes';
+import { defaultRuntime } from '../jobs';
+import { createJobsAdmin } from '../jobs/admin';
+import { createJobsAdminRouter } from '../jobs/admin.routes';
 
 const router = Router();
 
@@ -80,6 +83,9 @@ tenantRouter.use('/maintenance', maintenanceRoutes);
 tenantRouter.use('/approvals',   approvalRoutes);
 tenantRouter.use('/audit-log',   auditRoutes);
 tenantRouter.use('/restrictions', restrictionRoutes);
+// Background jobs administration (master tenant, platform administrators;
+// jobs/admin.routes.ts), before /admin/config.
+tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));
 // A module's named platform settings are mounted before the core settings
 // router (its PUT /:key would take their paths).
 tenantRouter.use('/admin/config', adminRoutes);
