@@ -36,6 +36,7 @@ import mobileAppRoutes from './mobileApp.routes';
 import { defaultRuntime } from '../jobs';
 import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
+import { createVaultAdminRouter } from '../vault/admin.routes';
 
 const router = Router();
 
@@ -86,6 +87,9 @@ tenantRouter.use('/restrictions', restrictionRoutes);
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));
+// The vault of secrets: state, escrow events, key rotations (master tenant,
+// platform administrators; vault/admin.routes.ts).
+tenantRouter.use('/admin/vault', createVaultAdminRouter());
 // A module's named platform settings are mounted before the core settings
 // router (its PUT /:key would take their paths).
 tenantRouter.use('/admin/config', adminRoutes);

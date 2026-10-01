@@ -2,7 +2,7 @@ import './env';
 import http from 'http';
 import { config, isWeakAdminPassword, startupConfigErrors } from './config';
 import { db } from './db';
-import { asIdentity, configureContextSigning, loadContextKeyFile } from './db/context';
+import { asIdentity, asNone, configureContextSigning, loadContextKeyFile } from './db/context';
 import { bootGuard, BootGuardError } from './db/bootGuard';
 import { createApp } from './app';
 import { createSocketServer } from './socket';
@@ -21,11 +21,15 @@ import { registerCoreJobs } from './jobs/core.jobs';
 import { registerDeviceModule } from './modules/devices';
 import { registerReportsModule } from './modules/reports';
 import { registerSsoSyncJobs } from './routes/obligateCallback.routes';
+import { BackfillError, backfillLegacySecrets, isVaultError, vault, vaultConfigErrors, VaultStartupError } from './vault';
+import { registerVaultJobs } from './vault/jobs';
 
-// Start-up order (docs: specs README §4, rls-tenant §7.9, file-durable §3.3):
-// configuration, registries (no I/O), (development only) migrations,
-// database boot guard, initial administrator, durable jobs (pg-boss: queues
-// and schedules), boot tasks, HTTP and Socket.io, start tasks, job workers,
+// Start-up order (docs: specs README §4, rls-tenant §7.9, file-durable §3.3,
+// coffre-secrets §6.1): configuration (the vault's KEK file included),
+// registries (no I/O), (development only) migrations, database boot guard,
+// vault (KEK, online lock, canary, tenant keys) and backfill of the inherited
+// clear secrets, initial administrator, durable jobs (pg-boss: queues and
+// schedules), boot tasks, HTTP and Socket.io, start tasks, job workers,
 // listen. The server never migrates in production: the server-migrate
 // service does (src/db/migrate.ts), and the boot guard refuses a schema it
 // did not bring up to date. No timer of this process does periodic work:
@@ -56,8 +60,9 @@ function devAppPassword(): string | null {
 async function main() {
   // Unsafe configuration (missing database URL, weak or missing session
   // secret, weak initial admin password, database context settings; see
-  // config.ts): refuse to start before anything touches the database.
-  const configErrors = startupConfigErrors();
+  // config.ts; the vault's KEK file, vault/config.ts): refuse to start before
+  // anything touches the database.
+  const configErrors = [...startupConfigErrors(), ...vaultConfigErrors({ warn: (m) => logger.warn(m) })];
   let contextKey: Buffer | null = null;
   try {
     contextKey = loadContextKeyFile(config.rlsContextKeyFile);
@@ -80,6 +85,7 @@ async function main() {
   registerReportsModule();
   registerCoreJobs();
   registerSsoSyncJobs();
+  registerVaultJobs();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.
@@ -102,6 +108,25 @@ async function main() {
     throw err;
   }
 
+  // Vault (coffre-secrets §6.1; review COF-RC3): the KEK provider, the online
+  // lock, the canary (a KEK that does not open this database's keys: message
+  // A), an interrupted KEK rotation (message B), the first data key of every
+  // tenant that has none; then the backfill of the inherited clear secrets,
+  // each class of table in its own database context. Any failure: refusal.
+  try {
+    await asNone({ type: 'job', name: 'vault.init' }, () => vault.init());
+    await asNone({ type: 'job', name: 'vault.backfill' }, () => backfillLegacySecrets());
+  } catch (err) {
+    if (err instanceof VaultStartupError) logger.fatal(err.refusal);
+    else if (err instanceof BackfillError) logger.fatal(err.message);
+    else if (isVaultError(err)) logger.fatal(err.message);
+    else logger.fatal({ err: safeErr(err) }, 'vault start-up failed');
+    logger.fatal('Vault not ready: refusing to start.');
+    await vault.close().catch(() => undefined);
+    await db.destroy().catch(() => undefined);
+    process.exit(1);
+  }
+
   // Initial administrator, on a database that has none (accounts: the
   // identity context).
   await asIdentity({ type: 'job', name: 'boot.default-admin' }, () => ensureDefaultAdmin());
@@ -116,6 +141,7 @@ async function main() {
     if (err instanceof JobsStartError) logger.fatal(err.message);
     else logger.fatal({ err: safeErr(err) }, 'background jobs could not start');
     logger.fatal('Background jobs not started: refusing to start.');
+    await vault.close().catch(() => undefined);
     await db.destroy().catch(() => undefined);
     process.exit(1);
   }
@@ -152,7 +178,8 @@ async function main() {
   // Shutdown (SIGTERM, SIGINT; once): forced exit past 25 s; no new HTTP
   // connection (5 s at most for the open ones); the jobs stop gracefully
   // (running handlers finish, or their jobs are failed and retried later);
-  // the modules' stop tasks; the database pool.
+  // the modules' stop tasks; the vault (KEK zeroed, online lock released);
+  // the database pool.
   let stopping = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (stopping) return;
@@ -165,6 +192,7 @@ async function main() {
     ]);
     await jobs.stop().catch((err) => logger.error({ err: safeErr(err) }, 'jobs stop failed'));
     await runStopTasks();
+    await vault.close().catch(() => undefined);
     await db.destroy().catch(() => undefined);
     process.exit(0);
   };

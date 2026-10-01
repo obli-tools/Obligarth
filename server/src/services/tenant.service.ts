@@ -6,7 +6,8 @@ import type { Tenant, TenantWithRole } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import { clientIp } from '../utils/clientIp';
 import { normaliseTenantRole } from './userScope.service';
-import { switchToIdentity, switchToNone, switchToTenant } from '../db/context';
+import { currentDbContext, switchToIdentity, switchToNone, switchToTenant } from '../db/context';
+import { vault } from '../vault';
 
 // Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
 // caller's context (each sees the tenants it may: its own memberships, every
@@ -98,6 +99,13 @@ export async function refuseSignInWithoutTenant(
   return noTenantAccessError();
 }
 
+/** The user of the current database context (the platform administrator
+ *  who creates or deletes a tenant). */
+function actorUserId(): number | null {
+  const actor = currentDbContext()?.actor;
+  return actor?.type === 'user' ? actor.userId : null;
+}
+
 export const tenantService = {
   async getAll(): Promise<Tenant[]> {
     const rows = await db('tenants').select<TenantRow[]>('*').orderBy('id');
@@ -120,17 +128,27 @@ export const tenantService = {
    *  leave it with no restriction at all. Through obligarth.tenant_create
    *  (rls-tenant §6.6; specs README §5), in one transaction, context 'none'
    *  of the caller, who must be an active platform administrator (refused by
-   *  the database otherwise). The coffre (FND-03) adds the tenant's key to
-   *  this transaction, the apple-edge integration its provisioning. */
-  async create(data: { name: string; slug: string }): Promise<Tenant> {
+   *  the database otherwise). Its first data key is created by the vault in
+   *  the same transaction (coffre-secrets §6.2: no valid tenant lacks one);
+   *  the apple-edge integration adds its provisioning (lot B). */
+  async create(data: { name: string; slug: string }, opts: { ipAddress?: string } = {}): Promise<Tenant> {
     const { defaultRestrictions } = await import('./restriction.service');
-    return switchToNone(() => db.transaction(async (trx) => {
+    const tenant = await switchToNone(() => db.transaction(async (trx) => {
       const { rows } = await trx.raw('SELECT obligarth.tenant_create(?, ?, ?::jsonb) AS id',
         [data.name, data.slug, JSON.stringify(defaultRestrictions())]) as { rows: Array<{ id: number }> };
       const id = Number(rows[0].id);
+      await vault.createTenantKey(trx, id);
       const row = await trx('tenants').where({ id }).first();
       return rowToTenant(row as TenantRow);
     }));
+    // Until the hardened journal (lot A6: audit.appendInTx, P1, last statement
+    // of the transaction), written once the tenant exists.
+    const { auditService } = await import('./audit.service');
+    await auditService.log({
+      tenantId: MASTER_TENANT_ID, userId: actorUserId() ?? undefined, action: 'tenant.created', resourceType: 'tenant',
+      resourcePath: String(tenant.id), details: { onBehalfOf: tenant.id, slug: tenant.slug }, ipAddress: opts.ipAddress,
+    });
+    return tenant;
   },
 
   /** Settings of a tenant, written in its own context. The slug is fixed at
@@ -153,13 +171,30 @@ export const tenantService = {
   /** Hard deletion through obligarth.tenant_delete (temporary measure until
    *  the tenant lifecycle specification: specs README §5): one transaction,
    *  context 'none' of the caller, an active platform administrator. The
-   *  function strips the tenant's id from the `target_tenant_ids` of every
-   *  table of the class tenant_shared, then deletes the row (the foreign keys
-   *  cascade); it refuses the master tenant. */
-  async delete(id: number): Promise<void> {
-    await switchToNone(() => db.transaction(async (trx) => {
+   *  vault first crypto-shreds the tenant's data keys (coffre-secrets §6.5,
+   *  V7: the foreign key of data_keys is RESTRICT, tenant_delete fails
+   *  without it); the function then strips the tenant's id from the
+   *  `target_tenant_ids` of every table of the class tenant_shared and
+   *  deletes the row (the foreign keys cascade); it refuses the master
+   *  tenant. The entries vault.dek_destroyed and tenant.deleted (master
+   *  tenant) come last (review COF-RC2): written once the transaction
+   *  commits until the hardened journal (lot A6) writes them in it. */
+  async delete(id: number, opts: { ipAddress?: string } = {}): Promise<void> {
+    const userId = actorUserId();
+    const entries = await switchToNone(() => db.transaction(async (trx) => {
+      const tenant = await trx('tenants').where({ id }).first('id', 'slug') as { id: number; slug: string } | undefined;
+      const { auditEntry } = await vault.shredTenantKeys(trx, id, { userId }, { audit: 'return' });
       await trx.raw('SELECT obligarth.tenant_delete(?)', [id]);
+      return [
+        ...(auditEntry ? [{ ...auditEntry, ipAddress: opts.ipAddress }] : []),
+        {
+          tenantId: MASTER_TENANT_ID, userId: userId ?? undefined, action: 'tenant.deleted', resourceType: 'tenant',
+          resourcePath: String(id), details: { onBehalfOf: id, slug: tenant?.slug ?? null }, ipAddress: opts.ipAddress,
+        },
+      ];
     }));
+    const { auditService } = await import('./audit.service');
+    for (const e of entries) await auditService.log(e);
   },
 
   /** Returns the first tenant accessible by userId (lowest id). */

@@ -3,6 +3,7 @@ import { notificationService } from '../services/notification.service';
 import { deviceService } from '../services/device.service';
 import { getPluginMetas } from '../notifications/registry';
 import { AppError } from '../middleware/errorHandler';
+import { isVaultError } from '../vault/errors';
 import { isMasterTenant } from '@obligarth/shared';
 import type {
   CreateChannelInput,
@@ -118,7 +119,7 @@ export const notificationsController = {
       // a master-shared channel (read-only on its side).
       await assertChannelOwnedByCaller(id, req);
       const data = req.body as UpdateChannelInput;
-      const channel = await notificationService.updateChannel(id, data);
+      const channel = await notificationService.updateChannel(id, data, { requestTenantId: req.tenantId });
       if (!channel) throw new AppError(404, 'Channel not found');
       res.json({ success: true, data: channel });
     } catch (err) {
@@ -147,7 +148,9 @@ export const notificationsController = {
       await notificationService.testChannel(id);
       res.json({ success: true, message: 'Test notification sent' });
     } catch (err: unknown) {
-      if (err instanceof Error && !(err instanceof AppError)) {
+      // A vault error (the channel's secrets cannot be opened) is never
+      // echoed: the error handler answers 500, the vault logged and alerted.
+      if (err instanceof Error && !(err instanceof AppError) && !isVaultError(err)) {
         next(new AppError(400, `Test failed: ${err.message}`));
       } else {
         next(err);

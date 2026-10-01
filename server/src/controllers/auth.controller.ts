@@ -4,6 +4,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { authService } from '../services/auth.service';
 import { appConfigService } from '../services/appConfig.service';
 import { twoFactorService } from '../services/twoFactor.service';
+import { hasLocalTotp } from '../services/totpSecret';
 import { permissionService } from '../services/permission.service';
 import { tenantService, noTenantAccessError, refuseSignInWithoutTenant } from '../services/tenant.service';
 import { AppError } from '../middleware/errorHandler';
@@ -43,9 +44,9 @@ async function signIn(req: Request, res: Response, user: SignedInUser): Promise<
   // Evaluated only once the password is proven: a wrong password answers
   // exactly like any other account (no enumeration).
   if (user.foreignSource === 'obligate') {
-    const f = await db('users').where({ id: user.id }).first('totp_enabled', 'totp_secret') as
-      { totp_enabled: boolean | null; totp_secret: string | null } | undefined;
-    if (!(f?.totp_enabled && f?.totp_secret)) {
+    const f = await db('users').where({ id: user.id }).first('totp_enabled', 'totp_secret_enc') as
+      { totp_enabled: boolean | null; totp_secret_enc: string | null } | undefined;
+    if (!hasLocalTotp(f)) {
       try {
         const tenant = await tenantService.getFirstTenantForUser(user.id);
         const { auditService } = await import('../services/audit.service');

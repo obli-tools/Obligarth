@@ -34,12 +34,12 @@ const ENROL_ACTION_KEY = 'device_key.enrol';
 const INSTALL_ID_RE = /^[\x21-\x7e]{1,64}$/;
 
 type FactorRow = {
-  id: number; role: string; foreign_source: string | null; foreign_id: number | null; totp_enabled: boolean; totp_secret: string | null;
+  id: number; role: string; foreign_source: string | null; foreign_id: number | null; totp_enabled: boolean; totp_secret_enc: string | null;
 };
 
 async function factorRow(userId: number): Promise<FactorRow | undefined> {
   return db('users').where({ id: userId })
-    .first('id', 'role', 'foreign_source', 'foreign_id', 'totp_enabled', 'totp_secret') as Promise<FactorRow | undefined>;
+    .first('id', 'role', 'foreign_source', 'foreign_id', 'totp_enabled', 'totp_secret_enc') as Promise<FactorRow | undefined>;
 }
 
 /** Lot O: a fresh Obligate re-authentication opens an SSO enrolment for 5 min (§4.10). */

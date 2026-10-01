@@ -18,8 +18,9 @@
 //    it (and logs the key paths, never the values): a junk key is dropped,
 //    the approval is filed as usual.
 // Data only the executor needs and that is not a clear secret (a bcrypt hash
-// of a new user's password, an avatar image) goes to `sealed_payload`
-// instead: never returned, wiped when the request is resolved.
+// of a new user's password, an avatar image) goes to `sealed` instead,
+// sealed by the vault (pending_approvals.sealed_payload_enc): never
+// returned, wiped when the request is resolved.
 //
 // Same rules as migration 129 (which cleaned the requests filed before).
 

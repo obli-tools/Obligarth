@@ -128,9 +128,12 @@ BEGIN
     ELSE
       EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON %s TO obligarth', r.qualified);
       -- The reader role (contexts member and platform) never reads the
-      -- identity tables, the session store nor the grants journal.
+      -- identity tables, the session store, the grants journal nor the
+      -- vault's technical tables (keys, instance secrets, key operations:
+      -- class technical of migration C, coffre-secrets §4.1).
       IF r.relname NOT IN ('session', 'password_reset_tokens', 'tfa_trusted_sessions', 'step_up_throttle',
-                           'user_device_keys', 'device_key_challenges', 'sso_foreign_users') THEN
+                           'user_device_keys', 'device_key_challenges', 'sso_foreign_users',
+                           'data_keys', 'instance_secrets', 'vault_operations') THEN
         EXECUTE format('GRANT SELECT ON %s TO obligarth_reader', r.qualified);
       END IF;
     END IF;

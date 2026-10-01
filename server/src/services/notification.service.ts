@@ -1,12 +1,15 @@
+import type { Knex } from 'knex';
 import { db } from '../db';
 import type { NotificationChannel, NotificationChannelType, NotificationBinding, OverrideMode } from '@obligarth/shared';
 import { isMasterTenant } from '@obligarth/shared';
 
 import type { NotificationPayload } from '../notifications/types';
-import { getPlugin } from '../notifications/registry';
+import { getPlugin, isSecretField, secretFieldsOf } from '../notifications/registry';
 import { smtpServerService } from './smtpServer.service';
 import { config } from '../config';
 import { logger } from '../utils/logger';
+import { AppError } from '../middleware/errorHandler';
+import { vault, type SecretLocator } from '../vault';
 
 interface ChannelRow {
   id: number;
@@ -18,6 +21,8 @@ interface ChannelRow {
   tenant_id: number;
   created_at: Date;
   updated_at: Date;
+  uuid?: string;
+  secret_fields?: unknown;
 }
 
 interface BindingRow {
@@ -29,36 +34,70 @@ interface BindingRow {
   override_mode: string;
 }
 
-// Pass `currentTenantId` to redact secrets when the caller doesn't
-// own the channel — typical for the FreeMobile-fan-out scenario:
-// master creates a channel with its API key, shares it with tenant B
-// who sees its existence (so admins can recognize "Notifications:
-// FreeMobile master is bound here") but never the API key itself.
-// The mask is also signaled with `readOnly: true` so the UI can
-// disable the edit form on the child side.
+// ── Secret fields: write-only (docs: coffre-secrets V8, §7.3) ──────────────
+// The secret fields of a channel's plugin (notifications/registry.ts:
+// `secret: true`, or type 'password') never sit in `config`: they are sealed
+// together, as one JSON object, in `secrets_enc` under the DEK of the
+// channel's tenant (AAD obligarth.notification_channels:secrets_enc:<id>:
+// <tenant>), and their names in `secret_fields`. The API returns `config`
+// (public fields only) and `secretFieldsSet` (names), never a value; an
+// update keeps a secret field that is absent or empty, replaces it with a new
+// string, clears it with null. resolveChannelConfig, right before a send, is
+// the only place that opens `secrets_enc`.
+
+/** The columns a channel's mapper may read (R6): never secrets_enc. */
+const PUBLIC_COLUMNS = ['id', 'name', 'type', 'config', 'is_enabled', 'created_by', 'tenant_id',
+  'created_at', 'updated_at', 'uuid', 'secret_fields'] as const;
+const publicColumns = (): string[] => [...PUBLIC_COLUMNS];
+
+const secretsAt = (id: number, tenantId: number): SecretLocator =>
+  ({ table: 'notification_channels', column: 'secrets_enc', pk: id, tenantId });
+
+// Pass `currentTenantId` to redact when the caller doesn't own the channel —
+// typical for the FreeMobile-fan-out scenario: master creates a channel with
+// its API key, shares it with tenant B who sees its existence (so admins can
+// recognize "Notifications: FreeMobile master is bound here") but never a
+// secret. The secret fields are never in `config` (write-only); this mask is
+// a last net for unknown keys that look secret. The mask is also signaled with
+// `readOnly: true` so the UI can disable the edit form on the child side.
 const SECRET_KEY_TEST = /(secret|token|password|webhook|api[_-]?key|key)$/i;
 
-function redactConfig(raw: unknown): Record<string, unknown> {
-  const cfg = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : (raw ?? {});
-  if (!cfg || typeof cfg !== 'object') return {};
+function parseObject(raw: unknown): Record<string, unknown> {
+  const v = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return {}; } })() : raw;
+  return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, unknown> : {};
+}
+
+/** The public part of a stored config: the plugin's secret fields are
+ *  dropped (a legacy clear value never leaves, even before the backfill). */
+function publicConfig(type: string, raw: unknown): Record<string, unknown> {
+  const secret = new Set(secretFieldsOf(type));
   const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(cfg as Record<string, unknown>)) {
-    out[k] = SECRET_KEY_TEST.test(k) ? '__REDACTED__' : v;
-  }
+  for (const [k, v] of Object.entries(parseObject(raw))) if (!secret.has(k)) out[k] = v;
   return out;
+}
+
+function redactConfig(cfg: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(cfg)) out[k] = SECRET_KEY_TEST.test(k) ? '__REDACTED__' : v;
+  return out;
+}
+
+function secretNames(raw: unknown): string[] {
+  const v = typeof raw === 'string' ? (() => { try { return JSON.parse(raw); } catch { return []; } })() : raw;
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
 }
 
 function rowToChannel(row: ChannelRow, currentTenantId?: number): NotificationChannel {
   const isCallerOwner = currentTenantId == null || currentTenantId === row.tenant_id || isMasterTenant(currentTenantId);
+  const cfg = publicConfig(row.type, row.config);
   const ch: NotificationChannel = {
     id: row.id,
     tenantId: row.tenant_id,
     name: row.name,
     type: row.type as NotificationChannelType,
-    config: isCallerOwner
-      ? (typeof row.config === 'string' ? JSON.parse(row.config) : row.config)
-      : redactConfig(row.config),
-    uuid: (row as any).uuid ?? '',
+    config: isCallerOwner ? cfg : redactConfig(cfg),
+    secretFieldsSet: isCallerOwner ? secretNames(row.secret_fields) : [],
+    uuid: row.uuid ?? '',
     createdAt: row.created_at.toISOString(),
     updatedAt: row.updated_at.toISOString(),
     // `readOnly` flag for the client form — true when the caller
@@ -66,6 +105,36 @@ function rowToChannel(row: ChannelRow, currentTenantId?: number): NotificationCh
     readOnly: !isCallerOwner,
   } as NotificationChannel & { readOnly: boolean };
   return ch;
+}
+
+/** A submitted config split along the plugin's fields: the public ones
+ *  (declared, not secret) and the secret ones; an unknown key is dropped. */
+function splitConfig(type: string, submitted: Record<string, unknown>): {
+  publicCfg: Record<string, unknown>; secrets: Record<string, unknown>;
+} {
+  const plugin = getPlugin(type);
+  const publicCfg: Record<string, unknown> = {};
+  const secrets: Record<string, unknown> = {};
+  for (const field of plugin?.configFields ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(submitted, field.key)) continue;
+    const v = submitted[field.key];
+    if (isSecretField(field)) secrets[field.key] = v;
+    else publicCfg[field.key] = v;
+  }
+  return { publicCfg, secrets };
+}
+
+const hasValue = (v: unknown): boolean => v !== undefined && v !== null && v !== '';
+
+async function sealSecrets(trx: Knex.Transaction, id: number, tenantId: number, secrets: Record<string, unknown>):
+  Promise<{ secrets_enc: string | null; secret_fields: string }> {
+  const names = Object.keys(secrets).filter((k) => hasValue(secrets[k])).sort();
+  if (!names.length) return { secrets_enc: null, secret_fields: '[]' };
+  const value = Object.fromEntries(names.map((k) => [k, secrets[k]]));
+  return {
+    secrets_enc: await vault.sealJson(secretsAt(id, tenantId), value, { trx }),
+    secret_fields: JSON.stringify(names),
+  };
 }
 
 function rowToBinding(row: BindingRow): NotificationBinding {
@@ -86,7 +155,7 @@ export const notificationService = {
     // Master sees every channel install-wide; otherwise: own channels +
     // channels shared to this tenant via the junction table.
     const isMaster = isMasterTenant(tenantId);
-    const q = db<ChannelRow>('notification_channels').orderBy('name');
+    const q = db('notification_channels').select(publicColumns()).orderBy('name');
     if (!isMaster) {
       q.where(function () {
         this.where('notification_channels.tenant_id', tenantId)
@@ -96,7 +165,7 @@ export const notificationService = {
           );
       });
     }
-    const rows = await q;
+    const rows = await q as unknown as ChannelRow[];
     return rows.map((row) => rowToChannel(row, tenantId));
   },
 
@@ -108,10 +177,12 @@ export const notificationService = {
    *  bypass on master. See `notification.routes.ts` for the canonical
    *  guard. */
   async getChannelById(id: number): Promise<NotificationChannel | null> {
-    const row = await db<ChannelRow>('notification_channels').where({ id }).first();
+    const row = await db('notification_channels').where({ id }).first(publicColumns()) as unknown as ChannelRow | undefined;
     return row ? rowToChannel(row) : null;
   },
 
+  /** A new channel: public fields in `config`, secret fields sealed (the id
+   *  is allocated first: it is part of the AAD). */
   async createChannel(data: {
     name: string;
     type: string;
@@ -121,36 +192,79 @@ export const notificationService = {
   }, tenantId: number): Promise<NotificationChannel> {
     const plugin = getPlugin(data.type);
     if (!plugin) throw new Error(`Unknown notification type: ${data.type}`);
-
-    const [row] = await db<ChannelRow>('notification_channels')
-      .insert({
-        name: data.name,
-        type: data.type,
-        config: JSON.stringify(data.config) as unknown as Record<string, unknown>,
-        is_enabled: data.isEnabled ?? true,
-        created_by: data.createdBy ?? null,
-        tenant_id: tenantId,
-      })
-      .returning('*');
-
-    return rowToChannel(row);
+    const { publicCfg, secrets } = splitConfig(data.type, data.config ?? {});
+    for (const [k, v] of Object.entries(secrets)) {
+      if (v !== null && v !== undefined && typeof v !== 'string') throw new AppError(400, `${k} must be a string`, 'invalidSecretField');
+    }
+    return db.transaction(async (trx) => {
+      const id = await vault.allocateId('notification_channels', { trx });
+      const sealed = await sealSecrets(trx, id, tenantId, secrets);
+      const [row] = await trx('notification_channels')
+        .insert({
+          id,
+          name: data.name,
+          type: data.type,
+          config: JSON.stringify(publicCfg),
+          is_enabled: data.isEnabled ?? true,
+          created_by: data.createdBy ?? null,
+          tenant_id: tenantId,
+          ...sealed,
+        })
+        .returning(publicColumns()) as ChannelRow[];
+      return rowToChannel(row);
+    });
   },
 
+  /** `config` replaces the public fields; a secret field absent or '' is
+   *  kept, a string replaces it, null clears it (400 for a required one).
+   *  The secrets are resealed only when one of them changes. */
   async updateChannel(id: number, data: {
     name?: string;
     config?: Record<string, unknown>;
     isEnabled?: boolean;
-  }): Promise<NotificationChannel | null> {
-    const updateData: Record<string, unknown> = { updated_at: new Date() };
-    if (data.name !== undefined) updateData.name = data.name;
-    if (data.config !== undefined) updateData.config = JSON.stringify(data.config);
-    if (data.isEnabled !== undefined) updateData.is_enabled = data.isEnabled;
-
-    const [row] = await db<ChannelRow>('notification_channels')
-      .where({ id })
-      .update(updateData)
-      .returning('*');
-    return row ? rowToChannel(row) : null;
+  }, opts: { requestTenantId?: number } = {}): Promise<NotificationChannel | null> {
+    return db.transaction(async (trx) => {
+      const cur = await trx('notification_channels').where({ id }).forUpdate()
+        .first('id', 'tenant_id', 'type', 'secrets_enc') as { id: number; tenant_id: number; type: string; secrets_enc: string | null } | undefined;
+      if (!cur) return null;
+      const updateData: Record<string, unknown> = { updated_at: new Date() };
+      if (data.name !== undefined) updateData.name = data.name;
+      if (data.isEnabled !== undefined) updateData.is_enabled = data.isEnabled;
+      if (data.config !== undefined) {
+        const { publicCfg, secrets: submitted } = splitConfig(cur.type, data.config ?? {});
+        updateData.config = JSON.stringify(publicCfg);
+        const fields = new Map((getPlugin(cur.type)?.configFields ?? []).map((f) => [f.key, f]));
+        let stored: Record<string, unknown> | null = null;
+        const load = async (): Promise<Record<string, unknown>> => {
+          if (!stored) {
+            stored = cur.secrets_enc
+              ? await vault.openJson<Record<string, unknown>>(secretsAt(cur.id, cur.tenant_id), cur.secrets_enc,
+                { trx, requestTenantId: opts.requestTenantId })
+              : {};
+          }
+          return stored;
+        };
+        let changed = false;
+        for (const [key, v] of Object.entries(submitted)) {
+          if (v === undefined || v === '') continue;                       // kept
+          if (v === null) {
+            if (fields.get(key)?.required) throw new AppError(400, `${key} is required and cannot be cleared`, 'secretFieldRequired');
+            const s = await load();
+            if (key in s) { delete s[key]; changed = true; }
+            continue;
+          }
+          if (typeof v !== 'string') throw new AppError(400, `${key} must be a string`, 'invalidSecretField');
+          const s = await load();
+          if (s[key] !== v) { s[key] = v; changed = true; }
+        }
+        if (changed) Object.assign(updateData, await sealSecrets(trx, cur.id, cur.tenant_id, await load()));
+      }
+      const [row] = await trx('notification_channels')
+        .where({ id })
+        .update(updateData)
+        .returning(publicColumns()) as ChannelRow[];
+      return row ? rowToChannel(row) : null;
+    });
   },
 
   async deleteChannel(id: number): Promise<boolean> {
@@ -185,25 +299,35 @@ export const notificationService = {
   },
 
   /**
-   * Resolve the effective config for a channel.
-   * For smtp channels using smtpServerId, fetches the SMTP server and injects its credentials.
-   * For all other channels, returns config as-is (backward-compat).
+   * The effective config of a channel, right before a send: the only place
+   * that opens its secrets (under the DEK of the channel's tenant, read from
+   * the row: a recipient of a master channel shared with it reads the master's
+   * row, as the row level security allows). For smtp channels using
+   * smtpServerId, the SMTP server's transport and credentials.
    */
-  async resolveChannelConfig(channel: NotificationChannel): Promise<Record<string, unknown>> {
-    if (channel.type === 'smtp' && channel.config.smtpServerId) {
-      const server = await smtpServerService.getTransportConfig(Number(channel.config.smtpServerId));
-      if (!server) throw new Error(`SMTP server #${channel.config.smtpServerId} not found`);
+  async resolveChannelConfig(channel: { id: number }): Promise<Record<string, unknown>> {
+    const row = await db('notification_channels').where({ id: channel.id })
+      .first('id', 'tenant_id', 'type', 'config', 'secrets_enc') as
+      { id: number; tenant_id: number; type: string; config: unknown; secrets_enc: string | null } | undefined;
+    if (!row) throw new Error('Channel not found');
+    const cfg = publicConfig(row.type, row.config);
+    if (row.type === 'smtp' && cfg.smtpServerId) {
+      const server = await smtpServerService.getTransportConfig(Number(cfg.smtpServerId));
+      if (!server) throw new Error(`SMTP server #${cfg.smtpServerId} not found`);
       return {
         host: server.host,
         port: server.port,
         secure: server.secure,
         username: server.username,
         password: server.password,
-        from: channel.config.fromOverride || server.fromAddress,
-        to: channel.config.to,
+        from: cfg.fromOverride || server.fromAddress,
+        to: cfg.to,
       };
     }
-    return channel.config;
+    const secrets = row.secrets_enc
+      ? await vault.openJson<Record<string, unknown>>(secretsAt(row.id, row.tenant_id), row.secrets_enc)
+      : {};
+    return { ...cfg, ...secrets };
   },
 
   async testChannel(id: number): Promise<void> {
@@ -428,7 +552,7 @@ export const notificationService = {
     const channelIds = Array.from(result.keys());
     if (channelIds.length === 0) return [];
 
-    const channels = await db<ChannelRow>('notification_channels').whereIn('id', channelIds);
+    const channels = await db('notification_channels').whereIn('id', channelIds).select(publicColumns()) as unknown as ChannelRow[];
     const channelMap = new Map(channels.map((c) => [c.id, c]));
 
     return Array.from(result.values()).map((r) => {
@@ -570,7 +694,7 @@ export const notificationService = {
     const channelIds = Array.from(result.keys());
     if (channelIds.length === 0) return [];
 
-    const channels = await db<ChannelRow>('notification_channels').whereIn('id', channelIds);
+    const channels = await db('notification_channels').whereIn('id', channelIds).select(publicColumns()) as unknown as ChannelRow[];
     const channelMap = new Map(channels.map((c) => [c.id, c]));
 
     return Array.from(result.values()).map((r) => {
@@ -599,9 +723,10 @@ export const notificationService = {
 
     const enrichedPayload: NotificationPayload = { ...payload, appName: config.appName };
 
-    const channels = await db<ChannelRow>('notification_channels')
+    const channels = await db('notification_channels')
+      .select(publicColumns())
       .whereIn('id', channelIds)
-      .where({ is_enabled: true });
+      .where({ is_enabled: true }) as unknown as ChannelRow[];
 
     for (const row of channels) {
       const channel = rowToChannel(row);

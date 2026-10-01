@@ -3,6 +3,9 @@ import type { Request, Response, NextFunction } from 'express';
 import { DEVICE_KEY_HEADER, type DeviceKeyRevokeReason } from '@obligarth/shared';
 import { db } from '../db';
 import { twoFactorService } from '../services/twoFactor.service';
+import {
+  hasLocalTotp as totpIsSet, openPendingTotpSecret, openTotpSecret, sealPendingTotpSecret, sealTotpSecret,
+} from '../services/totpSecret';
 import { appConfigService } from '../services/appConfig.service';
 import { authService } from '../services/auth.service';
 import { tenantService, refuseSignInWithoutTenant } from '../services/tenant.service';
@@ -16,7 +19,9 @@ import {
 declare module 'express-session' {
   interface SessionData {
     pendingMfaUserId?: number;
-    pendingTotpSecret?: string;
+    /** The TOTP secret of a setup in progress, sealed by the vault (never in
+     *  clear in the session store, which the backups hold). */
+    pendingTotpSecretEnc?: string;
     pendingTotpExpiresAt?: number;
     /** The pending setup replaces a live TOTP (its step-up was passed). */
     pendingTotpReplaces?: boolean;
@@ -46,10 +51,10 @@ const TOTP_MANAGE: StepUpOpts = {
  */
 async function checkFactorManagement(req: Request, actionKey: string): Promise<StepUpOutcome> {
   const row = await db('users').where({ id: req.session.userId! })
-    .first('totp_enabled', 'totp_secret', 'foreign_source', 'foreign_id') as {
-      totp_enabled: boolean; totp_secret: string | null; foreign_source: string | null; foreign_id: number | null;
+    .first('totp_enabled', 'totp_secret_enc', 'foreign_source', 'foreign_id') as {
+      totp_enabled: boolean; totp_secret_enc: string | null; foreign_source: string | null; foreign_id: number | null;
     } | undefined;
-  const hasLocalTotp = !!(row?.totp_enabled && row?.totp_secret);
+  const hasLocalTotp = totpIsSet(row);
   const isObligateSso = row?.foreign_source === 'obligate' && !!row?.foreign_id;
   if (hasLocalTotp || isObligateSso) return checkSecondFactor(req, { ...TOTP_MANAGE, actionKey });
   return checkPasswordStepUp(req, { actionKey });
@@ -129,12 +134,12 @@ export const twoFactorController = {
     try {
       const row = await db('users')
         .where({ id: req.session.userId! })
-        .first('username', 'totp_enabled', 'totp_secret', 'foreign_source', 'foreign_id') as {
-          username: string; totp_enabled: boolean; totp_secret: string | null;
+        .first('username', 'totp_enabled', 'totp_secret_enc', 'foreign_source', 'foreign_id') as {
+          username: string; totp_enabled: boolean; totp_secret_enc: string | null;
           foreign_source: string | null; foreign_id: number | null;
         } | undefined;
       if (!row) throw new AppError(401, 'User not found');
-      const hasLocalTotp = !!(row.totp_enabled && row.totp_secret);
+      const hasLocalTotp = totpIsSet(row);
       // P2: replacing a live TOTP (or adding a local one on top of the
       // Obligate factor) needs a current code of the existing factor; a
       // first enrolment needs the current password.
@@ -148,7 +153,7 @@ export const twoFactorController = {
       // same window we use for email OTP — long enough for a real
       // user to scan + paste, short enough to invalidate forgotten
       // browser tabs.
-      req.session.pendingTotpSecret = secret;
+      req.session.pendingTotpSecretEnc = await sealPendingTotpSecret(req.session.userId!, secret);
       req.session.pendingTotpExpiresAt = Date.now() + 10 * 60 * 1000;
       req.session.pendingTotpReplaces = hasLocalTotp;
       // issuer: the client builds the same otpauth:// URI for "Open in authenticator app"
@@ -160,11 +165,13 @@ export const twoFactorController = {
   async totpEnable(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { code } = req.body;
-      const secret = req.session.pendingTotpSecret;
+      const sealedPending = req.session.pendingTotpSecretEnc;
       const expiresAt = req.session.pendingTotpExpiresAt ?? 0;
-      if (!secret) throw new AppError(400, 'No pending TOTP setup. Call /setup first.');
-      if (Date.now() > expiresAt) {
-        delete req.session.pendingTotpSecret;
+      if (!sealedPending) throw new AppError(400, 'No pending TOTP setup. Call /setup first.');
+      // Unreadable (instance key rotated meanwhile): the setup starts again.
+      const secret = Date.now() > expiresAt ? null : await openPendingTotpSecret(req.session.userId!, sealedPending);
+      if (!secret) {
+        delete req.session.pendingTotpSecretEnc;
         delete req.session.pendingTotpExpiresAt;
         delete req.session.pendingTotpReplaces;
         throw new AppError(400, 'TOTP setup expired. Call /setup again.');
@@ -183,22 +190,25 @@ export const twoFactorController = {
       const sh = hashSessionId(req.sessionID);
       const upd = db('users').where({ id: req.session.userId });
       if (!req.session.pendingTotpReplaces) {
-        upd.where((q) => q.where('totp_enabled', false).orWhereNull('totp_enabled').orWhereNull('totp_secret'));
+        upd.where((q) => q.where('totp_enabled', false).orWhereNull('totp_enabled').orWhereNull('totp_secret_enc'));
       }
       const updated = await upd.update({
-        totp_secret: secret,
+        // Sealed by the vault; without the reseal flag, the trigger bumps
+        // credential_version (phone keys revoked), as before.
+        totp_secret_enc: await sealTotpSecret(req.session.userId!, secret),
+        totp_secret: null,
         totp_enabled: true,
         totp_last_session: db.raw('CASE WHEN totp_last_step IS NULL OR totp_last_step < ? THEN ? ELSE totp_last_session END', [step, sh]),
         totp_last_step: db.raw('GREATEST(COALESCE(totp_last_step, ?), ?)', [step, step]),
       });
       if (!updated) {
-        delete req.session.pendingTotpSecret;
+        delete req.session.pendingTotpSecretEnc;
         delete req.session.pendingTotpExpiresAt;
         delete req.session.pendingTotpReplaces;
         throw new AppError(409, 'Two-factor authentication was enabled in the meantime. Start the setup again.');
       }
       const replaced = !!req.session.pendingTotpReplaces;
-      delete req.session.pendingTotpSecret;
+      delete req.session.pendingTotpSecretEnc;
       delete req.session.pendingTotpExpiresAt;
       delete req.session.pendingTotpReplaces;
       await revokeDeviceKeys(req, 'totp_changed');
@@ -215,14 +225,15 @@ export const twoFactorController = {
 
   async totpDisable(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const row = await db('users').where({ id: req.session.userId }).first('totp_enabled', 'totp_secret');
+      const row = await db('users').where({ id: req.session.userId }).first('totp_enabled', 'totp_secret_enc');
       // P2: removing a live TOTP needs a current code of it.
-      const hadTotp = !!(row?.totp_enabled && row?.totp_secret);
+      const hadTotp = totpIsSet(row);
       if (hadTotp) {
         const step = await checkFactorManagement(req, 'profile.totp_manage');
         if (!step.ok) { sendStepUpFailure(res, step); return; }
       }
       await db('users').where({ id: req.session.userId }).update({
+        totp_secret_enc: null,
         totp_secret: null,
         totp_enabled: false,
       });
@@ -342,7 +353,7 @@ export const twoFactorController = {
       // must not complete the sign-in.
       const row = await db('users')
         .where({ id: userId, is_active: true })
-        .first('id', 'username', 'role', 'totp_secret', 'totp_enabled', 'email_otp_enabled', 'email', 'foreign_source');
+        .first('id', 'username', 'role', 'totp_secret_enc', 'totp_enabled', 'email_otp_enabled', 'email', 'foreign_source');
 
       if (!row) throw new AppError(400, 'User not found');
       // SSO account (og_) signing in with a local password: only its LOCAL
@@ -378,10 +389,11 @@ export const twoFactorController = {
         }
         valid = true;
         bindKeyId = r.keyId;
-      } else if (method === 'totp' && row.totp_enabled && row.totp_secret) {
-        totpStep = twoFactorService.verifyTotpStep(row.totp_secret, String(code ?? ''));
+      } else if (method === 'totp' && totpIsSet(row)) {
+        const totpSecret = await openTotpSecret(row);
+        totpStep = twoFactorService.verifyTotpStep(totpSecret, String(code ?? ''));
         valid = totpStep !== null && await acceptTotpStep(row.id, totpStep, preLoginHash, 'strict');
-        if (totpStep === null) await reportTotpDrift(req, row.id, row.totp_secret, String(code ?? ''), 'sign-in');
+        if (totpStep === null) await reportTotpDrift(req, row.id, totpSecret, String(code ?? ''), 'sign-in');
       } else if (method === 'email' && row.email_otp_enabled && !ssoAccount) {
         const pending = req.session.pendingEmailOtp;
         if (pending && Date.now() <= pending.expires) {

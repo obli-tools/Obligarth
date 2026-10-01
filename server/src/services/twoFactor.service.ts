@@ -92,7 +92,7 @@ export const twoFactorService = {
   },
 
   async sendEmailOtp(smtpServerId: number, toEmail: string, code: string): Promise<void> {
-    const server = await smtpServerService.getById(smtpServerId);
+    const server = await smtpServerService.getTransportConfig(smtpServerId);
     if (!server) throw new Error('SMTP server not configured for OTP');
 
     const transport = nodemailer.createTransport({
@@ -103,7 +103,7 @@ export const twoFactorService = {
     });
 
     await transport.sendMail({
-      from: server.from_address,
+      from: server.fromAddress,
       to: toEmail,
       subject: `${config.appName} — Your login code`,
       text: `Your login verification code is: ${code}\n\nThis code expires in 10 minutes.`,
@@ -121,7 +121,7 @@ export const twoFactorService = {
   /** Security notice (second factor added / removed) [D13]. English, like
    *  the OTP mails; static text only (no code, secret or address). */
   async sendSecurityNotice(smtpServerId: number, toEmail: string, subject: string, lines: string[]): Promise<void> {
-    const server = await smtpServerService.getById(smtpServerId);
+    const server = await smtpServerService.getTransportConfig(smtpServerId);
     if (!server) throw new Error('SMTP server not configured for OTP');
     const transport = nodemailer.createTransport({
       host: server.host,
@@ -131,7 +131,7 @@ export const twoFactorService = {
     });
     const esc = (v: string) => v.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
     await transport.sendMail({
-      from: server.from_address,
+      from: server.fromAddress,
       to: toEmail,
       subject: `${config.appName} — ${subject}`,
       text: lines.join('\n\n'),
@@ -143,7 +143,7 @@ export const twoFactorService = {
   /** Security notice [D13]: several wrong step-up codes in 24 h. English,
    *  like the OTP mails. Carries no code, IP list or secret. */
   async sendStepUpFailureNotice(smtpServerId: number, toEmail: string, failures: number): Promise<void> {
-    const server = await smtpServerService.getById(smtpServerId);
+    const server = await smtpServerService.getTransportConfig(smtpServerId);
     if (!server) throw new Error('SMTP server not configured for OTP');
 
     const transport = nodemailer.createTransport({
@@ -155,7 +155,7 @@ export const twoFactorService = {
 
     const n = Math.max(0, Math.floor(Number(failures) || 0));
     await transport.sendMail({
-      from: server.from_address,
+      from: server.fromAddress,
       to: toEmail,
       subject: `${config.appName} — Wrong verification codes on your account`,
       text: `Several wrong verification codes were entered on your account (${n} in 24 h).\n\nIf this was not you, change your password and review your trusted IPs in your profile. After 30 wrong codes in 24 hours, code entry is blocked until you sign in again.`,
@@ -176,7 +176,7 @@ export const twoFactorService = {
     toEmail: string,
     info: { label: string | null; server: string; ip: string | null; date: Date },
   ): Promise<void> {
-    const server = await smtpServerService.getById(smtpServerId);
+    const server = await smtpServerService.getTransportConfig(smtpServerId);
     if (!server) throw new Error('SMTP server not configured for OTP');
 
     const transport = nodemailer.createTransport({
@@ -193,7 +193,7 @@ export const twoFactorService = {
     const line = `A phone was registered for two-factor validation on ${info.server} (${label}, ${when}, IP ${ip}).`;
     const advice = 'If this was not you, revoke it in your profile and change your password.';
     await transport.sendMail({
-      from: server.from_address,
+      from: server.fromAddress,
       to: toEmail,
       subject: `${config.appName} — A phone was registered for two-factor validation`,
       text: `${line}\n\n${advice}`,

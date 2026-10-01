@@ -135,6 +135,8 @@ export const teamsPlugin: NotificationPlugin = {
       key: 'webhookUrl',
       label: 'Webhook URL',
       type: 'url',
+      // The URL carries the webhook's token: a secret (write-only).
+      secret: true,
       required: true,
       placeholder: 'https://xxx.webhook.office.com/webhookb2/...',
     },

@@ -4,6 +4,7 @@ import { MASTER_TENANT_ID, DEVICE_KEY_HEADER, type DeviceChallenge } from '@obli
 import { isUuid } from './payload';
 import { db } from '../../db';
 import { twoFactorService } from '../twoFactor.service';
+import { openTotpSecret } from '../totpSecret';
 import { tfaTrustService } from '../tfaTrust.service';
 import { clientAddress } from '../../utils/clientIp';
 import { logger } from '../../utils/logger';
@@ -470,9 +471,9 @@ export async function checkSecondFactor(req: Request, o: StepUpOpts): Promise<St
   if (!userId) return { ok: false, status: 401, body: { error: 'Unauthenticated' } };
   const user = await db('users')
     .where({ id: userId })
-    .first('id', 'is_active', 'totp_enabled', 'totp_secret', 'foreign_source', 'foreign_id', 'email',
+    .first('id', 'is_active', 'totp_enabled', 'totp_secret_enc', 'foreign_source', 'foreign_id', 'email',
       'password_hash', 'credential_version') as {
-      id: number; is_active: boolean; totp_enabled: boolean; totp_secret: string | null;
+      id: number; is_active: boolean; totp_enabled: boolean; totp_secret_enc: string | null;
       foreign_source: string | null; foreign_id: number | null; email: string | null;
       password_hash: string | null; credential_version: number | null;
     } | undefined;
@@ -483,7 +484,7 @@ export async function checkSecondFactor(req: Request, o: StepUpOpts): Promise<St
   const credentialVersion = user.credential_version == null ? undefined : Number(user.credential_version);
 
   // 2. A factor must exist: local TOTP, or the Obligate account (SSO).
-  const hasLocalTotp = !!(user.totp_enabled && user.totp_secret);
+  const hasLocalTotp = !!(user.totp_enabled && user.totp_secret_enc);
   const isObligateSso = user.foreign_source === 'obligate' && !!user.foreign_id;
   if (!hasLocalTotp && !isObligateSso) {
     return { ok: false, status: 403, body: { error: o.noFactorError ?? NO_FACTOR_ENVELOPE } };
@@ -626,10 +627,12 @@ export async function checkSecondFactor(req: Request, o: StepUpOpts): Promise<St
     let result: 'valid' | 'invalid' | 'used' | 'unavailable';
     try {
       if (hasLocalTotp) {
-        const step = twoFactorService.verifyTotpStep(user.totp_secret!, code);
+        // Opened by the vault right before the check (coffre-secrets §7.3).
+        const secret = await openTotpSecret({ id: user.id, totp_secret_enc: user.totp_secret_enc! });
+        const step = twoFactorService.verifyTotpStep(secret, code);
         if (step === null) {
           result = 'invalid';
-          await reportTotpDrift(req, userId, user.totp_secret!, code, o.actionKey);
+          await reportTotpDrift(req, userId, secret, code, o.actionKey);
         } else {
           result = await acceptTotpStep(userId, step, hashSessionId(req.sessionID), o.requireNewStep ? 'strict' : 'stepup')
             ? 'valid' : 'used';

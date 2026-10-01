@@ -5,7 +5,7 @@ export const slackPlugin: NotificationPlugin = {
   name: 'Slack',
   description: 'Send to a Slack channel via webhook',
   configFields: [
-    { key: 'webhookUrl', label: 'Slack Webhook URL', type: 'url', required: true, placeholder: 'https://hooks.slack.com/services/...' },
+    { key: 'webhookUrl', label: 'Slack Webhook URL', type: 'url', secret: true, required: true, placeholder: 'https://hooks.slack.com/services/...' },
     { key: 'channel', label: 'Channel (optional)', type: 'text', placeholder: '#monitoring' },
   ],
 

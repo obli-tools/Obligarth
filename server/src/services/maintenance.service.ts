@@ -701,20 +701,19 @@ export const maintenanceService = {
         appName: config.appName,
       };
 
+      // Public columns only: the channel's secrets are opened by
+      // resolveChannelConfig, right before the send (write-only channels).
       const channels = await db('notification_channels')
         .whereIn('id', window.notificationChannels)
-        .where({ is_enabled: true });
+        .where({ is_enabled: true })
+        .select('id', 'name', 'type') as Array<{ id: number; name: string; type: string }>;
 
+      const { notificationService } = await import('./notification.service');
       for (const ch of channels) {
         const plugin = getPlugin(ch.type);
         if (!plugin) continue;
         try {
-          let resolvedConfig: Record<string, unknown> = ch.config;
-          if (ch.type === 'smtp' && ch.config?.smtpServerId) {
-            const { smtpServerService } = await import('./smtpServer.service');
-            const srv = await smtpServerService.getTransportConfig(Number(ch.config.smtpServerId));
-            if (srv) resolvedConfig = { ...ch.config, host: srv.host, port: srv.port, secure: srv.secure, username: srv.username, password: srv.password, fromAddress: srv.fromAddress };
-          }
+          const resolvedConfig = await notificationService.resolveChannelConfig({ id: ch.id });
           await plugin.send(resolvedConfig, payload);
           logger.info(`[Maintenance] Notification sent (${event}) via ${ch.name} for window "${window.name}"`);
         } catch (err) {

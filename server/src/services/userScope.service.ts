@@ -217,7 +217,8 @@ async function resetSecondFactorsIn(
   ctx: { req?: Request; auditTenantId?: number | null },
 ): Promise<boolean> {
   const count = await db('users').where({ id: userId }).update({
-    totp_secret: null,
+    totp_secret_enc: null,
+    totp_secret: null,          // inherited clear column (emptied by the vault's backfill)
     totp_enabled: false,
     email_otp_enabled: false,
     updated_at: new Date(),

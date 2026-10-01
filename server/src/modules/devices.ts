@@ -6,10 +6,12 @@ import { registerApprovalExecutor, registerApprovalRequestType } from '../servic
 import { registerRestrictableActions } from '../services/restriction.service';
 import { deviceService } from '../services/device.service';
 import { executeBulkDelete, executeChangeGroup, executeDeviceRequest } from '../services/deviceApproval';
+import { registerSecretColumn } from '../vault';
 
 // =============================================================================
 // DEVICE REGISTRY — its hooks into the core's registries (durable jobs,
-// audit names, two-step approvals, restrictions matrix), registered here and
+// audit names, two-step approvals, restrictions matrix, sealed columns of the
+// vault), registered here and
 // only here; index.ts calls registerDeviceModule() before anything starts.
 // Registration order is kept where it shows: start-up order, order of the
 // restrictions matrix.
@@ -85,6 +87,16 @@ export function registerDeviceModule(): void {
     runAtStart: true,
     timeoutSeconds: 900,
     handler: perTenant((tenantId) => deviceService.cleanOrphans(tenantId)),
+  });
+
+  // ── Vault: the sealed license keys (docs: coffre-secrets V9) ──────────────
+  // Registered before the vault's boot backfill (index.ts calls this first):
+  // the inherited clear keys move into license_key_enc.
+  registerSecretColumn({
+    table: 'device_licenses', column: 'license_key_enc', pk: 'id', pkType: 'integer',
+    tenantColumn: 'tenant_id', encoding: 'utf8', owner: 'devices.licenses',
+    legacy: { kind: 'column', column: 'license_key', encoding: 'text' },
+    onLoss: 'null',
   });
 
   // ── Audit: names of the resources (audit.service) ─────────────────────────

@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import {
   DbContextDeniedError, DbContextMismatchError, DbContextMissingError, countRlsDenied, currentDbContext,
 } from '../db/context';
+import { VaultError } from '../vault/errors';
 
 export class AppError extends Error {
   constructor(
@@ -94,6 +95,20 @@ export function errorHandler(
     countRlsDenied(table);
     logger.warn({ err, table, constraint: (err as PgError).constraint, ...contextForLog(req) }, 'reference to another tenant refused');
     res.status(404).json({ success: false, error: 'Not found' });
+    return;
+  }
+
+  // Errors of the vault (docs: coffre-secrets §5.7): never a value in the
+  // answer nor in the log (the vault logged the failure, with its
+  // coordinates, and raised the alert when it hints at tampering or at an
+  // isolation defect). A tenant being deleted refuses new secrets (409).
+  if (err instanceof VaultError) {
+    if (err.code === 'tenant_retiring') {
+      res.status(409).json({ success: false, error: 'This tenant is being deleted: its secrets can no longer be changed', code: 'tenantRetiring' });
+      return;
+    }
+    logger.error({ vault: { code: err.code }, ...contextForLog(req) }, 'request failed on a vault error');
+    res.status(500).json({ success: false, error: 'Internal server error' });
     return;
   }
 

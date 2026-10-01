@@ -7,6 +7,7 @@ import { isMasterTenant } from '@obligarth/shared';
 import type { TenantCapability } from '@obligarth/shared';
 import { asPlatform, asTenant, currentDbContext, switchToTenant, userActor } from '../db/context';
 import { openPlatformGrant } from '../db/platformAccess';
+import { vault, type SecretLocator } from '../vault';
 
 // Database contexts (rls-tenant §8.2): a request is filed, read and resolved
 // in the database context of its tenant; an approved request is executed AS
@@ -54,13 +55,19 @@ async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise
 //     to the reviewers) instead of a silent "approved" that did nothing.
 //   - No secret in a request (services/approvalSecrets.ts): the payload is
 //     returned to every reviewer. Executor-only data that is not a clear
-//     secret (bcrypt hash of a new user's password, avatar image) sits in
-//     `sealed_payload`, never returned, wiped as soon as the request is
+//     secret (bcrypt hash of a new user's password, avatar image) is sealed
+//     by the vault in `sealed_payload_enc` (coffre-secrets V10: the DEK of the
+//     request's tenant), never returned, wiped as soon as the request is
 //     resolved (executed, failed, denied, cancelled, expired).
 
 const EXPIRY_MINUTES = 30;
 
-export type ApprovalRequestType = 'batch_command' | 'device_uninstall';
+export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_kek_rotation';
+
+/** Where the executor-only data of a request is sealed (AAD
+ *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */
+const sealedAt = (id: number, tenantId: number): SecretLocator =>
+  ({ table: 'pending_approvals', column: 'sealed_payload_enc', pk: id, tenantId });
 
 export interface BatchCommandPayload {
   action: string;              // 'change_group' | 'delete_devices' | 'settings_update' | ...
@@ -102,7 +109,7 @@ export interface PendingApproval {
   executionError: string | null;
 }
 
-/** API / socket shape. `sealed_payload` is never part of it. A pending
+/** API / socket shape. `sealed_payload_enc` is never part of it. A pending
  *  request past its expiry is reported 'expired' even before the sweeper ran. */
 function rowToApproval(r: any): PendingApproval {
   const expired = r.status === 'pending' && r.expires_at && new Date(r.expires_at).getTime() <= Date.now();
@@ -207,7 +214,7 @@ export interface ApprovalExecution {
   requesterId: number;
   /** The request's payload (for 'batch_command': BatchCommandPayload). */
   payload: any;
-  /** Executor-only data (sealed_payload), never returned by the API. */
+  /** Executor-only data (sealed_payload_enc, opened by the vault), never returned by the API. */
   sealed: Record<string, unknown>;
 }
 
@@ -278,16 +285,21 @@ export const approvalService = {
       logger.warn({ requestType: params.requestType, removed }, 'approval payload: secret fields dropped');
     }
     const expiresAt = new Date(Date.now() + EXPIRY_MINUTES * 60 * 1000);
-    const [row] = await inApprovalTenant(params.tenantId, () => db('pending_approvals').insert({
-      tenant_id: params.tenantId,
-      requested_by: params.userId,
-      request_type: params.requestType,
-      description: capDescription(params.description),
-      payload: JSON.stringify(clean),
-      sealed_payload: params.sealed ? JSON.stringify(params.sealed) : null,
-      status: 'pending',
-      expires_at: expiresAt,
-    }).returning('*'));
+    // The id comes first: it is part of the AAD of the sealed part.
+    const [row] = await inApprovalTenant(params.tenantId, () => db.transaction(async (trx) => {
+      const id = await vault.allocateId('pending_approvals', { trx });
+      return trx('pending_approvals').insert({
+        id,
+        tenant_id: params.tenantId,
+        requested_by: params.userId,
+        request_type: params.requestType,
+        description: capDescription(params.description),
+        payload: JSON.stringify(clean),
+        sealed_payload_enc: params.sealed ? await vault.sealJson(sealedAt(id, params.tenantId), params.sealed, { trx }) : null,
+        status: 'pending',
+        expires_at: expiresAt,
+      }).returning('*');
+    }));
 
     // Audit trail
     await auditService.log({
@@ -352,7 +364,10 @@ export const approvalService = {
     let partial: string | null = null;
     try {
       const payload = parseJson(row.payload) ?? {};
-      const sealed = parseJson(row.sealed_payload) ?? {};
+      // Opened right before the execution (as the requester, below).
+      const sealed = row.sealed_payload_enc
+        ? await vault.openJson<Record<string, unknown>>(sealedAt(Number(row.id), Number(row.tenant_id)), row.sealed_payload_enc)
+        : {};
       partial = await asTenant(Number(row.tenant_id), userActor(Number(row.requested_by)),
         () => this._execute(row, payload, sealed)) ?? null;
     } catch (err) {
@@ -361,8 +376,8 @@ export const approvalService = {
     }
     // The sealed part (password hash, image) never outlives the decision.
     await db('pending_approvals').where({ id: row.id }).update(failure
-      ? { execution_error: failure.slice(0, 1000), sealed_payload: null }
-      : { status: 'executed', executed_at: new Date(), execution_error: partial ? partial.slice(0, 1000) : null, sealed_payload: null });
+      ? { execution_error: failure.slice(0, 1000), sealed_payload_enc: null, sealed_payload: null }
+      : { status: 'executed', executed_at: new Date(), execution_error: partial ? partial.slice(0, 1000) : null, sealed_payload_enc: null, sealed_payload: null });
 
     await auditService.log({
       tenantId: row.tenant_id,
@@ -389,6 +404,7 @@ export const approvalService = {
       reviewed_by: params.reviewerId,
       reviewed_at: new Date(),
       review_reason: params.reason ?? null,
+      sealed_payload_enc: null,
       sealed_payload: null,
     });
     if (!done) await this._lostRace(row.id);
@@ -412,7 +428,7 @@ export const approvalService = {
       throw Object.assign(new Error('Only the requester can cancel'), { status: 403 });
     }
     const done = await stillOpen(db('pending_approvals').where({ id: row.id }))
-      .update({ status: 'cancelled', reviewed_at: new Date(), sealed_payload: null });
+      .update({ status: 'cancelled', reviewed_at: new Date(), sealed_payload_enc: null, sealed_payload: null });
     if (!done) await this._lostRace(row.id);
     await auditService.log({
       tenantId: row.tenant_id,
@@ -473,7 +489,7 @@ export const approvalService = {
     const rows = await db('pending_approvals')
       .whereIn('id', ids)
       .andWhere('status', 'pending')
-      .update({ status: 'expired', sealed_payload: null })
+      .update({ status: 'expired', sealed_payload_enc: null, sealed_payload: null })
       .returning('*') as any[];
     for (const row of rows) {
       await auditService.log({

@@ -654,13 +654,16 @@ export interface NotificationChannel {
   tenantId: number;
   name: string;
   type: NotificationChannelType;
-  /** When the caller doesn't own this channel (master fan-out into a
-   *  child tenant), the server replaces every secret-shaped key with
-   *  the literal string `__REDACTED__`. The UI uses `readOnly` below
-   *  to switch the editor into read-only mode without trying to
-   *  inspect the contents — keys an installer added later (e.g. an
-   *  exotic SMS plugin) get redacted by suffix-match anyway. */
+  /** The public settings of the channel: never a secret field (write-only,
+   *  sealed by the server's vault). When the caller doesn't own this
+   *  channel (master fan-out into a child tenant), any other key that
+   *  looks secret is replaced by the literal string `__REDACTED__` as well;
+   *  the UI uses `readOnly` below to switch the editor into read-only mode. */
   config: Record<string, any>;
+  /** Names of the secret fields that hold a value (sealed, never returned):
+   *  the form shows them as "set" and sends a new value only to replace one
+   *  (coffre-secrets V8). Empty for a channel the caller does not own. */
+  secretFieldsSet: string[];
   uuid: string;
   createdAt: string;
   updatedAt: string;
@@ -938,6 +941,8 @@ export interface CreateNotificationChannelRequest {
 
 export interface UpdateNotificationChannelRequest {
   name?: string;
+  /** Secret fields: absent or '' keeps the stored value, a string replaces
+   *  it, null clears it (an optional field only). */
   config?: Record<string, any>;
 }
 
@@ -969,6 +974,49 @@ export interface ObligateConfig {
    *  (else the API key is expected). Never returned in clear. */
   inboundSecretSet?: boolean;
   inboundSecretFromEnv?: boolean;
+}
+
+// ─── VAULT ───────────────────────────────────────────────────────────────────
+// State and operations of the server's vault of secrets (docs: coffre-secrets
+// §11.1), shown to the platform administrators. Identifiers, fingerprints and
+// counts only: never a key nor a secret.
+
+export interface VaultStatus {
+  provider: 'file' | 'transit';
+  /** First 16 hex characters of SHA-256 of the KEK: a fingerprint, not a secret. */
+  kekId: string;
+  /** apple-edge's, once it exposes it (coffre-secrets §8.4-1). */
+  edgeKekId: string | null;
+  instanceDek: { id: string; version: number; createdAt: string } | null;
+  tenantKeys: { active: number; retired: number; destroyed: number; scheduled: number; tenantsWithoutKey: number };
+  backfill: { complete: boolean; remaining: Record<string, number>; lastRunAt: string | null };
+  escrow: { confirmedAt: string | null; lastTestAt: string | null; coversCurrentKek: boolean };
+  lastKekRotationAt: string | null;
+  operations: { running: number; failed: number };
+}
+
+export type VaultOperationKind =
+  | 'backfill' | 'dek_rotation' | 'kek_rotation' | 'verify'
+  | 'escrow_confirmation' | 'escrow_test' | 'escrow_retirement' | 'kek_loss_recovery';
+
+export type VaultOperationState =
+  | 'pending_approval' | 'authorized' | 'running' | 'done' | 'failed' | 'expired' | 'cancelled';
+
+export interface VaultOperation {
+  id: string;
+  kind: VaultOperationKind;
+  state: VaultOperationState;
+  tenantId: number | null;
+  approvalId: number | null;
+  requestedBy: number | null;
+  reason: string | null;
+  params: Record<string, unknown>;
+  progress: Record<string, unknown>;
+  authorizedUntil: string | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  createdAt: string;
 }
 
 // ─── FLEET SUMMARY ───────────────────────────────────────────────────────────
@@ -1086,6 +1134,9 @@ export interface NotificationConfigField {
   key: string;
   label: string;
   type: NotificationConfigFieldType;
+  /** A secret field (token, webhook URL…): sealed by the server, never
+   *  returned (write-only). Every 'password' field is secret. */
+  secret?: boolean;
   required?: boolean;
   placeholder?: string;
   helpText?: string;

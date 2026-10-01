@@ -6,7 +6,7 @@ export const discordPlugin: NotificationPlugin = {
   name: 'Discord',
   description: 'Send to a Discord channel via webhook',
   configFields: [
-    { key: 'webhookUrl', label: 'Discord Webhook URL', type: 'url', required: true, placeholder: 'https://discord.com/api/webhooks/...' },
+    { key: 'webhookUrl', label: 'Discord Webhook URL', type: 'url', secret: true, required: true, placeholder: 'https://discord.com/api/webhooks/...' },
     { key: 'username', label: 'Bot Username (optional)', type: 'text', placeholder: 'Obligarth' },
   ],
 

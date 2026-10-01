@@ -508,7 +508,7 @@ export interface ActiveKey {
 type KeyRow = {
   id: string; user_id: number; origin: string; security_level: string; public_key_spki: unknown;
   credential_version: number; status: string; sso_epoch: number | null; user_cv: number; user_active: boolean;
-  foreign_source: string | null; foreign_id: number | null; totp_enabled: boolean; totp_secret: string | null;
+  foreign_source: string | null; foreign_id: number | null; totp_enabled: boolean; totp_secret_enc: string | null;
   attestation: unknown;
 };
 
@@ -519,7 +519,7 @@ async function loadKey(keyId: string): Promise<KeyRow | null> {
     .where('k.id', keyId)
     .first(
       'k.id', 'k.user_id', 'k.origin', 'k.security_level', 'k.public_key_spki', 'k.credential_version', 'k.status', 'k.sso_epoch', 'k.attestation',
-      'u.credential_version as user_cv', 'u.is_active as user_active', 'u.foreign_source', 'u.foreign_id', 'u.totp_enabled', 'u.totp_secret',
+      'u.credential_version as user_cv', 'u.is_active as user_active', 'u.foreign_source', 'u.foreign_id', 'u.totp_enabled', 'u.totp_secret_enc',
     ) as KeyRow | undefined;
   return row ?? null;
 }
@@ -659,7 +659,7 @@ export async function loginKeyFor(userId: number, headerKeyId: unknown): Promise
   if (!pol.enabled || !pol.loginEnabled) return null;
   const row = await loadKey(headerKeyId);
   if (!row || Number(row.user_id) !== userId) return null;
-  if (row.foreign_source != null || !row.totp_enabled || !row.totp_secret) return null;
+  if (row.foreign_source != null || !row.totp_enabled || !row.totp_secret_enc) return null;
   if (await unusableReason(row, pol.requireAttestation)) return null;
   return toActiveKey(row);
 }
@@ -1054,7 +1054,7 @@ export async function verifyAssertion(req: Request, o: VerifyAssertionOptions): 
     await rejectAudit(req, userId, a.keyId, 'invalid_assertion', 'unknown_key');
     return { ok: false, error: 'invalid_assertion' };
   }
-  if (o.purpose === 'login' && (row.foreign_source != null || !row.totp_enabled || !row.totp_secret)) {
+  if (o.purpose === 'login' && (row.foreign_source != null || !row.totp_enabled || !row.totp_secret_enc)) {
     countAssertionFailure(req);
     await rejectAudit(req, userId, a.keyId, 'invalid_assertion', 'not_login_eligible');
     return { ok: false, error: 'invalid_assertion' };
@@ -1191,7 +1191,8 @@ export interface EnrolUser {
   foreign_source: string | null;
   foreign_id?: number | null;
   totp_enabled: boolean;
-  totp_secret: string | null;
+  /** Presence of the sealed TOTP secret only: never opened here. */
+  totp_secret_enc: string | null;
 }
 
 /** Text the app recognises for "no second factor" (keep "enable TOTP"). */
@@ -1212,7 +1213,7 @@ export async function enrolPreconditions(user: EnrolUser): Promise<{ ok: true } 
     if (!pol.ssoSupported || user.foreign_source !== 'obligate' || !user.foreign_id) {
       return { ok: false, status: 403, body: { error: 'device_keys_sso_unsupported' } };
     }
-  } else if (!user.totp_enabled || !user.totp_secret) {
+  } else if (!user.totp_enabled || !user.totp_secret_enc) {
     return { ok: false, status: 403, body: { error: ENROL_NO_TOTP_ERROR } };
   }
   return { ok: true };

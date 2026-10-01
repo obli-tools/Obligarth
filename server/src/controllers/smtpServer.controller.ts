@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import { smtpServerService } from '../services/smtpServer.service';
 import { AppError } from '../middleware/errorHandler';
+import { isVaultError } from '../vault/errors';
+import { hasGlobalView } from '../services/deviceScope.service';
 
 export const smtpServerController = {
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -33,7 +35,10 @@ export const smtpServerController = {
         ...(username !== undefined && { username }),
         ...(password !== undefined && { password }),
         ...(fromAddress !== undefined && { fromAddress }),
-      });
+      // The password is sealed under the DEK of the server's tenant (the
+      // row's); a server of another tenant is refused, except from the
+      // master tenant's global view (coffre-secrets R1).
+      }, { requestTenantId: req.tenantId, globalView: hasGlobalView(req) });
       if (!server) throw new AppError(404, 'SMTP server not found');
       res.json({ success: true, data: server });
     } catch (err) { next(err); }
@@ -51,9 +56,12 @@ export const smtpServerController = {
   async test(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = parseInt(req.params.id, 10);
-      await smtpServerService.test(id);
+      await smtpServerService.test(id, { requestTenantId: req.tenantId, globalView: hasGlobalView(req) });
       res.json({ success: true, message: 'Connection successful' });
     } catch (err) {
+      // A vault error (the password cannot be opened) is never echoed: the
+      // error handler answers 500, the vault logged and alerted.
+      if (isVaultError(err)) { next(err); return; }
       const msg = err instanceof Error ? err.message : 'Connection failed';
       next(new AppError(400, `SMTP test failed: ${msg}`));
     }

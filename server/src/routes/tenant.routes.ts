@@ -140,7 +140,7 @@ router.post('/', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const { name, slug } = req.body as { name: string; slug: string };
     if (!name || !slug) throw new AppError(400, 'name and slug are required');
-    const tenant = await tenantService.create({ name, slug });
+    const tenant = await tenantService.create({ name, slug }, { ipAddress: clientIp(req) || undefined });
     res.status(201).json({ success: true, data: tenant });
   } catch (err) {
     next(err);
@@ -208,7 +208,7 @@ router.delete('/:id', async (req, res, next) => {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
     const id = parseInt(req.params.id);
     if (id === 1) throw new AppError(400, 'Cannot delete the default tenant');
-    await tenantService.delete(id);
+    await tenantService.delete(id, { ipAddress: clientIp(req) || undefined });
     res.json({ success: true });
   } catch (err) {
     next(err);

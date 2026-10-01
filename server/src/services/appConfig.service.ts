@@ -1,5 +1,6 @@
 import { db } from '../db';
-import { switchToIdentity } from '../db/context';
+import { currentDbContext, switchToIdentity } from '../db/context';
+import { vault } from '../vault';
 import type { AppConfigData, ObligateConfig } from '@obligarth/shared';
 
 // ── Platform settings of the modules ────────────────────────────────────────
@@ -43,6 +44,30 @@ const OBLIGATE_CONFIG_KEY = 'obligate_config';
 //   OBLIGATE_INBOUND_SECRET — a secret distinct from the API key that Obligate
 //     must present (Bearer) on its calls to this server. Unset → the Settings
 //     value → the API key (today's behaviour).
+// Storage (docs: coffre-secrets §7.3): app_config 'obligate_config' keeps the
+// URL only; the API key and the inbound secret are instance secrets of the
+// vault (obligate_api_key, obligate_inbound_secret), sealed under the
+// instance DEK, never returned (flags only). The boot backfill moved the
+// values an older version kept in clear in the JSON.
+const OBLIGATE_API_KEY = 'obligate_api_key';
+const OBLIGATE_INBOUND_SECRET = 'obligate_inbound_secret';
+
+function currentUserId(): number | null {
+  const actor = currentDbContext()?.actor;
+  return actor?.type === 'user' ? actor.userId : null;
+}
+
+/** The URL kept in app_config 'obligate_config' (the JSON's only key). */
+function parseObligateUrl(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  try {
+    const url = (JSON.parse(raw) as { url?: unknown }).url;
+    return typeof url === 'string' && url ? url : null;
+  } catch {
+    return null;
+  }
+}
+
 interface ObligateStored {
   url: string | null;
   apiKey: string | null;
@@ -54,13 +79,13 @@ function envInboundSecret(): string | null {
   return v ? v : null;
 }
 /** What the admin UI may see: flags, never a secret. */
-function obligatePublicView(s: ObligateStored, enabled: boolean): ObligateConfig {
+function obligatePublicView(s: { url: string | null; apiKeySet: boolean; inboundSecretSet: boolean }, enabled: boolean): ObligateConfig {
   const envSecret = envInboundSecret();
   return {
     url: s.url,
-    apiKeySet: !!s.apiKey,
+    apiKeySet: s.apiKeySet,
     enabled,
-    inboundSecretSet: !!(envSecret ?? s.inboundSecret),
+    inboundSecretSet: !!envSecret || s.inboundSecretSet,
     inboundSecretFromEnv: !!envSecret,
   };
 }
@@ -119,25 +144,23 @@ export const appConfigService = {
 
   async getObligateConfig(): Promise<ObligateConfig> {
     const enabled = (await this.get('obligate_enabled')) === 'true';
-    const stored = await this.readObligateStored();
-    return obligatePublicView(stored, enabled);
+    return obligatePublicView({
+      url: parseObligateUrl(await this.get(OBLIGATE_CONFIG_KEY)),
+      apiKeySet: await vault.hasInstanceSecret(OBLIGATE_API_KEY),
+      inboundSecretSet: await vault.hasInstanceSecret(OBLIGATE_INBOUND_SECRET),
+    }, enabled);
   },
 
   /**
-   * Obligate settings as stored (app_config 'obligate_config'), without the
-   * environment overrides. Internal: callers use getObligateRaw().
+   * Obligate settings as stored (URL in app_config 'obligate_config', the
+   * secrets in the vault, opened here), without the environment overrides.
+   * Internal: callers use getObligateRaw().
    */
   async readObligateStored(): Promise<ObligateStored> {
-    const raw = await this.get(OBLIGATE_CONFIG_KEY);
-    if (!raw) return { url: null, apiKey: null, inboundSecret: null };
-    try {
-      const cfg = JSON.parse(raw) as { url?: string; apiKey?: string; inboundSecret?: string };
-      return {
-        url: cfg.url ?? null,
-        apiKey: cfg.apiKey ?? null,
-        inboundSecret: typeof cfg.inboundSecret === 'string' && cfg.inboundSecret ? cfg.inboundSecret : null,
-      };
-    } catch { return { url: null, apiKey: null, inboundSecret: null }; }
+    const url = parseObligateUrl(await this.get(OBLIGATE_CONFIG_KEY));
+    const apiKey = await vault.getInstanceSecret(OBLIGATE_API_KEY);
+    const inboundSecret = await vault.getInstanceSecret(OBLIGATE_INBOUND_SECRET);
+    return { url, apiKey: apiKey || null, inboundSecret: inboundSecret || null };
   },
 
   /**
@@ -156,26 +179,33 @@ export const appConfigService = {
     };
   },
 
+  /** url: replaced when given; apiKey: a non-empty string replaces it, absent
+   *  or empty keeps it; inboundSecret: a non-empty string replaces it, null
+   *  (or '') clears it, absent keeps it. One transaction, identity context
+   *  (app_config is a catalog), the secrets sealed by the vault (audited by
+   *  it: vault.instance_secret_changed). */
   async patchObligateConfig(patch: {
     url?: string | null; apiKey?: string | null; enabled?: boolean;
     inboundSecret?: string | null;
   }): Promise<ObligateConfig> {
-    const existing = await this.readObligateStored();
-    const merged: ObligateStored = {
-      url: 'url' in patch ? (patch.url ?? null) : existing.url,
-      apiKey: ('apiKey' in patch && patch.apiKey) ? patch.apiKey : existing.apiKey,
-      // a non-empty string sets it, null clears it, absent keeps it
-      inboundSecret: 'inboundSecret' in patch
-        ? (typeof patch.inboundSecret === 'string' && patch.inboundSecret ? patch.inboundSecret : null)
-        : existing.inboundSecret,
-    };
-    const toStore: Record<string, unknown> = { url: merged.url, apiKey: merged.apiKey };
-    if (merged.inboundSecret) toStore.inboundSecret = merged.inboundSecret;
-    await this.set(OBLIGATE_CONFIG_KEY, JSON.stringify(toStore));
-    if ('enabled' in patch) {
-      await this.set('obligate_enabled', patch.enabled ? 'true' : 'false');
-    }
-    const enabled = (await this.get('obligate_enabled')) === 'true';
-    return obligatePublicView(merged, enabled);
+    const actor = { userId: currentUserId() };
+    await switchToIdentity(() => db.transaction(async (trx) => {
+      const row = await trx('app_config').where({ key: OBLIGATE_CONFIG_KEY }).forUpdate().first('value') as { value: string } | undefined;
+      const url = 'url' in patch ? (patch.url ?? null) : parseObligateUrl(row?.value);
+      const value = JSON.stringify({ url });
+      await trx('app_config').insert({ key: OBLIGATE_CONFIG_KEY, value }).onConflict('key').merge({ value });
+      if ('apiKey' in patch && typeof patch.apiKey === 'string' && patch.apiKey) {
+        await vault.setInstanceSecret(OBLIGATE_API_KEY, patch.apiKey, actor, { trx });
+      }
+      if ('inboundSecret' in patch) {
+        const v = typeof patch.inboundSecret === 'string' && patch.inboundSecret ? patch.inboundSecret : null;
+        await vault.setInstanceSecret(OBLIGATE_INBOUND_SECRET, v, actor, { trx });
+      }
+      if ('enabled' in patch) {
+        const enabledValue = patch.enabled ? 'true' : 'false';
+        await trx('app_config').insert({ key: 'obligate_enabled', value: enabledValue }).onConflict('key').merge({ value: enabledValue });
+      }
+    }));
+    return this.getObligateConfig();
   },
 };
