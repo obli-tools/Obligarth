@@ -11,38 +11,53 @@ import { jobStatus } from './status';
 // when pg-boss runs, the mode is not 'paused' and, in mode 'all', the
 // jobs.heartbeat queue succeeded less than JOBS_HEALTH_MAX_HEARTBEAT_AGE_S
 // ago (the cron pass and the workers both work); 503 {"status":"degraded"}
-// otherwise. Result cached 10 s.
+// otherwise. Result cached 10 s, a 200 never past the moment its heartbeat
+// gets too old: the 503 comes at most JOBS_HEALTH_MAX_HEARTBEAT_AGE_S after
+// the last heartbeat (180 s), not 10 s later.
 // =============================================================================
 
 const CACHE_MS = 10_000;
+const HEARTBEAT_QUEUE = 'jobs.heartbeat';
 
-export function createJobsHealth(runtime: JobsRuntime, maxAgeS: () => number = () => config.jobs.healthMaxHeartbeatAgeS) {
-  let cache: { at: number; ok: boolean } | null = null;
+export interface JobsHealthOptions {
+  /** Largest age of the heartbeat, in seconds (JOBS_HEALTH_MAX_HEARTBEAT_AGE_S). */
+  maxAgeS?: () => number;
+  /** The queue whose last success is the heartbeat (jobs.heartbeat; tests). */
+  heartbeatQueue?: string;
+}
 
-  async function evaluate(): Promise<boolean> {
-    if (!runtime.isStarted()) return false;
+export function createJobsHealth(runtime: JobsRuntime, opts: JobsHealthOptions = {}) {
+  const maxAgeS = opts.maxAgeS ?? (() => config.jobs.healthMaxHeartbeatAgeS);
+  const heartbeatQueue = opts.heartbeatQueue ?? HEARTBEAT_QUEUE;
+  let cache: { ok: boolean; until: number } | null = null;
+
+  /** Healthy, and until when that answer may be served from the cache. */
+  async function evaluate(now: number): Promise<{ ok: boolean; until: number }> {
+    const until = now + CACHE_MS;
+    if (!runtime.isStarted()) return { ok: false, until };
     const mode = runtime.mode();
-    if (mode === 'paused') return false;
-    if (mode === 'api') return true;
-    if (!runtime.workersStarted()) return false;
-    const beat = await jobStatus.get('jobs.heartbeat', '');
-    if (!beat?.lastSucceededAt) return false;
-    return Date.now() - beat.lastSucceededAt.getTime() < maxAgeS() * 1000;
+    if (mode === 'paused') return { ok: false, until };
+    if (mode === 'api') return { ok: true, until };
+    if (!runtime.workersStarted()) return { ok: false, until };
+    const beat = await jobStatus.get(heartbeatQueue, '');
+    if (!beat?.lastSucceededAt) return { ok: false, until };
+    const deadline = beat.lastSucceededAt.getTime() + maxAgeS() * 1000;
+    return now < deadline ? { ok: true, until: Math.min(until, deadline) } : { ok: false, until };
   }
 
-  /** Healthy? (cached 10 s) */
+  /** Healthy? (cached 10 s at most, see above) */
   async function check(): Promise<boolean> {
     const now = Date.now();
-    if (cache && now - cache.at < CACHE_MS) return cache.ok;
-    let ok = false;
+    if (cache && now < cache.until) return cache.ok;
+    let result: { ok: boolean; until: number };
     try {
-      ok = await evaluate();
+      result = await evaluate(now);
     } catch (err) {
       logger.warn({ err: safeErr(err) }, 'jobs health check failed');
-      ok = false;
+      result = { ok: false, until: now + CACHE_MS };
     }
-    cache = { at: now, ok };
-    return ok;
+    cache = result;
+    return result.ok;
   }
 
   return {

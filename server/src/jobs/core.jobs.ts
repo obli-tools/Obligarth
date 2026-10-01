@@ -89,8 +89,17 @@ async function monitor(ctx: JobContext<unknown>): Promise<JobResult> {
     }
   }
 
-  // New dead letters since the previous run of the monitor.
-  const since = statusOf('jobs.monitor')?.lastSucceededAt ?? new Date(Date.now() - 2 * STALE_MARGIN_MS);
+  // New dead letters: created since the START of the previous completed run
+  // (one created while that run was counting is counted twice rather than
+  // never; the alert is deduplicated).
+  const prev = await boss.getDb().executeSql(
+    `SELECT max(started_on) AS since FROM pgboss.job WHERE name = $1 AND state = 'completed' AND id <> $2`,
+    [ctx.name, ctx.jobId],
+  );
+  const prevStart = (prev.rows[0] as { since: Date | string | null } | undefined)?.since ?? null;
+  const since = prevStart !== null
+    ? new Date(prevStart)
+    : statusOf(ctx.name)?.lastSucceededAt ?? new Date(Date.now() - 2 * STALE_MARGIN_MS);
   const { rows } = await boss.getDb().executeSql(
     'SELECT count(*)::int AS n FROM pgboss.job WHERE name = $1 AND created_on > $2',
     [DEAD_LETTER_QUEUE, since],
@@ -126,6 +135,12 @@ export function registerCoreJobs(): void {
     runAtStart: true,
     retry: { limit: 0 },
     timeoutSeconds: 60,
+    // Run as soon as the cron pass sends it (woken by NOTIFY, polled every
+    // 2 s without it): its success follows the occurrence closely, so
+    // /health/jobs turns 503 at most JOBS_HEALTH_MAX_HEARTBEAT_AGE_S after
+    // the last occurrence sent.
+    notify: true,
+    pollSeconds: 2,
     handler: async () => undefined,
   });
 
