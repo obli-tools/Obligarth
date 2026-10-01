@@ -96,6 +96,9 @@ services:
   server:
     image: meejay/obligarth-server:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
     restart: unless-stopped
+    # pg-boss graceful stop (JOBS_STOP_TIMEOUT_MS, 15 s) inside the server's
+    # 25 s exit budget; Docker's default (10 s) would cut it short.
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -114,6 +117,9 @@ services:
       DB_CONTEXT_ASSERT: ${DB_CONTEXT_ASSERT:-}
       PLATFORM_GRANT_TTL_SECONDS: ${PLATFORM_GRANT_TTL_SECONDS:-900}
       PLATFORM_GRANT_RETENTION_DAYS: ${PLATFORM_GRANT_RETENTION_DAYS:-365}
+      # Background jobs: all (default) | api | paused (database restore,
+      # incident: jobs kept queued, none run) — see .env.example
+      JOBS_MODE: ${JOBS_MODE:-all}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
