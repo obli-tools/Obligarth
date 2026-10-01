@@ -76,27 +76,72 @@ function hasValue(v: unknown): boolean {
   return v !== null && v !== undefined && !(typeof v === 'string' && v === '');
 }
 
-/** One row of a 'column' source. */
-async function moveColumn(trx: Knex.Transaction, def: SecretColumnDef, legacyCol: string, encoding: 'text' | 'jsonb',
-  row: Record<string, unknown>, c: BackfillCounts): Promise<void> {
-  const loc = locatorOf(def, row);
-  const clear = row[legacyCol];
-  const where = trx(def.table).where(def.pk, row[def.pk] as string | number);
-  if (row[def.column] != null) {
-    // A sealed value already there: it wins, the clear one goes.
-    await where.update({ [legacyCol]: null });
-    c.conflicts++;
-    logger.warn({ vault: { event: 'vault.backfill_conflict', table: def.table, column: def.column, pk: String(loc.pk), tenantId: loc.tenantId } },
-      'vault backfill: a sealed value and a clear one, the sealed one kept');
-    return;
+/** SQL type of a registered primary key (the arrays of the batched UPDATE). */
+const PK_SQL_TYPE: Record<SecretColumnDef['pkType'], string> = { integer: 'integer', uuid: 'uuid', name: 'text' };
+
+/** One batch of rows of a 'column' source: each row sealed by the vault, then
+ *  ONE statement writes the batch. Under the row level security every
+ *  statement plans the policies of its table (rls-tenant §5): one UPDATE per
+ *  row made the backfill of 10 000 accounts more than twice as slow (lot A5).
+ *  As before, a row whose clear value changed meanwhile is left as it is
+ *  (the clear value is compared for a text source), and a row that already
+ *  holds a sealed value keeps it (the clear one goes). */
+async function moveColumns(trx: Knex.Transaction, def: SecretColumnDef, legacyCol: string, encoding: 'text' | 'jsonb',
+  rows: ReadonlyArray<Record<string, unknown>>, c: BackfillCounts): Promise<void> {
+  const conflicts: Array<string | number> = [];
+  const moves: Array<{ pk: string | number; clear: string | null; sealed: string }> = [];
+  for (const row of rows) {
+    const loc = locatorOf(def, row);
+    if (row[def.column] != null) {
+      conflicts.push(loc.pk);
+      continue;
+    }
+    const clear = row[legacyCol];
+    try {
+      // A jsonb value comes parsed from the driver: sealed as it is.
+      const sealed = encoding === 'jsonb'
+        ? await vault.sealJson(loc, clear, { trx })
+        : await vault.seal(loc, String(clear), { trx });
+      moves.push({ pk: loc.pk, clear: encoding === 'text' ? String(clear) : null, sealed });
+    } catch (err) {
+      throw new BackfillError(def.table, def.column, String(loc.pk), codeOf(err));
+    }
   }
-  // A jsonb value comes parsed from the driver: sealed as it is.
-  const sealed = encoding === 'jsonb'
-    ? await vault.sealJson(loc, clear, { trx })
-    : await vault.seal(loc, String(clear), { trx });
-  const n = await where.clone().modify((qb) => { if (encoding === 'text') qb.where(legacyCol, String(clear)); })
-    .update({ [def.column]: sealed, [legacyCol]: null });
-  if (n) c.moved++;
+  try {
+    if (conflicts.length) {
+      // A sealed value already there: it wins, the clear one goes.
+      await trx(def.table).whereIn(def.pk, conflicts).update({ [legacyCol]: null });
+      for (const row of rows.filter((r) => r[def.column] != null)) {
+        const loc = locatorOf(def, row);
+        c.conflicts++;
+        logger.warn({ vault: { event: 'vault.backfill_conflict', table: def.table, column: def.column, pk: String(loc.pk), tenantId: loc.tenantId } },
+          'vault backfill: a sealed value and a clear one, the sealed one kept');
+      }
+    }
+    if (moves.length) {
+      // The keys travel as text, cast to the key's type (an array literal of
+      // the driver). The clear value is compared for a text source only (a
+      // jsonb column has no equality with text).
+      const pks = moves.map((m) => String(m.pk));
+      const sealed = moves.map((m) => m.sealed);
+      const res = (encoding === 'text'
+        ? await trx.raw(
+          `UPDATE ?? AS t SET ?? = v.sealed, ?? = NULL
+             FROM unnest(?::${PK_SQL_TYPE[def.pkType]}[], ?::text[], ?::text[]) AS v(pk, clear, sealed)
+            WHERE t.?? = v.pk AND t.??::text = v.clear`,
+          [def.table, def.column, legacyCol, pks, moves.map((m) => String(m.clear)), sealed, def.pk, legacyCol],
+        )
+        : await trx.raw(
+          `UPDATE ?? AS t SET ?? = v.sealed, ?? = NULL
+             FROM unnest(?::${PK_SQL_TYPE[def.pkType]}[], ?::text[]) AS v(pk, sealed)
+            WHERE t.?? = v.pk`,
+          [def.table, def.column, legacyCol, pks, sealed, def.pk],
+        )) as unknown as { rowCount: number | null };
+      c.moved += Number(res.rowCount ?? 0);
+    }
+  } catch (err) {
+    throw new BackfillError(def.table, def.column, String((moves[0] ?? { pk: conflicts[0] }).pk), codeOf(err));
+  }
 }
 
 /** One row of a 'json-fields' source (notification channels). */
@@ -161,18 +206,18 @@ async function backfillScope(def: SecretColumnDef, scope: RowScope, c: BackfillC
       else qb = qb.whereRaw("jsonb_exists_any(??, string_to_array(?, ','))", [legacyCol, legacy.candidates().join(',')]);
       if (after !== null) qb = qb.where(def.pk, '>', after);
       const rows = await qb.orderBy(def.pk).limit(BATCH).forUpdate() as Array<Record<string, unknown>>;
+      if (legacy.kind === 'column') {
+        await moveColumns(trx, def, legacyCol, legacy.encoding, rows, c);
+        return { n: rows.length, last: rows.length ? rows[rows.length - 1][def.pk] as string | number : null };
+      }
       for (const row of rows) {
         try {
-          if (legacy.kind === 'column') {
-            await moveColumn(trx, def, legacyCol, legacy.encoding, row, c);
-          } else {
-            const fields = legacy.fieldsOf(row);
-            const out = await moveJsonFields(trx, def, legacyCol, fields, row, c);
-            if (out === 'skipped' || (out === 'none' && fields.length === 0)) {
-              c.skipped++;
-              logger.warn({ vault: { event: 'vault.backfill_skipped', table: def.table, column: def.column, pk: String(row[def.pk]) } },
-                'vault backfill: a legacy value could not be classified, left in place');
-            }
+          const fields = legacy.fieldsOf(row);
+          const out = await moveJsonFields(trx, def, legacyCol, fields, row, c);
+          if (out === 'skipped' || (out === 'none' && fields.length === 0)) {
+            c.skipped++;
+            logger.warn({ vault: { event: 'vault.backfill_skipped', table: def.table, column: def.column, pk: String(row[def.pk]) } },
+              'vault backfill: a legacy value could not be classified, left in place');
           }
         } catch (err) {
           if (err instanceof SyntaxError) {

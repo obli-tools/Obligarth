@@ -10,6 +10,7 @@ import { config } from '../config';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import { vault, type SecretLocator } from '../vault';
+import { currentDbContext, switchToTenant } from '../db/context';
 
 interface ChannelRow {
   id: number;
@@ -305,7 +306,11 @@ export const notificationService = {
    * that opens its secrets (under the DEK of the channel's tenant, read from
    * the row: a recipient of a master channel shared with it reads the master's
    * row, as the row level security allows). For smtp channels using
-   * smtpServerId, the SMTP server's transport and credentials.
+   * smtpServerId, the SMTP server's transport and credentials: the server of
+   * the channel's tenant (or a platform server), read in that tenant's
+   * context — the master tenant's for a master channel shared with the
+   * caller's tenant, whose row was just read here — never another tenant's
+   * (rls-tenant §5.7; coffre-secrets, review of lot A4).
    */
   async resolveChannelConfig(channel: { id: number }): Promise<Record<string, unknown>> {
     const row = await db('notification_channels').where({ id: channel.id })
@@ -314,7 +319,9 @@ export const notificationService = {
     if (!row) throw new Error('Channel not found');
     const cfg = publicConfig(row.type, row.config);
     if (row.type === 'smtp' && cfg.smtpServerId) {
-      const server = await smtpServerService.getTransportConfig(Number(cfg.smtpServerId));
+      const read = () => smtpServerService.getTransportConfig(Number(cfg.smtpServerId), { requestTenantId: row.tenant_id });
+      const ctx = currentDbContext();
+      const server = ctx?.kind === 'tenant' && ctx.tenantId === row.tenant_id ? await read() : await switchToTenant(row.tenant_id, read);
       if (!server) throw new Error(`SMTP server #${cfg.smtpServerId} not found`);
       return {
         host: server.host,
