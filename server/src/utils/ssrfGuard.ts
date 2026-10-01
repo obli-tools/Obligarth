@@ -1,5 +1,5 @@
 import { lookup } from 'dns/promises';
-import { isIP } from 'net';
+import { BlockList, isIP } from 'net';
 
 // Reject any HTTP target that resolves to a private / loopback /
 // link-local / metadata range. Used by the webhook notification
@@ -78,28 +78,35 @@ export async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
 // A SIEM is often on the local network: the private ranges (RFC 1918, ULA,
 // CGNAT) are admitted. Refused: loopback (unless the laboratory switch
 // AUDIT_SIEM_ALLOW_LOOPBACK), link-local (169.254.0.0/16, fe80::/10, hence the
-// cloud metadata services), 0.0.0.0/8, multicast and unspecified addresses.
-// The name is resolved at every connection; the caller connects to one of the
-// addresses returned, never resolves again.
+// cloud metadata services), 0.0.0.0/8, multicast, reserved and unspecified
+// addresses, whatever their spelling: the ranges are BlockLists, which also
+// check an IPv4-mapped IPv6 address (::ffff:7f00:1, the form a URL gives to
+// [::ffff:127.0.0.1]) as the IPv4 address it carries; the deprecated
+// IPv4-compatible range (::/96) is refused. The name is resolved at every
+// connection; the caller connects to one of the addresses returned, never
+// resolves again.
 
-function siemRefusalV4(ip: string, allowLoopback: boolean): string | null {
-  const o = ip.split('.').map(Number);
-  if (o.length !== 4 || o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return 'invalid address';
-  if (o[0] === 127) return allowLoopback ? null : 'loopback';
-  if (o[0] === 169 && o[1] === 254) return 'link-local';
-  if (o[0] === 0) return 'unspecified';
-  if (o[0] >= 224) return o[0] < 240 ? 'multicast' : 'reserved';
-  return null;
+function blockListOf(subnets: ReadonlyArray<readonly [string, number, 'ipv4' | 'ipv6']>): BlockList {
+  const b = new BlockList();
+  for (const [net, prefix, type] of subnets) b.addSubnet(net, prefix, type);
+  return b;
 }
 
-function siemRefusalV6(ip: string, allowLoopback: boolean): string | null {
-  const lc = ip.toLowerCase();
-  if (lc === '::1') return allowLoopback ? null : 'loopback';
-  if (lc === '::') return 'unspecified';
-  if (/^fe[89ab]/.test(lc)) return 'link-local';
-  if (lc.startsWith('ff')) return 'multicast';
-  const mapped = lc.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
-  if (mapped) return siemRefusalV4(mapped[1], allowLoopback);
+const SIEM_LOOPBACK = blockListOf([['127.0.0.0', 8, 'ipv4'], ['::1', 128, 'ipv6']]);
+const SIEM_REFUSED: ReadonlyArray<readonly [string, BlockList]> = [
+  ['link-local', blockListOf([['169.254.0.0', 16, 'ipv4'], ['fe80::', 10, 'ipv6']])],
+  ['unspecified', blockListOf([['0.0.0.0', 8, 'ipv4'], ['::', 128, 'ipv6']])],
+  ['multicast', blockListOf([['224.0.0.0', 4, 'ipv4'], ['ff00::', 8, 'ipv6']])],
+  ['reserved', blockListOf([['240.0.0.0', 4, 'ipv4'], ['::', 96, 'ipv6']])],
+];
+
+/** Why a SIEM may not be reached at `ip`, or null. */
+export function siemRefusal(ip: string, family: number, allowLoopback: boolean): string | null {
+  const type = family === 6 ? 'ipv6' : 'ipv4';
+  const address = String(ip ?? '').replace(/%.*$/, '');      // an IPv6 zone index is not part of the address
+  if (isIP(address) !== (family === 6 ? 6 : 4)) return 'invalid address';
+  if (SIEM_LOOPBACK.check(address, type)) return allowLoopback ? null : 'loopback';
+  for (const [why, list] of SIEM_REFUSED) if (list.check(address, type)) return why;
   return null;
 }
 
@@ -123,7 +130,7 @@ export async function assertSiemTarget(host: string, o: { allowLoopback?: boolea
   }
   if (!all.length) throw new Error(`Could not resolve ${name}`);
   for (const a of all) {
-    const why = a.family === 6 ? siemRefusalV6(a.address, allowLoopback) : siemRefusalV4(a.address, allowLoopback);
+    const why = siemRefusal(a.address, a.family, allowLoopback);
     if (why) throw new Error(`Refused SIEM destination (${why}: ${name}${v ? '' : ` → ${a.address}`})`);
   }
   return all;

@@ -129,6 +129,12 @@ export function createAuditAdminRouter(): Router {
     if (!parsed.success) throw bad(parsed.error);
     const until = parsed.data.until ? new Date(parsed.data.until) : null;
     if (until && Number.isNaN(until.getTime())) throw new AppError(400, 'Invalid date', 'invalidRequest');
+    // The bounds of obligarth.audit_set_legal_hold: in the future, 5 years at most.
+    const latest = new Date();
+    latest.setUTCFullYear(latest.getUTCFullYear() + 5);
+    if (until && (until.getTime() <= Date.now() || until.getTime() > latest.getTime())) {
+      throw new AppError(400, 'A legal hold ends in the future, within 5 years', 'invalidLegalHold');
+    }
     const reason = parsed.data.reason?.trim() || null;
     if (until && (!reason || reason.length < 10)) throw new AppError(400, 'A reason of 10 characters at least is required', 'reasonRequired');
     const current = await legalHoldOf(tenantId);

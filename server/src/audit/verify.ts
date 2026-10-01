@@ -208,13 +208,15 @@ async function finish(tenantId: number, vid: number, out: VerificationOutcome, r
   });
   const ctx = fromJob({ name: VERIFY_ACTOR.type === 'job' ? VERIFY_ACTOR.name : 'audit.verify-tenant', requestId: requestId ?? `verify-${vid}` });
   const kind = (await db('audit_verifications').where({ id: vid }).first('kind') as { kind: string } | undefined)?.kind;
+  // A deleted tenant's chain takes no entry any more: its entries go to the
+  // master tenant's chain, naming it.
+  const exists = await db('tenants').where({ id: tenantId }).first('id').catch(() => undefined);
   if (out.status === 'broken') {
     brokenChains.add(tenantId);
     auditMetrics.set('obligarth_audit_broken_chains', brokenChains.size);
     logger.error({ code: 'AUDIT_CHAIN_BROKEN', tenantId, problem: out.problem?.type, seq: out.problem?.seq, sealSeq: out.problem?.sealSeq },
       'audit: chain verification found a break');
     const details = { verificationId: vid, problem: out.problem?.type, seq: out.problem?.seq ?? null, sealSeq: out.problem?.sealSeq ?? null };
-    const exists = await db('tenants').where({ id: tenantId }).first('id').catch(() => undefined);
     if (exists) await append({ tenantId, action: 'audit.chain_broken', outcome: 'failure', details }, ctx);
     await append({ tenantId: MASTER_TENANT_ID, action: 'audit.chain_broken', outcome: 'failure', onBehalfOf: tenantId === MASTER_TENANT_ID ? undefined : tenantId, details: { ...details, tenantId } }, ctx);
     const { raiseJobAlert } = await import('../jobs/alerts');
@@ -235,7 +237,10 @@ async function finish(tenantId: number, vid: number, out: VerificationOutcome, r
     if (brokenChains.delete(tenantId)) auditMetrics.set('obligarth_audit_broken_chains', brokenChains.size);
   }
   if (kind === 'on_demand') {
-    await append({ tenantId, action: 'audit.verified', outcome: out.status === 'ok' ? 'success' : 'failure',
-      details: { verificationId: vid, status: out.status, entries: out.entries, seals: out.seals } }, ctx);
+    const details = { verificationId: vid, status: out.status, entries: out.entries, seals: out.seals };
+    await append(exists
+      ? { tenantId, action: 'audit.verified', outcome: out.status === 'ok' ? 'success' : 'failure', details }
+      : { tenantId: MASTER_TENANT_ID, action: 'audit.verified', outcome: out.status === 'ok' ? 'success' : 'failure', onBehalfOf: tenantId,
+        details: { ...details, tenantId } }, ctx);
   }
 }

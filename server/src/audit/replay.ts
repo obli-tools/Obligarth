@@ -16,7 +16,10 @@ import { readSpoolFile, rejectEntries, rewriteSpoolFile, spoolFiles, spoolStatus
 import { append } from './writer';
 
 export const REPLAY_ACTOR: DbActor = { type: 'job', name: 'audit.spool-replay' };
-const REFUSED = new Set(['22023', '22P02', '42501', '23503']);
+/** Refused for good (a data exception, an integrity or an access error,
+ *  classes 22, 23 and 42): kept aside, never retried — a line that can never
+ *  be written must not hold back the lines after it. */
+const REFUSED_RE = /^(22|23|42)/;
 
 function codeOf(err: unknown): string {
   const c = (err as { code?: unknown } | null)?.code;
@@ -55,7 +58,7 @@ export async function replaySpool(o: { requestId?: string } = {}): Promise<Repla
           replayed++;
           continue;
         }
-        if (REFUSED.has(code)) {
+        if (REFUSED_RE.test(code)) {
           rejectEntries([{ ...line, firstError: `${line.firstError}; replay ${code}` }]);
           rejected++;
           continue;

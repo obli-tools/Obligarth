@@ -74,7 +74,10 @@ async function readChain<T>(req: Request, tenantId: number, fn: () => Promise<T>
   return asTenant(tenantId, actorOfRequest(req), fn);
 }
 
-/** One audit.viewed per session, tenant and UTC day (§9.5). Never blocks. */
+/** One audit.viewed per session, tenant and UTC day (§9.5). Never blocks.
+ *  A deleted tenant's chain takes no entry any more (audit_append: unknown
+ *  tenant): its viewing from the global view is journaled in the master
+ *  tenant's chain, naming it. */
 async function noteViewed(req: Request, tenantId: number, view: 'list' | 'entry', global: boolean): Promise<void> {
   const day = new Date().toISOString().slice(0, 10);
   const seen = req.session.auditViewedOn ?? {};
@@ -83,9 +86,14 @@ async function noteViewed(req: Request, tenantId: number, view: 'list' | 'entry'
   req.session.auditViewedOn = { ...seen, [key]: day };
   // A standard entry never throws (spooled at worst); the context's lookup
   // may: logged, the reading itself is not refused.
-  void audit.fromRequest(req, tenantId)
-    .then((ctx) => audit.append({ tenantId, action: 'audit.viewed', details: { view, ...(global ? { globalView: true } : {}) } }, ctx))
-    .catch((err) => logger.warn({ err: { name: (err as Error).name }, tenantId }, 'audit: viewing not journaled'));
+  void (async () => {
+    const live = !global || tenantId === MASTER_TENANT_ID || !!(await db('tenants').where({ id: tenantId }).first('id'));
+    const chain = live ? tenantId : MASTER_TENANT_ID;
+    await audit.append({
+      tenantId: chain, action: 'audit.viewed', onBehalfOf: live ? undefined : tenantId,
+      details: { view, ...(global ? { globalView: true } : {}), ...(live ? {} : { tenantId, tenantDeleted: true }) },
+    }, await audit.fromRequest(req, chain));
+  })().catch((err) => logger.warn({ err: { name: (err as Error).name }, tenantId }, 'audit: viewing not journaled'));
 }
 
 function listParams(req: Request, tenantId: number | null): ListParams {

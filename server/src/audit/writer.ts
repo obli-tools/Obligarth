@@ -43,8 +43,11 @@ registerCoreAuditActions();
 
 /** Transient failures (§5.4): retried twice when the write is isolated. */
 const TRANSIENT_CODES = new Set(['55P03', '40P01', '40001', '57014', '53100', '57P01', '57P02', '57P03']);
-/** A body or a context the database refuses: a defect of the calling code. */
+/** A body or a context the database refuses: a defect of the calling code.
+ *  Any data exception, integrity or access error (classes 22, 23, 42) is one
+ *  too: it would fail the same way at every attempt and at every replay. */
 const MALFORMED_CODES = new Set(['22023', '22P02', '42501', '23503']);
+const MALFORMED_CLASS_RE = /^(22|23|42)/;
 const RETRY_DELAYS_MS = [50, 250];
 const SAVEPOINT = 'obligarth_audit';
 
@@ -59,7 +62,7 @@ function failureKind(err: unknown): FailureKind {
   const code = pgCode(err);
   if (code) {
     if (TRANSIENT_CODES.has(code) || code.startsWith('08')) return 'transient';
-    if (MALFORMED_CODES.has(code)) return 'malformed';
+    if (MALFORMED_CODES.has(code) || MALFORMED_CLASS_RE.test(code)) return 'malformed';
     return 'transient';
   }
   if (err instanceof AuditBodyError || err instanceof DbContextDeniedError || err instanceof DbContextMissingError) return 'malformed';

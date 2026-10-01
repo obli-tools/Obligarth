@@ -25,6 +25,28 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const SESSION_RE = /^[0-9a-f]{64}$/;
 const STEP_UP = new Set(['totp', 'obligate_totp', 'device_key', 'password', 'trusted_ip']);
 
+// ── Text the database takes ─────────────────────────────────────────────────
+// obligarth.audit_append reads the body as jsonb, which refuses U+0000 (22P05)
+// and a lone UTF-16 surrogate (22P02), both written by JSON.stringify as \u
+// escapes: a body carrying one would never be written (a critical action
+// refused, any other entry lost). Every text of a body is made safe here:
+// U+0000 and lone surrogates become U+FFFD, and a cut never leaves half of a
+// surrogate pair (a request may put such text in a key or a value).
+
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+/** `s` as the jsonb of the database takes it. */
+export function pgText(s: string): string {
+  return s.replace(/\u0000/g, '\uFFFD').replace(LONE_SURROGATE_RE, '\uFFFD');
+}
+
+/** The first `max` UTF-16 units of a safe text, never half a surrogate pair. */
+function headOf(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const last = s.charCodeAt(max - 1);
+  return s.slice(0, last >= 0xd800 && last <= 0xdbff ? max - 1 : max);
+}
+
 // ── Redaction of `details` (§3.5) ───────────────────────────────────────────
 
 /** Secret-looking names for the journal, beyond the approvals' rule. */
@@ -50,7 +72,8 @@ function redactValue(v: unknown, path: string[], removed: string[], depth: numbe
   if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'string') {
     if (SEALED_RE.test(v)) return '[sealed]';
-    return v.length > MAX_STRING ? `${v.slice(0, MAX_STRING)}…` : v;
+    const s = pgText(v);
+    return s.length > MAX_STRING ? `${headOf(s, MAX_STRING)}…` : s;
   }
   if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString();
   if (Buffer.isBuffer(v)) return `[${v.length} bytes]`;
@@ -64,14 +87,15 @@ function redactValue(v: unknown, path: string[], removed: string[], depth: numbe
     // A reference to a tenant secret is opaque: kept as is.
     if (Object.keys(o).length === 1 && typeof o.$secret === 'string' && UUID_RE.test(o.$secret)) return { $secret: o.$secret };
     const out: Record<string, unknown> = {};
-    for (const [k, x] of Object.entries(o)) {
+    for (const [raw, x] of Object.entries(o)) {
       if (x === undefined || typeof x === 'function') continue;
+      const k = pgText(raw);
       if (isJournalSecretKey(k) && hasValue(x)) { removed.push([...path, k].join('.')); continue; }
       out[k] = redactValue(x, [...path, k], removed, depth + 1);
     }
     return out;
   }
-  return String(v).slice(0, MAX_STRING);
+  return headOf(pgText(String(v)), MAX_STRING);
 }
 
 /** `details` as it may enter the journal: secret-named keys removed (their
@@ -110,7 +134,7 @@ export interface TargetSplit {
 export function splitTargets(t: NonNullable<AuditEntryInput['targets']>): TargetSplit {
   const ids = (Array.isArray(t.deviceIds) ? t.deviceIds : []).map(Number);
   if (!ids.every((n) => Number.isSafeInteger(n) && n > 0)) throw new AuditBodyError('targets.deviceIds must be positive integers');
-  const serials = Array.isArray(t.serials) ? t.serials.map((s) => String(s).slice(0, 64)) : undefined;
+  const serials = Array.isArray(t.serials) ? t.serials.map((s) => headOf(pgText(String(s)), 64)) : undefined;
   if (serials && serials.length !== ids.length) throw new AuditBodyError('targets.serials must follow targets.deviceIds');
   const selection = t.selection ? {
     ...(Array.isArray(t.selection.groups) ? { groups: t.selection.groups.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0).slice(0, 200) } : {}),
@@ -138,7 +162,7 @@ export function splitTargets(t: NonNullable<AuditEntryInput['targets']>): Target
 
 const cut = (v: unknown, max: number): string | undefined => {
   if (typeof v !== 'string' || v === '') return undefined;
-  return v.length > max ? v.slice(0, max) : v;
+  return headOf(pgText(v), max);
 };
 
 const posInt = (v: unknown): number | undefined => {
@@ -223,7 +247,7 @@ export function buildBody(entry: AuditEntryInput, ctx: AuditWriteContext, o: Bui
   let target: Record<string, unknown> | undefined;
   if (entry.target) {
     const type = cut(String(entry.target.type ?? ''), 50);
-    const tid = String(entry.target.id ?? '').slice(0, 500);
+    const tid = headOf(pgText(String(entry.target.id ?? '')), 500);
     if (!type || !/^[a-z][a-z0-9_]*$/.test(type)) throw new AuditBodyError('target needs a type');
     const device = entry.target.device === undefined || entry.target.device === null ? undefined : posInt(entry.target.device);
     if (entry.target.device !== undefined && entry.target.device !== null && device === undefined) throw new AuditBodyError('invalid target.device');

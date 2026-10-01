@@ -3,8 +3,10 @@
 // signed X-Obligarth-Signature: t=<epoch s>,v1=<HMAC-SHA256(secret,
 // "<t>.<raw body>") hex>, X-Obligarth-Delivery, an optional bearer token.
 // 2xx: delivered. 408, 429, 5xx, timeout, network error: retryable. Any
-// other 4xx: the destination is in error.
+// other 4xx: the destination is in error. The connection goes to an address
+// checked by assertSiemTarget, never to a name resolved again (DNS rebinding).
 import { createHmac, randomUUID } from 'node:crypto';
+import type { LookupFunction } from 'node:net';
 import { Agent, fetch as undiciFetch } from 'undici';
 import { assertSiemTarget } from '../../utils/ssrfGuard';
 
@@ -46,26 +48,26 @@ export function batchSize(items: readonly string[], s: Pick<WebhookSettings, 'ma
 
 export type WebhookResult = { ok: true; status: number } | { ok: false; retryable: boolean; code: string };
 
-const agents = new Map<string, Agent>();
-
-function agentFor(caPem: string | undefined): Agent | undefined {
-  if (!caPem) return undefined;
-  let a = agents.get(caPem);
-  if (!a) {
-    a = new Agent({ connect: { ca: caPem } });
-    agents.set(caPem, a);
-  }
-  return a;
+/** A dispatcher of one delivery, pinned to the addresses assertSiemTarget
+ *  admitted: the name is not resolved again; the certificate is still
+ *  checked against the URL's host name (and the destination's authority). */
+function pinnedAgent(addresses: ReadonlyArray<{ address: string; family: number }>, caPem: string | undefined): Agent {
+  const lookup: LookupFunction = (_host, options, callback) => {
+    if (options?.all) callback(null, addresses.map((a) => ({ address: a.address, family: a.family })));
+    else callback(null, addresses[0].address, addresses[0].family);
+  };
+  return new Agent({ connect: { ...(caPem ? { ca: caPem } : {}), lookup } });
 }
 
 /** One delivery of `items`. Never throws. */
 export async function postWebhook(s: WebhookSettings, secrets: WebhookSecrets, instance: string, items: readonly string[],
   o: { allowLoopback: boolean }): Promise<WebhookResult> {
   let url: URL;
+  let addresses: Array<{ address: string; family: number }>;
   try {
     url = new URL(s.url);
     if (url.protocol !== 'https:') return { ok: false, retryable: false, code: 'https_only' };
-    await assertSiemTarget(url.hostname, { allowLoopback: o.allowLoopback });
+    addresses = await assertSiemTarget(url.hostname, { allowLoopback: o.allowLoopback });
   } catch {
     return { ok: false, retryable: true, code: 'target_refused' };
   }
@@ -78,11 +80,12 @@ export async function postWebhook(s: WebhookSettings, secrets: WebhookSecrets, i
     'X-Obligarth-Delivery': deliveryId,
   };
   if (secrets.bearerToken) headers.Authorization = `Bearer ${secrets.bearerToken}`;
+  const dispatcher = pinnedAgent(addresses, s.caPem);
   try {
     const res = await undiciFetch(url, {
       method: 'POST', headers, body, redirect: 'error',
       signal: AbortSignal.timeout(s.timeoutSeconds * 1000),
-      dispatcher: agentFor(s.caPem),
+      dispatcher,
     });
     await res.arrayBuffer().catch(() => undefined);
     if (res.status >= 200 && res.status < 300) return { ok: true, status: res.status };
@@ -91,5 +94,7 @@ export async function postWebhook(s: WebhookSettings, secrets: WebhookSecrets, i
   } catch (err) {
     const name = (err as Error).name === 'TimeoutError' || (err as Error).name === 'AbortError' ? 'timeout' : 'network';
     return { ok: false, retryable: true, code: name };
+  } finally {
+    void dispatcher.destroy().catch(() => undefined);
   }
 }
