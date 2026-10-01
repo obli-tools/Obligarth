@@ -10,7 +10,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { newKey } from './envelope';
-import { inspectKekFile } from './kek';
+import { inspectKekFile, looksLikeKek, printableKekPath } from './kek';
 
 /** Where the Docker secret server_kek is mounted. */
 export const DOCKER_KEK_FILE = '/run/secrets/server_kek';
@@ -121,9 +121,10 @@ export function readVaultConfig(env: Env = process.env, options: VaultConfigOpti
 }
 
 /** Refusal for a missing or unusable KEK file (coffre-secrets §5.8), then the
- *  cause in fixed words (never the content of the file). */
+ *  cause in fixed words (never the content of the file, never a key given
+ *  instead of the path). */
 export function kekFileRefusal(file: string, cause: string): string {
-  return `The KEK file ${file} is missing or invalid: create it (openssl rand -base64 32) `
+  return `The KEK file ${printableKekPath(file)} is missing or invalid: create it (openssl rand -base64 32) `
     + `and mount it as the Docker secret server_kek. Cause: ${cause}.`;
 }
 
@@ -192,6 +193,15 @@ export function vaultConfigErrors(options: VaultConfigCheckOptions = {}): string
       + 'docker inspect and to every process of the container). Remove it and mount the key as the '
       + 'Docker secret server_kek (SERVER_KEK_FILE).');
   }
+  // A key pasted where the path of its file is expected: the same rule, and
+  // the value is never repeated (the refusals go to the logs).
+  for (const name of ['SERVER_KEK_FILE', 'SERVER_KEK_PREVIOUS_FILE']) {
+    if (looksLikeKek(setting(env, name))) {
+      errors.push(`${name} holds a key instead of the path of a file: a KEK is never read from an environment `
+        + 'variable (visible to docker inspect and to every process of the container). Remove it, mount the key '
+        + `as a Docker secret and set ${name} to the path of that file.`);
+    }
+  }
   // The value is not repeated: a misplaced key must not reach the logs.
   const provider = setting(env, 'KEK_PROVIDER') || 'file';
   if (provider === 'transit') {
@@ -206,7 +216,7 @@ export function vaultConfigErrors(options: VaultConfigCheckOptions = {}): string
       + `(${DEFAULT_DEK_CACHE_TTL_SECONDS} by default).`);
   }
 
-  if (provider === 'file') {
+  if (provider === 'file' && !looksLikeKek(cfg.kekFile)) {   // a key instead of the path: refused above
     if (cfg.kekFileSource === 'development') ensureDevelopmentKek(cfg.kekFile, warn);
     const check = inspectKekFile(cfg.kekFile);
     if (!check.ok) {

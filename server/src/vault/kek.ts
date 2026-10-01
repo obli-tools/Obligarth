@@ -112,11 +112,36 @@ function fileError(err: unknown): string {
   return typeof code === 'string' ? `cannot be read (${code})` : 'cannot be read';
 }
 
+/** True when a setting meant to name a KEK file holds a key instead (the KEK
+ *  pasted into SERVER_KEK_FILE, say): 32 bytes in base64, whitespace
+ *  included, or in hex (openssl rand -hex 32). Such a value is never
+ *  repeated: not in a refusal, an error or a log line. */
+export function looksLikeKek(value: string): boolean {
+  if (typeof value !== 'string') return false;
+  const compact = value.replace(/\s+/g, '');
+  if (/^[0-9A-Fa-f]{64}$/.test(compact)) return true;
+  try {
+    parseKek(compact).key.fill(0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The path of a KEK file as messages show it: never a value that looks like
+ *  a key. */
+export function printableKekPath(file: string): string {
+  if (!file) return '(none)';
+  return looksLikeKek(file) ? '(a key instead of a path, not shown)' : file;
+}
+
 /** Reads and parses a KEK file; on failure, why (fixed words, never the
  *  content). `mode`: the file's mode bits, for the permission warning. The
  *  key, when returned, is the caller's (fill(0) once used). */
 export function inspectKekFile(file: string): KekFileCheck {
   if (!file) return { ok: false, reason: 'no file configured' };
+  // A key where its path is expected: refused, never used as a file name.
+  if (looksLikeKek(file)) return { ok: false, reason: 'the setting holds a key instead of the path of a file' };
   let fd: number;
   try {
     fd = fs.openSync(file, 'r');
@@ -153,7 +178,7 @@ export function inspectKekFile(file: string): KekFileCheck {
 /** The KEK of a file, or VaultError('kek_unavailable') saying why. */
 export function readKekFile(file: string): { id: string; key: Buffer } {
   const check = inspectKekFile(file);
-  if (!check.ok) throw new VaultError('kek_unavailable', null, `KEK file ${file || '(none)'}: ${check.reason}`);
+  if (!check.ok) throw new VaultError('kek_unavailable', null, `KEK file ${printableKekPath(file)}: ${check.reason}`);
   return check.kek;
 }
 
