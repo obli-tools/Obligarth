@@ -86,16 +86,19 @@ END $$;
 /**
  * The roles that would carry the runtime role past the row level security if
  * it could take them on (rls-tenant §7.9, point 1): any role with SUPERUSER,
- * BYPASSRLS, CREATEROLE or CREATEDB, the owner role, and PostgreSQL's
- * predefined roles of the server's files and programs (superuser-level
- * access, as PostgreSQL documents them). The caller appends the membership
+ * BYPASSRLS, CREATEROLE or CREATEDB, the owner role, PostgreSQL's predefined
+ * roles of the server's files and programs (superuser-level access, as
+ * PostgreSQL documents them) and those of all the data (every table of every
+ * schema: obligarth_private, apple-edge's). The caller appends the membership
  * condition (pg_has_role … 'SET' or 'USAGE') and the ORDER BY. Checked by the
- * boot guard and by server-migrate --check.
+ * boot guard and by server-migrate --check, as rule 14 of
+ * obligarth.rls_audit() does from the RLS migration C on.
  */
 export const PRIVILEGED_ROLES_SQL = String.raw`
 SELECT r.rolname FROM pg_catalog.pg_roles r
  WHERE (r.rolsuper OR r.rolbypassrls OR r.rolcreaterole OR r.rolcreatedb
-        OR r.rolname IN ('obligarth_owner', 'pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files'))`;
+        OR r.rolname IN ('obligarth_owner', 'pg_execute_server_program', 'pg_read_server_files', 'pg_write_server_files',
+                         'pg_read_all_data', 'pg_write_all_data'))`;
 
 /**
  * Privileges of the runtime role BEFORE the row level security is active
