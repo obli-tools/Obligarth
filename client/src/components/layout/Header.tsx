@@ -128,9 +128,12 @@ export function Header() {
         className={cn('rounded-full object-cover', size === 'md' ? 'w-7 h-7' : 'w-4 h-4')}
       />
     ) : size === 'md' ? (
+      // Opaque accent tones of the theme: the white initial stays at 4.8:1 or
+      // more on every theme (the former translucent gradient let the header
+      // show through: 1.7:1 to 2.7:1 on Obli Daylight).
       <div
         className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-semibold text-white"
-        style={{ background: 'linear-gradient(135deg, rgba(224,58,58,0.6), rgba(255,100,100,0.4))' }}
+        style={{ background: 'linear-gradient(135deg, rgb(var(--c-accent)), rgb(var(--c-accent-dark)))' }}
       >
         {(displayedUsername?.[0] ?? '?').toUpperCase()}
       </div>

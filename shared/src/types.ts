@@ -35,7 +35,8 @@ export interface UserWithPassword extends User {
 
 /**
  * Web theme ids. `obli-dim` is the mid-dark (Nord Polar Night) companion of
- * `obli-daylight`: it changes neutrals only, the Obliance red accent stays.
+ * `obli-daylight`: it changes neutrals only, Obli Operator's magenta accent
+ * stays (client/src/index.css).
  */
 export type AppTheme = 'obli-operator' | 'modern' | 'neon' | 'obli-daylight' | 'obli-dim';
 

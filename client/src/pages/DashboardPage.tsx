@@ -18,6 +18,9 @@ import { Tip } from '@/components/common/Tip';
 import { useMediaQuery, MEDIA } from '@/hooks/useMediaQuery';
 
 // ── Sparkline (filled area + line) ───────────────────────────────────────────
+// `color` goes through the style attribute, where a theme token
+// (rgb(var(--c-...))) always resolves, rather than through SVG presentation
+// attributes, whose support of var() is not uniform.
 
 function Sparkline({ data, color, height = 36 }: { data: number[]; color: string; height?: number }) {
   if (data.length < 2) return <div style={{ height }} />;
@@ -38,12 +41,12 @@ function Sparkline({ data, color, height = 36 }: { data: number[]; color: string
     <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: '100%', height }} className="block">
       <defs>
         <linearGradient id={id} x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%"   stopColor={color} stopOpacity="0.40" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
+          <stop offset="0%"   style={{ stopColor: color, stopOpacity: 0.4 }} />
+          <stop offset="100%" style={{ stopColor: color, stopOpacity: 0 }} />
         </linearGradient>
       </defs>
       <path d={areaPath} fill={`url(#${id})`} />
-      <path d={linePath} fill="none" stroke={color} strokeWidth="1.6" strokeLinejoin="round" />
+      <path d={linePath} fill="none" style={{ stroke: color }} strokeWidth="1.6" strokeLinejoin="round" />
     </svg>
   );
 }
@@ -62,7 +65,7 @@ function HeroFeatured({ label, value, color, series, days }: {
     <div className="h-full flex flex-col rounded-xl p-5 relative overflow-hidden bg-gradient-to-br from-accent/10 via-bg-secondary to-bg-secondary shadow-[0_0_0_1px_rgb(var(--c-accent)/0.18)_inset,_0_6px_28px_-10px_rgb(var(--c-accent)/0.25)]">
       <div className="text-[11px] font-mono uppercase tracking-[0.14em] text-text-muted mb-3">{label}</div>
       <div className={`font-display text-[48px] font-semibold leading-none ${color}`}>{value}</div>
-      <div className="mt-3"><Sparkline data={series} color="#ff6868" /></div>
+      <div className="mt-3"><Sparkline data={series} color="rgb(var(--c-accent-as-text))" /></div>
       <div className="grid grid-cols-4 mt-2 gap-2">
         {days.map((d, i) => {
           const isLast = i === days.length - 1;

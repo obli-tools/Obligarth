@@ -6,9 +6,22 @@
    Theme CSS custom properties
    Values are space-separated RGB triplets so Tailwind's opacity modifier syntax
    (e.g. bg-accent/30) works: Tailwind emits  rgb(var(--c-X) / 0.3)
+
+   Accent: Obligarth's magenta (D32, brand #D63FD6), in tones whose contrast
+   is computed (WCAG 2.x relative luminance) on each theme's own surfaces.
+   White text on the brand itself is only 3.8:1, and no single tone reads both
+   under white text and as text on these surfaces, hence two tokens:
+     --c-accent          fills (white text on them), borders, rings, tints;
+     --c-accent-as-text  the accent as TEXT: text-accent / text-primary map to
+                         it (tailwind.config.ts, textColor).
+   Targets: white on --c-accent and --c-accent-hover (and on accent/80 or /90
+   hover fills) >= 4.5:1; --c-accent-as-text >= 4.5:1 on the page, cards and
+   inputs (tertiary) and on accent/10 to /20 tints over a card, >= 3:1 on the
+   hover and active rows; --c-accent >= 3:1 against the page and cards (rings,
+   checkbox and toggle fills) where the theme allows it (not on Obli Dim).
    ───────────────────────────────────────────────────────────────────────────── */
 
-/* ── Obli Operator (default) — Obli design system v1, teinte bleu nuit + accent rouge.
+/* ── Obli Operator (default) — Obli design system v1, night-blue surfaces + magenta accent.
        Tokens forwarded by Obligate (shared/src/themes.ts → OBLI_OPERATOR_THEME).
        Spec: Obli Design System §2 + §10. ─────────────────────────────────────── */
 :root,
@@ -44,13 +57,18 @@
   --c-status-paused:         75 82 115;
   --c-status-paused-bg:      19 23 40;
 
-  --c-accent:                224 58 58;
-  --c-accent-hover:          255 104 104;
-  --c-accent-dark:           180 30 30;
-  --c-primary:               224 58 58;
+  /* Accent (see the header): fill #bb37bb, white text 4.8:1, 4.0:1 against
+     the page and 3.7:1 against cards; hover fill #ab32ab (darker: white text
+     5.6:1); text #dc5cdc: 6.1:1 on the page, 5.6:1 on cards, 5.3:1 on
+     inputs, 4.9:1 / 4.6:1 on hover / active rows, 4.7:1 on an accent/20 tint. */
+  --c-accent:                187 55 187;
+  --c-accent-hover:          171 50 171;
+  --c-accent-dark:           150 44 150;
+  --c-accent-as-text:        220 92 220;
+  --c-primary:               187 55 187;
 }
 
-/* ── Obli Daylight — light companion to Obli Operator (Obliance red accent) ─
+/* ── Obli Daylight — light companion to Obli Operator (magenta accent, deeper) ─
    Soft-white surface, depth via shadow (no borders), slate-900 text. Every
    token Obligarth uses MUST be redeclared here: :root above is the dark
    obli-operator, so any omitted token would inherit a DARK value on light. */
@@ -59,7 +77,8 @@
      white. Softens glare over long admin sessions. Per the Obligate spec,
      hover/active/border MUST be plain RGB triplets (no "R G B / A"), else
      Tailwind's rgb(var(--x) / <alpha>) emits invalid CSS and borders fall
-     back to thick black. Surfaces change; the Obliance red accent stays. */
+     back to thick black. Surfaces change; the accent stays magenta, in
+     deeper tones for a light surface. */
   --c-bg-primary:            229 233 240;   /* #e5e9f0  Snow Storm page bg */
   --c-bg-secondary:          236 239 244;   /* #eceff4  cards */
   --c-bg-tertiary:           216 222 233;   /* #d8dee9  input/toolbar/pill container */
@@ -86,11 +105,16 @@
   --c-status-warning:        217 119 6;
   --c-status-critical:       220 38 38;
 
-  --c-accent:                220 38 38;    /* Obliance red-600 — kept from Operator */
-  --c-accent-hover:          239 68 68;
-  --c-accent-dark:           153 27 27;
+  /* Accent: fill #962c96, white text 6.8:1 (4.7:1 on an accent/80 hover
+     fill over a card), 5.6:1 / 5.9:1 against the page / cards; hover fill
+     #862786, white text 7.9:1; text #8b298b: 6.2:1 on the page, 6.5:1 on
+     cards, 5.6:1 on inputs, 5.3:1 on active rows, 4.8:1 on an accent/20 tint. */
+  --c-accent:                150 44 150;
+  --c-accent-hover:          134 39 134;
+  --c-accent-dark:           112 33 112;
+  --c-accent-as-text:        139 41 139;
   --c-accent-text:           255 255 255;
-  --c-primary:               220 38 38;
+  --c-primary:               150 44 150;
 
   --shadow-card: 0 1px 2px 0 rgba(46,52,64,0.03), 0 6px 24px -12px rgba(46,52,64,0.08);
   --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.18) inset, 0 8px 32px -12px rgb(var(--c-accent) / 0.22);
@@ -107,8 +131,9 @@
    theme for every light/dark decision (logo, native controls via
    color-scheme, system bars). Dim changes NEUTRALS
    ONLY: the accent lines below are copied verbatim from Obli Operator and
-   must never diverge (Obliance red #e03a3a). Every token is a plain RGB
-   triplet (no alpha), same rule as Daylight.
+   must never diverge (magenta fill #bb37bb); only the accent as text is
+   Dim's own (below). Every token is a plain RGB triplet (no alpha), same
+   rule as Daylight.
    Status tokens keep the SEMANTICS of Operator / Daylight (only the tones are
    retuned for the slate surfaces): status-down is the neutral "offline" slate
    there (offline counts, 'Off' / disabled badges, and also error text / the
@@ -149,12 +174,20 @@
   --c-status-warning:        235 203 139;   /* #ebcb8b  (parity with Daylight) */
   --c-status-critical:       255 107 107;   /* #ff6b6b  (parity with Daylight) */
 
-  /* Accent — verbatim from Obli Operator (Obliance red). */
-  --c-accent:                224 58 58;
-  --c-accent-hover:          255 104 104;
-  --c-accent-dark:           180 30 30;
+  /* Accent — verbatim from Obli Operator. */
+  --c-accent:                187 55 187;
+  --c-accent-hover:          171 50 171;
+  --c-accent-dark:           150 44 150;
   --c-accent-text:           255 255 255;
-  --c-primary:               224 58 58;
+  --c-primary:               187 55 187;
+  /* Accent as TEXT (owner choice « B », 28/09: a lighter tint of the accent
+     for text, links and icons; fills, borders and rings keep --c-accent):
+     #eda9ed, 6.8:1 on the page, 5.5:1 on cards, 4.7:1 on inputs, 4.4:1 /
+     4.2:1 on hover / active rows, 5.0:1 on an accent/20 tint. The fill keeps
+     white text at 4.8:1 but stands at only 2.6:1 / 2.1:1 against the page /
+     cards: on these mid-dark neutrals no fill dark enough for white text
+     reaches 3:1 (the inherited red: 2.9:1 / 2.3:1). */
+  --c-accent-as-text:        237 169 237;
 
   --shadow-card: 0 1px 0 0 rgba(255,255,255,0.03), 0 6px 20px -8px rgba(20,23,30,0.40);
   --shadow-glow: 0 0 0 1px rgb(var(--c-accent) / 0.20) inset, 0 6px 26px -10px rgb(var(--c-accent) / 0.28);
@@ -176,30 +209,8 @@
   background-color: rgb(107 115 153);
 }
 
-/* Obli Dim, accent used as TEXT (owner choice « B », 28/09): the Obliance red
-   #e03a3a is only 2.3:1 on the Dim cards, so accent-coloured text, links and
-   icons take Obliance's own lighter tint #ff6868 (3.6:1 on cards, 4.4:1 on the
-   page). Fills, borders and rings keep the brand red (--c-accent). Hover
-   variants to another colour still win (higher specificity below). */
-[data-theme="obli-dim"] {
-  --c-accent-as-text:        255 104 104;   /* #ff6868 = --c-accent-hover */
-}
-[data-theme="obli-dim"] .text-accent,
-[data-theme="obli-dim"] .text-primary,
-[data-theme="obli-dim"] .hover\:text-accent:hover,
-[data-theme="obli-dim"] .group:hover .group-hover\:text-accent,
-[data-theme="obli-dim"] .group:hover .group-hover\:text-primary {
-  color: rgb(var(--c-accent-as-text));
-}
-[data-theme="obli-dim"] .text-accent\/80,
-[data-theme="obli-dim"] .text-primary\/80 { color: rgb(var(--c-accent-as-text) / 0.8); }
-[data-theme="obli-dim"] .text-accent\/70,
-[data-theme="obli-dim"] .hover\:text-accent\/70:hover { color: rgb(var(--c-accent-as-text) / 0.7); }
-[data-theme="obli-dim"] .text-accent\/40 { color: rgb(var(--c-accent-as-text) / 0.4); }
-/* NotificationsPage: text-accent/70 that turns to status-down on hover. */
-[data-theme="obli-dim"] .text-accent\/70.hover\:text-status-down:hover { color: rgb(var(--c-status-down)); }
-
-/* ── Modern UI (legacy) — fond très sombre, teinte rouge ultra-subtile ──── */
+/* ── Modern UI (legacy) — very dark surfaces with a faint warm tint; Obli
+   Operator's magenta accent tones (contrasts checked on these surfaces). ── */
 [data-theme="modern"] {
   --c-bg-primary:            14 11 12;
   --c-bg-secondary:          22 17 18;
@@ -225,13 +236,15 @@
   --c-status-paused:         112 102 104;
   --c-status-paused-bg:      30 24 25;
 
-  --c-accent:                194 0 27;
-  --c-accent-hover:          224 30 55;
-  --c-accent-dark:           150 0 20;
-  --c-primary:               194 0 27;
+  /* White text 4.8:1 on the fill; text 6.2:1 on the page, 5.9:1 on cards. */
+  --c-accent:                187 55 187;
+  --c-accent-hover:          171 50 171;
+  --c-accent-dark:           150 44 150;
+  --c-accent-as-text:        220 92 220;
+  --c-primary:               187 55 187;
 }
 
-/* ── Neon UI — fonds neutres (Obliguard-style) + accent lilas ───────────────── */
+/* ── Neon UI — neutral near-black surfaces (Obliguard-style), glowing magenta accent ── */
 [data-theme="neon"] {
   --c-bg-primary:            7 8 10;
   --c-bg-secondary:          13 14 17;
@@ -257,10 +270,12 @@
   --c-status-paused:         114 88 52;
   --c-status-paused-bg:      20 13 6;
 
-  --c-accent:                194 0 27;
-  --c-accent-hover:          224 30 55;
-  --c-accent-dark:           150 0 20;
-  --c-primary:               194 0 27;
+  /* White text 4.8:1 on the fill; text 6.3:1 on the page, 6.1:1 on cards. */
+  --c-accent:                187 55 187;
+  --c-accent-hover:          171 50 171;
+  --c-accent-dark:           150 44 150;
+  --c-accent-as-text:        220 92 220;
+  --c-primary:               187 55 187;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
@@ -282,23 +297,24 @@
   height: 1px;
   background: radial-gradient(
     ellipse 70% 100% at 50% 100%,
-    rgb(194 0 27 / 0.9) 0%,
-    rgb(194 0 27 / 0.4) 40%,
+    rgb(var(--c-accent) / 0.9) 0%,
+    rgb(var(--c-accent) / 0.4) 40%,
     transparent 70%
   );
   pointer-events: none;
 }
 
-/* ── Active nav item — barre rouge + fond teinté + glow icône ──────────────── */
+/* ── Active nav item — accent bar + tinted background + accent text and icon
+   (the accent as text: 5.3:1 or more on this tinted row) ──────────────────── */
 [data-theme="neon"] .bg-bg-active {
-  background-color: rgb(194 0 27 / 0.12) !important;
-  box-shadow: inset 3px 0 0 rgb(194 0 27 / 1), inset 0 0 12px rgb(194 0 27 / 0.08);
+  background-color: rgb(var(--c-accent) / 0.12) !important;
+  box-shadow: inset 3px 0 0 rgb(var(--c-accent) / 1), inset 0 0 12px rgb(var(--c-accent) / 0.08);
 }
 [data-theme="neon"] .bg-bg-active .text-text-primary {
-  color: rgb(194 0 27 / 1) !important;
+  color: rgb(var(--c-accent-as-text) / 1) !important;
 }
 [data-theme="neon"] .bg-bg-active svg {
-  color: rgb(194 0 27 / 1) !important;
+  color: rgb(var(--c-accent-as-text) / 1) !important;
 }
 
 /* ── Accent & primary text — no glow ───────────────────────────────────────── */
