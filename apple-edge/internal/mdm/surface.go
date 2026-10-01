@@ -67,6 +67,7 @@ type Surface struct {
 	cfg      *config.Config
 	logger   *obs.Logger
 	metrics  *obs.Metrics
+	verifier *Verifier
 	mdm      http.Handler
 	checkin  http.Handler
 	inflight chan struct{}
@@ -81,7 +82,7 @@ type Surface struct {
 // NewSurface assembles the device surface around the guard and verifier.
 func NewSurface(cfg *config.Config, reg *tenant.Registry, g *Guard, v *Verifier, logger *obs.Logger, m *obs.Metrics) *Surface {
 	s := &Surface{
-		reg: reg, cfg: cfg, logger: logger.With("component", "device"), metrics: m,
+		reg: reg, cfg: cfg, logger: logger.With("component", "device"), metrics: m, verifier: v,
 		inflight:  make(chan struct{}, cfg.MaxInflight),
 		large:     make(chan struct{}, cfg.LargeBodySlots),
 		tenantLim: ratelimit.New(TenantRate, TenantBurst, 100000),
@@ -302,6 +303,11 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 		s.checkin.ServeHTTP(w, r)
 	} else {
 		s.mdm.ServeHTTP(w, r)
+	}
+	if w.status == http.StatusBadRequest && st.stage == "signature" {
+		if h := r.Header.Get("Mdm-Signature"); h != "" {
+			s.verifier.ReportSignatureFailure(r.Context(), st.tenant, h, body)
+		}
 	}
 	if w.status == http.StatusBadRequest && (st.stage == "signature" || st.stage == "refused") {
 		s.failLim.Fail(source)

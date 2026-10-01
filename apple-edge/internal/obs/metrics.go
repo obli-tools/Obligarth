@@ -235,7 +235,7 @@ type HistogramVec struct {
 }
 
 // DefBuckets suits request durations in seconds.
-var DefBuckets = []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30}
+var DefBuckets = []float64{.005, .01, .025, .05, .1, .15, .25, .4, .5, 1, 2.5, 5, 10, 30}
 
 // Histogram registers a histogram.
 func (r *Registry) Histogram(name, help string, buckets []float64, labels ...string) *HistogramVec {

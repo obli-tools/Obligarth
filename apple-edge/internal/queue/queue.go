@@ -20,7 +20,6 @@ import (
 
 	"github.com/MeeJay/Obligarth/apple-edge/internal/apierr"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
-	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/outbox"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store/nanomdmsql"
@@ -55,7 +54,6 @@ type Queue struct {
 	Upstream Upstream
 	Secrets  *store.Secrets
 	Out      *outbox.Writer
-	Logger   *obs.Logger
 }
 
 // EnqueueRequest is the body of POST .../commands.

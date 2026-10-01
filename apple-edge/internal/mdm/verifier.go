@@ -6,10 +6,14 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
+	"encoding/asn1"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/smallstep/pkcs7"
 
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
@@ -134,6 +138,92 @@ func (v *Verifier) classifyChainError(ctx context.Context, t *tenant.Tenant, cer
 		}
 	}
 	v.metrics.SecurityEvents.Inc(t.Key, "untrusted_certificate")
+}
+
+// ReportSignatureFailure is called when Mdm-Signature verification failed.
+// The CMS library checks the signing time against the signer's validity
+// before the signature itself, so an expired identity never reaches the
+// verifier: this recognises a genuine signature by an expired identity of
+// the URL tenant and reports security.identity_expired.
+func (v *Verifier) ReportSignatureFailure(ctx context.Context, t *tenant.Tenant, header string, body []byte) {
+	cert := expiredSigner(header, body, v.now())
+	if cert == nil || t.Roots == nil {
+		return
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{Roots: t.Roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: cert.NotAfter.Add(-time.Minute)}); err != nil {
+		return
+	}
+	sum := sha256.Sum256(cert.Raw)
+	sha := hex.EncodeToString(sum[:])
+	if ic, err := v.lookup(ctx, sha); err != nil || ic == nil || ic.Tenant != t.Key {
+		return
+	}
+	v.emitOnce(ctx, sha, "security.identity_expired", outbox.T(t.Key, "security.identity_expired", map[string]any{
+		"cert_sha256": sha, "not_after": cert.NotAfter.UTC().Format(time.RFC3339)}))
+}
+
+// expiredSigner returns the signer of an Mdm-Signature whose only defect is
+// a signing time after the expiry of the signer's certificate, the
+// signature itself being verified here.
+func expiredSigner(header string, body []byte, now time.Time) *x509.Certificate {
+	raw, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return nil
+	}
+	p7, err := pkcs7.Parse(raw)
+	if err != nil || len(p7.Signers) != 1 {
+		return nil
+	}
+	p7.Content = body
+	var ste *pkcs7.SigningTimeNotValidError
+	if err := p7.Verify(); !errors.As(err, &ste) || !ste.SigningTime.After(ste.NotAfter) {
+		return nil // valid, or refused for another reason (digest mismatch...)
+	}
+	signer := p7.GetOnlySigner()
+	if signer == nil || !now.After(signer.NotAfter) {
+		return nil
+	}
+	si := p7.Signers[0]
+	alg := signatureAlgorithm(si.DigestEncryptionAlgorithm.Algorithm, si.DigestAlgorithm.Algorithm)
+	if alg == x509.UnknownSignatureAlgorithm || len(si.AuthenticatedAttributes) == 0 {
+		return nil
+	}
+	// DER of the authenticated attributes as signed: a SET OF in the
+	// received order (what the library verifies).
+	attrs, err := asn1.Marshal(si.AuthenticatedAttributes)
+	if err != nil || len(attrs) == 0 {
+		return nil
+	}
+	attrs[0] = 0x31
+	if signer.CheckSignature(alg, attrs, si.EncryptedDigest) != nil {
+		return nil
+	}
+	return signer
+}
+
+// signatureAlgorithm mirrors the mapping of the CMS library (devices and
+// simulators commonly sign with SHA-1, accepted for data signatures).
+func signatureAlgorithm(enc, digest asn1.ObjectIdentifier) x509.SignatureAlgorithm {
+	rsa := enc.Equal(pkcs7.OIDEncryptionAlgorithmRSA) || enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA1) ||
+		enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA256) || enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA384) ||
+		enc.Equal(pkcs7.OIDEncryptionAlgorithmRSASHA512)
+	switch {
+	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA1):
+		return x509.SHA1WithRSA
+	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA256):
+		return x509.SHA256WithRSA
+	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA384):
+		return x509.SHA384WithRSA
+	case rsa && digest.Equal(pkcs7.OIDDigestAlgorithmSHA512):
+		return x509.SHA512WithRSA
+	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA256):
+		return x509.ECDSAWithSHA256
+	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA384):
+		return x509.ECDSAWithSHA384
+	case enc.Equal(pkcs7.OIDDigestAlgorithmECDSASHA512):
+		return x509.ECDSAWithSHA512
+	}
+	return x509.UnknownSignatureAlgorithm
 }
 
 func (v *Verifier) emitOnce(ctx context.Context, sha, typ string, ev outbox.Event) {

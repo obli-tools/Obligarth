@@ -165,7 +165,7 @@ func Start(ctx context.Context, cfg *config.Config, sec Secrets, logger *obs.Log
 	guard := mdm.NewGuard(auth, nanoStore, a.DB, a.Out, secrets, cfg.CrossTenantPolicy, logger, a.Metrics, cfg.DBMaxConns)
 	a.Verifier = mdm.NewVerifier(a.DB, a.Registry, a.Out, logger, a.Metrics)
 	a.Surface = mdm.NewSurface(cfg, a.Registry, guard, a.Verifier, logger, a.Metrics)
-	a.Queue = &queue.Queue{DB: a.DB, Upstream: nanoStore, Secrets: secrets, Out: a.Out, Logger: logger}
+	a.Queue = &queue.Queue{DB: a.DB, Upstream: nanoStore, Secrets: secrets, Out: a.Out}
 	a.Tenants = &tenant.Service{Reg: a.Registry, DB: a.DB, Keys: a.Keys, Out: a.Out, Logger: logger,
 		CAYears: cfg.CAYears, RetireAfter: cfg.RetireAfter, PublicBase: cfg.PublicBase}
 	a.API = &api.Server{Cfg: cfg, DB: a.DB, Tenants: a.Tenants, Reg: a.Registry, Queue: a.Queue, Disabler: nanoStore,
