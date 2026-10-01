@@ -301,15 +301,15 @@ export const approvalService = {
       }).returning('*');
     }));
 
-    // Audit trail
-    await auditService.log({
+    // Audit trail, in the approval's tenant (from its context, like the row).
+    await inApprovalTenant(params.tenantId, () => auditService.log({
       tenantId: params.tenantId,
       userId: params.userId,
       action: 'approval.requested',
       resourceType: 'approval',
       resourcePath: String(row.id),
       details: { requestType: params.requestType, description: capDescription(params.description) },
-    }).catch(() => {});
+    })).catch(() => {});
 
     // Live push to all admins in the tenant so a red badge appears immediately.
     try { getIO().to(`tenant:${params.tenantId}`).emit('APPROVAL_CREATED', rowToApproval(row)); } catch {}
@@ -715,8 +715,9 @@ export const approvalService = {
   },
 
   /** Approved team request (tenant.manage_teams / tenant.manage_permissions;
-   *  /api/teams is platform-admin only). Audited in the TEAM's tenant, as the
-   *  direct route does (teams.controller auditTeam): an approval filed from
+   *  /api/teams is platform-admin only). Audited in the TEAM's tenant, from
+   *  its context, as the direct route does (teams.controller auditTeam,
+   *  logReqAs): an approval filed from
    *  the global view on another tenant's team leaves its trace in that
    *  tenant's own log, where the team's name resolves. */
   async _executeTeamAction(tenantId: number, requesterId: number, payload: Record<string, unknown>): Promise<void> {
@@ -735,8 +736,12 @@ export const approvalService = {
         targetTenantId = data.tenantId;
       }
       if (!(await db('tenants').where({ id: targetTenantId }).first('id'))) refuse('Target tenant not found');
-      const team = await asTenant(targetTenantId, userActor(requesterId), () => teamService.create(data, targetTenantId));
-      await auditAs(targetTenantId, requesterId, 'team.created', { resourceType: 'team', resourcePath: String(team.id), details: { name: team.name } });
+      // Written, and audited, in the team's tenant (the audit entry from its
+      // context: rls-tenant §5.3.5).
+      await asTenant(targetTenantId, userActor(requesterId), async () => {
+        const team = await teamService.create(data, targetTenantId);
+        await auditAs(targetTenantId, requesterId, 'team.created', { resourceType: 'team', resourcePath: String(team.id), details: { name: team.name } });
+      });
       return;
     }
     const teamId = Number(payload.teamId);
@@ -757,12 +762,12 @@ export const approvalService = {
         if (!parsed.success) invalidRequest(parsed.error);
         const updated = await inTeamTenant(() => teamService.update(teamId, parsed.data));
         if (!updated) refuse('Team not found');
-        await auditAs(teamTenantId, requesterId, 'team.updated', { resourceType: 'team', resourcePath: String(teamId), details: { name: updated.name } });
+        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.updated', { resourceType: 'team', resourcePath: String(teamId), details: { name: updated.name } }));
         return;
       }
       case 'team_delete': {
         if (!(await inTeamTenant(() => teamService.delete(teamId)))) refuse('Team not found');
-        await auditAs(teamTenantId, requesterId, 'team.deleted', { resourceType: 'team', resourcePath: String(teamId), details: { name: team.name } });
+        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.deleted', { resourceType: 'team', resourcePath: String(teamId), details: { name: team.name } }));
         return;
       }
       case 'team_members_set': {
@@ -770,9 +775,9 @@ export const approvalService = {
         const parsed = schemas.setTeamMembersSchema.safeParse({ memberIds: payload.memberIds });
         if (!parsed.success) invalidRequest(parsed.error);
         await inTeamTenant(() => teamService.setMembers(teamId, parsed.data.memberIds));
-        await auditAs(teamTenantId, requesterId, 'team.members_changed', {
+        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.members_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { userCount: parsed.data.memberIds.length, memberIds: parsed.data.memberIds },
-        });
+        }));
         return;
       }
       case 'team_permissions_set': {
@@ -780,9 +785,9 @@ export const approvalService = {
         const parsed = schemas.setTeamPermissionsSchema.safeParse({ permissions: payload.permissions });
         if (!parsed.success) invalidRequest(parsed.error);
         await inTeamTenant(() => teamService.setPermissions(teamId, parsed.data.permissions));
-        await auditAs(teamTenantId, requesterId, 'team.permissions_changed', {
+        await inTeamTenant(() => auditAs(teamTenantId, requesterId, 'team.permissions_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { permissionCount: parsed.data.permissions.length },
-        });
+        }));
         return;
       }
       default:

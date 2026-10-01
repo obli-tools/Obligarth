@@ -2,31 +2,70 @@ import { clientIp as resolveClientIp } from '../utils/clientIp';
 import type { Knex } from 'knex';
 import { db } from '../db';
 import type { Request } from 'express';
-import { isMasterTenant } from '@obligarth/shared';
-import { asTenant, contextMode, countContextMissing, currentDbContext, type DbActor } from '../db/context';
+import { isMasterTenant, MASTER_TENANT_ID } from '@obligarth/shared';
+import {
+  DbContextDeniedError, asNone, asTenant, contextMode, countContextMissing, currentDbContext, type DbActor,
+} from '../db/context';
 import { logger } from '../utils/logger';
 import { userLabels } from './userLabels.service';
 
 /**
- * An entry is written in the database context of ITS tenant, as the current
- * actor (rls-tenant §5.3.5, §8.2): a platform event filed under the master
- * tenant from a sign-in, an action of the MSP filed in the client's tenant
- * (logReqAs), all with the actor of the caller's context. Without a context
- * (a defect): logged, and written only while DB_CONTEXT_MODE=audit.
+ * An entry is written where the policy of audit_logs admits it (rls-tenant
+ * §5.3.5; lot A5, review of lot A1), with the actor of the caller's context:
+ *   - a tenant context writes the entries of ITS tenant only: an entry of
+ *     another tenant is refused (a wrong tenantId never lands elsewhere); an
+ *     action of the MSP on a client is filed from asTargetTenant (logReqAs);
+ *   - an entry of the master tenant (platform events: sign-in, SSO, grants)
+ *     is written from 'identity' or 'none' (from any other context: in
+ *     'none', same actor, which the policy admits for any actor);
+ *   - an entry of a tenant from a context without tenant (sign-in, account
+ *     work, jobs) is written in that tenant's context only for an actor that
+ *     may act there: a job or an integration (server code, like
+ *     forEachTenant), or a user who is a member of the tenant or an active
+ *     platform administrator (checked by the database).
+ * A refusal throws DbContextDeniedError (log() logs the lost entry). Without
+ * a context (a defect): logged, and written only while DB_CONTEXT_MODE=audit.
  */
 async function inEntryTenant(tenantId: number, fn: () => Promise<unknown>): Promise<void> {
   const ctx = currentDbContext();
-  if (ctx?.kind === 'tenant' && ctx.tenantId === tenantId) { await fn(); return; }
-  let actor: DbActor;
-  if (ctx) {
-    actor = ctx.actor;
-  } else {
+  if (!ctx) {
     countContextMissing();
     logger.warn({ code: 'DB_CONTEXT_MISSING', stack: new Error('audit entry').stack }, 'database query without context');
     if (contextMode() !== 'audit') throw new Error('audit entry without a database context');
-    actor = { type: 'anonymous', name: 'unscoped' };
+    await asTenant(tenantId, { type: 'anonymous', name: 'unscoped' }, fn);
+    return;
   }
-  await asTenant(tenantId, actor, fn);
+  if (ctx.kind === 'tenant' && ctx.tenantId === tenantId) {
+    await fn();
+    return;
+  }
+  if (tenantId === MASTER_TENANT_ID) {
+    // What the policy admits from 'none' for any actor: a platform event
+    // raised during another context's work goes there.
+    if (ctx.kind === 'identity' || ctx.kind === 'none') await fn();
+    else await asNone(ctx.actor, fn);
+    return;
+  }
+  if (ctx.kind === 'tenant') {
+    throw new DbContextDeniedError(`audit entry of tenant ${tenantId} from the context of tenant ${ctx.tenantId}`);
+  }
+  if (!(await actorMayWriteIn(ctx.actor, tenantId))) {
+    throw new DbContextDeniedError(`audit entry of tenant ${tenantId}: the actor of the context does not act there`);
+  }
+  await asTenant(tenantId, ctx.actor, fn);
+}
+
+/** May `actor` (the current context's) write in `tenantId`'s context: a job,
+ *  an integration, a member of the tenant or an active platform
+ *  administrator (the database answers, in the current context). */
+async function actorMayWriteIn(actor: DbActor, tenantId: number): Promise<boolean> {
+  if (actor.type === 'job' || actor.type === 'integration') return true;
+  if (actor.type !== 'user' || !Number.isSafeInteger(tenantId) || tenantId <= 0) return false;
+  const res = await db.raw(
+    'SELECT (obligarth.ctx_actor_is_platform_admin() OR ?::integer = ANY (obligarth.actor_member_tenant_ids())) AS ok',
+    [tenantId],
+  ) as { rows: Array<{ ok: boolean }> };
+  return res.rows[0]?.ok === true;
 }
 
 export interface AuditLogEntry {
@@ -213,7 +252,10 @@ export const auditService = {
   },
 
   /** As logReq, but filed in `tenantId` (a master-tenant action that touched
-   *  another tenant's devices leaves a trace in that tenant's own log). */
+   *  another tenant's devices leaves a trace in that tenant's own log):
+   *  written from asTargetTenant (rls-tenant §6.3, §8.2), so the request's
+   *  own tenant, or any tenant from the global view, one target per request.
+   *  Never throws: a refused target is logged like a lost entry. */
   async logReqAs(
     req: Request,
     tenantId: number,
@@ -221,13 +263,18 @@ export const auditService = {
     extras: Partial<Omit<AuditLogEntry, 'action' | 'tenantId' | 'userId' | 'ipAddress'>> = {},
   ): Promise<void> {
     const userId = (req.session as any)?.userId as number | undefined;
-    await this.log({
-      tenantId,
-      userId,
-      action,
-      ipAddress: clientIpFromReq(req),
-      ...extras,
-    });
+    try {
+      const { asTargetTenant } = await import('../middleware/dbContext');
+      await asTargetTenant(req, tenantId, () => this.log({
+        tenantId,
+        userId,
+        action,
+        ipAddress: clientIpFromReq(req),
+        ...extras,
+      }));
+    } catch (err) {
+      logger.warn({ err, action, tenantId }, 'audit entry not written');
+    }
   },
 
   async getByDevice(deviceId: number, tenantId: number, limit = 50): Promise<AuditLogRow[]> {

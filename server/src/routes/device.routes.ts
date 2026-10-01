@@ -517,6 +517,15 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
       groupWriterId: req.session.role === 'admin' ? undefined : req.session.userId!,
     }));
     if (!device) return res.status(404).json({ error: 'Device not found' });
+    // Filed in the device's tenant (from the global view: the client's log,
+    // rls-tenant EX-08): the fields changed, never their values.
+    try {
+      const { auditService } = await import('../services/audit.service');
+      await auditService.logReqAs(req, targetTenantId, 'device.updated', {
+        deviceId, resourceType: 'device', resourcePath: String(deviceId),
+        details: { fields: Object.keys((req.body ?? {}) as Record<string, unknown>).slice(0, 20).map((k) => k.slice(0, 64)) },
+      });
+    } catch {}
     res.json({ data: device });
   } catch (err) { next(err); }
 });

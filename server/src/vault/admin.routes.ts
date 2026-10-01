@@ -16,6 +16,7 @@
 import crypto from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { isMasterTenant, MASTER_TENANT_ID, type VaultOperationKind } from '@obligarth/shared';
+import { asTargetTenant } from '../middleware/dbContext';
 import { AppError } from '../middleware/errorHandler';
 import { approvalService } from '../services/approval.service';
 import { checkSecondFactor, sendStepUpFailure } from '../services/deviceKey/stepUpProof';
@@ -158,13 +159,18 @@ export function createVaultAdminRouter(): Router {
       return created;
     }));
     const details = { operationId: op.id, tenantId, reason };
-    await writeVaultAudit([
-      ...(tenantId !== null ? [{ tenantId, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault', details }] : []),
-      {
-        tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault_operation',
-        resourcePath: op.id, details, ipAddress: clientIp(req) || undefined,
-      },
-    ]);
+    // The tenant's own log gets the entry from its context (rls-tenant §6.3:
+    // the master tenant's global view writes into one target), the MSP's
+    // log from the request's.
+    if (tenantId !== null) {
+      await asTargetTenant(req, tenantId, () => writeVaultAudit([
+        { tenantId, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault', details },
+      ]));
+    }
+    await writeVaultAudit([{
+      tenantId: MASTER_TENANT_ID, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault_operation',
+      resourcePath: op.id, details, ipAddress: clientIp(req) || undefined,
+    }]);
     res.status(202).json({ success: true, data: op });
   }));
 

@@ -35,6 +35,20 @@ async function scopeTenantId(req: Request, scope: SettingScope, scopeId: number 
   return tenantId;
 }
 
+/** Audit of a settings write, filed in the rows' tenant (from the global
+ *  view: the client's log, rls-tenant EX-08). Never throws. */
+async function auditSettings(req: Request, tenantId: number, action: string, scope: SettingScope, scopeId: number | null,
+  details: Record<string, unknown>): Promise<void> {
+  try {
+    const { auditService } = await import('../services/audit.service');
+    await auditService.logReqAs(req, tenantId, action, {
+      resourceType: scope === 'global' ? 'tenant' : scope,
+      resourcePath: String(scope === 'global' ? tenantId : scopeId),
+      details: { scope, ...details },
+    });
+  } catch { /* the audit never breaks the request */ }
+}
+
 export const settingsController = {
   // GET /api/settings/global/resolved
   async getGlobalResolved(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -89,6 +103,7 @@ export const settingsController = {
       const tenantId = await scopeTenantId(req, scope, scopeId);
 
       await asTargetTenant(req, tenantId, () => settingsService.set(tenantId, scope, scopeId, key as SettingKey, value));
+      await auditSettings(req, tenantId, 'settings.changed', scope, scopeId, { keys: [key], values: { [key]: value } });
 
       res.json({ success: true, message: 'Setting saved' });
     } catch (err: unknown) {
@@ -113,6 +128,10 @@ export const settingsController = {
         scopeId,
         overrides.map((o) => ({ key: o.key as SettingKey, value: o.value })),
       ));
+      await auditSettings(req, tenantId, 'settings.changed', scope, scopeId, {
+        keys: overrides.map((o) => o.key).slice(0, 50),
+        values: Object.fromEntries(overrides.slice(0, 50).map((o) => [o.key, o.value])),
+      });
 
       res.json({ success: true, message: 'Settings saved' });
     } catch (err) {
@@ -128,6 +147,7 @@ export const settingsController = {
       const tenantId = await scopeTenantId(req, scope, scopeId);
 
       const deleted = await asTargetTenant(req, tenantId, () => settingsService.remove(tenantId, scope, scopeId, key as SettingKey));
+      if (deleted) await auditSettings(req, tenantId, 'settings.reset', scope, scopeId, { keys: [key] });
 
       res.json({ success: true, message: deleted ? 'Setting reset to inherited' : 'No override found' });
     } catch (err) {

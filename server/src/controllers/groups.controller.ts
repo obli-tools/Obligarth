@@ -146,7 +146,9 @@ export const groupsController = {
 
       try {
         const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'group.created', {
+        // Filed in the group's tenant (from the global view: the client's log,
+        // rls-tenant EX-08), from asTargetTenant.
+        await auditService.logReqAs(req, tenantId, 'group.created', {
           resourceType: 'group', resourcePath: String(group.id),
           details: { name: group.name, parentId: group.parentId ?? null },
         });
@@ -174,7 +176,7 @@ export const groupsController = {
 
       try {
         const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'group.updated', {
+        await auditService.logReqAs(req, current.tenantId, 'group.updated', {
           resourceType: 'group', resourcePath: String(id),
           details: { name: group.name },
         });
@@ -237,7 +239,7 @@ export const groupsController = {
 
       try {
         const { auditService } = await import('../services/audit.service');
-        await auditService.logReq(req, 'group.deleted', {
+        await auditService.logReqAs(req, current.tenantId, 'group.deleted', {
           resourceType: 'group', resourcePath: String(id),
         });
       } catch {}
