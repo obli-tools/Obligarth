@@ -63,11 +63,14 @@ function slugify(name: string): string {
     .replace(/^-|-$/g, '');
 }
 
-async function ensureUniqueSlug(slug: string, excludeId?: number): Promise<string> {
+/** A slug free in `tenantId` — the unique key is (slug, tenant_id). Another
+ *  tenant's groups are never looked at: the suffix picked here would tell
+ *  which names they use. */
+async function ensureUniqueSlug(slug: string, tenantId: number, excludeId?: number): Promise<string> {
   let candidate = slug;
   let i = 1;
   while (true) {
-    const q = db('device_groups').where({ slug: candidate });
+    const q = db('device_groups').where({ slug: candidate, tenant_id: tenantId });
     if (excludeId) q.whereNot({ id: excludeId });
     const exists = await q.first();
     if (!exists) return candidate;
@@ -109,7 +112,7 @@ export const groupService = {
     sortOrder?: number;
     groupNotifications?: boolean;
   }, tenantId: number): Promise<DeviceGroup> {
-    const slug = await ensureUniqueSlug(slugify(data.name));
+    const slug = await ensureUniqueSlug(slugify(data.name), tenantId);
 
     const row = await db.transaction(async (trx) => {
       if (data.parentId) {
@@ -165,8 +168,10 @@ export const groupService = {
     const updateData: Record<string, unknown> = { updated_at: new Date() };
 
     if (data.name !== undefined) {
+      const current = await db('device_groups').where({ id }).first('tenant_id') as { tenant_id: number } | undefined;
+      if (!current) return null;
       updateData.name = data.name;
-      updateData.slug = await ensureUniqueSlug(slugify(data.name), id);
+      updateData.slug = await ensureUniqueSlug(slugify(data.name), Number(current.tenant_id), id);
     }
     if (data.description !== undefined) updateData.description = data.description;
     if (data.sortOrder !== undefined) updateData.sort_order = data.sortOrder;

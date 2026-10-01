@@ -9,11 +9,12 @@ import { permissionService } from './permission.service';
  * tenant-scoped route follows (master tenant + isolation rules):
  *   - the device must be in the session's tenant (req.tenantId), except for a
  *     platform admin on the master tenant (god view: any tenant);
- *   - a non-admin must also be a member of that tenant (requireTenant does
- *     not check it: a user removed from a tenant keeps a session on it until
- *     it switches), see the device through one of their teams (the same rule
- *     as the device list, permissionService.canReadDevice) and, when
- *     `capability` is given, hold it on the device.
+ *   - a non-admin must also be a member of the device's tenant (requireTenant
+ *     re-checks the session's tenant on every request; this helper checks it
+ *     again rather than rely on being mounted behind it), see the device
+ *     through one of their teams (the same rule as the device list,
+ *     permissionService.canReadDevice) and, when `capability` is given, hold
+ *     it on the device.
  * Admins (users.role 'admin') bypass the team checks, as everywhere.
  *
  * A device the caller may not see answers like an unknown one (404, no

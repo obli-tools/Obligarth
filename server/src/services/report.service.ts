@@ -380,6 +380,9 @@ class ReportService {
     }
 
     const devices = await db('devices').where({ tenant_id: report.tenant_id }).whereIn('id', deviceIds);
+    // Only the report's tenant's devices from here on: a scope naming
+    // another tenant's device (scope_id is free) reads none of its data.
+    deviceIds = devices.map((d: any) => Number(d.id));
     const deviceName = new Map<number, string>(devices.map((d: any) => [d.id, d.display_name || d.hostname || `#${d.id}`]));
     sections.devices = devices.map((d: any) => ({
       id: d.id, hostname: d.hostname, displayName: d.display_name,

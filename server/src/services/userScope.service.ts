@@ -92,11 +92,13 @@ export const userScope = {
       .first('id', 'username', 'role', 'is_active', 'foreign_source') as ManagedTarget | undefined;
     if (!target) throw new AppError(404, 'User not found');
     if (actor.isPlatformAdmin) return target;
+    // Outside the current tenant, an account answers like an unknown one
+    // (404) before anything else is said about it (a platform admin, say).
+    const rows = await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>;
+    if (!rows.some((r) => Number(r.tenant_id) === actor.tenantId)) throw new AppError(404, 'User not found');
     if (target.role === 'admin') {
       throw new AppError(403, 'Only a platform administrator can manage an administrator account');
     }
-    const rows = await db('user_tenants').where({ user_id: targetId }).select('tenant_id', 'role') as Array<{ tenant_id: number; role: string }>;
-    if (!rows.some((r) => Number(r.tenant_id) === actor.tenantId)) throw new AppError(404, 'User not found');
     for (const r of rows) {
       const refusal = await refusalFor(actor, Number(r.tenant_id), normaliseTenantRole(r.role));
       if (refusal) throw new AppError(403, refusal);

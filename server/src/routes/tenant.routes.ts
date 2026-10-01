@@ -137,10 +137,11 @@ router.get('/:id', async (req, res, next) => {
     const tenant = await tenantService.getById(id);
     if (!tenant) throw new AppError(404, 'Tenant not found');
 
-    // Non-admins can only see their own tenants
+    // Non-admins can only see their own tenants: another tenant answers like
+    // an unknown one (its existence is not told).
     if (req.session.role !== 'admin') {
       const hasAccess = await tenantService.userHasAccess(req.session.userId!, id);
-      if (!hasAccess) throw new AppError(403, 'Access denied');
+      if (!hasAccess) throw new AppError(404, 'Tenant not found');
     }
 
     res.json({ success: true, data: tenant });

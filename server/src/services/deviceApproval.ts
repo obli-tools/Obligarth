@@ -137,6 +137,9 @@ async function transferDevices(tenantId: number, requesterId: number, rawIds: un
       failed.push(device.hostname);
     }
   }
+  // The source tenant's teams lose their scopes on the moved devices.
+  const { deviceService } = await import('./device.service');
+  await deviceService.dropForeignTeamScopes(moved.map(Number), t.targetTenantId);
   await auditAs(tenantId, requesterId, moved.length > 1 || devices.length > 1 ? 'device.bulk_transferred' : 'device.transferred', {
     deviceId: devices.length === 1 ? devices[0].id : undefined,
     resourceType: 'device', resourcePath: devices.map((d) => d.id).join(','),

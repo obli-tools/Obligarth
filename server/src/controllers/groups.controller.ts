@@ -117,8 +117,8 @@ export const groupsController = {
       }
 
       // A non-administrator creates through a can_create team of THIS
-      // tenant (requireCanCreate looks at the teams of every tenant), and
-      // only those teams receive the rw scope on the new group.
+      // tenant (the rule of requireCanCreate), of which it is still a
+      // member, and only those teams receive the rw scope on the new group.
       const creatorTeamIds = isAdmin ? [] : await groupService.creatorTeamIds(req.session.userId!, tenantId);
       if (!isAdmin && creatorTeamIds.length === 0) throw new AppError(403, 'Insufficient permissions');
 

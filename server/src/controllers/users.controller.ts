@@ -378,18 +378,19 @@ export const usersController = {
   async setTenants(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = parseInt(req.params.id, 10);
+      // P1: tenant memberships are the tenant-level role. A manager that is
+      // not a platform admin may only change the CURRENT tenant's row, of an
+      // account it dominates other than itself (tenant admin rows only as a
+      // tenant admin), and may only grant a role whose permissions it holds.
+      // Rows of other tenants are kept as they are. Checked first: an
+      // account outside the manager's reach answers 404, whatever it is.
+      const actor = actorFromReq(req);
+      const assignments = await userScope.resolveTenantAssignments(actor, id, (req.body as { assignments?: unknown })?.assignments);
       const targetUser = await userService.getById(id);
       if (!targetUser) throw new AppError(404, 'User not found');
       if (targetUser.foreignSource === 'obligate') {
         throw new AppError(400, 'Cannot modify SSO user tenant access — manage from Obligate');
       }
-      // P1: tenant memberships are the tenant-level role. A manager that is
-      // not a platform admin may only change the CURRENT tenant's row, of an
-      // account it dominates other than itself (tenant admin rows only as a
-      // tenant admin), and may only grant a role whose permissions it holds.
-      // Rows of other tenants are kept as they are.
-      const actor = actorFromReq(req);
-      const assignments = await userScope.resolveTenantAssignments(actor, id, (req.body as { assignments?: unknown })?.assignments);
 
       // The requested rows (tenant id + role only): the executor re-resolves
       // them as the requester when the request is approved. The description

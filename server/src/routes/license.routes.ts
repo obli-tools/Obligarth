@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { licenseService } from '../services/license.service';
 import { requireDeviceRead, requireDeviceWriteParam } from '../middleware/rbac';
+import { parseRequestDeviceId } from '../services/deviceScope.service';
+import { db } from '../db';
 
 const router = Router();
 
@@ -20,10 +22,15 @@ router.get('/device/:deviceId', requireDeviceRead('deviceId'), async (req, res, 
   } catch (err) { next(err); }
 });
 
-// POST /licenses/device/:deviceId — create
+// POST /licenses/device/:deviceId — create, for a device of the session's
+// tenant only (the license is written there): another tenant's device
+// answers like an unknown one (404).
 router.post('/device/:deviceId', requireDeviceWriteParam('deviceId'), async (req, res, next) => {
   try {
-    const license = await licenseService.create(parseInt(req.params.deviceId), req.tenantId!, req.body);
+    const deviceId = parseRequestDeviceId(req.params.deviceId);
+    const device = deviceId === null ? undefined : await db('devices').where({ id: deviceId, tenant_id: req.tenantId! }).first('id');
+    if (!device) return res.status(404).json({ error: 'Device not found' });
+    const license = await licenseService.create(deviceId!, req.tenantId!, req.body);
     res.status(201).json({ data: license });
   } catch (err) { next(err); }
 });

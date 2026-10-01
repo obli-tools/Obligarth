@@ -484,9 +484,11 @@ router.post('/batch/transfer', requireTenantCapability('devices.manage'), async 
     if (!approved) return;
 
     // Each device joins the target tenant, attached to the target key (its
-    // pre-approval claim, permissionService) and ungrouped. Keep in sync
-    // with deviceApproval.ts (transferDevices).
+    // pre-approval claim, permissionService) and ungrouped; the source
+    // tenant's teams lose their scopes on it. Keep in sync with
+    // deviceApproval.ts (transferDevices).
     const results = { transferred: 0, failed: 0 };
+    const moved: number[] = [];
     for (const device of validDevices) {
       try {
         await db('devices').where({ id: device.id }).update({
@@ -496,11 +498,13 @@ router.post('/batch/transfer', requireTenantCapability('devices.manage'), async 
           updated_at: new Date(),
         });
         results.transferred++;
+        moved.push(Number(device.id));
       } catch (err) {
         logger.error({ err, deviceId: device.id }, 'bulk transfer: failed for device');
         results.failed++;
       }
     }
+    await deviceService.dropForeignTeamScopes(moved, targetTenantId);
 
     try {
       const { auditService } = await import('../services/audit.service');
@@ -846,13 +850,15 @@ router.post('/:id/transfer', requireTenantCapability('devices.manage'), async (r
     });
     if (!approved) return;
 
-    // Move the device record (keep in sync with deviceApproval.ts, transferDevices).
+    // Move the device record, and drop the source tenant's team scopes on
+    // it (keep in sync with deviceApproval.ts, transferDevices).
     await db('devices').where({ id: deviceId }).update({
       tenant_id: targetTenantId,
       api_key_id: targetApiKeyId,
       group_id: null,
       updated_at: new Date(),
     });
+    await deviceService.dropForeignTeamScopes([deviceId], targetTenantId);
 
     try {
       const { auditService } = await import('../services/audit.service');

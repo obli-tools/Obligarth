@@ -1,19 +1,31 @@
 import { Router, type Request, type Response } from 'express';
 import crypto from 'crypto';
-import { isMasterTenant } from '@obligarth/shared';
 import { db } from '../db';
 import { requireRole, requireAnyTenantCapability } from '../middleware/rbac';
+import { hasGlobalView } from '../services/deviceScope.service';
 
 const router = Router();
 
 // API keys (agent_api_keys): the enrollment credentials of a tenant. A key
 // may carry a default group, which is also the pre-approval claim of the
-// devices enrolled with it (permissionService).
+// devices enrolled with it (permissionService): always a group of the key's
+// own tenant.
+
+/** A key's default group: null, or the id of a group of `tenantId`
+ *  (undefined when the value names nothing there). */
+async function defaultGroupOf(tenantId: number, raw: unknown): Promise<number | null | undefined> {
+  if (raw === null || raw === undefined) return null;
+  const id = Number(raw);
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined;
+  const row = await db('device_groups').where({ id, tenant_id: tenantId }).first('id');
+  return row ? id : undefined;
+}
 
 async function listKeys(req: Request, res: Response): Promise<void> {
-  // Master tenant gets every API key across the install. Other tenants
-  // stay strictly scoped to their own keys.
-  const isMaster = isMasterTenant(req.tenantId!);
+  // The global view (a platform admin on the master tenant) lists the keys
+  // of every tenant. Anyone else, on the master tenant too, only those of
+  // the session's tenant: a key enrolls devices into its tenant.
+  const isMaster = hasGlobalView(req);
   const q = db('agent_api_keys')
     .leftJoin('devices', function () {
       this.on('devices.api_key_id', '=', 'agent_api_keys.id')
@@ -51,13 +63,18 @@ async function createKey(req: Request, res: Response): Promise<void> {
     res.status(400).json({ success: false, error: 'Name is required' });
     return;
   }
+  const groupId = await defaultGroupOf(req.tenantId, defaultGroupId);
+  if (groupId === undefined) {
+    res.status(400).json({ success: false, error: 'Group not found' });
+    return;
+  }
   const userId = req.session?.userId ?? 0;
   const rawKey = crypto.randomBytes(32).toString('hex');
   const [row] = await db('agent_api_keys').insert({
     tenant_id: req.tenantId,
     name: name.trim(),
     key: rawKey,
-    default_group_id: defaultGroupId ?? null,
+    default_group_id: groupId,
     created_by: userId,
   }).returning('*');
   try {
@@ -88,7 +105,14 @@ async function updateKey(req: Request, res: Response): Promise<void> {
   const { name, defaultGroupId } = req.body as { name?: string; defaultGroupId?: number | null };
   const updates: any = {};
   if (name !== undefined) updates.name = name.trim();
-  if (defaultGroupId !== undefined) updates.default_group_id = defaultGroupId;
+  if (defaultGroupId !== undefined) {
+    const groupId = await defaultGroupOf(req.tenantId, defaultGroupId);
+    if (groupId === undefined) {
+      res.status(400).json({ success: false, error: 'Group not found' });
+      return;
+    }
+    updates.default_group_id = groupId;
+  }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ success: false, error: 'Nothing to update' });
     return;

@@ -504,10 +504,12 @@ class DeviceService {
     const updated = await this.getDeviceById(id, deviceTenantId);
     if (updated && this.io) {
       // Emit on the OWNING tenant's room so the device's home tenant
-      // sees the live change too — not just the master room.
+      // sees the live change too. The global view's echo goes to the
+      // master tenant's admin room (platform administrators only), never
+      // to its plain members: they do not see other tenants' devices.
       this.io.to(`tenant:${updated.tenantId}`).emit(SocketEvents.DEVICE_UPDATED, updated);
       if (isMaster && updated.tenantId !== tenantId) {
-        this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_UPDATED, updated);
+        this.io.to(`tenant:${tenantId}:admin`).emit(SocketEvents.DEVICE_UPDATED, updated);
       }
     }
     return updated;
@@ -666,6 +668,23 @@ class DeviceService {
       for (const r of deleted) this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id: r.id });
     }
     return deleted.map((r) => Number(r.id));
+  }
+
+  /**
+   * After a tenant transfer: the device scopes that teams of any other
+   * tenant than `tenantId` (the devices' new one) held on these devices are
+   * removed. A team's scopes stay in its own tenant (teamService), and a
+   * device that left a tenant must not stay reachable through that
+   * tenant's teams. Keep in step with every transfer path (device.routes,
+   * deviceApproval.ts).
+   */
+  async dropForeignTeamScopes(deviceIds: number[], tenantId: number): Promise<void> {
+    if (deviceIds.length === 0) return;
+    await db('team_permissions')
+      .where({ scope: 'device' })
+      .whereIn('scope_id', deviceIds)
+      .whereIn('team_id', db('user_teams').whereNot({ tenant_id: tenantId }).select('id'))
+      .delete();
   }
 
   // ─── Inventory pruning ────────────────────────────────────────────────────

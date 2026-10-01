@@ -149,13 +149,17 @@ export function requireAnyTenantCapability(...capabilities: TenantCapability[]) 
 }
 
 /**
- * Require canCreate permission (for creating new devices/groups).
+ * Require canCreate permission (for creating new devices/groups): a
+ * can_create team of the request's tenant (teams are mono-tenant, a
+ * can_create granted in another tenant gives nothing here).
  */
 export function requireCanCreate() {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     try {
       if (req.session.role === 'admin') return next();
-      const canCreate = await permissionService.canCreate(req.session.userId!, false);
+      const tenantId = (req as any).tenantId as number | undefined;
+      if (!tenantId) return next(new AppError(403, 'Insufficient permissions'));
+      const canCreate = await permissionService.canCreate(req.session.userId!, false, tenantId);
       if (!canCreate) return next(new AppError(403, 'Insufficient permissions'));
       next();
     } catch (err) {

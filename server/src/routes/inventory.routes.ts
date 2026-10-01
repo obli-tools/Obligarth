@@ -1,18 +1,24 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { inventoryService } from '../services/inventory.service';
-import { permissionService } from '../services/permission.service';
+import { resolveRequestDevice } from '../services/deviceScope.service';
 import { AppError } from '../middleware/errorHandler';
 
 const router = Router();
 
-// All inventory routes require read access to the device
+// All inventory routes require read access to the device, with the REST
+// tenant rule (resolveRequestDevice): a device of the session's tenant (of
+// any tenant for the master tenant's global view), seen through one of the
+// caller's teams for a non-admin. A device out of reach answers like an
+// unknown one (404) — a team scope left on a device that moved to another
+// tenant opens nothing here.
 router.param('deviceId', async (req: Request, _res: Response, next: NextFunction, val: string) => {
-  if (req.session?.role === 'admin') return next();
-  const deviceId = parseInt(val, 10);
-  if (isNaN(deviceId)) return next();
-  const canRead = await permissionService.canReadDevice(req.session.userId!, deviceId, false);
-  if (!canRead) return next(new AppError(403, 'Insufficient permissions'));
-  next();
+  try {
+    const outcome = await resolveRequestDevice(req, val);
+    if (!outcome.ok) return next(new AppError(outcome.status, outcome.error));
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.get('/:deviceId/hardware', async (req, res, next) => {
