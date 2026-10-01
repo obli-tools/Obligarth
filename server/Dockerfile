@@ -7,16 +7,23 @@ WORKDIR /app
 # Chromium (apk add chromium) via executablePath (see utils/chromium.ts).
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
 
-COPY package.json ./
-COPY shared/ ./shared/
-RUN cd shared && npm install && npm run build
-
+# Dependencies come from package-lock.json only (npm ci): exact versions and
+# integrity hashes, and @obligarth/* are links to the local workspaces
+# recorded in the lock, never packages fetched from the public registry (the
+# @obligarth npm scope is not reserved). npm ci checks the lock against the
+# package.json of every workspace, hence the three of them.
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
 COPY server/package.json ./server/
-RUN cd server && npm install
+COPY client/package.json ./client/
+RUN npm ci --workspace=shared --workspace=server
+
+COPY shared/ ./shared/
+RUN npm run build --workspace=shared
 
 COPY server/tsconfig.json server/knexfile.ts ./server/
 COPY server/src/ ./server/src/
-RUN cd server && npm run build
+RUN npm run build --workspace=server
 
 # ---- Production stage ----
 FROM node:24-alpine AS production
@@ -33,25 +40,24 @@ RUN apk add --no-cache \
 ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     CHROMIUM_PATH=/usr/bin/chromium-browser
 
-COPY --from=builder /app/shared/package.json ./shared/
+# Runtime dependencies of the server only, from the lock as well (see the
+# builder stage). client/package.json is also read at runtime: the client
+# version reported by GET /api/system.
+COPY package.json package-lock.json ./
+COPY shared/package.json ./shared/
+COPY server/package.json ./server/
+COPY client/package.json ./client/
+RUN npm ci --omit=dev --workspace=server && npm cache clean --force
+
 COPY --from=builder /app/shared/dist/ ./shared/dist/
-
-COPY --from=builder /app/server/package.json ./server/
-COPY package.json ./
-RUN cd server && npm install --omit=dev
-
 COPY --from=builder /app/server/dist/ ./server/dist/
 
-# Client package.json — version used by GET /api/system
-COPY client/package.json ./client/
-
-# Obli mobile app (Android) — served by GET /api/mobile/android/{version,download}
-# (docs/obli-mobile.md §6). Drop zone written by the release script:
-# manifest.json (committed placeholder: versionCode 0 → available:false),
-# optional RELEASE_NOTES.md and obligarth.apk (gitignored; missing → 404).
-# The Gradle project (mobile/android) is excluded by .dockerignore.
+# Obli mobile app (Android): drop zone read by GET /api/mobile/android/
+# {version,download} (manifest.json, optional RELEASE_NOTES.md and
+# obligarth.apk). No release is part of the repository, so the folder is empty
+# in the image: version answers 503, download 404, and the web client says the
+# app is not published yet. A release is provided by mounting it here.
 RUN mkdir -p ./mobile/release
-COPY mobile/release/ ./mobile/release/
 
 EXPOSE 3001
 

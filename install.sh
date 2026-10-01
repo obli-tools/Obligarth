@@ -37,6 +37,11 @@ if ! docker compose version > /dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v curl > /dev/null 2>&1; then
+  echo "✗ curl is required to download the configuration files."
+  exit 1
+fi
+
 # Create install directory
 mkdir -p "$INSTALL_DIR"
 cd "$INSTALL_DIR"
@@ -87,12 +92,16 @@ echo ""
 docker compose pull
 docker compose up -d
 
+# Port published by the client container: LISTEN_PORT of .env (default 3005)
+PORT=$(sed -n 's/^LISTEN_PORT=\([0-9][0-9]*\).*/\1/p' .env | tail -n 1)
+[ -n "$PORT" ] || PORT=3005
+
 echo ""
 echo "  ╔══════════════════════════════════════╗"
 echo "  ║        Obligarth is running!         ║"
 echo "  ╚══════════════════════════════════════╝"
 echo ""
-echo "  → Open: http://localhost:3005"
+echo "  → Open: http://localhost:$PORT"
 if [ -n "$ADMIN_PASSWORD" ]; then
   echo "  → Sign in: admin / $ADMIN_PASSWORD"
   echo "    Shown only this once (also in .env, used only to create this first account)."
@@ -106,5 +115,5 @@ echo ""
 echo "  Useful commands:"
 echo "    docker compose -f $(pwd)/docker-compose.yml logs -f"
 echo "    docker compose -f $(pwd)/docker-compose.yml down"
-echo "    docker compose -f $(pwd)/docker-compose.yml pull && docker compose up -d  # update"
+echo "    docker compose -f $(pwd)/docker-compose.yml pull && docker compose -f $(pwd)/docker-compose.yml up -d  # update"
 echo ""

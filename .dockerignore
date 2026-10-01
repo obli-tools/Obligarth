@@ -1,27 +1,43 @@
-node_modules
+# Build context of the server and client images (context: the repository root).
+# A WHITELIST, like .gitignore: everything is left out, then only what
+# server/Dockerfile and client/Dockerfile copy is let back in. An image built
+# from a working copy thus gets the same inputs as one built from a clean
+# clone, without local documentation, tools, data, tests or release drops.
+# apple-edge/ is built from its own context (./apple-edge, own .dockerignore).
+*
+!package.json
+!package-lock.json
+!shared/
+!server/
+!client/
+
+# Never in a build context, even inside the folders above (same rules as
+# .gitignore)
 **/node_modules
 **/dist
-.git
-.env
-*.md
-.vscode
+**/build
+**/coverage
+**/*.tsbuildinfo
+**/*.log
+**/.env
+**/.env.*
+**/docs
+**/*.md
+**/*.bat
+**/*.cmd
 **/*.ps1
-.cache
-
-# Obli mobile (Android): only the release drop zone (manifest.json,
-# RELEASE_NOTES.md, obligarth.apk) enters the build context. The Gradle
-# project (mobile/android: sources, local.properties, keystores) never does.
-mobile/*
-!mobile/release
-!mobile/release/RELEASE_NOTES.md
+**/.cache
+**/.secrets
 **/*.jks
 **/*.keystore
-**/.secrets
+**/.vscode
+**/.idea
+**/.DS_Store
+**/Thumbs.db
 
-# Données d'outils locaux et scripts locaux : jamais dans un contexte de build
-.cache
-**/.cache
-**/*.bat
-# Documentation : jamais dans un contexte de build
-docs
-docs-import
+# Tests and test data stay local: never compiled into an image
+**/*.test.*
+**/*.spec.*
+**/__tests__
+**/testdata
+**/test-resolve.mjs

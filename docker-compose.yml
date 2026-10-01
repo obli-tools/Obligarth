@@ -37,7 +37,8 @@ services:
       # Aggressive autovacuum, sized for the same former push traffic: hundreds
       # of row versions/s on the devices table made stock autovacuum fall
       # behind → bloat → every UI SELECT on devices slowed down. (A per-table
-      # override on `devices` is set by migration 118 for even tighter thresholds.)
+      # override on `devices` is set by the base migration for even tighter
+      # thresholds.)
       - "-c"
       - "autovacuum_vacuum_scale_factor=0.02"
       - "-c"
