@@ -19,25 +19,23 @@
 **/coverage
 **/*.tsbuildinfo
 **/*.log
-**/.env
-**/.env.*
 **/docs
 **/*.md
 **/*.bat
 **/*.cmd
 **/*.ps1
-**/.cache
-**/.secrets
 **/*.jks
 **/*.keystore
-**/.vscode
-**/.idea
-**/.DS_Store
 **/Thumbs.db
+# Hidden files and folders: .env files, caches, secrets, editor and
+# workstation tool folders. A hidden file the build needs takes a "!"
+# exception placed after this line.
+**/.*
 
 # Tests and test data stay local: never compiled into an image
 **/*.test.*
 **/*.spec.*
+**/*e2e*
 **/__tests__
 **/testdata
 **/test-resolve.mjs

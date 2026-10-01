@@ -33,15 +33,18 @@ docs/
 *.bat
 *.cmd
 *.ps1
-.cache/
-.secrets/
 *.jks
 *.keystore
+# Dossiers cachés : caches, secrets, éditeurs et outils du poste. Un dossier
+# caché indispensable au build demande une exception « ! » placée après cette
+# ligne.
+.*/
 
 # Tests et jeux de données de test : restent locaux (non indispensables au build)
 *.test.*
 *.spec.*
 *_test.go
+*e2e*
 __tests__/
 testdata/
 test-resolve.mjs
@@ -55,8 +58,6 @@ coverage/
 *.log
 .DS_Store
 Thumbs.db
-.vscode/
-.idea/
 .env
 .env.*
 !/.env.example
