@@ -76,17 +76,20 @@ type MiddlewareFailureReason =
  * client id and its key has been regenerated, a token proves only that SOME
  * key holder asked for it. Hence:
  *   OBLIGATE_DELEGATION_APPS  — comma list of source apps (the signed `azp`)
- *     whose tokens are accepted. Unset: 'oblidesk' (inherited default; no app
- *     reads Obligarth this way yet: 'none' advised). 'none': delegation off.
+ *     whose tokens are accepted. Unset, empty or 'none' (alone or in the
+ *     list): delegation off, refused before any JWKS fetch. Off by default:
+ *     no app reads Obligarth this way yet, and an accepted source app would
+ *     let anyone holding its key obtain tokens this server honours. Name a
+ *     source app only once it really reads Obligarth.
  *   OBLIGATE_DELEGATION_ALLOW_ADMIN — 'true' accepts a token whose subject is
  *     a platform admin here (god view on every tenant). Unset: refused, a
  *     leaked key must not open every tenant's devices. Set it back once the
  *     source apps' keys are no longer public.
  */
 export function delegationPolicy(): { enabled: boolean; apps: Set<string>; allowPlatformAdmin: boolean } {
-  const rawApps = process.env.OBLIGATE_DELEGATION_APPS?.trim().toLowerCase();
-  const list = rawApps === undefined || rawApps === '' ? ['oblidesk'] : rawApps.split(/[\s,]+/).filter(Boolean);
-  const enabled = !(list.length === 0 || (list.length === 1 && list[0] === 'none'));
+  const rawApps = process.env.OBLIGATE_DELEGATION_APPS?.trim().toLowerCase() ?? '';
+  const list = rawApps.split(/[\s,]+/).filter(Boolean);
+  const enabled = list.length > 0 && !list.includes('none');
   return {
     enabled,
     apps: new Set(enabled ? list : []),

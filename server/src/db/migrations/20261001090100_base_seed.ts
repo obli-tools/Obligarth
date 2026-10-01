@@ -12,7 +12,8 @@ import type { Knex } from 'knex';
  * Restrictions of the master tenant (tenants.action_restrictions): the
  * recommended defaults of the restrictions matrix, i.e. those of the core
  * (restriction.service.ts) and of the device registry (modules/devices.ts).
- * A tenant created later starts with none ('{}', the column default).
+ * A tenant created later gets the same defaults from tenantService.create
+ * (defaultRestrictions); the column default stays '{}'.
  */
 const MASTER_TENANT_RESTRICTIONS = {
   'device.delete': 'sensitive',

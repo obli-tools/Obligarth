@@ -161,6 +161,12 @@ export function createApp() {
 
   // API routes
   app.use('/api', routes);
+  // An /api path no router answered (unknown, or a dormant module whose
+  // router is not mounted): a JSON 404, never the web client's index.html
+  // below, nor a 500 where the client build is absent (server image).
+  app.use('/api', (_req, res) => {
+    res.status(404).json({ success: false, error: 'Not found' });
+  });
 
   // Health check (public — also used by login page to display server version).
   // `app` names the application behind this URL: a client of a sibling Obli*

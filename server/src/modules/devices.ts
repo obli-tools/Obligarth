@@ -64,7 +64,8 @@ export function registerDeviceModule(): void {
     { key: 'device.bulk_group_change',     label: 'Bulk change group',        category: 'Device' },
     { key: 'device.transfer_tenant',       label: 'Transfer device to another tenant', category: 'Device' },
   ], {
-    // Recommended default levels (the migrations seed the same).
+    // Recommended default levels: every new tenant starts with them
+    // (tenantService.create), the seed writes the same on the master tenant.
     'device.delete':                'sensitive',
     'device.bulk_group_change':     'sensitive',
     'device.transfer_tenant':       'sensitive',

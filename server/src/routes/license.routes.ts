@@ -1,3 +1,7 @@
+// DORMANT: this router is not mounted (routes/index.ts) while software
+// licenses sleep (design §6.1). Before mounting it again, guard every route,
+// reads included, with a tenant capability: any member of the tenant, a
+// viewer included, could read and change license keys through it.
 import { Router } from 'express';
 import { licenseService } from '../services/license.service';
 import { requireDeviceRead, requireDeviceWriteParam } from '../middleware/rbac';

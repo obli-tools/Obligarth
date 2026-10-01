@@ -587,11 +587,14 @@ router.get('/:id', requireDeviceRead(), async (req, res, next) => {
 });
 
 // PATCH /api/devices/:id — a `groupId` must be a group of the device's own
-// tenant (404 'Group not found' otherwise, as for an unknown group).
+// tenant (404 'Group not found' otherwise, as for an unknown group), and one
+// the caller can write unless it is a platform administrator (403).
 router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
-    const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body ?? {}, { globalView: hasGlobalView(req) });
+    const device = await deviceService.updateDevice(deviceId, req.tenantId!, req.body ?? {}, { globalView: hasGlobalView(req) }, {
+      groupWriterId: req.session.role === 'admin' ? undefined : req.session.userId!,
+    });
     if (!device) return res.status(404).json({ error: 'Device not found' });
     res.json({ data: device });
   } catch (err) { next(err); }
@@ -608,8 +611,8 @@ router.patch('/:id', requireDeviceWrite(), async (req, res, next) => {
 router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
-    // Same tenant rule as GET /:id (the service's own filter keys on the
-    // tenant id alone).
+    // Same tenant rule as GET /:id; the service applies it to the rows too
+    // (global view passed explicitly, never inferred from the tenant id).
     if (!(await deviceService.getDeviceById(deviceId, req.tenantId!, { globalView: hasGlobalView(req) }))) {
       return res.status(404).json({ error: 'Device not found' });
     }
@@ -623,6 +626,7 @@ router.get('/:id/change-events', requireDeviceRead(), async (req, res, next) => 
         ...parsed.data,
         callerUserId: req.session.userId!,
         callerIsAdmin: req.session.role === 'admin',
+        globalView: hasGlobalView(req),
       }),
     });
   } catch (err) { next(err); }
@@ -645,6 +649,7 @@ router.get('/:id/change-events/summary', requireDeviceRead(), async (req, res, n
         ...parsed.data,
         callerUserId: req.session.userId!,
         callerIsAdmin: req.session.role === 'admin',
+        globalView: hasGlobalView(req),
       }),
     });
   } catch (err) { next(err); }

@@ -452,7 +452,10 @@ class DeviceService {
    * device is not reachable. A group is always one of the DEVICE's tenant:
    * another tenant's group answers like an unknown one (404), since a
    * device placed in another tenant's tree would hand that tenant's teams a
-   * scope on it through the closure.
+   * scope on it through the closure. `opts.groupWriterId`: the caller when it
+   * is not a platform administrator; moving the device into another group
+   * then also needs write access to that group (403 otherwise), as moving a
+   * group under a parent does (groups.controller).
    */
   async updateDevice(id: number, tenantId: number, data: Partial<{
     displayName: string;
@@ -466,11 +469,11 @@ class DeviceService {
     warrantyStatus: string | null;
     expectedLifetimeYears: number | null;
     lifecycleStatus: string | null;
-  }>, view?: TenantView) {
+  }>, view?: TenantView, opts: { groupWriterId?: number } = {}) {
     const isMaster = isGlobalView(tenantId, view);
     const lookup = db('devices').where({ id });
     if (!isMaster) lookup.where({ tenant_id: tenantId });
-    const current = await lookup.first('id', 'tenant_id') as { id: number; tenant_id: number } | undefined;
+    const current = await lookup.first('id', 'tenant_id', 'group_id') as { id: number; tenant_id: number; group_id: number | null } | undefined;
     if (!current) return null;
     const deviceTenantId = Number(current.tenant_id);
 
@@ -483,6 +486,13 @@ class DeviceService {
         ? await db('device_groups').where({ id: gid, tenant_id: deviceTenantId }).first('id')
         : undefined;
       if (!group) throw new AppError(404, 'Group not found');
+      // A form that sends the device's current group back moves nothing.
+      if (opts.groupWriterId !== undefined && gid !== Number(current.group_id)) {
+        const { permissionService } = await import('./permission.service');
+        if (!(await permissionService.canWriteGroup(opts.groupWriterId, gid, false))) {
+          throw new AppError(403, 'No write permission on target group');
+        }
+      }
       groupId = gid;
     }
 

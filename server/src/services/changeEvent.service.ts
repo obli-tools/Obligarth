@@ -99,11 +99,14 @@ const AUDIT_ACTIONS_OWNED_ELSEWHERE = [
 
 // ── Query helpers ────────────────────────────────────────────────────────────
 
-/** Tenant-scoped base query on an aliased device-owned table. Master tenant
- *  (id=1) is the god view and keeps the device filter only. */
-function scope(table: string, alias: string, deviceId: number, tenantId: number): Knex.QueryBuilder {
-  const q = db(`${table} as ${alias}`).where(`${alias}.device_id`, deviceId);
-  if (!isMasterTenant(tenantId)) q.where(`${alias}.tenant_id`, tenantId);
+/** Tenant-scoped base query on an aliased device-owned table. Only the global
+ *  view (a platform administrator on the master tenant: hasGlobalView, passed
+ *  by the route) keeps the device filter alone; anyone else, a member or a
+ *  tenant administrator of the master tenant included, reads the rows of
+ *  `tenantId` only. */
+function scope(table: string, alias: string, ctx: SourceContext): Knex.QueryBuilder {
+  const q = db(`${table} as ${alias}`).where(`${alias}.device_id`, ctx.deviceId);
+  if (!(ctx.globalView && isMasterTenant(ctx.tenantId))) q.where(`${alias}.tenant_id`, ctx.tenantId);
   return q;
 }
 
@@ -164,6 +167,8 @@ interface SourceContext {
   to: Date;
   callerUserId: number;
   callerIsAdmin: boolean;
+  /** The master tenant's global view (hasGlobalView(req)): see scope(). */
+  globalView: boolean;
 }
 
 const USER_COLUMNS = ['u.username as actor_username', 'u.display_name as actor_display_name'];
@@ -172,14 +177,14 @@ const USER_COLUMNS = ['u.username as actor_username', 'u.display_name as actor_d
  *  the returned map is one the caller is not allowed to read (config_change
  *  for non-admins) — never one that silently returned nothing. */
 function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, EventSource[]>> {
-  const { deviceId, tenantId, from, to } = ctx;
+  const { from, to } = ctx;
 
   const sources: Partial<Record<ChangeEventKind, EventSource[]>> = {
     // ── remote_session ───────────────────────────────────────────────────────
     remote_session: [{
       table: 'remote_sessions',
       base: () => {
-        const q = scope('remote_sessions', 'rs', deviceId, tenantId)
+        const q = scope('remote_sessions', 'rs', ctx)
           .leftJoin('users as u', 'u.id', 'rs.started_by')
           .whereBetween('rs.started_at', [from, to]);
         // The rule of the former remote sessions list: a plain user must not
@@ -224,7 +229,7 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
   if (ctx.callerIsAdmin) {
     sources.config_change = [{
       table: 'audit_logs',
-      base: () => scope('audit_logs', 'al', deviceId, tenantId)
+      base: () => scope('audit_logs', 'al', ctx)
         .leftJoin('users as u', 'u.id', 'al.user_id')
         .whereBetween('al.created_at', [from, to])
         .whereNotIn('al.action', AUDIT_ACTIONS_OWNED_ELSEWHERE)
@@ -308,6 +313,8 @@ export interface ChangeEventQueryOptions {
   limit?: number;
   callerUserId: number;
   callerIsAdmin: boolean;
+  /** hasGlobalView(req) of the route: never inferred from the tenant id. */
+  globalView?: boolean;
 }
 
 // ── Service ──────────────────────────────────────────────────────────────────
@@ -323,7 +330,7 @@ export const changeEventService = {
     const limit = Math.min(MAX_LIMIT, Math.max(1, opts.limit ?? DEFAULT_LIMIT));
     const ctx: SourceContext = {
       deviceId, tenantId, from: opts.from, to: opts.to,
-      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin,
+      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, globalView: !!opts.globalView,
     };
     const sources = buildSources(ctx);
     const kinds = resolveKinds(sources, opts.kinds);
@@ -367,7 +374,7 @@ export const changeEventService = {
   async getSummary(deviceId: number, tenantId: number, opts: Omit<ChangeEventQueryOptions, 'kinds' | 'limit'>) {
     const ctx: SourceContext = {
       deviceId, tenantId, from: opts.from, to: opts.to,
-      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin,
+      callerUserId: opts.callerUserId, callerIsAdmin: opts.callerIsAdmin, globalView: !!opts.globalView,
     };
     const sources = buildSources(ctx);
     const kinds = resolveKinds(sources, undefined);

@@ -29,7 +29,6 @@ import repoPublicRoutes from './repoPublic.routes';
 import reportRoutes from './report.routes';
 import agentAdminRoutes from './agentAdmin.routes';
 import systemRoutes from './system.routes';
-import licenseRoutes from './license.routes';
 import permissionSetsRoutes from './permissionSets.routes';
 import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
@@ -88,8 +87,11 @@ tenantRouter.use('/restrictions', restrictionRoutes);
 tenantRouter.use('/admin/config', adminRoutes);
 tenantRouter.use('/admin/smtp-servers', smtpRoutes);
 tenantRouter.use('/agent',       agentAdminRoutes);  // admin: API key management
-tenantRouter.use('/licenses',    licenseRoutes);
 tenantRouter.use('/permission-sets', permissionSetsRoutes);
+// Software licenses are dormant (design §6.1): license.routes.ts stays in the
+// tree but is not mounted. No capability guards it (any member, viewer
+// included, read and changed license keys); give it one before mounting it
+// again.
 
 router.use('/', tenantRouter);
 

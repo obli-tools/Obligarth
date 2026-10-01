@@ -113,9 +113,14 @@ export const tenantService = {
     return row ? rowToTenant(row) : null;
   },
 
+  /** A new tenant starts with the recommended restrictions matrix
+   *  (defaultRestrictions: the core's and the registered modules'), like
+   *  the master tenant the seed creates; the column default ('{}') would
+   *  leave it with no restriction at all. */
   async create(data: { name: string; slug: string }): Promise<Tenant> {
+    const { defaultRestrictions } = await import('./restriction.service');
     const [row] = await db('tenants')
-      .insert({ name: data.name, slug: data.slug })
+      .insert({ name: data.name, slug: data.slug, action_restrictions: JSON.stringify(defaultRestrictions()) })
       .returning('*');
     return rowToTenant(row as TenantRow);
   },

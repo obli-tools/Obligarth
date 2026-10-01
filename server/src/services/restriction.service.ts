@@ -71,10 +71,10 @@ const CORE_RESTRICTABLE_ACTIONS: readonly RestrictableAction[] = [
 ];
 
 /**
- * Recommended default levels for fresh tenants (and tenants that never
- * customised anything); the migrations seed the same. Keys listed as 'none'
- * are omitted from the stored map so the UI shows them blank and the admin
- * can opt in later.
+ * Recommended default levels: every new tenant starts with them
+ * (tenantService.create, through defaultRestrictions), and the seed writes the
+ * same on the master tenant. Keys listed as 'none' are omitted from the
+ * stored map so the UI shows them blank and the admin can opt in later.
  */
 const CORE_DEFAULT_RESTRICTIONS: Readonly<Record<string, DefaultLevel>> = {
   // Clearing the audit log deletes accountability — always require a

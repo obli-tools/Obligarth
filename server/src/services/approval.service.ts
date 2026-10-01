@@ -676,7 +676,10 @@ export const approvalService = {
   },
 
   /** Approved team request (tenant.manage_teams / tenant.manage_permissions;
-   *  /api/teams is platform-admin only). */
+   *  /api/teams is platform-admin only). Audited in the TEAM's tenant, as the
+   *  direct route does (teams.controller auditTeam): an approval filed from
+   *  the global view on another tenant's team leaves its trace in that
+   *  tenant's own log, where the team's name resolves. */
   async _executeTeamAction(tenantId: number, requesterId: number, payload: Record<string, unknown>): Promise<void> {
     await requirePlatformAdmin(requesterId);
     const { teamService } = await import('./team.service');
@@ -694,12 +697,13 @@ export const approvalService = {
       }
       if (!(await db('tenants').where({ id: targetTenantId }).first('id'))) refuse('Target tenant not found');
       const team = await teamService.create(data, targetTenantId);
-      await auditAs(tenantId, requesterId, 'team.created', { resourceType: 'team', resourcePath: String(team.id), details: { name: team.name } });
+      await auditAs(targetTenantId, requesterId, 'team.created', { resourceType: 'team', resourcePath: String(team.id), details: { name: team.name } });
       return;
     }
     const teamId = Number(payload.teamId);
     const team = Number.isInteger(teamId) && teamId > 0 ? await teamService.getById(teamId) : null;
     if (!team || (!isMasterTenant(tenantId) && Number(team.tenantId) !== tenantId)) refuse('Team not found');
+    const teamTenantId = Number(team.tenantId);
     switch (action) {
       case 'team_update': {
         if (payload.body === undefined) refuse(`This team request was filed without its content — ${REDO}`);
@@ -707,12 +711,12 @@ export const approvalService = {
         if (!parsed.success) invalidRequest(parsed.error);
         const updated = await teamService.update(teamId, parsed.data);
         if (!updated) refuse('Team not found');
-        await auditAs(tenantId, requesterId, 'team.updated', { resourceType: 'team', resourcePath: String(teamId), details: { name: updated.name } });
+        await auditAs(teamTenantId, requesterId, 'team.updated', { resourceType: 'team', resourcePath: String(teamId), details: { name: updated.name } });
         return;
       }
       case 'team_delete': {
         if (!(await teamService.delete(teamId))) refuse('Team not found');
-        await auditAs(tenantId, requesterId, 'team.deleted', { resourceType: 'team', resourcePath: String(teamId), details: { name: team.name } });
+        await auditAs(teamTenantId, requesterId, 'team.deleted', { resourceType: 'team', resourcePath: String(teamId), details: { name: team.name } });
         return;
       }
       case 'team_members_set': {
@@ -720,7 +724,7 @@ export const approvalService = {
         const parsed = schemas.setTeamMembersSchema.safeParse({ memberIds: payload.memberIds });
         if (!parsed.success) invalidRequest(parsed.error);
         await teamService.setMembers(teamId, parsed.data.memberIds);
-        await auditAs(tenantId, requesterId, 'team.members_changed', {
+        await auditAs(teamTenantId, requesterId, 'team.members_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { userCount: parsed.data.memberIds.length, memberIds: parsed.data.memberIds },
         });
         return;
@@ -730,7 +734,7 @@ export const approvalService = {
         const parsed = schemas.setTeamPermissionsSchema.safeParse({ permissions: payload.permissions });
         if (!parsed.success) invalidRequest(parsed.error);
         await teamService.setPermissions(teamId, parsed.data.permissions);
-        await auditAs(tenantId, requesterId, 'team.permissions_changed', {
+        await auditAs(teamTenantId, requesterId, 'team.permissions_changed', {
           resourceType: 'team', resourcePath: String(teamId), details: { permissionCount: parsed.data.permissions.length },
         });
         return;

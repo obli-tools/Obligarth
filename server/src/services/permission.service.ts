@@ -38,7 +38,8 @@ export const permissionService = {
    *  - Direct device permission (scope='device', scope_id=deviceId)
    *  - Group permission via closure table on devices.group_id
    *  - **API key claim**: when devices.group_id IS NULL, the device
-   *    inherits the scope of the API key's default_group_id. This is
+   *    inherits the scope of the API key's default_group_id, when that
+   *    group belongs to the device's tenant. This is
    *    what makes a pre-approval device "belong" to a group even
    *    though approveDevice() hasn't run yet — an API key targeting
    *    the "Linux" group implicitly claims its enrolling devices
@@ -74,10 +75,15 @@ export const permissionService = {
       // group" flow; the ungrouped path covers keys with no default
       // group set (orphan devices).
       if (deviceRow.api_key_id) {
-        const key = await db('agent_api_keys')
-          .where({ id: deviceRow.api_key_id })
-          .select('default_group_id')
-          .first() as { default_group_id: number | null } | undefined;
+        // SECURITY: a key's default group claims the device only when it is
+        // a group of the DEVICE's tenant (same rule as approveDevice). A key
+        // pointing at another tenant's group (written before the key routes
+        // checked it, or by hand) must not hand that tenant's teams a scope
+        // on this device through the closure.
+        const key = await db('agent_api_keys as k')
+          .join('device_groups as g', 'g.id', 'k.default_group_id')
+          .where({ 'k.id': deviceRow.api_key_id, 'g.tenant_id': deviceRow.tenant_id })
+          .first('k.default_group_id') as { default_group_id: number } | undefined;
         if (key?.default_group_id) {
           groupLevel = await this._getGroupPermissionViaClosure(userId, key.default_group_id);
         }
@@ -302,9 +308,15 @@ export const permissionService = {
     // the user's team has scope on, the device is treated as if it
     // already lived in that group. Covers the typical
     // "Linux-key enrols a device, Linux-team needs to approve it"
-    // case where group_id is only set at approveDevice() time.
+    // case where group_id is only set at approveDevice() time. Only a
+    // default group of the device's own tenant claims it (see
+    // getDevicePermission).
     const apiKeyClaimedDevices = await db('devices')
       .join('agent_api_keys', 'agent_api_keys.id', 'devices.api_key_id')
+      .join('device_groups as key_group', function () {
+        this.on('key_group.id', 'agent_api_keys.default_group_id')
+          .andOn('key_group.tenant_id', 'devices.tenant_id');
+      })
       .join('device_group_closure', 'device_group_closure.descendant_id', 'agent_api_keys.default_group_id')
       .join('team_permissions', function () {
         this.on('team_permissions.scope_id', 'device_group_closure.ancestor_id')

@@ -83,8 +83,8 @@ services:
       DEVICE_KEYS_SSO_ENABLED: ${DEVICE_KEYS_SSO_ENABLED:-false}
       # Obligate: optional distinct inbound secret (empty = Settings value / the API key) — see .env.example
       OBLIGATE_INBOUND_SECRET: ${OBLIGATE_INBOUND_SECRET:-}
-      # Delegated reads from sibling apps (empty = oblidesk only, platform-admin subjects refused) — see .env.example
-      OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-}
+      # Delegated reads from sibling apps (off unless source apps are named; platform-admin subjects refused) — see .env.example
+      OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-none}
       OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
     volumes:
       # Persistent custom directory: reports, software repository, phone-key cache.
