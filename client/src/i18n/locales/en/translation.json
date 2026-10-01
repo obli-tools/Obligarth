@@ -322,7 +322,11 @@
     "removeFromGlobalHint": "Remove from global",
     "addToGlobalHint": "Add to global notifications",
     "globalActive": "Global ✓",
-    "disabled": "Disabled"
+    "disabled": "Disabled",
+    "secretKept": "Saved: leave empty to keep it.",
+    "secretKeptPlaceholder": "•••••••• (saved)",
+    "secretClear": "Clear",
+    "secretCleared": "Will be cleared when you save."
   },
   "settings": {
     "obligate": {
@@ -1176,7 +1180,8 @@
     "title": "Security",
     "description": "Audit trail and pending approvals.",
     "tabAudit": "Audit log",
-    "tabApprovals": "Approvals"
+    "tabApprovals": "Approvals",
+    "tabVault": "Vault"
   },
   "deviceKeys": {
     "level": {
@@ -1261,6 +1266,96 @@
         "misconfigured": "Obligate is misconfigured on this server (it points to {{appName}} itself). Contact an administrator.",
         "error": "Obligate re-authentication failed. Try again."
       }
+    }
+  },
+  "vault": {
+    "title": "Vault of secrets",
+    "description": "Encryption keys of the stored secrets. No key and no secret is ever shown here.",
+    "refresh": "Refresh",
+    "loadFailed": "Could not load the state of the vault",
+    "reason": "Reason",
+    "history": "Operations",
+    "noOperations": "No operation yet.",
+    "yes": "Yes",
+    "no": "No",
+    "status": {
+      "kek": "Key-encryption key (KEK)",
+      "provider": "Provider",
+      "lastKekRotation": "Last rotation",
+      "keys": "Data keys (DEK)",
+      "instanceKey": "Instance key",
+      "activeTenantKeys": "Active tenant keys",
+      "retired": "Retired / destroyed",
+      "scheduled": "Scheduled for destruction",
+      "withoutKey": "Tenants without a key",
+      "escrow": "Escrow",
+      "confirmed": "Confirmed",
+      "tested": "Last test",
+      "covers": "Covers the current KEK",
+      "backfill": "Inherited secrets",
+      "backfillState": "Moved into the vault",
+      "complete": "Complete",
+      "incomplete": "Values left in place",
+      "lastRun": "Last run",
+      "operations": "Operations",
+      "running": "Running",
+      "failed": "Failed"
+    },
+    "escrow": {
+      "missing": "The current key-encryption key is not escrowed: escrow it (vault escrow split) and record the confirmation below. Apple secrets stay refused until then.",
+      "title": "Escrow event",
+      "help": "After the ceremony (2 shares out of 3), record what was done, with the kek_id the escrow tool printed from the shares (never copied from this page: the server checks it against the current key). A second factor is asked.",
+      "kind": "Event",
+      "confirmation": "Escrow confirmed",
+      "test": "Annual test of the shares",
+      "oldShares": "Old shares destroyed",
+      "serverKekId": "kek_id of the server, as printed from the shares (16 hex)",
+      "edgeKekId": "kek_id of apple-edge (optional)",
+      "note": "Note (no secret)",
+      "record": "Record",
+      "recorded": "Escrow event recorded",
+      "failed": "Escrow event not recorded"
+    },
+    "kek": {
+      "title": "Rotate the KEK",
+      "help": "Another platform administrator approves it; the rotation is then run on the host with the server stopped (vault kek-rotate), within 24 hours.",
+      "request": "Request the rotation",
+      "requested": "KEK rotation requested: another platform administrator must approve it",
+      "failed": "KEK rotation not requested"
+    },
+    "dek": {
+      "title": "Rotate a data key",
+      "help": "After an incident only: every secret of the key is resealed in the background. A second factor is asked.",
+      "key": "Key",
+      "instance": "Instance key",
+      "request": "Rotate",
+      "requested": "Data key rotation started",
+      "failed": "Data key rotation not started"
+    },
+    "op": {
+      "date": "Date",
+      "kind": "Operation",
+      "state": "State",
+      "target": "Key"
+    },
+    "kind": {
+      "backfill": "Inherited secrets moved",
+      "dek_rotation": "Data key rotation",
+      "kek_rotation": "KEK rotation",
+      "verify": "Verification",
+      "escrow_confirmation": "Escrow confirmed",
+      "escrow_test": "Escrow tested",
+      "escrow_retirement": "Old shares destroyed",
+      "kek_loss_recovery": "Recovery after a lost KEK"
+    },
+    "state": {
+      "pending_approval": "Waiting for approval",
+      "authorized": "Authorized",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
     }
   }
 }

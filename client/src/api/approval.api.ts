@@ -7,7 +7,7 @@ export interface PendingApproval {
   tenantId: number;
   requestedBy: number;
   requestedByName: string | null;
-  requestType: 'batch_command' | 'device_uninstall' | 'setting_change';
+  requestType: 'batch_command' | 'device_uninstall' | 'setting_change' | 'vault_kek_rotation';
   description: string;
   payload: Record<string, any>;
   status: 'pending' | 'approved' | 'denied' | 'executed' | 'expired' | 'cancelled';

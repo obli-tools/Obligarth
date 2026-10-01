@@ -322,7 +322,11 @@
     "removeFromGlobalHint": "Retirer des notifications globales",
     "addToGlobalHint": "Ajouter aux notifications globales",
     "globalActive": "Global ✓",
-    "disabled": "Désactivé"
+    "disabled": "Désactivé",
+    "secretKept": "Enregistré : laisser vide pour le conserver.",
+    "secretKeptPlaceholder": "•••••••• (enregistré)",
+    "secretClear": "Effacer",
+    "secretCleared": "Sera effacé à l'enregistrement."
   },
   "settings": {
     "obligate": {
@@ -1176,7 +1180,8 @@
     "title": "Sécurité",
     "description": "Journal d'audit et approbations en attente.",
     "tabAudit": "Journal d'audit",
-    "tabApprovals": "Approbations"
+    "tabApprovals": "Approbations",
+    "tabVault": "Coffre"
   },
   "deviceKeys": {
     "level": {
@@ -1261,6 +1266,96 @@
         "misconfigured": "Obligate est mal configuré sur ce serveur (il pointe vers {{appName}} lui-même). Contactez un administrateur.",
         "error": "La reconfirmation auprès d'Obligate a échoué. Réessayez."
       }
+    }
+  },
+  "vault": {
+    "title": "Coffre de secrets",
+    "description": "Clés de chiffrement des secrets stockés. Aucune clé ni aucun secret n'est jamais affiché ici.",
+    "refresh": "Actualiser",
+    "loadFailed": "Impossible de lire l'état du coffre",
+    "reason": "Motif",
+    "history": "Opérations",
+    "noOperations": "Aucune opération pour le moment.",
+    "yes": "Oui",
+    "no": "Non",
+    "status": {
+      "kek": "Clé de chiffrement de clés (KEK)",
+      "provider": "Fournisseur",
+      "lastKekRotation": "Dernière rotation",
+      "keys": "Clés de données (DEK)",
+      "instanceKey": "Clé d'instance",
+      "activeTenantKeys": "Clés de tenant actives",
+      "retired": "Retirées / détruites",
+      "scheduled": "Destruction programmée",
+      "withoutKey": "Tenants sans clé",
+      "escrow": "Séquestre",
+      "confirmed": "Confirmé",
+      "tested": "Dernier test",
+      "covers": "Couvre la KEK courante",
+      "backfill": "Secrets hérités",
+      "backfillState": "Passés au coffre",
+      "complete": "Terminé",
+      "incomplete": "Valeurs laissées en place",
+      "lastRun": "Dernier passage",
+      "operations": "Opérations",
+      "running": "En cours",
+      "failed": "En échec"
+    },
+    "escrow": {
+      "missing": "La clé de chiffrement de clés courante n'est pas séquestrée : séquestrez-la (vault escrow split) puis enregistrez la confirmation ci-dessous. Les secrets Apple restent refusés d'ici là.",
+      "title": "Événement de séquestre",
+      "help": "Après la cérémonie (2 parts sur 3), enregistrez ce qui a été fait, avec le kek_id que l'outil de séquestre a calculé à partir des parts (jamais recopié depuis cette page : le serveur le compare à la clé courante). Un second facteur est demandé.",
+      "kind": "Événement",
+      "confirmation": "Séquestre confirmé",
+      "test": "Test annuel des parts",
+      "oldShares": "Anciennes parts détruites",
+      "serverKekId": "kek_id du serveur, tel que calculé à partir des parts (16 caractères hexadécimaux)",
+      "edgeKekId": "kek_id d'apple-edge (facultatif)",
+      "note": "Note (aucun secret)",
+      "record": "Enregistrer",
+      "recorded": "Événement de séquestre enregistré",
+      "failed": "Événement de séquestre non enregistré"
+    },
+    "kek": {
+      "title": "Rotation de la KEK",
+      "help": "Un autre administrateur de plateforme l'approuve ; la rotation se fait ensuite sur l'hôte, serveur arrêté (vault kek-rotate), dans les 24 heures.",
+      "request": "Demander la rotation",
+      "requested": "Rotation de la KEK demandée : un autre administrateur de plateforme doit l'approuver",
+      "failed": "Rotation de la KEK non demandée"
+    },
+    "dek": {
+      "title": "Rotation d'une clé de données",
+      "help": "Après un incident seulement : chaque secret de la clé est rescellé en arrière-plan. Un second facteur est demandé.",
+      "key": "Clé",
+      "instance": "Clé d'instance",
+      "request": "Lancer la rotation",
+      "requested": "Rotation de la clé de données lancée",
+      "failed": "Rotation de la clé de données non lancée"
+    },
+    "op": {
+      "date": "Date",
+      "kind": "Opération",
+      "state": "État",
+      "target": "Clé"
+    },
+    "kind": {
+      "backfill": "Secrets hérités passés au coffre",
+      "dek_rotation": "Rotation d'une clé de données",
+      "kek_rotation": "Rotation de la KEK",
+      "verify": "Vérification",
+      "escrow_confirmation": "Séquestre confirmé",
+      "escrow_test": "Séquestre testé",
+      "escrow_retirement": "Anciennes parts détruites",
+      "kek_loss_recovery": "Reprise après perte de la KEK"
+    },
+    "state": {
+      "pending_approval": "En attente d'approbation",
+      "authorized": "Autorisée",
+      "running": "En cours",
+      "done": "Terminée",
+      "failed": "En échec",
+      "expired": "Expirée",
+      "cancelled": "Annulée"
     }
   }
 }

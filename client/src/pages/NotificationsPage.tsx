@@ -255,6 +255,11 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  const [selectedType, setSelectedType] = useState('');
  const [formName, setFormName] = useState('');
  const [formConfig, setFormConfig] = useState<Record<string, unknown>>({});
+ // Secret fields are write-only (server vault): the names of the ones that
+ // hold a value come with the channel, never their values; the ones the user
+ // asked to clear are sent as null.
+ const [secretsSet, setSecretsSet] = useState<string[]>([]);
+ const [clearedSecrets, setClearedSecrets] = useState<Set<string>>(new Set());
  const [saving, setSaving] = useState(false);
  const [testing, setTesting] = useState<number | null>(null);
 
@@ -297,6 +302,8 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  setSelectedType(plugins[0]?.type || '');
  setFormName('');
  setFormConfig({});
+ setSecretsSet([]);
+ setClearedSecrets(new Set());
  setShowForm(true);
  revealForm();
  };
@@ -306,8 +313,26 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  setSelectedType(ch.type);
  setFormName(ch.name);
  setFormConfig({ ...ch.config });
+ setSecretsSet(ch.secretFieldsSet ?? []);
+ setClearedSecrets(new Set());
  setShowForm(true);
  revealForm();
+ };
+
+ const isSecret = (f: { type: string; secret?: boolean }) => f.secret === true || f.type === 'password';
+
+ // Update: the public fields as typed; a secret field only when a new value
+ // was typed (empty keeps the stored one), null when the user cleared it.
+ const updateConfig = (): Record<string, unknown> => {
+ const fields = (selectedPlugin || plugins.find((p) => p.type === selectedType))?.configFields ?? [];
+ const out: Record<string, unknown> = {};
+ for (const f of fields) {
+ const v = formConfig[f.key];
+ if (!isSecret(f)) { if (v !== undefined) out[f.key] = v; continue; }
+ if (clearedSecrets.has(f.key)) out[f.key] = null;
+ else if (typeof v === 'string' && v !== '') out[f.key] = v;
+ }
+ return out;
  };
 
  const handleSubmit = async (e: FormEvent) => {
@@ -317,7 +342,7 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  if (editingId) {
  await notificationsApi.updateChannel(editingId, {
  name: formName,
- config: formConfig,
+ config: updateConfig(),
  });
  toast.success(t('notifications.updated'));
  } else {
@@ -500,11 +525,55 @@ export function NotificationsPage({ embedded }: { embedded?: boolean } = {}) {
  </div>
  );
  }
+ if (isSecret(field)) {
+ // Write-only: a stored value is never shown; empty keeps it.
+ const stored = !!editingId && secretsSet.includes(field.key) && !clearedSecrets.has(field.key);
+ const cleared = clearedSecrets.has(field.key);
+ return (
+ <div key={field.key} className="space-y-1">
+ <Input
+ label={field.label}
+ type="password"
+ value={String(formConfig[field.key] ?? '')}
+ onChange={(e) => {
+ setFormConfig({ ...formConfig, [field.key]: e.target.value });
+ if (cleared) setClearedSecrets((prev) => { const next = new Set(prev); next.delete(field.key); return next; });
+ }}
+ placeholder={stored ? (t('notifications.secretKeptPlaceholder') || '•••••••• (saved)') : field.placeholder}
+ required={field.required && !stored}
+ autoComplete="new-password"
+ autoCapitalize="off"
+ autoCorrect="off"
+ spellCheck={false}
+ />
+ {stored && (
+ <div className="flex flex-wrap items-center gap-2 text-xs text-text-muted">
+ <span>{t('notifications.secretKept') || 'Saved: leave empty to keep it.'}</span>
+ {!field.required && (
+ <button
+ type="button"
+ className="text-status-down hover:underline coarse:py-2"
+ onClick={() => {
+ setClearedSecrets((prev) => new Set(prev).add(field.key));
+ setFormConfig({ ...formConfig, [field.key]: '' });
+ }}
+ >
+ {t('notifications.secretClear') || 'Clear'}
+ </button>
+ )}
+ </div>
+ )}
+ {cleared && (
+ <p className="text-xs text-text-muted">{t('notifications.secretCleared') || 'Will be cleared when you save.'}</p>
+ )}
+ </div>
+ );
+ }
  return (
  <Input
  key={field.key}
  label={field.label}
- type={field.type === 'password' ? 'password' : field.type === 'number' ? 'number' : 'text'}
+ type={field.type === 'number' ? 'number' : 'text'}
  value={String(formConfig[field.key] ?? '')}
  onChange={(e) =>
  setFormConfig({

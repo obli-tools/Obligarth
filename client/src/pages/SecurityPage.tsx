@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield, FileText, ShieldCheck } from 'lucide-react';
+import { Shield, FileText, ShieldCheck, KeyRound } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { AuditLogPage } from './AuditLogPage';
@@ -8,17 +8,26 @@ import { ApprovalsPage } from './ApprovalsPage';
 import { approvalApi } from '@/api/approval.api';
 import { PageContainer } from '@/components/common/PageContainer';
 import { getSocket } from '@/socket/socketClient';
+import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { useAuthStore } from '@/store/authStore';
+import { useTenantStore } from '@/store/tenantStore';
+import { VaultPanel } from './admin/VaultPanel';
 
-type Tab = 'audit' | 'approvals';
+type Tab = 'audit' | 'approvals' | 'vault';
 
-// Single admin-level "Security" page that groups the audit log and the
-// two-step approval review queue as tabs. Tab selection is reflected in
-// the URL (?tab=audit|approvals) so a deep-link stays stable.
+// Single admin-level "Security" page that groups the audit log, the
+// two-step approval review queue and (platform administrators on the master
+// tenant) the vault of secrets as tabs. Tab selection is reflected in the URL
+// (?tab=audit|approvals|vault) so a deep-link stays stable.
 
 export function SecurityPage() {
  const { t } = useTranslation();
  const [searchParams, setSearchParams] = useSearchParams();
- const initial = (searchParams.get('tab') as Tab) || 'audit';
+ const isPlatformAdmin = useAuthStore((st) => st.user?.role === 'admin');
+ const { currentTenantId } = useTenantStore();
+ const vaultVisible = isPlatformAdmin && currentTenantId === MASTER_TENANT_ID;
+ const asked = (searchParams.get('tab') as Tab) || 'audit';
+ const initial: Tab = asked === 'vault' && !vaultVisible ? 'audit' : asked;
  const [tab, setTab] = useState<Tab>(initial);
  const [pendingCount, setPendingCount] = useState(0);
 
@@ -84,10 +93,17 @@ export function SecurityPage() {
  </span>
  )}
  </TabBtn>
+ {vaultVisible && (
+ <TabBtn active={tab === 'vault'} onClick={() => setTab('vault')}>
+ <KeyRound className="w-4 h-4" />
+ {t('security.tabVault') || 'Vault'}
+ </TabBtn>
+ )}
  </div>
 
  {tab === 'audit' && <AuditLogPage embedded />}
  {tab === 'approvals' && <ApprovalsPage embedded />}
+ {tab === 'vault' && vaultVisible && <VaultPanel />}
  </PageContainer>
  );
 }
