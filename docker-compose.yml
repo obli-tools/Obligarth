@@ -125,6 +125,14 @@ services:
       # Background jobs: all (default) | api | paused (database restore,
       # incident: jobs kept queued, none run) — see .env.example
       JOBS_MODE: ${JOBS_MODE:-all}
+      # Hardened audit journal: hourly seal, optional RFC 3161 time stamping,
+      # SIEM exporter, clock check; spool in /custom/audit-spool — see .env.example
+      AUDIT_SEAL_CRON: "${AUDIT_SEAL_CRON:-12 * * * *}"
+      AUDIT_TSA_URL: ${AUDIT_TSA_URL:-}
+      AUDIT_TSA_CERT_SHA256: ${AUDIT_TSA_CERT_SHA256:-}
+      AUDIT_TSA_TIMEOUT_MS: ${AUDIT_TSA_TIMEOUT_MS:-10000}
+      AUDIT_EXPORT: ${AUDIT_EXPORT:-on}
+      AUDIT_MAX_CLOCK_SKEW_SECONDS: ${AUDIT_MAX_CLOCK_SKEW_SECONDS:-240}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
