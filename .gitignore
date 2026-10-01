@@ -27,6 +27,9 @@
 !/install.sh
 !/docker-compose.yml
 
+# ...et la licence (Elastic License 2.0, décision des propriétaires)
+!/LICENSE
+
 # 3. Jamais versionnés, même dans les dossiers autorisés
 docs/
 *.md
