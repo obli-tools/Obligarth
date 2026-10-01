@@ -28,6 +28,7 @@ var allowed = map[string]bool{
 	"method": true, "status": true, "duration_ms": true, "tenant": true, "eref": true,
 	"request_id": true, "command_uuid": true, "request_type": true, "message_type": true,
 	"topic": true, "outcome": true, "count": true, "version": true, "actor": true,
+	"ade_token": true, "phase": true,
 }
 
 // renamed maps library keys onto allowed keys.
@@ -200,6 +201,7 @@ var structuredKeys = map[string]bool{
 	"tenant": true, "eref": true, "request_id": true, "command_uuid": true,
 	"request_type": true, "message_type": true, "topic": true, "route": true,
 	"method": true, "component": true, "outcome": true, "version": true, "actor": true,
+	"ade_token": true, "phase": true,
 }
 
 func maskIfFree(key, s string) string {

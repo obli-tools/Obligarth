@@ -6,6 +6,8 @@
 //	apple-edge healthcheck    query /readyz on the internal listener
 //	apple-edge version        print the versions
 //	apple-edge kek rotate     re-wrap every DEK with the current KEK
+//	apple-edge signing-identity import <chain.pem> <key.pem>
+//	                          store the profile signing identity (encrypted)
 package main
 
 import (
@@ -25,6 +27,7 @@ import (
 	"github.com/MeeJay/Obligarth/apple-edge/internal/crypto/envelope"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/migrate"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/signing"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store"
 )
 
@@ -39,6 +42,8 @@ commands:
   healthcheck    exit 0 if the internal /readyz answers 200
   version        print the versions
   kek rotate     re-wrap every data key with EDGE_KEK_FILE (previous: EDGE_KEK_PREVIOUS_FILE)
+  signing-identity import <chain.pem> <key.pem>
+                 store the profile signing identity (chain: leaf first), key encrypted
 `
 
 func main() {
@@ -68,6 +73,8 @@ func run(args []string) int {
 		return 0
 	case args[0] == "kek" && len(args) == 2 && args[1] == "rotate":
 		return kekRotate(cfg, logger)
+	case args[0] == "signing-identity" && len(args) == 4 && args[1] == "import":
+		return signingImport(cfg, logger, args[2], args[3])
 	}
 	fmt.Fprint(os.Stderr, usage)
 	return 2
@@ -209,5 +216,66 @@ func kekRotate(cfg *config.Config, logger *obs.Logger) int {
 		return 1
 	}
 	logger.Info("msg", "KEK rotation complete", "count", n)
+	return 0
+}
+
+func signingImport(cfg *config.Config, logger *obs.Logger, chainFile, keyFile string) int {
+	if err := cfg.ValidateSigningImport(); err != nil {
+		logger.Error("msg", "configuration", "err", err)
+		return 2
+	}
+	chain, err := os.ReadFile(chainFile)
+	if err != nil {
+		logger.Error("msg", "certificate chain file", "err", err)
+		return 1
+	}
+	key, err := os.ReadFile(keyFile)
+	if err != nil {
+		logger.Error("msg", "private key file", "err", err)
+		return 1
+	}
+	id, err := signing.ParseIdentity(chain, key, time.Now())
+	if err != nil {
+		logger.Error("msg", "signing identity", "err", err)
+		return 1
+	}
+	pw, err := config.ReadSecretFile(cfg.DBPasswordFile)
+	if err != nil {
+		logger.Error("msg", "EDGE_DB_PASSWORD_FILE", "err", err)
+		return 1
+	}
+	kekText, err := config.ReadSecretFile(cfg.KEKFile)
+	if err != nil {
+		logger.Error("msg", "EDGE_KEK_FILE", "err", err)
+		return 1
+	}
+	kek, err := envelope.ParseKEK(kekText)
+	if err != nil {
+		logger.Error("msg", "EDGE_KEK_FILE", "err", err)
+		return 1
+	}
+	dsn, err := store.DSN(cfg.DatabaseURL, pw, "")
+	if err != nil {
+		logger.Error("msg", "EDGE_DATABASE_URL", "err", err)
+		return 1
+	}
+	db, err := store.OpenPool(dsn, 2)
+	if err != nil {
+		logger.Error("msg", "database", "err", err)
+		return 1
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	keys := store.NewKeyring(db, kek)
+	if _, err := keys.EnsureInstance(ctx); err != nil {
+		logger.Error("msg", "instance data key (KEK check)", "err", err)
+		return 1
+	}
+	if err := signing.Import(ctx, db, keys, id); err != nil {
+		logger.Error("msg", "signing identity import", "err", err)
+		return 1
+	}
+	logger.Info("msg", "profile signing identity imported", "count", len(id.Chain))
 	return 0
 }

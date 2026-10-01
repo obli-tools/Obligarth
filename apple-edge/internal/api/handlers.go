@@ -16,6 +16,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/MeeJay/Obligarth/apple-edge/internal/ade"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/apierr"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/migrate"
@@ -56,8 +57,8 @@ func upstreamVersions() map[string]string {
 	}
 	for _, d := range bi.Deps {
 		switch d.Path {
-		case "github.com/micromdm/nanomdm", "github.com/micromdm/scep/v2", "github.com/smallstep/scep",
-			"github.com/smallstep/pkcs7", "github.com/lib/pq", "github.com/micromdm/plist":
+		case "github.com/micromdm/nanomdm", "github.com/micromdm/nanodep", "github.com/micromdm/scep/v2", "github.com/smallstep/scep",
+			"github.com/smallstep/pkcs7", "github.com/lib/pq", "github.com/micromdm/plist", "golang.org/x/net":
 			out[d.Path] = d.Version
 		}
 	}
@@ -307,8 +308,8 @@ func (s *Server) importPushCert(w http.ResponseWriter, r *http.Request) error {
 	if err := decode(r, 64<<10, &req); err != nil {
 		return err
 	}
-	if req.CertPEM == "" || req.KeyPEM == "" {
-		return apierr.BadRequest("cert_pem and key_pem are required (step 1: import)")
+	if req.CertPEM == "" {
+		return apierr.BadRequest("cert_pem is required (key_pem only to import an external key)")
 	}
 	info, err := s.Tenants.ImportPushCert(r.Context(), key, tenant.PushImport{CertPEM: []byte(req.CertPEM), KeyPEM: []byte(req.KeyPEM), AllowTopicChange: req.AllowTopicChange})
 	if err != nil {
@@ -360,9 +361,6 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request) error {
 	if req.Bind.Serial != "" && !serialRe.MatchString(req.Bind.Serial) {
 		return apierr.BadRequest("bind.serial is invalid")
 	}
-	if req.MachineInfoID != "" {
-		return apierr.Unprocessable("machine_info_unsupported", "MachineInfo verification arrives with step 2")
-	}
 	if _, err := s.liveTenant(r, key); err != nil {
 		return err
 	}
@@ -370,7 +368,26 @@ func (s *Server) createChallenge(w http.ResponseWriter, r *http.Request) error {
 	if req.TTLSeconds != 0 && (ttl < scep.ChallengeMinTTL || ttl > scep.ChallengeMaxTTL) {
 		return apierr.BadRequest("ttl_seconds must be between 60 and 3600")
 	}
-	ch, id, expires, err := scep.NewChallenge(r.Context(), s.DB, key, scep.ChallengeRequest{SessionRef: req.SessionRef, TTL: ttl, BindUDID: req.Bind.UDID, BindSerial: req.Bind.Serial})
+	if req.MachineInfoID != "" {
+		// ADE: the challenge is bound to the UDID and serial number verified
+		// in the MachineInfo signed by Apple.
+		if !ids.ValidUUID(req.MachineInfoID) {
+			return apierr.Unprocessable("machine_info_not_found", "unknown or expired MachineInfo check")
+		}
+		chk, err := ade.MachineInfoCheck(r.Context(), s.DB, key, strings.ToLower(req.MachineInfoID))
+		if err != nil {
+			return err
+		}
+		if chk == nil {
+			return apierr.Unprocessable("machine_info_not_found", "unknown or expired MachineInfo check")
+		}
+		if (req.Bind.UDID != "" && req.Bind.UDID != chk.UDID) || (req.Bind.Serial != "" && req.Bind.Serial != chk.Serial) {
+			return apierr.Unprocessable("validation_failed", "bind differs from the verified MachineInfo")
+		}
+		req.Bind.UDID, req.Bind.Serial, req.MachineInfoID = chk.UDID, chk.Serial, strings.ToLower(req.MachineInfoID)
+	}
+	ch, id, expires, err := scep.NewChallenge(r.Context(), s.DB, key, scep.ChallengeRequest{SessionRef: req.SessionRef, TTL: ttl,
+		BindUDID: req.Bind.UDID, BindSerial: req.Bind.Serial, MachineInfoID: req.MachineInfoID})
 	if err != nil {
 		return err
 	}
@@ -395,6 +412,22 @@ func (s *Server) enqueue(w http.ResponseWriter, r *http.Request) error {
 	resp, created, err := s.Queue.Enqueue(r.Context(), key, plist, req)
 	if err != nil {
 		return err
+	}
+	targets := make([]string, 0, len(resp.Targets))
+	for t := range resp.Targets {
+		targets = append(targets, t)
+	}
+	outcomes := map[string]string{}
+	if req.Push && s.Push != nil {
+		outcomes = s.Push.Push(r.Context(), key, targets, PushWait)
+	}
+	for _, t := range targets {
+		tr := resp.Targets[t]
+		tr.Push = queue.PushNotRequested
+		if o, ok := outcomes[t]; ok {
+			tr.Push = o
+		}
+		resp.Targets[t] = tr
 	}
 	code := http.StatusOK
 	if created {
@@ -544,7 +577,13 @@ func (s *Server) getEnrollment(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, http.StatusOK, map[string]any{"enrollment": view(e, proofs), "queue": queueOut})
+	// The public identity of the device lets the brain encrypt sensitive
+	// payloads for it (EncryptedPayloadContent).
+	var certPEM any
+	if e.IdentityPEM.Valid {
+		certPEM = e.IdentityPEM.String
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{"enrollment": view(e, proofs), "queue": queueOut, "certificate_pem": certPEM})
 }
 
 func (s *Server) release(w http.ResponseWriter, r *http.Request) error {

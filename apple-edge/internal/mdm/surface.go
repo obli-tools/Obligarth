@@ -129,6 +129,27 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return w.ResponseWriter.Write(b)
 }
 
+// jsonOnSuccess labels a non-empty successful answer as JSON.
+type jsonOnSuccess struct {
+	http.ResponseWriter
+	wrote bool
+}
+
+func (w *jsonOnSuccess) WriteHeader(code int) {
+	w.wrote = true
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *jsonOnSuccess) Write(b []byte) (int, error) {
+	if !w.wrote && len(b) > 0 {
+		w.wrote = true
+		if w.Header().Get("Content-Type") == "" {
+			w.Header().Set("Content-Type", "application/json")
+		}
+	}
+	return w.ResponseWriter.Write(b)
+}
+
 // uniformErrors hides error bodies written by libraries (the SCEP transport
 // copies error texts): any status >= 400 gets the plain status text.
 type uniformErrors struct {
@@ -285,12 +306,19 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	// Query parameters would reach NanoMDM as forgeable Params.
 	r.URL.RawQuery = ""
 	isCheckin := op == "checkin" || strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-apple-aspen-mdm-checkin")
+	var out http.ResponseWriter = w
 	if isCheckin {
 		var mt struct{ MessageType string }
-		if err := plist.Unmarshal(body, &mt); err == nil && mt.MessageType == "ReturnToService" {
-			s.metrics.Checkins.Inc(st.tenant.Key, "ReturnToService", "refused")
-			fail(w, http.StatusBadRequest, "")
-			return
+		if err := plist.Unmarshal(body, &mt); err == nil {
+			switch mt.MessageType {
+			case "ReturnToService":
+				s.metrics.Checkins.Inc(st.tenant.Key, "ReturnToService", "refused")
+				fail(w, http.StatusBadRequest, "")
+				return
+			case "DeclarativeManagement":
+				// DDM answers (tokens, items, declarations) are JSON.
+				out = &jsonOnSuccess{ResponseWriter: w}
+			}
 		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
@@ -300,9 +328,9 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	r.ContentLength = int64(len(body))
 	st.stage = "signature"
 	if op == "checkin" {
-		s.checkin.ServeHTTP(w, r)
+		s.checkin.ServeHTTP(out, r)
 	} else {
-		s.mdm.ServeHTTP(w, r)
+		s.mdm.ServeHTTP(out, r)
 	}
 	if w.status == http.StatusBadRequest && st.stage == "signature" {
 		if h := r.Header.Get("Mdm-Signature"); h != "" {

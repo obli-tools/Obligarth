@@ -247,10 +247,11 @@ func IssuedCertExists(ctx context.Context, q Querier, tenant, sha string) (bool,
 
 // Challenge is the enrollment context attached to an issued certificate.
 type Challenge struct {
-	ID         string
-	SessionRef string
-	BindUDID   string
-	BindSerial string
+	ID            string
+	SessionRef    string
+	BindUDID      string
+	BindSerial    string
+	MachineInfoID string
 }
 
 // ChallengeByID returns a challenge (bindings and session reference), or nil.
@@ -259,15 +260,29 @@ func ChallengeByID(ctx context.Context, q Querier, tenant, id string) (*Challeng
 		return nil, nil
 	}
 	c := &Challenge{ID: id}
-	var s, u, n sql.NullString
+	var s, u, n, m sql.NullString
 	err := q.QueryRowContext(ctx, `
-SELECT session_ref, bind_udid, bind_serial FROM apple_edge.scep_challenges WHERE id = $1 AND tenant_key = $2`, id, tenant).Scan(&s, &u, &n)
+SELECT session_ref, bind_udid, bind_serial, machine_info_id::text FROM apple_edge.scep_challenges WHERE id = $1 AND tenant_key = $2`, id, tenant).Scan(&s, &u, &n, &m)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	c.SessionRef, c.BindUDID, c.BindSerial = s.String, u.String, n.String
+	c.SessionRef, c.BindUDID, c.BindSerial, c.MachineInfoID = s.String, u.String, n.String, m.String
 	return c, nil
+}
+
+// ADEProof reports whether a MachineInfo check proves that udid belongs to
+// tenant: verified for this UDID, with a serial number that is, now, an
+// ADE device of one of the tenant's tokens.
+func ADEProof(ctx context.Context, q Querier, tenant, machineInfoID, udid string) (bool, error) {
+	var ok bool
+	err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+  SELECT 1 FROM apple_edge.machine_info_checks m
+    JOIN apple_edge.ade_devices d ON d.tenant_key = m.tenant_key AND d.serial = m.serial
+    JOIN apple_edge.ade_tokens t ON t.id = d.token_id AND t.tenant_key = m.tenant_key AND t.state <> 'removed'
+   WHERE m.id = $1 AND m.tenant_key = $2 AND m.udid = $3 AND m.token_id IS NOT NULL)`, machineInfoID, tenant, udid).Scan(&ok)
+	return ok, err
 }

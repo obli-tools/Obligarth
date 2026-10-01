@@ -16,6 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/MeeJay/Obligarth/apple-edge/internal/ade"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/apierr"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/config"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
@@ -34,10 +35,16 @@ type Disabler interface {
 	DisableEnrollment(ctx context.Context, deviceID string) error
 }
 
+// Pusher queues APNs pushes (the push scheduler).
+type Pusher interface {
+	Push(ctx context.Context, tenant string, enrollmentIDs []string, wait time.Duration) map[string]string
+}
+
 // Server is the internal API.
 type Server struct {
 	Cfg      *config.Config
 	DB       *sql.DB
+	Keys     *store.Keyring
 	Tenants  *tenant.Service
 	Reg      *tenant.Registry
 	Queue    *queue.Queue
@@ -45,6 +52,8 @@ type Server struct {
 	Secrets  *store.Secrets
 	Out      *outbox.Writer
 	Verifier Evicter
+	Push     Pusher
+	ADE      *ade.Service
 	Logger   *obs.Logger
 	Metrics  *obs.Metrics
 	Health   *Health
@@ -122,6 +131,21 @@ func (s *Server) Handler() http.Handler {
 	route("DELETE "+t+"/enrollments/{id}", s.purge)
 	route("POST "+t+"/certificates/{sha256}/revoke", s.revoke)
 	route("POST "+t+"/device-secrets/{ref}/reveal", s.reveal)
+
+	route("POST "+t+"/push/csr", s.pushCSR)
+	route("POST "+t+"/push-requests", s.pushRequests)
+	route("POST "+t+"/ca/rotate", s.rotateCA)
+	route("POST "+t+"/machine-info/verify", s.verifyMachineInfo)
+	route("POST "+t+"/profiles/sign", s.signProfile)
+	route("POST "+t+"/ade-tokens", s.createADEToken)
+	route("GET "+t+"/ade-tokens", s.listADETokens)
+	route("GET "+t+"/ade-tokens/{id}", s.getADEToken)
+	route("PUT "+t+"/ade-tokens/{id}/token", s.uploadADEToken)
+	route("DELETE "+t+"/ade-tokens/{id}", s.deleteADEToken)
+	route("PUT "+t+"/ade-tokens/{id}/profiles/{usage}", s.defineADEProfile)
+	route("POST "+t+"/ade-tokens/{id}/assignments", s.assignADEProfile)
+	route("POST "+t+"/ade-tokens/{id}/sync", s.syncADEToken)
+	route("PUT "+t+"/ade-tokens/{id}/account-driven-enrollment", s.accountDrivenEnrollment)
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
@@ -239,6 +263,11 @@ func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || store.IsLockTimeout(err) {
+		writeErrorBody(w, http.StatusServiceUnavailable, "unavailable", "try again later")
+		return
+	}
+	if store.IsUnavailable(err) {
+		s.Logger.Error("msg", "database unavailable", "component", "api", "request_id", reqctx.RequestID(r.Context()), "err", err)
 		writeErrorBody(w, http.StatusServiceUnavailable, "unavailable", "try again later")
 		return
 	}

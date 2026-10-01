@@ -258,10 +258,11 @@ const (
 
 // ChallengeRequest describes a challenge to create.
 type ChallengeRequest struct {
-	SessionRef string
-	TTL        time.Duration
-	BindUDID   string
-	BindSerial string
+	SessionRef    string
+	TTL           time.Duration
+	BindUDID      string
+	BindSerial    string
+	MachineInfoID string // verified MachineInfo the bindings come from
 }
 
 // NewChallenge stores a one-time challenge (hashed) and returns it in clear.
@@ -276,9 +277,9 @@ func NewChallenge(ctx context.Context, q store.Querier, tenant string, req Chall
 	sum := sha256.Sum256([]byte(challenge))
 	id = ids.NewUUID()
 	err = q.QueryRowContext(ctx, `
-INSERT INTO apple_edge.scep_challenges (id, tenant_key, hash, session_ref, bind_udid, bind_serial, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))
-RETURNING expires_at`, id, tenant, sum[:], nullIf(req.SessionRef), nullIf(req.BindUDID), nullIf(req.BindSerial), req.TTL.Seconds()).Scan(&expires)
+INSERT INTO apple_edge.scep_challenges (id, tenant_key, hash, session_ref, bind_udid, bind_serial, machine_info_id, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, now() + make_interval(secs => $8))
+RETURNING expires_at`, id, tenant, sum[:], nullIf(req.SessionRef), nullIf(req.BindUDID), nullIf(req.BindSerial), nullIf(req.MachineInfoID), req.TTL.Seconds()).Scan(&expires)
 	return challenge, id, expires, err
 }
 

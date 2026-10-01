@@ -302,6 +302,16 @@ type Metrics struct {
 	RegistryReloads   *CounterVec
 	RegistryReloadDur *HistogramVec
 	APIAuthFailures   *CounterVec
+
+	APNsPushes       *CounterVec
+	APNsPushDuration *HistogramVec
+	APNsCircuitOpen  *GaugeVec
+	APNsCertExpiry   *GaugeVec
+	ADESync          *CounterVec
+	ADELastSync      *GaugeVec
+	ADETokenExpiry   *GaugeVec
+	DDMRelay         *CounterVec
+	DDMRelayDuration *HistogramVec
 }
 
 // NewMetrics registers the metrics of apple-edge.
@@ -326,5 +336,14 @@ func NewMetrics() *Metrics {
 		RegistryReloads:   r.Counter("apple_edge_registry_reloads_total", "Registry reloads.", "outcome"),
 		RegistryReloadDur: r.Histogram("apple_edge_registry_reload_duration_seconds", "Registry reload duration.", DefBuckets),
 		APIAuthFailures:   r.Counter("apple_edge_internal_api_auth_failures_total", "Internal API requests refused for authentication."),
+		APNsPushes:        r.Counter("apple_edge_apns_pushes_total", "APNs pushes by outcome and HTTP status.", "tenant", "outcome", "http_status"),
+		APNsPushDuration:  r.Histogram("apple_edge_apns_push_duration_seconds", "APNs push duration.", DefBuckets),
+		APNsCircuitOpen:   r.Gauge("apple_edge_apns_circuit_open", "1 while APNs refuses a push certificate of the tenant (403).", "tenant"),
+		APNsCertExpiry:    r.Gauge("apple_edge_apns_cert_expiry_timestamp_seconds", "Expiry of the active push certificate (Unix seconds).", "tenant"),
+		ADESync:           r.Counter("apple_edge_ade_sync_total", "ADE synchronisation cycles by outcome.", "tenant", "outcome"),
+		ADELastSync:       r.Gauge("apple_edge_ade_last_sync_timestamp_seconds", "Last successful ADE synchronisation (Unix seconds).", "tenant", "token"),
+		ADETokenExpiry:    r.Gauge("apple_edge_ade_token_expiry_timestamp_seconds", "Expiry of the ADE server token (Unix seconds).", "tenant", "token"),
+		DDMRelay:          r.Counter("apple_edge_ddm_relay_requests_total", "DDM check-ins relayed to the brain.", "tenant", "endpoint_kind", "outcome"),
+		DDMRelayDuration:  r.Histogram("apple_edge_ddm_relay_duration_seconds", "Duration of the DDM relay round trip.", DefBuckets),
 	}
 }

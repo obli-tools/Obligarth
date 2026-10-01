@@ -40,8 +40,12 @@ const (
 
 var unlockKeyRe = regexp.MustCompile(`<key>UnlockToken</key>\s*<string>obligarth-secret:unlock_token</string>`)
 
-// Push outcomes (step 1: always disabled).
-const PushDisabled = "disabled"
+// Push outcomes: "sent", "deferred", "disabled" or "error" come from the
+// push scheduler; a command enqueued with push=false reports "not_requested".
+const (
+	PushDisabled     = "disabled"
+	PushNotRequested = "not_requested"
+)
 
 // Upstream is the part of NanoMDM's storage the queue uses.
 type Upstream interface {

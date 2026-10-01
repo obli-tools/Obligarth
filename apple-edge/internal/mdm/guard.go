@@ -12,6 +12,7 @@ import (
 	"github.com/micromdm/nanomdm/service"
 
 	"github.com/MeeJay/Obligarth/apple-edge/internal/config"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/ddm"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/outbox"
@@ -67,6 +68,7 @@ var (
 	errConflict     = httpErr(http.StatusForbidden, "device identifier reserved by another tenant")
 	errMismatch     = httpErr(http.StatusForbidden, "device does not match the enrollment challenge")
 	errUnsupported  = httpErr(http.StatusBadRequest, "message not supported")
+	errEndpoint     = httpErr(http.StatusBadRequest, "declarative management endpoint not allowed")
 	errNoUserAuth   = httpErr(http.StatusGone, "user authentication not supported")
 	errBusy         = httpErr(http.StatusServiceUnavailable, "busy")
 	errMissingUUID  = httpErr(http.StatusBadRequest, "command result without CommandUUID")
@@ -216,11 +218,9 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 		return errBadIDs
 	}
 	t := p.t
-	var ch *store.Challenge
-	if p.st.issued != nil {
-		if ch, err = store.ChallengeByID(ctx, g.db, t.Key, p.st.issued.ChallengeID); err != nil {
-			return err
-		}
+	ch, err := g.challengeOf(ctx, p)
+	if err != nil {
+		return err
 	}
 	if ch != nil {
 		field := ""
@@ -236,7 +236,10 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 			return errMismatch
 		}
 	}
-	proof := store.ProofNone
+	proof, err := g.proof(ctx, t.Key, ch, p)
+	if err != nil {
+		return err
+	}
 	holder, err := store.ActiveDeviceID(ctx, g.db, p.kind, p.raw)
 	if err != nil {
 		return err
@@ -308,6 +311,29 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	return nil
 }
 
+// proof returns "ade" when the identity was issued on a challenge bound to
+// a MachineInfo signed by Apple for this UDID whose serial number is an
+// ADE device of the tenant: such a device is in the Setup Assistant of the
+// tenant, hence erased, and its proof prevails over a reservation elsewhere.
+func (g *Guard) proof(ctx context.Context, tenant string, ch *store.Challenge, p *prep) (string, error) {
+	if ch == nil || ch.MachineInfoID == "" || p.kind != store.KindUDID {
+		return store.ProofNone, nil
+	}
+	ok, err := store.ADEProof(ctx, g.db, tenant, ch.MachineInfoID, p.raw)
+	if err != nil || !ok {
+		return store.ProofNone, err
+	}
+	return store.ProofADE, nil
+}
+
+// challengeOf returns the challenge of the identity of the request, if any.
+func (g *Guard) challengeOf(ctx context.Context, p *prep) (*store.Challenge, error) {
+	if p.st.issued == nil {
+		return nil, nil
+	}
+	return store.ChallengeByID(ctx, g.db, p.t.Key, p.st.issued.ChallengeID)
+}
+
 // TokenUpdate activates the identifier in the registry (device channel)
 // before NanoMDM stores the token: a concurrent enrollment of the same
 // identifier in another tenant fails on the unique index and is refused.
@@ -346,6 +372,14 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 		g.metrics.Checkins.Inc(t.Key, "TokenUpdate", "ok")
 		return nil
 	}
+	ch, err := g.challengeOf(ctx, p)
+	if err != nil {
+		return err
+	}
+	proof, err := g.proof(ctx, t.Key, ch, p)
+	if err != nil {
+		return err
+	}
 	select {
 	case g.holds <- struct{}{}:
 		defer func() { <-g.holds }()
@@ -358,7 +392,7 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	}
 	defer tx.Rollback()
 	activated := true
-	if err := store.ActivateDeviceID(ctx, tx, t.Key, p.kind, p.raw, p.deviceID, store.ProofNone); err != nil {
+	if err := store.ActivateDeviceID(ctx, tx, t.Key, p.kind, p.raw, p.deviceID, proof); err != nil {
 		_ = tx.Rollback()
 		switch {
 		case errors.Is(err, store.ErrIDConflict):
@@ -463,12 +497,25 @@ func (g *Guard) UserAuthenticate(r *mdm.Request, m *mdm.UserAuthenticate) ([]byt
 	return nil, errNoUserAuth
 }
 
-// DeclarativeManagement is relayed from step 2 on.
+// DeclarativeManagement checks the endpoint against the allow-list, then
+// lets certauth and the NanoMDM core hand the check-in to the DDM relay.
 func (g *Guard) DeclarativeManagement(r *mdm.Request, m *mdm.DeclarativeManagement) ([]byte, error) {
-	if p, err := g.prepare(r, &m.Enrollment, "DeclarativeManagement", "", false); err == nil {
-		g.metrics.Checkins.Inc(p.t.Key, "DeclarativeManagement", "unsupported")
+	p, err := g.prepare(r, &m.Enrollment, "DeclarativeManagement", "", false)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errUnsupported
+	if !ddm.ValidEndpoint(m.Endpoint) {
+		g.metrics.Checkins.Inc(p.t.Key, "DeclarativeManagement", "refused_endpoint")
+		g.metrics.DDMRelay.Inc(p.t.Key, "invalid", "invalid_endpoint")
+		return nil, errEndpoint
+	}
+	out, err := g.next.DeclarativeManagement(r, m)
+	outcome := "ok"
+	if err != nil {
+		outcome = "error"
+	}
+	g.metrics.Checkins.Inc(p.t.Key, "DeclarativeManagement", outcome)
+	return out, err
 }
 
 // GetToken is not supported.

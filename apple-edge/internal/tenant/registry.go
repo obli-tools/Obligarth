@@ -22,8 +22,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/lib/pq"
-
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/outbox"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/scep"
@@ -359,44 +357,28 @@ func (r *Registry) reportLoadFailure(ctx context.Context, key string) {
 	}
 }
 
-// Run keeps the registry in sync: LISTEN on the registry channel through a
-// dedicated connection (never pooled nor recycled), plus a full
+// Run keeps the registry in sync: notifications of the registry channel
+// (shared LISTEN connection, never pooled nor recycled), plus a full
 // reconciliation every interval and after every reconnection.
-func (r *Registry) Run(ctx context.Context, dsn string, interval time.Duration) {
-	var reconnected atomic.Bool
-	l := pq.NewListener(dsn, time.Second, 30*time.Second, func(ev pq.ListenerEventType, err error) {
-		switch ev {
-		case pq.ListenerEventReconnected:
-			reconnected.Store(true)
-			r.logger.Info("msg", "registry listener reconnected")
-		case pq.ListenerEventDisconnected, pq.ListenerEventConnectionAttemptFailed:
-			r.logger.Info("msg", "registry listener disconnected", "err", err)
-		}
-	})
-	defer l.Close()
-	if err := l.Listen(Channel); err != nil {
-		r.logger.Error("msg", "registry listen", "err", err)
-	}
+func (r *Registry) Run(ctx context.Context, notes <-chan store.Notification, interval time.Duration) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case n := <-l.Notify:
-			if n == nil { // connection re-established: notifications may have been lost
+		case n := <-notes:
+			if n.Reconnected { // notifications may have been lost
+				r.logger.Info("msg", "registry reconciliation after reconnection")
 				r.reconcile(ctx)
 				continue
 			}
-			if n.Extra != "" && !r.upToDate(ctx, n.Extra) {
-				if err := r.Reload(ctx, n.Extra); err != nil {
-					r.logger.Error("msg", "registry reload", "tenant", n.Extra, "err", err)
+			if n.Payload != "" && !r.upToDate(ctx, n.Payload) {
+				if err := r.Reload(ctx, n.Payload); err != nil {
+					r.logger.Error("msg", "registry reload", "tenant", n.Payload, "err", err)
 				}
 			}
 		case <-tick.C:
-			if reconnected.Swap(false) {
-				r.logger.Info("msg", "registry reconciliation after reconnection")
-			}
 			r.reconcile(ctx)
 		}
 	}

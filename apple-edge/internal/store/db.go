@@ -8,8 +8,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -133,6 +135,24 @@ func IsCheckViolation(err error, constraint string) bool {
 func IsLockTimeout(err error) bool {
 	code, _ := PGCode(err)
 	return code == "55P03" || code == "57014"
+}
+
+// IsUnavailable reports a transient failure of the database itself:
+// connection refused or lost, too many connections, server shutting down
+// or starting up. Callers answer "try again later".
+func IsUnavailable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, driver.ErrBadConn) {
+		return true
+	}
+	var ne net.Error
+	if errors.As(err, &ne) {
+		return true
+	}
+	code, _ := PGCode(err)
+	return strings.HasPrefix(code, "08") || strings.HasPrefix(code, "53") || code == "57P01" || code == "57P02" || code == "57P03"
 }
 
 // TryXactLock takes a transaction-scoped advisory lock for singleton jobs;

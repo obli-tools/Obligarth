@@ -30,6 +30,7 @@ var files embed.FS
 // Components, in application order, with their schema.
 var components = []struct{ Name, Schema string }{
 	{"nanomdm", "nanomdm"},
+	{"nanodep", "nanodep"},
 	{"apple_edge", "apple_edge"},
 }
 
@@ -44,6 +45,10 @@ const (
 const (
 	NanoMDMSchemaSHA256 = "33480889eb1154d1213ebba7d99b39fe1f02533266a23733a9b0b2500aceed6b"
 	NanoMDMSchemaFile   = "sql/nanomdm/0001_upstream_schema.sql"
+	// NanoDEP does not export its schema: the copy starts with a comment
+	// header (up to the first blank line), followed by the upstream file.
+	NanoDEPSchemaSHA256 = "01a5aae6b61b379cdbeb317e92919557745b9ae06b7d46f5f10963321b939184"
+	NanoDEPSchemaFile   = "sql/nanodep/0001_upstream_schema.sql"
 )
 
 // ExitCodeSchemaMismatch is the exit code of serve when the database is not

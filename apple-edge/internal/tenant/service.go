@@ -29,7 +29,10 @@ type Service struct {
 	CAYears     int
 	RetireAfter time.Duration
 	PublicBase  string
-	Now         func() time.Time
+	Metrics     *obs.Metrics
+	// APNsStatus returns the last APNs answer of a topic (nil if none).
+	APNsStatus func(topic string) any
+	Now        func() time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -129,6 +132,100 @@ SELECT t.key, t.state, coalesce(ca.id::text, ''), coalesce(ca.sha256, ''), coale
 	return c, err == nil, err
 }
 
+// Rotation is the result of RotateCA.
+type Rotation struct {
+	CA       CAInfo   `json:"ca"`
+	Previous []CAInfo `json:"verify_only"`
+}
+
+// RotateCA gives a tenant a new issuing CA. The previous active CA keeps
+// verifying the identities it issued (verify_only) and its private key,
+// useless from now on, is destroyed; new enrollments use the new CA at
+// once (registry reload, rebuilt SCEP service). The key is generated
+// before any transaction or lock.
+func (s *Service) RotateCA(ctx context.Context, key string) (Rotation, error) {
+	if st, err := s.state(ctx, s.DB, key, false); err != nil {
+		return Rotation{}, err
+	} else if st != StateActive && st != StateSuspended {
+		return Rotation{}, errNotLive
+	}
+	cert, priv, err := NewCA(key, s.CAYears, s.now())
+	if err != nil {
+		return Rotation{}, err
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return Rotation{}, err
+	}
+	caID := ids.NewUUID()
+	sum := sha256.Sum256(cert.Raw)
+	out := Rotation{CA: CAInfo{ID: caID, SHA256: hex.EncodeToString(sum[:]), NotAfter: cert.NotAfter.UTC(), Status: "active"}}
+	err = store.InTx(ctx, s.DB, func(tx *sql.Tx) error {
+		st, err := s.state(ctx, tx, key, true)
+		if err != nil {
+			return err
+		}
+		if st != StateActive && st != StateSuspended {
+			return errNotLive
+		}
+		rows, err := tx.QueryContext(ctx, `
+UPDATE apple_edge.tenant_cas SET status = 'verify_only', key_enc = NULL
+ WHERE tenant_key = $1 AND status = 'active'
+RETURNING id, sha256, not_after`, key)
+		if err != nil {
+			return err
+		}
+		for rows.Next() {
+			c := CAInfo{Status: "verify_only"}
+			if err := rows.Scan(&c.ID, &c.SHA256, &c.NotAfter); err != nil {
+				rows.Close()
+				return err
+			}
+			c.NotAfter = c.NotAfter.UTC()
+			out.Previous = append(out.Previous, c)
+		}
+		rows.Close()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		dek, err := s.Keys.ActiveDEK(ctx, tx, key)
+		if err != nil {
+			return err
+		}
+		enc, err := dek.Seal("apple_edge.tenant_cas", "key_enc", caID, key, keyDER)
+		if err != nil {
+			return err
+		}
+		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO apple_edge.tenant_cas (id, tenant_key, status, cert_pem, key_enc, sha256, not_after)
+VALUES ($1, $2, 'active', $3, $4, $5, $6)`, caID, key, string(certPEM), enc, out.CA.SHA256, out.CA.NotAfter); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET updated_at = now() WHERE key = $1`, key); err != nil {
+			return err
+		}
+		prev := make([]string, 0, len(out.Previous))
+		for _, p := range out.Previous {
+			prev = append(prev, p.ID)
+		}
+		if err := s.Out.Insert(ctx, tx, outbox.T(key, "tenant.ca_rotated", map[string]any{
+			"ca_id": caID, "sha256": out.CA.SHA256, "not_after": out.CA.NotAfter.Format(time.RFC3339), "verify_only": prev,
+		})); err != nil {
+			return err
+		}
+		return store.Notify(ctx, tx, Channel, key)
+	})
+	if err != nil {
+		return Rotation{}, err
+	}
+	s.Out.Committed()
+	if err := s.Reg.Reload(ctx, key); err != nil {
+		s.Logger.Error("msg", "registry reload after CA rotation", "tenant", key, "err", err)
+	}
+	return out, nil
+}
+
 // Summary is a line of the tenant list.
 type Summary struct {
 	Key            string `json:"key"`
@@ -164,6 +261,8 @@ type PushCertInfo struct {
 	Topic       string     `json:"topic,omitempty"`
 	NotAfter    *time.Time `json:"not_after,omitempty"`
 	ActivatedAt *time.Time `json:"activated_at,omitempty"`
+	// APNs is the last answer of APNs for the topic on this replica.
+	APNs any `json:"apns,omitempty"`
 }
 
 // Info is the state of a tenant.
@@ -242,6 +341,11 @@ SELECT (SELECT count(*) FROM apple_edge.device_ids WHERE tenant_key = $1 AND sta
 	in.Counters["active_device_ids"] = activeIDs
 	in.Counters["issued_certificates"] = issued
 	in.Counters["enabled_enrollments"] = enrollments
+	var adeTokens int
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM apple_edge.ade_tokens WHERE tenant_key = $1 AND state <> 'removed'`, key).Scan(&adeTokens); err != nil {
+		return in, err
+	}
+	in.Counters["ade_tokens"] = adeTokens
 	return in, nil
 }
 
@@ -316,6 +420,13 @@ func (s *Service) Retire(ctx context.Context, key string) error {
 		if n > 0 {
 			return "", apierr.Conflict("tenant_has_active_enrollments", fmt.Sprintf("%d device identifiers are still active", n))
 		}
+		var tokens int
+		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM apple_edge.ade_tokens WHERE tenant_key = $1 AND state <> 'removed'`, key).Scan(&tokens); err != nil {
+			return "", err
+		}
+		if tokens > 0 {
+			return "", apierr.Conflict("tenant_has_ade_tokens", fmt.Sprintf("%d ADE tokens are still present (delete them first)", tokens))
+		}
 		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = 'retiring', retiring_since = now(), updated_at = now() WHERE key = $1`, key); err != nil {
 			return "", err
 		}
@@ -372,6 +483,13 @@ SELECT key FROM apple_edge.tenants
 				return err
 			}
 			for _, q := range []string{
+				`DELETE FROM apple_edge.machine_info_checks WHERE tenant_key = $1`,
+				`DELETE FROM apple_edge.ade_devices WHERE token_id IN (SELECT id FROM apple_edge.ade_tokens WHERE tenant_key = $1)`,
+				`DELETE FROM apple_edge.ade_profiles WHERE token_id IN (SELECT id FROM apple_edge.ade_tokens WHERE tenant_key = $1)`,
+				`DELETE FROM nanodep.dep_names WHERE name IN (SELECT id::text FROM apple_edge.ade_tokens WHERE tenant_key = $1)`,
+				`DELETE FROM apple_edge.ade_tokens WHERE tenant_key = $1`,
+				`DELETE FROM apple_edge.apns_inactive WHERE tenant_key = $1`,
+				`DELETE FROM apple_edge.expiry_alerts WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.device_secrets WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.device_ids WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.commands WHERE tenant_key = $1`,
@@ -463,6 +581,9 @@ SELECT id, state, coalesce(topic, ''), not_after, activated_at FROM apple_edge.p
 		if act.Valid {
 			t := act.Time.UTC()
 			p.ActivatedAt = &t
+		}
+		if s.APNsStatus != nil && p.Topic != "" && (p.State == "active" || p.State == "legacy") {
+			p.APNs = s.APNsStatus(p.Topic)
 		}
 		out = append(out, p)
 	}
