@@ -669,11 +669,15 @@ class DeviceService {
     if (failed > 0) throw new JobError('partial_failure', 'one cleanup step failed');
   }
 
-  async bulkApprove(ids: number[], tenantId: number, approvedBy: number) {
+  /** Approves the devices of `tenantId` among `ids` (the others are skipped,
+   *  untouched); returns how many were approved. */
+  async bulkApprove(ids: number[], tenantId: number, approvedBy: number): Promise<number> {
     // Approve each device individually so default group from API key is assigned
+    let approved = 0;
     for (const id of ids) {
-      await this.approveDevice(id, tenantId, approvedBy);
+      if (await this.approveDevice(id, tenantId, approvedBy)) approved++;
     }
+    return approved;
   }
 
   /**

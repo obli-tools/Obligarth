@@ -375,8 +375,12 @@ router.post('/bulk/approve', requireTenantCapability('agent_config:approval'), a
   try {
     const { ids, deviceIds } = req.body;
     const list = ids ?? deviceIds ?? [];
-    await deviceService.bulkApprove(list, req.tenantId!, req.session.userId!);
-    res.json({ success: true, count: list.length });
+    // Counted on the devices actually approved: an id of another tenant (or
+    // an unknown one) is skipped, and a request with none of the tenant's
+    // devices answers 404, as DELETE /bulk/delete does.
+    const count = await deviceService.bulkApprove(list, req.tenantId!, req.session.userId!);
+    if (list.length > 0 && count === 0) return res.status(404).json({ error: 'No matching devices in this tenant' });
+    res.json({ success: true, count });
   } catch (err) { next(err); }
 });
 
@@ -432,8 +436,8 @@ router.delete('/bulk/delete', requireTenantCapability('devices.manage'), async (
 // Body: { deviceIds: number[], groupId: number | null }
 router.post('/batch/change-group', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
-    const { deviceIds, groupId } = req.body as { deviceIds: number[]; groupId: number | null };
-    if (!Array.isArray(deviceIds) || deviceIds.length === 0) {
+    const { deviceIds: rawIds, groupId } = req.body as { deviceIds: unknown; groupId: number | null };
+    if (!Array.isArray(rawIds) || rawIds.length === 0) {
       return res.status(400).json({ error: 'deviceIds required' });
     }
     // Validate group if provided (null = ungrouped).
@@ -442,6 +446,17 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
       if (!grp) return res.status(404).json({ error: 'Group not found' });
     }
     const normalized = groupId === undefined ? null : groupId;
+    // The ids are narrowed to the devices of the session's tenant first, as
+    // DELETE /bulk/delete does: an id of another tenant reaches neither the
+    // restriction check, nor the approval, nor the counts and the audit
+    // entry, and a request with none of the tenant's devices answers 404.
+    const requested = [...new Set(rawIds.map(parseRequestDeviceId).filter((n): n is number => n !== null))];
+    const prev = requested.length
+      ? await db('devices').whereIn('id', requested).andWhere({ tenant_id: req.tenantId! }).select('id', 'group_id') as
+        Array<{ id: number; group_id: number | null }>
+      : [];
+    if (prev.length === 0) return res.status(404).json({ error: 'No matching devices in this tenant' });
+    const deviceIds = prev.map((d) => Number(d.id));
 
     const { applyRestriction } = await import('../services/restriction.service');
     const approved = await applyRestriction(res, {
@@ -454,12 +469,8 @@ router.post('/batch/change-group', requireTenantCapability('devices.manage'), as
     });
     if (!approved) return;
 
-    // Capture previous groupIds so only the devices whose group changed count.
-    const prev = await db('devices')
-      .whereIn('id', deviceIds)
-      .andWhere({ tenant_id: req.tenantId! })
-      .select('id', 'group_id');
-    const prevById = new Map(prev.map((p: any) => [p.id, p.group_id]));
+    // Previous groupIds (read above) so only the devices whose group changed count.
+    const prevById = new Map(prev.map((p) => [Number(p.id), p.group_id]));
 
     await db('devices')
       .whereIn('id', deviceIds)

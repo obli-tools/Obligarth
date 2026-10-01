@@ -101,6 +101,17 @@ SELECT r.rolname FROM pg_catalog.pg_roles r
                          'pg_read_all_data', 'pg_write_all_data'))`;
 
 /**
+ * The same reach from the reader role, which the runtime role can always
+ * take on (SET ROLE obligarth_reader, rls-tenant §3.1): a privileged role
+ * granted to the reader WITH INHERIT TRUE, SET FALSE is reached that way
+ * although pg_has_role(<runtime role>, …) answers false for it (review of
+ * lot A5). Appended by the callers of PRIVILEGED_ROLES_SQL with OR; false
+ * when the reader role does not exist.
+ */
+export const READER_REACHES_SQL = String.raw`EXISTS (SELECT 1 FROM pg_catalog.pg_roles rr WHERE rr.rolname = 'obligarth_reader'
+            AND (pg_catalog.pg_has_role(rr.oid, r.oid, 'SET') OR pg_catalog.pg_has_role(rr.oid, r.oid, 'USAGE')))`;
+
+/**
  * Privileges of the runtime role BEFORE the row level security is active
  * (step 1 of rls-tenant §10.4: the server runs as `obligarth`, the RLS
  * migration C is not applied yet). Plain DML on the tables of the schema —

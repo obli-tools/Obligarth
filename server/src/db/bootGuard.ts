@@ -1,7 +1,7 @@
 import { db } from './index';
-import { PRIVILEGED_ROLES_SQL } from './bootstrap';
+import { PRIVILEGED_ROLES_SQL, READER_REACHES_SQL } from './bootstrap';
 import { asNone, asTenant, contextMode, contextSigningEnabled, type DbActor } from './context';
-import { missingMigrations } from './migrationFiles';
+import { missingMigrations, rlsMigrationApplied } from './migrationFiles';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -13,11 +13,13 @@ import { logger } from '../utils/logger';
 // finding:
 //   1. the current role is `obligarth`, without SUPERUSER, BYPASSRLS,
 //      CREATEROLE nor CREATEDB, and it cannot take on (SET ROLE, or an
-//      inherited membership) a role that has one of them, the owner role or
-//      a role of the server's files and programs;
+//      inherited membership, directly or through the reader role) a role
+//      that has one of them, the owner role or a role of the server's files
+//      and programs or of all the data;
 //   2. it owns no object of the schemas obligarth and obligarth_private;
 //   3. obligarth.rls_audit() is empty — once the RLS is active (migration
-//      C): before it, no table is classified yet;
+//      C applied, or any table under RLS): before it, no table is
+//      classified yet;
 //   4. every migration shipped in the image is applied (otherwise: "database
 //      schema incompatible, run server-migrate");
 //   5. context self-test: asTenant(1) then obligarth.ctx_tenant() = 1 (in
@@ -56,10 +58,12 @@ export async function bootGuard(): Promise<void> {
     }
     // A membership carries the role past the row level security just as well
     // (a GRANT made by hand on an external database, say): SET ROLE to a
-    // superuser or to the owner, or the owner's rights inherited.
+    // superuser or to the owner, or the owner's rights inherited, directly
+    // or through the reader role it can always take on.
     if (r && !r.rolsuper) {
       const reachable = await db.raw(`${PRIVILEGED_ROLES_SQL}
-           AND (pg_has_role(current_user, r.oid, 'SET') OR pg_has_role(current_user, r.oid, 'USAGE'))
+           AND (pg_has_role(current_user, r.oid, 'SET') OR pg_has_role(current_user, r.oid, 'USAGE')
+                OR ${READER_REACHES_SQL})
            AND r.rolname <> current_user
          ORDER BY r.rolname`) as Rows<{ rolname: string }>;
       if (reachable.rows.length > 0) {
@@ -98,6 +102,10 @@ export async function bootGuard(): Promise<void> {
     if (missing.length) {
       findings.push(`database schema incompatible, run server-migrate (missing: ${missing.join(', ')})`);
     }
+    // Once migration C is applied, the RLS is expected even when no table
+    // has it any more (turned off by hand, partial restore): the audit below
+    // then names every table (review of lot A5).
+    const rlsMigrated = rlsMigrationApplied(applied.map((m) => m.name));
 
     const state = await db.raw(`
       SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -105,7 +113,7 @@ export async function bootGuard(): Promise<void> {
              to_regprocedure('obligarth.ctx_tenant()') IS NOT NULL AS context_functions,
              COALESCE((SELECT p.prosecdef FROM pg_proc p WHERE p.oid = to_regprocedure('obligarth.ctx_raw()')), false) AS signed`) as
       Rows<{ rls_active: boolean; context_functions: boolean; signed: boolean }>;
-    rlsActive = state.rows[0]?.rls_active === true;
+    rlsActive = state.rows[0]?.rls_active === true || rlsMigrated;
     contextFunctions = state.rows[0]?.context_functions === true;
 
     // 3. audit of the classification, once the RLS is active

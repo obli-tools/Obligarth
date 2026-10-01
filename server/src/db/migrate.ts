@@ -3,9 +3,11 @@ import { readFileSync } from 'node:fs';
 import knex from 'knex';
 import pg from 'pg';
 import { migrationConfig } from '../../knexfile';
-import { BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL, PRIVILEGED_ROLES_SQL } from './bootstrap';
+import {
+  BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL, PRIVILEGED_ROLES_SQL, READER_REACHES_SQL,
+} from './bootstrap';
 import { contextKeyId, loadContextKeyFile } from './context';
-import { missingMigrations, shippedMigrations } from './migrationFiles';
+import { missingMigrations, rlsMigrationApplied, shippedMigrations } from './migrationFiles';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -76,14 +78,21 @@ const SIGN_IN_HINT =
 
 type Q = (sql: string, values?: unknown[]) => Promise<pg.QueryResult>;
 
-/** Is the RLS active: does any table of the schema have it enabled
- *  (migration C)? Before, the runtime role gets plain privileges. */
+/** Is the RLS active: does any table of the schema have it enabled, or is
+ *  migration C recorded? Before, the runtime role gets plain privileges. A
+ *  database whose RLS was turned off after migration C (by hand, a partial
+ *  restore) counts as active: audited and refused, never given the plain
+ *  privileges of before the RLS (review of lot A5). */
 export async function rlsActive(q: Q): Promise<boolean> {
   const { rows } = await q(
     `SELECT EXISTS (SELECT 1 FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-                     WHERE n.nspname = 'obligarth' AND c.relkind IN ('r', 'p') AND c.relrowsecurity) AS active`,
+                     WHERE n.nspname = 'obligarth' AND c.relkind IN ('r', 'p') AND c.relrowsecurity) AS active,
+            to_regclass('obligarth.obligarth_migrations') IS NOT NULL AS tracked`,
   );
-  return rows[0]?.active === true;
+  if (rows[0]?.active === true) return true;
+  if (rows[0]?.tracked !== true) return false;
+  const applied = await q('SELECT name FROM obligarth.obligarth_migrations');
+  return rlsMigrationApplied(applied.rows.map((r) => String(r.name)));
 }
 
 async function withAdmin<T>(adminUrl: string, fn: (q: Q, client: pg.Client) => Promise<T>): Promise<T> {
@@ -261,10 +270,12 @@ export async function checkDatabase(adminUrl: string): Promise<CheckReport> {
       if ((name === 'obligarth') !== r.rolcanlogin) findings.push(`role ${name}: unexpected LOGIN attribute`);
     }
     // The runtime role must not be able to take on a privileged role either
-    // (SET ROLE, or an inherited membership): same check as the boot guard.
+    // (SET ROLE, or an inherited membership, directly or through the reader
+    // role): same check as the boot guard.
     if (byName.has('obligarth')) {
       const reach = await q(`${PRIVILEGED_ROLES_SQL}
-           AND (pg_has_role('obligarth', r.oid, 'SET') OR pg_has_role('obligarth', r.oid, 'USAGE'))
+           AND (pg_has_role('obligarth', r.oid, 'SET') OR pg_has_role('obligarth', r.oid, 'USAGE')
+                OR ${READER_REACHES_SQL})
            AND r.rolname <> 'obligarth'
          ORDER BY r.rolname`);
       if (reach.rowCount) {
