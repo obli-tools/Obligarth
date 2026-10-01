@@ -1,9 +1,20 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import { reportService } from '../services/report.service';
 import { requireTenantCapability, requireAnyTenantCapability } from '../middleware/rbac';
 import fs from 'fs';
+import { AppError } from '../middleware/errorHandler';
 
 const router = Router();
+
+/** The report of the path, in the request's tenant: an unknown id and
+ *  another tenant's answer alike (404, its existence is not told). */
+async function reportOfPath(req: Request): Promise<number> {
+  const id = Number.parseInt(String(req.params.id), 10);
+  if (!Number.isSafeInteger(id) || id <= 0 || !(await reportService.exists(id, req.tenantId!))) {
+    throw new AppError(404, 'Report not found');
+  }
+  return id;
+}
 
 // Reports: holders of the `reports` tenant capability, or of
 // `supervision:read`, which opens the Supervision page (it holds the
@@ -26,28 +37,29 @@ router.post('/', async (req, res, next) => {
 
 router.patch('/:id', async (req, res, next) => {
   try {
-    const updated = await reportService.updateReport(parseInt(req.params.id), req.tenantId!, req.body);
+    const updated = await reportService.updateReport(await reportOfPath(req), req.tenantId!, req.body);
+    if (!updated) throw new AppError(404, 'Report not found');
     res.json({ data: updated });
   } catch (err) { next(err); }
 });
 
 router.delete('/:id', async (req, res, next) => {
   try {
-    await reportService.deleteReport(parseInt(req.params.id), req.tenantId!);
+    if (!(await reportService.deleteReport(await reportOfPath(req), req.tenantId!))) throw new AppError(404, 'Report not found');
     res.status(204).send();
   } catch (err) { next(err); }
 });
 
 router.post('/:id/generate', async (req, res, next) => {
   try {
-    const output = await reportService.generateReport(parseInt(req.params.id), req.tenantId!);
+    const output = await reportService.generateReport(await reportOfPath(req), req.tenantId!);
     res.status(202).json({ data: output });
   } catch (err) { next(err); }
 });
 
 router.get('/:id/outputs', async (req, res, next) => {
   try {
-    const outputs = await reportService.getOutputs(parseInt(req.params.id), req.tenantId!);
+    const outputs = await reportService.getOutputs(await reportOfPath(req), req.tenantId!);
     res.json({ data: outputs });
   } catch (err) { next(err); }
 });

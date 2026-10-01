@@ -1,9 +1,9 @@
 import type { Request, Response } from 'express';
 import { maintenanceService, isWindowActive } from '../services/maintenance.service';
 import type { CreateMaintenanceWindowRequest, UpdateMaintenanceWindowRequest, MaintenanceScopeType } from '@obligarth/shared';
-import { isMasterTenant } from '@obligarth/shared';
 import { db } from '../db';
 import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
+import { hasGlobalView } from '../services/deviceScope.service';
 
 // Tenant ownership gate. `maintenanceService.getById` is intentionally
 // tenant-agnostic (background scheduler uses it cross-tenant), so any
@@ -15,7 +15,7 @@ import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
 async function loadOwnedWindow(id: number, req: Request): Promise<Awaited<ReturnType<typeof maintenanceService.getById>> | null> {
   const w = await globalViewRead(req, () => maintenanceService.getById(id));
   if (!w) return null;
-  if (!isMasterTenant(req.tenantId) && w.tenantId !== req.tenantId) return null;
+  if (!hasGlobalView(req) && w.tenantId !== req.tenantId) return null;
   return w;
 }
 
@@ -172,6 +172,11 @@ export const maintenanceController = {
       if (!['device', 'group'].includes(scopeType)) {
         return res.status(400).json({ success: false, error: 'type must be device or group' });
       }
+      // A group or device out of reach (another tenant's) answers 404, as an
+      // unknown one.
+      if (!Number.isSafeInteger(scopeId) || scopeId <= 0 || !await scopeBelongsToCallerTenant(scopeType, scopeId, req)) {
+        return res.status(404).json({ success: false, error: 'Scope not found' });
+      }
 
       // Resolve groupId for devices
       let groupId: number | null = null;
@@ -272,8 +277,10 @@ export const maintenanceController = {
 };
 
 async function scopeBelongsToCallerTenant(scopeType: 'group' | 'device', scopeId: number, req: Request): Promise<boolean> {
-  if (isMasterTenant(req.tenantId)) return true; // god view sees all
+  // The global view reaches every tenant's scopes (read in the context
+  // 'platform'); anyone else, those of the session's tenant only (a member
+  // of the master tenant without the global view included).
   const table = scopeType === 'group' ? 'device_groups' : 'devices';
   const row = await globalViewRead(req, () => db(table).where({ id: scopeId }).first('tenant_id')) as { tenant_id: number } | undefined;
-  return !!row && row.tenant_id === req.tenantId;
+  return !!row && (hasGlobalView(req) || row.tenant_id === req.tenantId);
 }

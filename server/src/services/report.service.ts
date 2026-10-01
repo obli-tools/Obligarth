@@ -50,6 +50,11 @@ class ReportService {
     };
   }
 
+  /** Is reportId a report of tenantId (the routes answer 404 otherwise)? */
+  async exists(reportId: number, tenantId: number): Promise<boolean> {
+    return !!(await db('reports').where({ id: reportId, tenant_id: tenantId }).first('id'));
+  }
+
   async getReports(tenantId: number) {
     const rows = await db('reports').where({ tenant_id: tenantId }).orderBy('name');
     return rows.map(this.rowToReport.bind(this));
@@ -624,12 +629,14 @@ class ReportService {
     return removed;
   }
 
-  async deleteReport(id: number, tenantId: number) {
+  /** Deletes a report of tenantId and its output files; false when there is
+   *  no such report. */
+  async deleteReport(id: number, tenantId: number): Promise<boolean> {
     const outputs = await db('report_outputs').where({ report_id: id, tenant_id: tenantId });
     for (const o of outputs) {
       if (o.file_path) fs.unlink(o.file_path).catch(() => {});
     }
-    await db('reports').where({ id, tenant_id: tenantId }).delete();
+    return (await db('reports').where({ id, tenant_id: tenantId }).delete()) > 0;
   }
 }
 

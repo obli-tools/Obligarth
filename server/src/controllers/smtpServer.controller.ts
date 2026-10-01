@@ -56,12 +56,17 @@ export const smtpServerController = {
   async test(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = parseInt(req.params.id, 10);
+      // A server out of reach (unknown, or another tenant's: the row level
+      // security hides it) answers 404, like the other routes of a server.
+      if (!(await smtpServerService.getTransportConfig(id, { requestTenantId: req.tenantId, globalView: hasGlobalView(req) }))) {
+        throw new AppError(404, 'SMTP server not found');
+      }
       await smtpServerService.test(id, { requestTenantId: req.tenantId, globalView: hasGlobalView(req) });
       res.json({ success: true, message: 'Connection successful' });
     } catch (err) {
       // A vault error (the password cannot be opened) is never echoed: the
       // error handler answers 500, the vault logged and alerted.
-      if (isVaultError(err)) { next(err); return; }
+      if (isVaultError(err) || err instanceof AppError) { next(err); return; }
       const msg = err instanceof Error ? err.message : 'Connection failed';
       next(new AppError(400, `SMTP test failed: ${msg}`));
     }

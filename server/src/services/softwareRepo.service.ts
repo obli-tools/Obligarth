@@ -207,16 +207,18 @@ class SoftwareRepoService {
     return this.rowToPackage(row);
   }
 
-  async delete(id: number, tenantId: number): Promise<void> {
+  /** Deletes a package of tenantId and its file; false when there is no such
+   *  package (the route answers 404). */
+  async delete(id: number, tenantId: number): Promise<boolean> {
     const row = await db('software_repo_packages').where({ id, tenant_id: tenantId }).first();
-    if (!row) return;
+    if (!row) return false;
 
     // Remove file from disk
     const ext = path.extname(row.filename).toLowerCase();
     const filePath = path.join(repoDir(tenantId), `${row.uuid}${ext}`);
     try { fs.unlinkSync(filePath); } catch {}
 
-    await db('software_repo_packages').where({ id, tenant_id: tenantId }).delete();
+    return (await db('software_repo_packages').where({ id, tenant_id: tenantId }).delete()) > 0;
   }
 
   async getFilePath(uuid: string, tenantId?: number): Promise<{ filePath: string; filename: string; mimeType: string } | null> {

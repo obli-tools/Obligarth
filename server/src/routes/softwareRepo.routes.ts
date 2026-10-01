@@ -70,7 +70,9 @@ router.post('/packages', requireRole('admin'), upload.single('file'), async (req
 // DELETE /software-repo/packages/:id — delete (admin only)
 router.delete('/packages/:id', requireRole('admin'), async (req, res, next) => {
   try {
-    await softwareRepoService.delete(parseInt(req.params.id), req.tenantId!);
+    if (!(await softwareRepoService.delete(parseInt(req.params.id), req.tenantId!))) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
     res.status(204).send();
   } catch (err) { next(err); }
 });
