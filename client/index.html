@@ -19,10 +19,13 @@
     <title>Obligarth</title>
     <!-- FOUC prevention: apply the saved theme (especially the light
          Obli Daylight) before the JS bundle boots, so a reload doesn't flash
-         the wrong palette. Mirrors the allowlist in utils/theme.ts. -->
+         the wrong palette. Mirrors the storage keys and the allowlist of
+         utils/theme.ts ('oa-theme': the key inherited from Obliance, read
+         while the new one is empty; utils/theme.ts moves it). -->
     <script>
       try {
-        var t = localStorage.getItem('oa-theme');
+        var t = localStorage.getItem('obligarth:theme');
+        if (t === null) t = localStorage.getItem('oa-theme');
         if (t === 'obli-operator' || t === 'obli-daylight' || t === 'obli-dim' || t === 'modern' || t === 'neon') {
           document.documentElement.dataset.theme = t;
         }

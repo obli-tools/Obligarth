@@ -2,7 +2,23 @@ import type { AppTheme } from '@obligarth/shared';
 
 export type { AppTheme };
 
-const STORAGE_KEY = 'oa-theme';
+const STORAGE_KEY = 'obligarth:theme';
+/** Key inherited from Obliance: read once (and moved) when the new one is
+ *  still empty, so a saved choice survives the rename. index.html's
+ *  anti-flash script reads it the same way. */
+const LEGACY_STORAGE_KEY = 'oa-theme';
+
+/** The saved theme id, moving a value still stored under the legacy key. */
+function readStoredTheme(): string | null {
+  const value = localStorage.getItem(STORAGE_KEY);
+  if (value !== null) return value;
+  const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
+  if (legacy !== null) {
+    localStorage.setItem(STORAGE_KEY, legacy);
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
+  }
+  return legacy;
+}
 
 /** Every theme id this app knows how to render. */
 const KNOWN_THEMES = new Set<AppTheme>(['obli-operator', 'obli-daylight', 'obli-dim', 'modern', 'neon']);
@@ -32,7 +48,7 @@ export function applyTheme(theme: string): void {
 /** Load the theme from localStorage (used before session check to avoid flash). */
 export function loadSavedTheme(): AppTheme {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    const saved = readStoredTheme();
     if (saved && KNOWN_THEMES.has(saved as AppTheme)) return saved as AppTheme;
   } catch {
     // ignore

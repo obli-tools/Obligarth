@@ -30,25 +30,21 @@ import { logger } from '../utils/logger';
  *
  * ── Read-through union, no new storage ──────────────────────────────────────
  * Nothing is ingested, backfilled or denormalised: every kind is a live read
- * over the table that already owns that fact.
+ * over the table that already owns that fact. The MDM's own kinds (commands,
+ * profiles, apps) join here as their tables appear.
  *
- *   remote_session     remote_sessions
  *   config_change      audit_logs                      ← ADMIN ONLY, see below
  *
  * ── Permissions ─────────────────────────────────────────────────────────────
- * `requireDeviceRead()` is necessary but not sufficient: two sources are
- * protected more tightly elsewhere and MUST NOT become readable here.
- *   - `audit_logs` is admin-only (`routes/audit.routes.ts` mounts
- *     `requireRole('admin')` on the whole router), so `config_change` is
- *     dropped for non-admins.
- *   - `remote_sessions` hides other users' sessions from plain users (the
- *     rule of the former remote sessions list), so non-admins only see
- *     sessions they started.
- * The kinds actually served are echoed back in `kinds` so the caller can tell
- * "no events" apart from "not allowed to see that kind".
+ * `requireDeviceRead()` is necessary but not sufficient: a source protected
+ * more tightly elsewhere MUST NOT become readable here. `audit_logs` is
+ * admin-only (`routes/audit.routes.ts` mounts `requireRole('admin')` on the
+ * whole router), so `config_change` is dropped for non-admins. The kinds
+ * actually served are echoed back in `kinds` so the caller can tell "no
+ * events" apart from "not allowed to see that kind".
  *
  * ── formatVersion ───────────────────────────────────────────────────────────
- * Currently 3. Never change the exported shape silently — bump
+ * Currently 4. Never change the exported shape silently — bump
  * `FORMAT_VERSION` below (and tell Oblidesk) when a field is renamed, removed
  * or restructured. `title`/`detail` are English fallbacks: consumers should
  * localise from `kind` + `payload`, which are the stable machine-readable part.
@@ -56,13 +52,14 @@ import { logger } from '../utils/logger';
  * scenario_run, compliance_drift, software_installed and software_removed,
  * and the actor types schedule, scenario and api (removed modules). Version 2
  * also had the kinds agent_upgraded and reboot (the agent's command queue and
- * its reported boot time) and the actor type agent (removed agent).
+ * its reported boot time) and the actor type agent (removed agent). Version 3
+ * also had the kind remote_session (the remote sessions table of the removed
+ * remote access).
  */
 
-const FORMAT_VERSION = 3 as const;
+const FORMAT_VERSION = 4 as const;
 
 export const CHANGE_EVENT_KINDS = [
-  'remote_session',
   'config_change',
 ] as const;
 
@@ -90,12 +87,6 @@ const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
 const DEFAULT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_LIMIT = 500;
 const MAX_LIMIT = 2000;
-
-/** audit_logs actions that another kind already sources from its own table —
- *  listing them under config_change too would double-count the same change. */
-const AUDIT_ACTIONS_OWNED_ELSEWHERE = [
-  'remote.session_ended',
-];
 
 // ── Query helpers ────────────────────────────────────────────────────────────
 
@@ -179,50 +170,7 @@ const USER_COLUMNS = ['u.username as actor_username', 'u.display_name as actor_d
 function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, EventSource[]>> {
   const { from, to } = ctx;
 
-  const sources: Partial<Record<ChangeEventKind, EventSource[]>> = {
-    // ── remote_session ───────────────────────────────────────────────────────
-    remote_session: [{
-      table: 'remote_sessions',
-      base: () => {
-        const q = scope('remote_sessions', 'rs', ctx)
-          .leftJoin('users as u', 'u.id', 'rs.started_by')
-          .whereBetween('rs.started_at', [from, to]);
-        // The rule of the former remote sessions list: a plain user must not
-        // see other users' sessions on a shared device.
-        if (!ctx.callerIsAdmin) q.where('rs.started_by', ctx.callerUserId);
-        return q;
-      },
-      columns: [
-        'rs.id', 'rs.protocol', 'rs.status', 'rs.started_by', 'rs.connected_at', 'rs.ended_at',
-        'rs.duration_seconds', 'rs.end_reason', ...USER_COLUMNS, 'rs.started_at as at',
-      ],
-      order: 'rs.started_at',
-      countOn: 'rs.id',
-      map: (r) => ({
-        id: `remote_session:remote_sessions:${r.id}`,
-        kind: 'remote_session',
-        at: toIso(r.at),
-        title: `Remote session (${r.protocol}) — ${r.status}`,
-        detail: [
-          r.duration_seconds != null ? `${r.duration_seconds}s` : null,
-          r.end_reason || null,
-        ].filter(Boolean).join(' · ') || null,
-        actor: actorName(r),
-        actorType: 'user',
-        severityHint: 'medium',
-        resourceType: 'remote_session',
-        resourceId: String(r.id),
-        resourcePath: r.protocol,
-        payload: {
-          sessionId: r.id, protocol: r.protocol, status: r.status,
-          connectedAt: r.connected_at ? toIso(r.connected_at) : null,
-          endedAt: r.ended_at ? toIso(r.ended_at) : null,
-          durationSeconds: r.duration_seconds ?? null,
-          endReason: r.end_reason ?? null,
-        },
-      }),
-    }],
-  };
+  const sources: Partial<Record<ChangeEventKind, EventSource[]>> = {};
 
   // audit_logs is admin-only everywhere else (routes/audit.routes.ts) — do not
   // widen it here. Non-admins simply get the kind omitted from `kinds`.
@@ -231,9 +179,7 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
       table: 'audit_logs',
       base: () => scope('audit_logs', 'al', ctx)
         .leftJoin('users as u', 'u.id', 'al.user_id')
-        .whereBetween('al.created_at', [from, to])
-        .whereNotIn('al.action', AUDIT_ACTIONS_OWNED_ELSEWHERE)
-        .whereRaw(`al.action NOT LIKE 'remote.session_started.%'`),
+        .whereBetween('al.created_at', [from, to]),
       columns: [
         'al.id', 'al.action', 'al.resource_type', 'al.resource_path', 'al.details',
         'al.user_id', 'al.ip_address', ...USER_COLUMNS, 'al.created_at as at',

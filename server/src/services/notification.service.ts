@@ -582,6 +582,8 @@ export const notificationService = {
   /**
    * Send a group-level notification (for grouped notifications feature).
    * Resolves channels at the group level (no device bindings) and dispatches.
+   * No caller today (the agent channel that fed the grouped notifications is
+   * gone); kept for the MDM's group events.
    */
   async sendForGroup(
     groupId: number,
@@ -618,17 +620,27 @@ export const notificationService = {
     }
   },
 
+  /**
+   * One row of notification_log per send: status 'sent' or 'failed', with the
+   * error message. (It used to write `success` and `error`, columns the table
+   * never had, so every send through sendForGroup threw here.) A failure to
+   * log never turns a sent notification into a failed one.
+   */
   async logNotification(
     channelId: number,
     eventType: string,
     success: boolean,
     error?: string,
   ): Promise<void> {
-    await db('notification_log').insert({
-      channel_id: channelId,
-      event_type: eventType,
-      success,
-      error: error ?? null,
-    });
+    try {
+      await db('notification_log').insert({
+        channel_id: channelId,
+        event_type: eventType,
+        status: success ? 'sent' : 'failed',
+        error_message: error ?? null,
+      });
+    } catch (err) {
+      logger.warn({ err, channelId, eventType }, 'notification log write failed');
+    }
   },
 };

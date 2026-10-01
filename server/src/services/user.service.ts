@@ -1,3 +1,4 @@
+import type { Knex } from 'knex';
 import { db } from '../db';
 import { hashPassword } from '../utils/crypto';
 import { forgetTenantMemberships } from './tenant.service';
@@ -71,14 +72,15 @@ export const userService = {
   },
 
   /** Same, from a bcrypt hash computed beforehand (utils/crypto
-   *  hashPassword): an approved creation only ever kept the hash. */
+   *  hashPassword): an approved creation only ever kept the hash. `trx`: the
+   *  transaction of a caller that writes more with the account. */
   async createWithPasswordHash(data: {
     username: string;
     passwordHash: string;
     displayName?: string | null;
     role?: UserRole;
-  }): Promise<User> {
-    const [row] = await db<UserRow>('users')
+  }, trx?: Knex.Transaction): Promise<User> {
+    const [row] = await (trx ?? db)<UserRow>('users')
       .insert({
         username: data.username,
         password_hash: data.passwordHash,

@@ -151,19 +151,27 @@ export const userScope = {
     }
 
     const next = wanted.find((w) => w.tenantId === actor.tenantId);
-    if (next) {
-      const callerRole = await membershipRole(actor.userId, actor.tenantId);
-      if (next.role === 'admin') {
-        if (callerRole !== 'admin') {
-          throw new AppError(403, 'Only a tenant administrator can grant the tenant administrator role');
-        }
-      } else {
-        if (!(await capsOfRole(next.role))) throw new AppError(400, `Unknown role: ${next.role}`);
-        const refusal = await refusalFor(actor, actor.tenantId, next.role);
-        if (refusal) throw new AppError(403, 'You can only grant a role whose permissions you hold');
-      }
-    }
+    if (next) await this.assertGrantableRole(actor, actor.tenantId, next.role);
     return next ? [...kept, next] : kept;
+  },
+
+  /**
+   * May `actor` (not a platform admin) give `role` in `tenantId`? The tenant
+   * administrator role only by a tenant administrator there; a permission set
+   * only if the caller holds every capability of it there (granting must
+   * never widen the caller's rights). Throws 400 (unknown role) or 403.
+   */
+  async assertGrantableRole(actor: ScopeActor, tenantId: number, role: string): Promise<void> {
+    if (actor.isPlatformAdmin) return;
+    if (role === 'admin') {
+      if ((await membershipRole(actor.userId, tenantId)) !== 'admin') {
+        throw new AppError(403, 'Only a tenant administrator can grant the tenant administrator role');
+      }
+      return;
+    }
+    if (!(await capsOfRole(role))) throw new AppError(400, `Unknown role: ${role}`);
+    const refusal = await refusalFor(actor, tenantId, role);
+    if (refusal) throw new AppError(403, 'You can only grant a role whose permissions you hold');
   },
 
 };

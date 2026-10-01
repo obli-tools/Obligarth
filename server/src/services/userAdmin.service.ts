@@ -14,7 +14,8 @@ import { createUserSchema, updateUserSchema, type UpdateUserInput } from '../val
 // execution time — rights, scope and accounts may have changed while the
 // request waited:
 //  - P1 scope (userScope.assertManageableTarget): a manager that is not a
-//    platform admin only acts on an account it dominates;
+//    platform admin only acts on an account it dominates, and an account it
+//    creates joins its tenant with a role it can grant (newAccountTenant);
 //  - only a platform admin creates an administrator or changes a platform
 //    role; SSO (Obligate) accounts are managed from Obligate; the last
 //    active administrator is never demoted, disabled or deleted; one's own
@@ -55,9 +56,30 @@ export async function usernameTaken(username: string): Promise<boolean> {
   return !!row;
 }
 
+/** Tenant role a new account receives in its creator's tenant. */
+export const NEW_ACCOUNT_TENANT_ROLE = 'user';
+
+/**
+ * The tenant a new account joins: a creator that is not a platform
+ * administrator (a tenant administrator, or a holder of users.manage) can
+ * only see and manage the members of its tenant, so the account joins it,
+ * with the role NEW_ACCOUNT_TENANT_ROLE, which the creator must be able to
+ * grant (userScope.assertGrantableRole). A platform administrator assigns
+ * the tenants afterwards (PUT /api/users/:id/tenants): null.
+ */
+export async function newAccountTenant(actor: ScopeActor): Promise<number | null> {
+  if (actor.isPlatformAdmin) return null;
+  if (!Number.isInteger(actor.tenantId) || actor.tenantId <= 0) throw new AppError(400, 'No tenant selected');
+  await userScope.assertGrantableRole(actor, actor.tenantId, NEW_ACCOUNT_TENANT_ROLE);
+  return actor.tenantId;
+}
+
 /**
  * New local account. `passwordHash` is a bcrypt hash (utils/crypto
  * hashPassword): an approval only ever keeps the hash, never the password.
+ * Created by a manager that is not a platform administrator, the account
+ * joins the manager's tenant in the same transaction (newAccountTenant):
+ * without it, it was invisible to its creator and could not sign in.
  */
 export async function createUserAccount(
   actor: ScopeActor,
@@ -78,20 +100,31 @@ export async function createUserAccount(
   if (typeof passwordHash !== 'string' || passwordHash.length < 20) {
     throw new AppError(400, 'The request carries no password hash — redo the creation');
   }
+  const tenantId = await newAccountTenant(actor);
   if (await usernameTaken(data.username)) throw new AppError(409, 'Username already exists');
   let user: User;
   try {
-    user = await userService.createWithPasswordHash({
-      username: data.username,
-      passwordHash,
-      displayName: data.displayName ?? null,
-      role: data.role ?? 'user',
+    user = await db.transaction(async (trx) => {
+      const created = await userService.createWithPasswordHash({
+        username: data.username,
+        passwordHash,
+        displayName: data.displayName ?? null,
+        role: data.role ?? 'user',
+      }, trx);
+      if (tenantId !== null) {
+        await trx('user_tenants').insert({ user_id: created.id, tenant_id: tenantId, role: NEW_ACCOUNT_TENANT_ROLE });
+      }
+      return created;
     });
   } catch (err) {
     if (err instanceof Error && /unique/i.test(err.message)) throw new AppError(409, 'Username already exists');
     throw err;
   }
-  await audit(actor, ctx, 'user.created', user.id, { username: user.username, role: user.role });
+  await audit(actor, ctx, 'user.created', user.id, {
+    username: user.username,
+    role: user.role,
+    ...(tenantId !== null ? { tenantId, tenantRole: NEW_ACCOUNT_TENANT_ROLE } : {}),
+  });
   return user;
 }
 

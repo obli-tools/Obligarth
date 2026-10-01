@@ -16,11 +16,9 @@ import type { Knex } from 'knex';
 //     licenses);
 //   - the columns the code still reads or writes. None of the removed RMM's
 //     tables (scripts, schedules, scenarios, updates, compliance, CVE,
-//     remote access, SSH bastion, metrics history, Hyper-V, Veeam, network
-//     discovery…) and none of the agent's per-device columns.
-//   Exception: remote_sessions, still read (never written) by the
-//   change-event timeline (services/changeEvent.service.ts, kind
-//   remote_session), with the columns it reads only. It goes with that kind.
+//     remote access and its sessions, SSH bastion, metrics history, Hyper-V,
+//     Veeam, network discovery…) and none of the agent's per-device columns
+//     (metric levels included).
 //
 // Invariants carried over from the inherited schema, on purpose:
 //   - trigger users_credential_version (function users_bump_credential_version):
@@ -483,10 +481,6 @@ export async function up(knex: Knex): Promise<void> {
     t.integer('expected_lifetime_years');
     t.string('lifecycle_status', 20).defaultTo('unknown');
 
-    // Levels re-read under the lock of a live-alert incident (liveAlert.service)
-    t.string('last_metric_status', 16);
-    t.string('last_metric_alert_status', 16);
-
     t.index(['tenant_id', 'status']);
     t.index(['tenant_id', 'group_id']);
     t.index(['approval_status']);
@@ -544,28 +538,6 @@ export async function up(knex: Knex): Promise<void> {
     t.timestamp('scanned_at').notNullable().defaultTo(knex.fn.now());
     t.index(['device_id', 'scanned_at']);
     t.index(['device_id', 'name']);
-  });
-
-  // ===========================================================================
-  // REMOTE SESSIONS: read-only rest of the removed remote access, for the
-  // change-event timeline (see the header); nothing writes it any more.
-  // ===========================================================================
-  await knex.schema.createTable('remote_sessions', (t) => {
-    t.uuid('id').primary().defaultTo(knex.raw('gen_random_uuid()'));
-    t.integer('device_id').notNullable()
-      .references('id').inTable('devices').onDelete('CASCADE');
-    t.integer('tenant_id').notNullable()
-      .references('id').inTable('tenants').onDelete('CASCADE');
-    t.string('protocol', 32).notNullable();
-    t.string('status', 32).notNullable();
-    t.integer('started_by').notNullable()
-      .references('id').inTable('users').onDelete('CASCADE');
-    t.timestamp('started_at').notNullable().defaultTo(knex.fn.now());
-    t.timestamp('connected_at');
-    t.timestamp('ended_at');
-    t.integer('duration_seconds');
-    t.string('end_reason', 100);
-    t.index(['device_id', 'status']);
   });
 
   // ===========================================================================
@@ -862,7 +834,6 @@ export async function down(knex: Knex): Promise<void> {
     'sso_foreign_users',
     'report_outputs',
     'reports',
-    'remote_sessions',
     'device_inventory_software',
     'device_inventory_hardware',
     'devices',

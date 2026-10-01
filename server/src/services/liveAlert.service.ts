@@ -71,12 +71,14 @@ function rowToAlert(row: Record<string, unknown>): LiveAlertRow {
 //   (every kind)                                                          device deleted (deleteDevice, bulkDelete, cleanOrphans)
 //
 // These four kinds were raised and resolved by the agent channel (push
-// handling, command channel, disk health, identity checks), now removed:
-// nothing raises them any more, and a row already stored only leaves with
-// its device (last line). The engine stays for the incidents of the MDM.
+// handling, command channel, disk health, identity checks), now removed, and
+// so was their raise path (raiseIncident, which re-read the device's status
+// and metric levels under the incident lock). Only the resolution stays: a
+// row already stored leaves with its device (last line). An incident of the
+// MDM brings its own raise path, with the device state it needs.
 //
-// Stable keys outside this table keep the historical behaviour (dedup on an
-// unread row of the same tenant + key, never resolved).
+// add() handles every stable key the same way: dedup on an unread active row
+// of the same tenant + key, never resolved by add() itself.
 export type LiveAlertIncidentKind = 'metric' | 'offline' | 'diskhealth' | 'duplicate_agent_id';
 
 const INCIDENT_KEY_SUFFIXES: Record<LiveAlertIncidentKind, readonly string[]> = {
@@ -89,19 +91,6 @@ const INCIDENT_KEY_SUFFIXES: Record<LiveAlertIncidentKind, readonly string[]> = 
 /** Every stable key of the incident `kind` of a device (all severities). */
 export function incidentStableKeys(kind: LiveAlertIncidentKind, deviceId: number): string[] {
   return INCIDENT_KEY_SUFFIXES[kind].map((suffix) => `device:${deviceId}:${suffix}`);
-}
-
-/** The incident a stable key belongs to, or null (not an incident key). */
-export function parseIncidentStableKey(
-  stableKey: string | null | undefined,
-): { kind: LiveAlertIncidentKind; deviceId: number } | null {
-  if (!stableKey) return null;
-  const m = /^device:(\d+):(.+)$/.exec(stableKey);
-  if (!m) return null;
-  for (const kind of Object.keys(INCIDENT_KEY_SUFFIXES) as LiveAlertIncidentKind[]) {
-    if (INCIDENT_KEY_SUFFIXES[kind].includes(m[2])) return { kind, deviceId: Number(m[1]) };
-  }
-  return null;
 }
 
 const INCIDENT_KINDS = Object.keys(INCIDENT_KEY_SUFFIXES) as LiveAlertIncidentKind[];
@@ -120,28 +109,9 @@ const RESOLVE_CHUNK = 200;
 
 type IncidentRef = { kind: LiveAlertIncidentKind; deviceId: number };
 
-/** Advisory-lock key of an incident: raises and resolves of one incident run one at a time. */
+/** Advisory-lock key of an incident: the resolutions of one incident run one at a time. */
 function incidentLockKey(kind: LiveAlertIncidentKind, deviceId: number): string {
   return `live_alert_incident:${kind}:${deviceId}`;
-}
-
-/** Device columns an incident's open/over state is read from, under its lock. */
-type IncidentDeviceState = {
-  status: string;
-  last_metric_status: string | null;
-  last_metric_alert_status: string | null;
-};
-const INCIDENT_DEVICE_COLUMNS = ['status', 'last_metric_status', 'last_metric_alert_status'] as const;
-
-/**
- * Is the device's metric incident still open? The alertable level
- * (`last_metric_alert_status`; NULL = never written, read as the full level,
- * migration 125) is written BEFORE the incident is raised or resolved, so
- * the stored level is the truth both sides re-check under the lock.
- */
-function metricIncidentOpen(d: IncidentDeviceState): boolean {
-  const level = d.last_metric_alert_status ?? d.last_metric_status;
-  return level === 'warning' || level === 'critical';
 }
 
 /**
@@ -185,10 +155,9 @@ function emitResolved(rows: TenantRow[]): void {
 
 /**
  * Resolve every active row of these incidents, in ANY tenant. Each chunk
- * holds the incidents' advisory locks, like a raise: a raise running at
- * the same moment either commits first (its row is then seen and resolved
- * here) or runs after (and sees the recovered state, see raiseIncident).
- * NOTIFICATION_RESOLVED is emitted per chunk. Returns the resolved ids.
+ * holds the incidents' advisory locks (the raise path of an MDM incident
+ * must take the same lock). NOTIFICATION_RESOLVED is emitted per chunk.
+ * Returns the resolved ids.
  */
 async function resolveIncidentRefs(refs: IncidentRef[]): Promise<number[]> {
   const ids: number[] = [];
@@ -263,26 +232,10 @@ async function announce(row: Record<string, unknown>, tenantId: number): Promise
 export const liveAlertService = {
   /**
    * Add a new live alert. Returns the inserted row (NOTIFICATION_NEW is
-   * emitted), or null when nothing was inserted.
-   *
-   *   - Incident stable key (table above): nothing is inserted when a row
-   *     of the incident with the same stable key and severity is already
-   *     active in this tenant, read or unread. Otherwise (first occurrence,
-   *     escalation warning → critical, device moved to another tenant…)
-   *     every active row of the incident, in any tenant, is resolved
-   *     (NOTIFICATION_RESOLVED) and a NEW row is inserted: a higher id, so
-   *     id-based clients (web, phone high-water marks) notify it. Nothing
-   *     is inserted when the device no longer exists, or once the incident
-   *     lock is held the incident is already over: (offline) the device is
-   *     no longer offline, (metric) its stored alertable level is back to
-   *     ok (the caller writes the level first).
-   *   - Any other stable key: skipped when an unread alert with the same
-   *     (tenant_id, stable_key) already exists (historical behaviour).
+   * emitted), or null when nothing was inserted: skipped when an unread
+   * active alert with the same (tenant_id, stable_key) already exists.
    */
   async add(tenantId: number, opts: AddOpts): Promise<LiveAlertRow | null> {
-    const incident = parseIncidentStableKey(opts.stableKey);
-    if (incident) return raiseIncident(tenantId, opts, incident.kind, incident.deviceId);
-
     // Dedup: skip if an unread alert with the same stable_key already exists for this tenant
     if (opts.stableKey) {
       const existing = await db('live_alerts')
@@ -416,58 +369,3 @@ export const liveAlertService = {
       .delete();
   },
 };
-
-/** Incident branch of add(), serialised per incident (advisory lock). */
-async function raiseIncident(
-  tenantId: number,
-  opts: AddOpts,
-  kind: LiveAlertIncidentKind,
-  deviceId: number,
-): Promise<LiveAlertRow | null> {
-  const keys = incidentStableKeys(kind, deviceId);
-  const { row, resolved } = await db.transaction(async (trx) => {
-    // Two paths may raise the same incident at once (manual push_now next
-    // to a regular push): one at a time, so at most one row stays active.
-    // Recoveries take the same lock (resolveIncidentRefs).
-    await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [incidentLockKey(kind, deviceId)]);
-    // Re-check under the lock that the incident is still open: the device
-    // may have been deleted, (offline) come back, or (metric) recovered —
-    // another push wrote the alertable level back to ok — between the
-    // caller's status / level write and this insert. A recovery that ran in
-    // that window found nothing to resolve, so inserting now would leave a
-    // phantom alert (device green, "CPU 96 %" listed for good) that also
-    // swallows the next real one. Then nothing is inserted and whatever is
-    // still active of the incident is resolved.
-    const device = await trx('devices').where({ id: deviceId }).first(...INCIDENT_DEVICE_COLUMNS) as IncidentDeviceState | undefined;
-    const open = !!device
-      && (kind !== 'offline' || device.status === 'offline')
-      && (kind !== 'metric' || metricIncidentOpen(device));
-    const active = await trx('live_alerts')
-      .whereIn('stable_key', keys)
-      .whereNull('resolved_at')
-      .orderBy('id', 'desc')
-      .select('id', 'tenant_id', 'stable_key', 'severity') as Array<TenantRow & { stable_key: string; severity: string }>;
-    const keep = open
-      ? active.find((r) => r.tenant_id === tenantId && r.stable_key === opts.stableKey && r.severity === opts.severity)
-      : undefined;
-    const stale = active.filter((r) => r !== keep).map((r) => r.id);
-    let resolvedRows: TenantRow[] = [];
-    if (stale.length > 0) {
-      resolvedRows = await trx('live_alerts')
-        .whereIn('id', stale)
-        .whereNull('resolved_at')
-        .update({ resolved_at: new Date() })
-        .returning(['id', 'tenant_id']) as TenantRow[];
-    }
-    if (keep || !open) return { row: null, resolved: resolvedRows };
-    const [inserted] = await trx('live_alerts').insert(insertValues(tenantId, opts)).returning('*');
-    return { row: inserted as Record<string, unknown>, resolved: resolvedRows };
-  });
-
-  // Resolved first, then the new row: clients drop the previous alert of
-  // the incident before they show its replacement.
-  emitResolved(resolved);
-  if (!row) return null;
-  await trimTenant(tenantId);
-  return announce(row, tenantId);
-}

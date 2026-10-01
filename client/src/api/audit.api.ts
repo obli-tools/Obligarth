@@ -19,7 +19,7 @@ export interface AuditLogRow {
   /** Display name resolved by the server from the owning table (e.g.
    *  `device_groups.name` when `resourceType='group'`). `null` if the entity
    *  has been deleted, or for resource types without a nameable table
-   *  (file, command, remote_session, etc.). The raw `resourceType`/
+   *  (settings, approval, audit_log, etc.). The raw `resourceType`/
    *  `resourcePath` pair stays available so the UI can fall back to it. */
   resourceName: string | null;
   details: Record<string, unknown> | null;

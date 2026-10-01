@@ -3,7 +3,9 @@ import { userService } from '../services/user.service';
 import { teamService } from '../services/team.service';
 import { AppError } from '../middleware/errorHandler';
 import { userScope, actorFromReq, resetSecondFactors } from '../services/userScope.service';
-import { createUserAccount, updateUserAccount, deleteUserAccount, usernameTaken } from '../services/userAdmin.service';
+import {
+  createUserAccount, updateUserAccount, deleteUserAccount, usernameTaken, newAccountTenant, NEW_ACCOUNT_TENANT_ROLE,
+} from '../services/userAdmin.service';
 import { hashPassword } from '../utils/crypto';
 import { db } from '../db';
 import { isMasterTenant } from '@obligarth/shared';
@@ -83,15 +85,22 @@ export const usersController = {
         throw new AppError(403, 'Only a platform administrator can create an administrator account');
       }
       if (await usernameTaken(data.username)) throw new AppError(409, 'Username already exists');
+      // Outside the platform administrators, the account joins the
+      // manager's tenant: refused now (role it cannot grant) rather than
+      // after a second administrator approved it (checked again then).
+      const joinsTenant = await newAccountTenant(actorFromReq(req));
       // The password is hashed NOW: at the 'restricted' level the approval
       // keeps only this bcrypt hash, in its sealed part (never returned by
       // the API, wiped once resolved) — never the password (approvalSecrets).
       const passwordHash = await hashPassword(data.password);
       const { applyRestriction } = await import('../services/restriction.service');
+      const access = joinsTenant !== null
+        ? `; tenant access: ${await (await import('../services/approvalDescribe')).tenantLabel(joinsTenant)} as "${NEW_ACCOUNT_TENANT_ROLE}"`
+        : '';
       const gated = await applyRestriction(res, {
         req, actionKey: 'tenant.manage_users',
         approvalRequestType: 'batch_command',
-        approvalDescription: `Create user "${data.username}" — display name: ${data.displayName ? `"${data.displayName}"` : 'none'}; platform role: ${data.role === 'admin' ? 'ADMINISTRATOR' : 'user'}; password: set by the requester (never shown)`,
+        approvalDescription: `Create user "${data.username}" — display name: ${data.displayName ? `"${data.displayName}"` : 'none'}; platform role: ${data.role === 'admin' ? 'ADMINISTRATOR' : 'user'}${access}; password: set by the requester (never shown)`,
         approvalPayload: {
           action: 'user_create',
           body: { username: data.username, displayName: data.displayName ?? null, role: data.role ?? 'user' },
