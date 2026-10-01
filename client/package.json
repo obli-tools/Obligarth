@@ -1,6 +1,6 @@
 {
   "name": "@obligarth/client",
-  "version": "5.1.120",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
