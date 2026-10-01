@@ -6,8 +6,14 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: obligarth
-      POSTGRES_USER: obligarth
-      POSTGRES_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
+      # Administrator of the instance (rls-tenant §3.1), used by server-migrate
+      # only. The server connects as the runtime role obligarth, created by
+      # server-migrate: no superuser, owner of nothing, under row level
+      # security. POSTGRES_* only act on a new volume: a volume created before
+      # (POSTGRES_USER=obligarth) is refused by server-migrate, recreate it
+      # (docker compose down -v) — no Obligarth database is kept from before.
+      POSTGRES_USER: obligarth_admin
+      POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}
     # Tuning sized for the push traffic of the former RMM agent (2000+ devices
     # ≈ 200 push/s, where stock Postgres collapsed under the device-table write
     # churn); kept until the load of the MDM is measured. Values below assume a
@@ -56,22 +62,58 @@ services:
     #ports:
     #  - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U obligarth"]
+      test: ["CMD-SHELL", "pg_isready -U obligarth_admin -d obligarth"]
       interval: 5s
       timeout: 5s
       retries: 10
       start_period: 60s
 
-  server:
-    image: meejay/obligarth-server:${OBLIGARTH_VERSION:-latest}
-    restart: unless-stopped
+  # One-shot: roles, schemas, then the migrations, with the administration
+  # account the server never sees (rls-tenant §3.3, R3). The server starts
+  # only once it has completed successfully; an upgrade runs it first (take a
+  # backup before: the migrations have no way back).
+  server-migrate:
+    image: meejay/obligarth-server:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    command: ["node", "dist/src/db/migrate.js"]
+    restart: "no"
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       NODE_ENV: production
+      DATABASE_ADMIN_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
+      # Password given to the runtime role obligarth: the one of DATABASE_URL.
+      DB_APP_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
+      # Signed database context (rls-tenant §4.6, R12): the key the database
+      # checks the server's contexts with, registered by server-migrate.
+      RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
+    secrets:
+      - rls_context_key
+    # The image's health check is the server's: nothing listens here.
+    healthcheck:
+      disable: true
+
+  server:
+    image: meejay/obligarth-server:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
       PORT: 3001
+      # Runtime role (rls-tenant §3.1): no superuser, owner of nothing; the
+      # server never migrates (server-migrate does).
       DATABASE_URL: postgres://obligarth:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
+      # Signed database context (R12), same key as server-migrate's.
+      RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
+      # Database context of the row level security (rls-tenant §7.10) — see .env.example
+      DB_CONTEXT_MODE: ${DB_CONTEXT_MODE:-strict}
+      DB_CONTEXT_ASSERT: ${DB_CONTEXT_ASSERT:-}
+      PLATFORM_GRANT_TTL_SECONDS: ${PLATFORM_GRANT_TTL_SECONDS:-900}
+      PLATFORM_GRANT_RETENTION_DAYS: ${PLATFORM_GRANT_RETENTION_DAYS:-365}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
@@ -100,6 +142,8 @@ services:
       # Delegated reads from sibling apps (off unless source apps are named; platform-admin subjects refused) — see .env.example
       OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-none}
       OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
+    secrets:
+      - rls_context_key
     volumes:
       # Persistent custom directory: reports, software repository, phone-key cache.
       - ${CUSTOM_DIR:-./custom}:/custom
@@ -112,7 +156,7 @@ services:
         hard: 131072
 
   client:
-    image: meejay/obligarth-client:${OBLIGARTH_VERSION:-latest}
+    image: meejay/obligarth-client:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
     restart: unless-stopped
     # nginx worker_rlimit_nofile (65536) needs the container ulimit to allow it.
     ulimits:
@@ -124,5 +168,11 @@ services:
         condition: service_healthy
     ports:
       - "${LISTEN_PORT:-3005}:80"
+
 volumes:
   postgres_data:
+
+secrets:
+  # 32 random bytes (base64), mode 600, created by install.sh; never in .env.
+  rls_context_key:
+    file: ./secrets/rls_context_key
