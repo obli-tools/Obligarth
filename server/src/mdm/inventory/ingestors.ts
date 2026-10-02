@@ -4,7 +4,7 @@ import type { NanoEnrollType, Ownership } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { raiseInTx } from '../../apple/alerts/service';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
-import { platformFromProductName } from '../registry/authenticateRules';
+import { platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 
 // =============================================================================
 // The inventory contract (docs: modele-donnees-mdm §5.2 to §5.4, §10.4): the
@@ -17,7 +17,8 @@ import { platformFromProductName } from '../registry/authenticateRules';
 //   - monotony by kind (last_<kind>_at): an answer older than the last one
 //     ingested of the same kind is set aside ('stale');
 //   - device data never authorise anything (S10): lengths bounded by the
-//     columns, a changed serial number or UDID raises an alert.
+//     columns, a changed serial number or UDID raises an alert, a serial
+//     number held by another record is never taken from it.
 // In the caller's transaction and the tenant's context (the outbox handler's
 // savepoint, or the job apple.command-result-ingest); no network. The return
 // values tell the caller what changed, for the resolution and the compliance
@@ -120,13 +121,18 @@ export interface DeviceInformationEffects {
   osChanged?: boolean;
   supervisionChanged?: boolean;
   serialChanged?: boolean;
+  /** The serial number reported is held by another record of the tenant: not written. */
+  serialHeld?: boolean;
   udidMismatch?: boolean;
 }
 
 /**
  * DeviceInformation (§5.3, inline): the columns of the record and of the satellite, the rest (filtered) in
  * apple_devices.device_information. A known serial number that changes raises device.serial_changed; a UDID
- * that is not the identity's raises security.identity_mismatch (neither is stored over the known value).
+ * that is not the identity's raises security.identity_mismatch (neither is stored over the known value). A
+ * record without a serial number takes the reported one unless another record holds it (devices_serial_uq):
+ * device data never take the identity of another device (review of lot B2, MDM-B2-R1): alert
+ * security.identity_mismatch, nothing written.
  */
 export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: number, deviceId: number,
   queryResponses: Record<string, unknown>, occurredAt: Date): Promise<DeviceInformationEffects> {
@@ -167,7 +173,13 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
         effects.serialChanged = true;
         await raiseInTx(trx, tenantId, 'device.serial_changed', { discriminant: deviceId });
       } else if (!f.serial) {
-        device.serial_number = serial.toUpperCase();
+        const holder = await serialHolderOf(trx, tenantId, serial.toUpperCase(), deviceId);
+        if (holder !== null) {
+          effects.serialHeld = true;
+          await raiseInTx(trx, tenantId, 'security.identity_mismatch', { discriminant: holder, params: { field: 'serial' } });
+        } else {
+          device.serial_number = serial.toUpperCase();
+        }
       }
     }
   }

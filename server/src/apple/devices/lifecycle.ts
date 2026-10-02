@@ -7,8 +7,8 @@ import { JobError } from '../../jobs/errors';
 import { jobIdFor } from '../../jobs/ids';
 import { raiseInTx } from '../alerts/service';
 import {
-  findDeviceForAuthenticate, findSessionForAuthenticate, managementModeFor, platformFromProductName, serialOf,
-  type SessionFacts,
+  findDeviceForAuthenticate, findSessionForAuthenticate, managementModeFor, platformFromProductName, serialClaimOf,
+  serialHolderOf, type DeviceMatch, type SessionFacts,
 } from '../../mdm/registry/authenticateRules';
 import { closeEpisode, markEpisodeEnrolled, openEpisode } from '../../mdm/registry/episodes';
 import { applyCollectionRules } from '../../mdm/inventory/ingestors';
@@ -30,6 +30,11 @@ import { privacyRulesFor, type PrivacyRules } from './privacy';
 //   - No record without an enrollment session (DM25): the ownership is never
 //     guessed; an Authenticate whose mode the session's ownership forbids
 //     (barrier 2) creates no record and asks apple-edge to release it.
+//   - The serial number of the message is device data (S10): only an ADE
+//     enrollment verifies it (apple-edge, against the session's MachineInfo).
+//     Unverified, it finds a record that left management only; held by a
+//     record still under management, it is never taken: the device gets a
+//     record of its own, without a serial number, and an alert is raised.
 //   - The identifier of the device becomes active at the first TokenUpdate
 //     of the cycle (DM26), like apple_edge.device_ids: the loser of an
 //     Authenticate race never holds it; a violation of the unique index there
@@ -55,9 +60,19 @@ export interface AuthenticateFacts {
   eventId: string;
 }
 
-export type AuthenticateOutcome = 'created' | 'new_cycle' | 'duplicate' | 'stale' | 'no_session' | 'ownership_mismatch';
+export type AuthenticateOutcome = 'created' | 'new_cycle' | 'duplicate' | 'stale' | 'no_session' | 'ownership_mismatch'
+  | 'identity_mismatch';
 export type TokenUpdateOutcome = 'completed' | 'awaiting' | 'configured' | 'refreshed' | 'stale';
 export type UnenrolledOutcome = 'unenrolled' | 'already' | 'stale' | 'unknown';
+
+export interface AuthenticateResult {
+  deviceId: number | null;
+  outcome: AuthenticateOutcome;
+  /** The serial number presented is held by this other record (a device still under management, or any other
+   *  record when the device was found by its enrollment id), which keeps it: the device was recorded without it
+   *  and the alert security.identity_mismatch raised (the handler audits it). */
+  serialHeldBy?: number;
+}
 
 export interface TokenUpdateFacts {
   enrollmentId: string;
@@ -108,13 +123,13 @@ async function raiseUnknownSession(trx: Knex.Transaction, tenantId: number): Pro
   await raiseInTx(trx, tenantId, 'enrollment.unknown_session', { params: { count: (Number.isFinite(count) ? count : 0) + 1 } });
 }
 
-/** The columns of the record a new cycle writes (§4.5 rule 3, §10.4): from the session and the message. */
+/** The columns of the record a new cycle writes (§4.5 rule 3, §10.4): from the session and the message. The
+ *  serial number is not among them: onAuthenticate decides it. */
 function cycleColumns(f: AuthenticateFacts, s: SessionFacts, mode: ManagementMode, rules: PrivacyRules,
   current: { platform: string | null; isNew: boolean }) {
   const msg = f.message ?? {};
   const productName = str(msg.ProductName, 64);
   const personal = s.ownership === 'personal';
-  const serial = !personal && rules.storeSerialNumber ? (serialOf(f) ?? (s.serialNumber && /^[A-Za-z0-9]{4,64}$/.test(s.serialNumber) ? s.serialNumber.toUpperCase() : null)) : null;
   const cols: Record<string, unknown> = {
     management_channel: 'apple_mdm',
     ownership: s.ownership,
@@ -143,8 +158,6 @@ function cycleColumns(f: AuthenticateFacts, s: SessionFacts, mode: ManagementMod
   const osBuild = str(msg.BuildVersion, 32);
   if (osBuild) cols.os_build = osBuild;
   // What the privacy rules of the new ownership do not keep is cleared, never carried over (§5.2).
-  if (personal || !rules.storeSerialNumber) cols.serial_number = null;
-  else if (serial) cols.serial_number = serial;
   if (!rules.storeDeviceName) cols.device_name = null;
   else if (str(msg.DeviceName, 255)) cols.device_name = str(msg.DeviceName, 255);
   if (personal) cols.lost_mode_state = 'off';
@@ -188,11 +201,15 @@ function satelliteColumns(f: AuthenticateFacts, s: SessionFacts) {
 /**
  * mdm.authenticate (§7.3, modele §4.5): the record created or found, a new cycle opened. 'duplicate': the
  * same certificate again; 'stale': older than the current cycle or than the record's last state; no write
- * for 'no_session' (alert enrollment.unknown_session) nor 'ownership_mismatch' (alert
- * enrollment.ownership_mismatch, job mdm.enrollment-release; the handler writes the audit entry).
+ * for 'no_session' (alert enrollment.unknown_session), 'ownership_mismatch' (alert
+ * enrollment.ownership_mismatch, job mdm.enrollment-release) nor 'identity_mismatch' (the message's serial
+ * number contradicts the session's verified one: alert security.identity_mismatch, job mdm.enrollment-release);
+ * the handler writes the audit entries. The record is found by its enrollment id, else by its serial number
+ * (findDeviceForAuthenticate): an unverified serial number never takes a record still under management
+ * ('created' with serialHeldBy: a record of its own, without that serial number, and an alert).
  */
 export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f: AuthenticateFacts):
-  Promise<{ deviceId: number | null; outcome: AuthenticateOutcome }> {
+  Promise<AuthenticateResult> {
   const sat = await satelliteOf(trx, tenantId, f.enrollmentId);
   if (sat) {
     if (f.certSha256 && sha(sat.cert_sha256) === f.certSha256) {
@@ -219,19 +236,47 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
       { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
     return { deviceId: null, outcome: 'ownership_mismatch' };
   }
+  // The serial number and its trust (S10): a message that contradicts the session's MachineInfo creates nothing
+  // (apple-edge refuses such an Authenticate first; the enrollment is released if one got through).
+  const claim = serialClaimOf(f, session);
+  if (claim.contradicted) {
+    await raiseInTx(trx, tenantId, 'security.identity_mismatch', { params: { field: 'serial' } });
+    await enrollmentReleaseJob().sendInTx(trx, { tenantId, eventId: f.eventId },
+      { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
+    return { deviceId: null, outcome: 'identity_mismatch' };
+  }
   const rules = await privacyRulesFor(trx, tenantId, session.ownership, f.enrollmentType);
+  const keepsSerial = session.ownership !== 'personal' && rules.storeSerialNumber;
 
   // Rule 3: the existing record (the satellite of the enrollment id, else the serial number).
   let deviceId: number;
   let created = false;
-  const found = sat ? { deviceId: Number(sat.device_id), enrollmentId: f.enrollmentId } : await findDeviceForAuthenticate(trx, tenantId, f, rules);
+  let serialHeldBy: number | undefined;
+  const lookup = sat ? { deviceId: Number(sat.device_id), enrollmentId: f.enrollmentId, by: 'enrollment_id' as const }
+    : await findDeviceForAuthenticate(trx, tenantId, f, rules, session);
+  if (lookup && 'serialHeldBy' in lookup) serialHeldBy = lookup.serialHeldBy;
+  const found: DeviceMatch | null = lookup && 'deviceId' in lookup ? lookup : null;
   if (found) {
     deviceId = found.deviceId;
     const current = await trx('devices').where({ tenant_id: tenantId, id: deviceId }).forUpdate()
-      .first('group_id', 'platform', 'enrollment_state_at') as { group_id: number | null; platform: string; enrollment_state_at: Date | null } | undefined;
+      .first('group_id', 'platform', 'enrollment_state_at', 'serial_number') as
+      { group_id: number | null; platform: string; enrollment_state_at: Date | null; serial_number: string | null } | undefined;
     if (!current) throw new JobError('missing_prerequisite', 'record of the device not found');
     if (!sat && f.occurredAt.getTime() < time(current.enrollment_state_at)) return { deviceId, outcome: 'stale' };
     const cols = cycleColumns(f, session, mode, rules, { platform: current.platform, isNew: false });
+    // The serial number: cleared when the rules of the new cycle do not keep it (§5.2). A record found by its
+    // enrollment id keeps a known serial number (a different one only raises an alert, as at the ingestion,
+    // §5.3) and takes the presented one only if no other record holds it. Found by its serial number: unchanged.
+    if (!keepsSerial) cols.serial_number = null;
+    else if (found.by === 'enrollment_id' && claim.serial && claim.serial !== (current.serial_number ?? '').toUpperCase()) {
+      if (current.serial_number) {
+        await raiseInTx(trx, tenantId, 'device.serial_changed', { discriminant: deviceId });
+      } else {
+        const holder = await serialHolderOf(trx, tenantId, claim.serial, deviceId);
+        if (holder !== null) serialHeldBy = holder;
+        else cols.serial_number = claim.serial;
+      }
+    }
     // The group changes only when the profile asks for it (§4.5 rule 3).
     if (session.resetGroupOnReenroll) cols.group_id = session.groupId;
     await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
@@ -246,10 +291,18 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
       .update({ sent_token: null, fetched_token: null, sync_command_id: null });
   } else {
     const cols = cycleColumns(f, session, mode, rules, { platform: null, isNew: true });
+    // A serial number held by a record still under management is never written over it (devices_serial_uq):
+    // the device gets a record of its own, without it (review of lot B2, MDM-B2-R1).
+    cols.serial_number = keepsSerial && serialHeldBy === undefined ? claim.serial : null;
     const [row] = await trx('devices').insert({ tenant_id: tenantId, group_id: session.groupId, ...cols }).returning('id');
     deviceId = Number((row as { id: number }).id ?? row);
     created = true;
     await trx('apple_devices').insert({ device_id: deviceId, tenant_id: tenantId, ...satelliteColumns(f, session) });
+  }
+  if (serialHeldBy !== undefined) {
+    // Another enrollment announced the serial number of a device under management (a forged message, or a
+    // logic board replaced while the previous record still runs): the operator decides; that record is untouched.
+    await raiseInTx(trx, tenantId, 'security.identity_mismatch', { discriminant: serialHeldBy, params: { field: 'serial' } });
   }
 
   // Rule 4: the episode of the cycle (the open one, if any, is replaced).
@@ -258,17 +311,20 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     enrollmentProfileId: session.profileId, enrollmentSessionId: session.sessionId, endUserId: session.endUserId,
     certSha256: f.certSha256, startedAt: f.occurredAt,
   });
-  // The session: authenticated (unless further), its device and certificate; the ADE device of the serial.
+  // The session: authenticated (unless further), its device and certificate.
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .whereNotIn('state', ['authenticated', 'enrolled'])
     .update({ state: 'authenticated', state_at: f.occurredAt, updated_at: new Date() });
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .update({ device_id: deviceId, cert_sha256: trx.raw('COALESCE(cert_sha256, ?)', [f.certSha256]), updated_at: new Date() });
-  const adeSerial = session.serialNumber ?? serialOf(f);
-  if (adeSerial) {
-    await trx('apple_ade_devices').where({ tenant_id: tenantId, serial_number: adeSerial }).update({ device_id: deviceId, updated_at: new Date() });
+  // The device of Apple Business of the serial number: by the verified serial number only (an ADE enrollment),
+  // never by the message's nor for a personal device (§7.3 step 6, review of lot B2).
+  if (claim.verified && claim.serial && session.ownership !== 'personal') {
+    await trx('apple_ade_devices').where({ tenant_id: tenantId, serial_number: claim.serial }).update({ device_id: deviceId, updated_at: new Date() });
   }
-  return { deviceId, outcome: created ? 'created' : 'new_cycle' };
+  return serialHeldBy !== undefined
+    ? { deviceId, outcome: created ? 'created' : 'new_cycle', serialHeldBy }
+    : { deviceId, outcome: created ? 'created' : 'new_cycle' };
 }
 
 /**
