@@ -18,6 +18,7 @@ import {
 } from './lifecycle';
 import { jobs, JobsStartError, safeErr } from './jobs';
 import { registerCoreJobs } from './jobs/core.jobs';
+import { registerOutboxJobs } from './jobs/outbox/jobs';
 import { registerDeviceModule } from './modules/devices';
 import { registerReportsModule } from './modules/reports';
 import { registerSsoSyncJobs } from './routes/obligateCallback.routes';
@@ -25,6 +26,7 @@ import { BackfillError, backfillLegacySecrets, isVaultError, vault, vaultConfigE
 import { registerVaultJobs } from './vault/jobs';
 import { registerAuditModule } from './audit/module';
 import { registerGuardModule } from './guard/module';
+import { registerAppleModule } from './modules/apple';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -89,9 +91,11 @@ async function main() {
   registerReportsModule();
   registerCoreJobs();
   registerSsoSyncJobs();
+  registerOutboxJobs();
   registerVaultJobs();
   registerAuditModule();
   registerGuardModule();
+  registerAppleModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.

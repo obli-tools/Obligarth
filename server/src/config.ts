@@ -1,10 +1,17 @@
 import './env';
 import path from 'node:path';
 import { readJobsConfig } from './jobs/config';
+import { readOutboxConfig } from './jobs/outbox/config';
+import { appleStartupErrors, readAppleConfig } from './apple/config';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
 // at start when invalid (startupConfigErrors), in every environment.
 const jobsEnv = readJobsConfig(process.env);
+// Consumer of the apple-edge outbox (OUTBOX_*, file-durable annex A): same rule.
+const outboxEnv = readOutboxConfig(process.env);
+// The apple-edge integration (APPLE_*, MDM_PUBLIC_BASE: integration-apple-edge
+// annex A): same rule; its secret files are read at start (startupConfigErrors).
+const appleEnv = readAppleConfig(process.env);
 
 function publicUrlFromEnv(): string {
   const appUrl = (process.env.APP_URL || '').trim();
@@ -129,6 +136,12 @@ export const config = {
   /** Background jobs (pg-boss, schema pgboss): mode, pool, stop budget,
    *  health threshold. See jobs/config.ts. */
   jobs: jobsEnv.config,
+  /** Consumer of the apple-edge outbox: mode, batch size, polling, dead
+   *  letters retention, lag alert. See jobs/outbox/config.ts. */
+  outbox: outboxEnv.config,
+  /** The apple-edge integration: mode, internal API, secret files, public
+   *  base of the device surface, thresholds. See apple/config.ts. */
+  apple: appleEnv.config,
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
   appName: process.env.APP_NAME || 'Obligarth',
@@ -254,6 +267,8 @@ export function startupConfigErrors(): string[] {
   }
   // Background jobs: refused in every environment as well.
   errors.push(...jobsEnv.errors);
+  errors.push(...outboxEnv.errors);
+  errors.push(...appleEnv.errors, ...appleStartupErrors(config.apple));
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
     errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
       'outside development, the migrations run in the server-migrate service.');

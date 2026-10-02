@@ -348,6 +348,14 @@ async function createMissingTenantKeys(): Promise<number> {
 
 // ── The API ─────────────────────────────────────────────────────────────────
 
+/** The kek_id apple-edge announces in its status (coffre-secrets §8.4-1), set by
+ *  the apple-edge integration (apple/edge/health.ts); null while unknown. */
+let edgeKekIdSource: () => string | null = () => null;
+
+export function setEdgeKekIdSource(fn: () => string | null): void {
+  edgeKekIdSource = fn;
+}
+
 export const vault = {
   /**
    * Boot (coffre-secrets §6.1), in the context 'none' of the job actor
@@ -691,7 +699,7 @@ export const vault = {
       return {
         provider: provider.kind,
         kekId: provider.id,
-        edgeKekId: null,
+        edgeKekId: edgeKekIdSource(),
         instanceDek: inst ? { id: inst.id, version: Number(inst.version), createdAt: iso(instRow?.created_at) ?? '' } : null,
         tenantKeys: {
           active: Number(keys?.active ?? 0), retired: Number(keys?.retired ?? 0), destroyed: Number(keys?.destroyed ?? 0),

@@ -13,17 +13,23 @@ import { jobStatus } from './status';
 // ago (the cron pass and the workers both work); 503 {"status":"degraded"}
 // otherwise. Result cached 10 s, a 200 never past the moment its heartbeat
 // gets too old: the 503 comes at most JOBS_HEALTH_MAX_HEARTBEAT_AGE_S after
-// the last heartbeat (180 s), not 10 s later.
+// the last heartbeat (180 s), not 10 s later. The consumer of the apple-edge
+// outbox counts too (file-durable §8.2): disabled, or a turn of its loop less
+// than 60 s ago.
 // =============================================================================
 
 const CACHE_MS = 10_000;
 const HEARTBEAT_QUEUE = 'jobs.heartbeat';
+/** Largest age of the last turn of the outbox consumer's loop. */
+const OUTBOX_LOOP_MAX_AGE_MS = 60_000;
 
 export interface JobsHealthOptions {
   /** Largest age of the heartbeat, in seconds (JOBS_HEALTH_MAX_HEARTBEAT_AGE_S). */
   maxAgeS?: () => number;
   /** The queue whose last success is the heartbeat (jobs.heartbeat; tests). */
   heartbeatQueue?: string;
+  /** State of the outbox consumer of this process (none: not counted). */
+  outbox?: () => { state: string; lastLoopAt: number };
 }
 
 export function createJobsHealth(runtime: JobsRuntime, opts: JobsHealthOptions = {}) {
@@ -39,6 +45,8 @@ export function createJobsHealth(runtime: JobsRuntime, opts: JobsHealthOptions =
     if (mode === 'paused') return { ok: false, until };
     if (mode === 'api') return { ok: true, until };
     if (!runtime.workersStarted()) return { ok: false, until };
+    const consumer = opts.outbox?.();
+    if (consumer && consumer.state !== 'disabled' && !(now - consumer.lastLoopAt < OUTBOX_LOOP_MAX_AGE_MS)) return { ok: false, until };
     const beat = await jobStatus.get(heartbeatQueue, '');
     if (!beat?.lastSucceededAt) return { ok: false, until };
     const deadline = beat.lastSucceededAt.getTime() + maxAgeS() * 1000;

@@ -36,9 +36,11 @@ import mobileAppRoutes from './mobileApp.routes';
 import { defaultRuntime } from '../jobs';
 import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
+import { createOutboxAdminRouter } from '../jobs/outbox/admin.routes';
 import { createVaultAdminRouter } from '../vault/admin.routes';
 import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
+import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
 
 const router = Router();
 
@@ -92,6 +94,12 @@ tenantRouter.use('/guard',       createGuardRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));
+// The apple-edge outbox consumer: state, dead letters (master tenant,
+// platform administrators; jobs/outbox/admin.routes.ts).
+tenantRouter.use('/admin/outbox', createOutboxAdminRouter());
+// apple-edge: its state and the tenant registry (master tenant, platform
+// administrators; apple/admin.routes.ts).
+tenantRouter.use('/admin/apple-edge', createAppleEdgeAdminRouter());
 // The vault of secrets: state, escrow events, key rotations (master tenant,
 // platform administrators; vault/admin.routes.ts).
 tenantRouter.use('/admin/vault', createVaultAdminRouter());

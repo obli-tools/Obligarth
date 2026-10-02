@@ -9,6 +9,7 @@ import { normaliseTenantRole } from './userScope.service';
 import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type DbActor } from '../db/context';
 import { vault } from '../vault';
 import { audit, type AuditWriteContext } from '../audit';
+import { appleTenants } from '../apple/tenants/registry';
 
 // Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
 // caller's context (each sees the tenants it may: its own memberships, every
@@ -139,7 +140,10 @@ export const tenantService = {
    *  of the caller, who must be an active platform administrator (refused by
    *  the database otherwise). Its first data key is created by the vault in
    *  the same transaction (coffre-secrets §6.2: no valid tenant lacks one);
-   *  the apple-edge integration adds its provisioning (lot B). */
+   *  the apple-edge integration sends its provisioning job in it
+   *  (integration-apple-edge §6.2: the tenant exists at apple-edge within the
+   *  minute, its MDM key written once; APPLE_EDGE_MODE=off: nothing, the
+   *  hourly apple-edge.provision-all catches up once it is turned on). */
   async create(data: { name: string; slug: string }, opts: { ipAddress?: string; auditCtx?: AuditWriteContext } = {}): Promise<Tenant> {
     const { defaultRestrictions } = await import('./restriction.service');
     const ctx = await auditContextOf(opts.auditCtx, MASTER_TENANT_ID, opts.ipAddress);
@@ -148,6 +152,7 @@ export const tenantService = {
         [data.name, data.slug, JSON.stringify(defaultRestrictions())]) as { rows: Array<{ id: number }> };
       const id = Number(rows[0].id);
       await vault.createTenantKey(trx, id);
+      await appleTenants.scheduleProvisioning(trx, id);
       const row = await trx('tenants').where({ id }).first() as TenantRow;
       // P1, last statement of the transaction (audit-durci §4.6): no tenant
       // without its entry, no entry without its tenant.
@@ -207,10 +212,33 @@ export const tenantService = {
    *  deletes the row (the foreign keys cascade); it refuses the master
    *  tenant. The entries vault.dek_destroyed and tenant.deleted (master
    *  tenant) come last (review COF-RC2): written once the transaction
-   *  commits until the hardened journal (lot A6) writes them in it. */
+   *  commits until the hardened journal (lot A6) writes them in it.
+   *  Before it, outside any transaction (specs README §5, review INT-RC11):
+   *  a tenant that has an MDM key is retired at apple-edge (409 when devices
+   *  are still enrolled or ADE servers connected, as apple-edge says it); a
+   *  deletion that then fails restores it there. A deletion the database
+   *  refuses anyway (the master tenant, a caller who is not an active
+   *  platform administrator) asks apple-edge nothing: the tenant is never
+   *  retired there, even for a moment. */
   async delete(id: number, opts: { ipAddress?: string; auditCtx?: AuditWriteContext } = {}): Promise<void> {
     const userId = actorUserId();
     const ctx = await auditContextOf(opts.auditCtx, MASTER_TENANT_ID, opts.ipAddress);
+    const actor: DbActor = currentDbContext()?.actor ?? { type: 'anonymous', name: 'unscoped' };
+    const allowed = id !== MASTER_TENANT_ID && await switchToNone(async () => {
+      const res = await db.raw('SELECT obligarth.ctx_actor_is_platform_admin() AS ok') as { rows: Array<{ ok: boolean }> };
+      return res.rows[0]?.ok === true;
+    });
+    const edge = allowed ? await switchToNone(() => appleTenants.retireBeforeDeletion(id, actor)) : 'no_edge_tenant';
+    try {
+      await tenantService.deleteHere(id, userId, ctx);
+    } catch (err) {
+      if (edge === 'retiring') await switchToNone(() => appleTenants.restore(id, actor)).catch(() => undefined);
+      throw err;
+    }
+  },
+
+  /** The deletion in the brain (delete, above): one transaction, context 'none' of the caller. */
+  async deleteHere(id: number, userId: number | null, ctx: AuditWriteContext): Promise<void> {
     await switchToNone(() => db.transaction(async (trx) => {
       const tenant = await trx('tenants').where({ id }).first('id', 'slug') as { id: number; slug: string } | undefined;
       const { auditEntry } = await vault.shredTenantKeys(trx, id, { userId }, { audit: 'return' });

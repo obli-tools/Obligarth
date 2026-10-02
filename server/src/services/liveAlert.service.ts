@@ -26,6 +26,13 @@ export interface LiveAlertRow {
   message: string;
   navigateTo: string | null;
   stableKey: string | null;
+  /** Catalogue kind of an alert of a module (apple: integration-apple-edge
+   *  §12.1); null for the core's own alerts. */
+  kind?: string | null;
+  /** Translatable text (I11): the console renders t(`${i18nKey}.title`,
+   *  i18nParams) and falls back on title/message. */
+  i18nKey?: string | null;
+  i18nParams?: Record<string, string | number | boolean> | null;
   // ISO timestamp when the user marked it read, or null when unread.
   // MUST be `readAt` (not `read`) to match the shared LiveAlert contract
   // the client reads — the client checks `!alert.readAt`. A previous
@@ -45,6 +52,9 @@ function rowToAlert(row: Record<string, unknown>): LiveAlertRow {
     message: row.message as string,
     navigateTo: row.navigate_to as string | null,
     stableKey: row.stable_key as string | null,
+    kind: (row.kind as string | null | undefined) ?? null,
+    i18nKey: (row.i18n_key as string | null | undefined) ?? null,
+    i18nParams: (row.i18n_params as Record<string, string | number | boolean> | null | undefined) ?? null,
     readAt: row.read_at ? new Date(row.read_at as string | Date).toISOString() : null,
     createdAt: (row.created_at as Date).toISOString(),
   };
@@ -146,7 +156,7 @@ function groupByTenant(rows: TenantRow[]): Map<number, number[]> {
  * Tell the open clients of each tenant that these rows left the lists:
  * NOTIFICATION_RESOLVED `{ ids }`, same room as NOTIFICATION_NEW.
  */
-function emitResolved(rows: TenantRow[]): void {
+export function emitResolved(rows: TenantRow[]): void {
   if (!_io || rows.length === 0) return;
   for (const [tenantId, ids] of groupByTenant(rows)) {
     _io.to(`tenant:${tenantId}:notifications`).emit(SocketEvents.NOTIFICATION_RESOLVED, { ids });
@@ -197,12 +207,13 @@ function insertValues(tenantId: number, opts: AddOpts): Record<string, unknown> 
 }
 
 /**
- * Keep only the newest 200 rows per tenant. Active rows are kept first so
+ * Keep only the newest 200 rows per tenant (exported for the delivery job of
+ * a module's alerts: apple/alerts/service.ts). Active rows are kept first so
  * the hidden (resolved) history of a flapping device can never push a
  * still-open alert out. (Active rows of a deleted device do not pile up:
  * device deletion and cleanOrphans resolve them.)
  */
-async function trimTenant(tenantId: number): Promise<void> {
+export async function trimTenant(tenantId: number): Promise<void> {
   const res = await db.raw(
     `DELETE FROM live_alerts WHERE tenant_id = ? AND id NOT IN (
        SELECT id FROM live_alerts WHERE tenant_id = ?
@@ -217,8 +228,9 @@ async function trimTenant(tenantId: number): Promise<void> {
   emitResolved(droppedActive.map((r) => ({ id: r.id, tenant_id: r.tenant_id })));
 }
 
-/** Enrich with the tenant name and broadcast NOTIFICATION_NEW. */
-async function announce(row: Record<string, unknown>, tenantId: number): Promise<LiveAlertRow> {
+/** Enrich with the tenant name and broadcast NOTIFICATION_NEW (exported for
+ *  the delivery job of a module's alerts). */
+export async function announce(row: Record<string, unknown>, tenantId: number): Promise<LiveAlertRow> {
   const alert = rowToAlert(row);
   const tenantRow = await db('tenants').where({ id: tenantId }).select('name').first() as { name: string } | undefined;
   const enriched: LiveAlertRow = { ...alert, tenantName: tenantRow?.name ?? '' };

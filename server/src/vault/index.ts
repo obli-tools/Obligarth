@@ -8,7 +8,7 @@ import { registerCoreSecrets } from './coreSecrets';
 registerCoreSecrets();
 
 export {
-  vault, VAULT_NAMESPACE, VaultStartupError, type SecretLocator, type VaultCallOptions, type ActorRef,
+  vault, VAULT_NAMESPACE, VaultStartupError, setEdgeKekIdSource, type SecretLocator, type VaultCallOptions, type ActorRef,
 } from './vault';
 export { VaultError, isVaultError, type VaultErrorCode } from './errors';
 export {

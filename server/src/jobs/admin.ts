@@ -3,6 +3,7 @@ import { PGBOSS_SCHEMA_VERSION, PGBOSS_VERSION } from './boss';
 import { DEAD_LETTER_QUEUE, QUEUE_NAME_RE } from './registry';
 import type { JobsRuntime } from './runtime';
 import { jobStatus, type JobStatusRow } from './status';
+import { outboxOverview } from './outbox/deadLetters';
 
 // =============================================================================
 // Administration of the jobs (platform administrators of the master tenant,
@@ -55,7 +56,9 @@ export function createJobsAdmin(runtime: JobsRuntime) {
     /** GET /api/admin/jobs */
     async overview() {
       const b = boss();
-      const [queues, status, deadLetters] = await Promise.all([b.getQueues(), jobStatus.list(), runtime.deadLetterCounts()]);
+      const [queues, status, deadLetters, outbox] = await Promise.all([
+        b.getQueues(), jobStatus.list(), runtime.deadLetterCounts(), outboxOverview(),
+      ]);
       const byQueue = new Map(status.filter((s) => s.key === '').map((s) => [s.queue, s]));
       const tenantRows = status.filter((s) => s.key !== '');
       const registered = new Map(runtime.registry.list().map((d) => [d.name, d]));
@@ -94,8 +97,11 @@ export function createJobsAdmin(runtime: JobsRuntime) {
           total: deadLetters.reduce((n, d) => n + d.count, 0),
           bySource: Object.fromEntries(deadLetters.map((d) => [d.source, d.count])),
         },
-        // The apple-edge outbox consumer arrives with the integration (lot B).
-        outbox: { consumer: 'disabled', pending: null, retrying: null, oldestPendingSeconds: null, deadLetters: null },
+        // The apple-edge outbox consumer (outbox/; details: GET /api/admin/outbox).
+        outbox: {
+          consumer: outbox.consumer, pending: outbox.pending, retrying: outbox.retrying,
+          oldestPendingSeconds: outbox.oldestPendingSeconds, deadLetters: outbox.deadLetters,
+        },
       };
     },
 

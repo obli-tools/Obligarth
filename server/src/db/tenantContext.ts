@@ -1,8 +1,8 @@
 import type { Knex } from 'knex';
 import { db } from './index';
 import {
-  DbContextMissingError, LEASE_SEARCH_PATH, actorToken, asNone, asTenant, assertValidContext, currentDbContext, encodeContext,
-  leaseKey, runWithDbContext, type DbActor, type DbContext,
+  DbContextDeniedError, DbContextMissingError, LEASE_SEARCH_PATH, actorToken, asNone, asTenant, assertValidContext, currentDbContext,
+  encodeContext, leaseKey, runWithDbContext, type DbActor, type DbContext,
 } from './context';
 import type { PgConnection } from './contextPgClient';
 import { logger } from '../utils/logger';
@@ -28,6 +28,31 @@ export function withTenantTransaction<T>(
 const SET_LOCAL_WITH_ROLE_SQL =
   "SELECT set_config('role', ?, true), set_config('obligarth.ctx', ?, true), set_config('obligarth.ctx_sig', ?, true), " +
   "set_config('search_path', ?, true)";
+
+/** Alphabet of the values of a context (role, context text, signature,
+ *  search_path): what encodeContext produces from a valid context. */
+const CONTEXT_LITERAL_RE = /^[A-Za-z0-9_.:|, -]*$/;
+
+/** The statement applyTenantContext sends, its values written as literals,
+ *  for a transaction that switches its context once per event in a single
+ *  round trip joined to the event's SAVEPOINT (outbox consumer,
+ *  jobs/outbox/apply.ts: file-durable L2). The values are the context's own
+ *  (role name, context text, HMAC signature, search_path), built here from a
+ *  checked context and refused outside their alphabet before being quoted:
+ *  no caller value reaches the SQL. tenantId null: no tenant. */
+export function tenantContextStatement(tenantId: number | null, actor: DbActor): string {
+  const ctx: DbContext = tenantId === null
+    ? { kind: 'none', tenantId: null, actor, grantId: null, origin: 'job' }
+    : { kind: 'tenant', tenantId, actor, grantId: null, origin: 'job' };
+  assertValidContext(ctx);
+  const enc = encodeContext(ctx);
+  const lit = (v: string): string => {
+    if (!CONTEXT_LITERAL_RE.test(v)) throw new DbContextDeniedError('context value outside its alphabet');
+    return `'${v}'`;
+  };
+  return `SELECT set_config('role', ${lit(enc.role)}, true), set_config('obligarth.ctx', ${lit(enc.ctx)}, true), `
+    + `set_config('obligarth.ctx_sig', ${lit(enc.sig)}, true), set_config('search_path', ${lit(LEASE_SEARCH_PATH)}, true)`;
+}
 
 /** Low level, for a transaction that serves several tenants one after the
  *  other (outbox consumer, inside its SAVEPOINT per event): transaction-local
