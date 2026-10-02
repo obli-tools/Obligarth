@@ -69,8 +69,8 @@ export async function deviceList(tenantId: number, rawIds: unknown): Promise<str
   const list = ids(rawIds);
   if (!list.length) return 'no device';
   const rows = await db('devices').where({ tenant_id: tenantId }).whereIn('id', list)
-    .select('id', 'hostname', 'display_name') as Array<{ id: number; hostname: string | null; display_name: string | null }>;
-  const byId = new Map(rows.map((r) => [Number(r.id), r.display_name || r.hostname || `#${r.id}`]));
+    .select('id', 'label') as Array<{ id: number; label: string | null }>;
+  const byId = new Map(rows.map((r) => [Number(r.id), r.label || `#${r.id}`]));
   const names = list.map((id) => byId.get(id) ?? `#${id} (not in this tenant)`);
   return `${list.length} device${list.length > 1 ? 's' : ''}: ${capList(names)}`;
 }

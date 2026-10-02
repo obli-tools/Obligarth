@@ -1,20 +1,21 @@
 import { z } from 'zod';
 import { db } from '../db';
 import { forEachTenant } from '../db/tenantContext';
-import { registerFleetSizeProvider, registerGuardedAction, type GuardedActionDef } from '../guard';
+import { registerFleetSizeProvider, registerGuardedAction, registerOwnershipProvider, type DeviceOwnership, type GuardedActionDef } from '../guard';
 import { JobError, registerJob, type JobContext } from '../jobs';
-import { registerAuditResourceName } from '../services/audit.service';
-import { registerApprovalExecutor, registerApprovalRequestType } from '../services/approval.service';
+import { registerApprovalExecutor } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { deviceService } from '../services/device.service';
-import { executeBulkDelete, executeChangeGroup, executeDeviceRequest } from '../services/deviceApproval';
+import { executeBulkDelete, executeChangeGroup } from '../services/deviceApproval';
 import { registerSecretColumn } from '../vault';
 
 // =============================================================================
 // DEVICE REGISTRY — its hooks into the core's registries (durable jobs,
-// audit names, two-step approvals, restrictions matrix, sealed columns of the
-// vault), registered here and
+// two-step approvals, restrictions matrix, guarded deletion of records, the
+// guard engine's providers, sealed columns of the vault), registered here and
 // only here; index.ts calls registerDeviceModule() before anything starts.
+// The MDM data model (mdm/index.ts) adds its own: end users, episodes,
+// ownership change, console API.
 // Registration order is kept where it shows: start-up order, order of the
 // restrictions matrix.
 // =============================================================================
@@ -39,18 +40,6 @@ export function registerDeviceModule(): void {
     if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed, ${ok} done`);
     return { output: { tenants: ok } };
   };
-
-  // Inventory retention (every 6 h). Leaves with the agent's inventory
-  // (data model, lot B).
-  registerJob({
-    name: 'devices.inventory-retention',
-    scope: 'platform',
-    description: 'Delete software inventory scans older than inventory_retention_days',
-    payload: empty,
-    schedule: { cron: '25 */6 * * *' },
-    timeoutSeconds: 900,
-    handler: perTenant((tenantId) => deviceService.pruneInventory(tenantId)),
-  });
 
   // Daily fleet snapshot (dashboard deltas, timeseries chart); also at start
   // (idempotent upsert), so a fresh deploy has a "today" row right away.
@@ -101,17 +90,15 @@ export function registerDeviceModule(): void {
     onLoss: 'null',
   });
 
-  // ── Audit: names of the resources (audit.service) ─────────────────────────
-  registerAuditResourceName('api_key', 'agent_api_keys');                     // enrollment keys
-
   // ── Two-step approvals: executors (approval.service) ──────────────────────
   registerApprovalExecutor('change_group', executeChangeGroup);                // bulk group change
   // Record deletion goes through the guard engine (audit-durci §10.2): a
-  // request filed before it (delete_devices, device_uninstall) is refused.
+  // request filed before it (delete_devices) is refused, with its reason.
   registerApprovalExecutor('delete_devices', executeBulkDelete);
-  registerApprovalRequestType('device_uninstall', executeDeviceRequest);
-  // The tenant transfer is gone (rls-tenant R10): no 'transfer_tenant'
-  // executor; a request filed before finds none and is refused.
+  // The agent's requests (device_uninstall) and the tenant transfer
+  // (transfer_tenant, rls-tenant R10) are gone with the agent
+  // (modele-donnees-mdm §11.1, §10.7): no executor, a request filed before
+  // finds none and is refused.
 
   // ── Guarded action: deletion of device records (audit-durci §10.2) ────────
   // Floors of D23: one or two devices 'sensitive' (step-up, the trusted IP
@@ -120,11 +107,20 @@ export function registerDeviceModule(): void {
   // erase has them); the whole fleet refused; typed confirmation. Also the
   // first entry of the restrictions matrix (registered here, in its order).
   registerGuardedAction(deviceDeleteAction);
-  // The active fleet of a tenant (hourly cap, whole fleet): every device
-  // until the MDM's model (lot B) registers the managed ones.
+  // The active fleet of a tenant (hourly cap, whole fleet): the devices under
+  // management (every enrollment state but 'unenrolled').
   registerFleetSizeProvider(async (tenantId) => {
-    const row = await db('devices').where({ tenant_id: tenantId }).count<{ n: string }[]>('id as n').first();
+    const row = await db('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled')
+      .count<{ n: string }[]>('id as n').first();
     return Number(row?.n ?? 0);
+  });
+  // The ownership of devices (devices.ownership, never unknown: modele-donnees-mdm DM25), read by the guard
+  // engine for the actions that refuse an ownership (erasure of a personal device…).
+  registerOwnershipProvider(async (tenantId, deviceIds) => {
+    if (deviceIds.length === 0) return new Map();
+    const rows = await db('devices').whereIn('id', deviceIds).andWhere({ tenant_id: tenantId }).select('id', 'ownership') as
+      Array<{ id: number; ownership: DeviceOwnership }>;
+    return new Map(rows.map((r) => [Number(r.id), r.ownership]));
   });
 
   // ── Restrictions matrix (restriction.service), in the order it lists them ─
@@ -138,12 +134,14 @@ export function registerDeviceModule(): void {
 }
 
 /**
- * device.delete: deletion of device records (inventory, licenses, alerts
- * and reports' references purged with them, deviceService.bulkDelete), in
- * the action's tenant. Revalidation: the device still exists in the tenant.
- * Idempotent: a device already gone is skipped. No serial number in the
- * registry before the MDM's model (lot B, devices.serial_number): the
- * execution entry carries the ids (J29: noted in the specification).
+ * device.delete: deletion of device records out of management (inventory,
+ * episodes, satellites, effective state cascade; licenses, alerts and the
+ * reports' references purged with them, deviceService.bulkDelete), in the
+ * action's tenant. A record under management is never deleted (it leaves
+ * management first, ENR-17: devices_guard_delete in the base). Revalidation:
+ * the device still exists in the tenant and is still out of management.
+ * Idempotent: a device already gone is skipped. The execution entry carries
+ * the serial numbers the registry kept (J29).
  */
 const deviceDeleteAction: GuardedActionDef<Record<string, never>> = {
   key: 'device.delete',
@@ -162,12 +160,23 @@ const deviceDeleteAction: GuardedActionDef<Record<string, never>> = {
   tenantCapability: 'devices.manage',
   category: 'Device',
   defaultLevel: 'sensitive',
+  async serialsOf(tenantId, deviceIds) {
+    const rows = await db('devices').whereIn('id', deviceIds).andWhere({ tenant_id: tenantId }).select('id', 'serial_number') as
+      Array<{ id: number; serial_number: string | null }>;
+    return new Map(rows.map((r) => [Number(r.id), r.serial_number ?? '']));
+  },
   async revalidate(ctx) {
-    const present = new Set((await db('devices').whereIn('id', ctx.deviceIds).andWhere({ tenant_id: ctx.tenantId }).pluck('id') as number[]).map(Number));
-    return new Map(ctx.deviceIds.map((id) => [id, present.has(id) ? 'ok' as const : { code: 'not_found' }]));
+    const rows = await db('devices').whereIn('id', ctx.deviceIds).andWhere({ tenant_id: ctx.tenantId }).select('id', 'enrollment_state') as
+      Array<{ id: number; enrollment_state: string }>;
+    const state = new Map(rows.map((r) => [Number(r.id), r.enrollment_state]));
+    return new Map(ctx.deviceIds.map((id) => {
+      const s = state.get(id);
+      if (s === undefined) return [id, { code: 'not_found' }];
+      return [id, s === 'unenrolled' ? 'ok' as const : { code: 'under_management' }];
+    }));
   },
   async execute(ctx, deviceIds) {
     const deleted = new Set((await deviceService.bulkDelete(deviceIds, ctx.tenantId)).map(Number));
-    return new Map(deviceIds.map((id) => [id, deleted.has(id) ? { status: 'done' as const } : { status: 'skipped' as const, code: 'not_found' }]));
+    return new Map(deviceIds.map((id) => [id, deleted.has(id) ? { status: 'done' as const } : { status: 'skipped' as const, code: 'not_found_or_managed' }]));
   },
 };

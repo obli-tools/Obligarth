@@ -1,26 +1,123 @@
+import type { Knex } from 'knex';
 import { Server as SocketIOServer } from 'socket.io';
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { AppError } from '../middleware/errorHandler';
 import { JobError, safeErr } from '../jobs/errors';
-import { SocketEvents, isMasterTenant } from '@obligarth/shared';
-import type { Device, DeviceIdentityFingerprint } from '@obligarth/shared';
+import {
+  MDM_STALE_AFTER_DAYS_DEFAULT, SocketEvents, contactState, isMasterTenant, versionNum,
+  type AppleDeviceDetail, type ComplianceReason, type ContactState, type DeviceDetail, type DeviceFacets,
+  type DeviceSummary, type MdmFleetPoint, type MdmFleetSummary, type NanoEnrollType, type Ownership,
+} from '@obligarth/shared';
+import { collectedFields, privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
+import { staleAfterDaysOf } from '../mdm/settings';
 import type { TenantView } from './deviceScope.service';
+
+// =============================================================================
+// The device registry of the MDM (docs: modele-donnees-mdm §4, §10.2, §11.1):
+// list, record, facets, export, fleet summary and series, snapshots, the
+// operator's edits, the deletion of records out of management. Reads and
+// writes only the MDM columns of devices (version N: the columns of the removed
+// agent are neither read nor written; they leave with the contract step).
+// The contact of a device is derived from last_checkin_at, never stored; a
+// value the privacy rules do not collect is absent from the views (EX-19).
+// The master tenant's global view (TenantView) reaches every tenant: an
+// explicit flag of the route, never inferred from the tenant id.
+// =============================================================================
 
 /** The master tenant's global view, as the caller passed it (TenantView). */
 function isGlobalView(tenantId: number, view?: TenantView): boolean {
   return !!view?.globalView && isMasterTenant(tenantId);
 }
 
-// JSONB columns come back as either an already-parsed array (pg's default
-// when the driver knows it's JSONB) or as a raw string in some edge paths.
-// This shim normalises both shapes to a typed array, defaulting to [] on
-// corruption so a bad row never crashes the device read path.
-function safeParseFingerprints(raw: string): DeviceIdentityFingerprint[] {
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch { return []; }
+const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v ? new Date(String(v)).toISOString() : null);
+const nanoTypeOfMode = (mode: string): NanoEnrollType => (mode === 'user_enrollment' ? 'User Enrollment (Device)' : 'Device');
+const asArray = <T = unknown>(v: unknown): T[] => {
+  if (Array.isArray(v)) return v as T[];
+  if (typeof v === 'string') { try { const p = JSON.parse(v); return Array.isArray(p) ? p as T[] : []; } catch { return []; } }
+  return [];
+};
+const asObject = (v: unknown): Record<string, unknown> => {
+  if (v && typeof v === 'object' && !Array.isArray(v)) return v as Record<string, unknown>;
+  if (typeof v === 'string') { try { const p = JSON.parse(v); return p && typeof p === 'object' && !Array.isArray(p) ? p : {}; } catch { return {}; } }
+  return {};
+};
+
+/** Filters of GET /api/mdm/devices (§10.6). */
+export interface DeviceListFilters {
+  platform?: string[];
+  ownership?: string[];
+  enrollmentState?: string[];
+  contact?: ContactState[];
+  compliance?: string[];
+  config?: string[];
+  /** Devices whose OS version is below this one ('17.5'). */
+  osBelow?: string;
+  supervised?: boolean;
+  groupId?: number;
+  includeSubgroups?: boolean;
+  ungrouped?: boolean;
+  tags?: string[];
+  endUserId?: number;
+  /** Free text: label, names, serial number, model, end user. */
+  q?: string;
+  /** Global view only: a subset of tenants. */
+  tenantIds?: number[];
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
+  page?: number;
+  pageSize?: number;
+  /** Non-administrators: the devices their teams see (permissionService.getVisibleDeviceIds). */
+  visibleIds?: number[] | 'all';
+}
+
+/** Columns of a summary row (devices, its group, tenant and end user, the satellite's type). */
+const SUMMARY_COLUMNS = [
+  'devices.id', 'devices.uuid', 'devices.tenant_id', 'devices.group_id', 'devices.display_name', 'devices.label',
+  'devices.platform', 'devices.ownership', 'devices.enrollment_type', 'devices.management_mode', 'devices.supervised',
+  'devices.usage', 'devices.enrollment_state', 'devices.last_checkin_at', 'devices.compliance_state',
+  'devices.compliance_reasons', 'devices.config_state', 'devices.lost_mode_state', 'devices.os_version',
+  'devices.model', 'devices.model_name', 'devices.serial_number', 'devices.end_user_id', 'devices.tags',
+  'devices.enrolled_at', 'device_groups.name as group_name', 'tenants.name as tenant_name',
+  'end_users.display_name as end_user_display_name', 'end_users.email as end_user_email',
+];
+
+/** Columns of the record of one device, on top of the summary's. */
+const DETAIL_COLUMNS = [
+  'devices.description', 'devices.custom_fields', 'devices.os_build', 'devices.device_name',
+  'devices.storage_capacity_bytes', 'devices.storage_available_bytes', 'devices.unenrolled_at',
+  'devices.unenroll_reason', 'devices.purchase_date', 'devices.warranty_expiry', 'devices.warranty_vendor',
+  'devices.warranty_status', 'devices.expected_lifetime_years', 'devices.lifecycle_status',
+  'devices.enrollment_profile_id', 'devices.created_at', 'devices.updated_at',
+];
+
+/** Sortable columns: a whitelist, never the caller's text. */
+const SORT_COLUMNS: Record<string, string> = {
+  name: 'devices.label',
+  platform: 'devices.platform',
+  os: 'devices.os_version_num',
+  lastCheckin: 'devices.last_checkin_at',
+  enrolledAt: 'devices.enrolled_at',
+  group: 'device_groups.name',
+  state: 'devices.enrollment_state',
+  compliance: 'devices.compliance_state',
+  ownership: 'devices.ownership',
+  model: 'devices.model_name',
+};
+
+/** A cache of the privacy rules of a request: one resolution per (tenant, ownership, type). */
+class RulesCache {
+  private readonly cache = new Map<string, Promise<PrivacyRules>>();
+  get(tenantId: number, ownership: Ownership, mode: string): Promise<PrivacyRules> {
+    const type = nanoTypeOfMode(mode);
+    const key = `${tenantId}:${ownership}:${type}`;
+    let p = this.cache.get(key);
+    if (!p) {
+      p = privacyRulesFor(db, tenantId, ownership, type);
+      this.cache.set(key, p);
+    }
+    return p;
+  }
 }
 
 class DeviceService {
@@ -28,440 +125,286 @@ class DeviceService {
 
   setIO(io: SocketIOServer) { this.io = io; }
 
-  // ─── Row mapper ────────────────────────────────────────────────────────────
-  // The fields the removed agent used to report (metrics, privacy mode,
-  // airgap, watchdog, identity fingerprints…) are still mapped from their
-  // columns: the shared Device type declares them. Nothing writes them any
-  // more; they go with the future base migration.
-  rowToDevice(row: any): Device {
+  // ─── Views ────────────────────────────────────────────────────────────────
+
+  private async toSummary(row: any, rules: RulesCache, staleDays: Map<number, number>, now: Date): Promise<DeviceSummary> {
+    const tenantId = Number(row.tenant_id);
+    const r = await rules.get(tenantId, row.ownership, row.management_mode);
+    const summary: DeviceSummary = {
+      id: Number(row.id), uuid: row.uuid, tenantId,
+      label: row.label, displayName: row.display_name ?? null,
+      groupId: row.group_id === null || row.group_id === undefined ? null : Number(row.group_id),
+      groupName: row.group_name ?? null,
+      platform: row.platform, ownership: row.ownership, enrollmentMethod: row.enrollment_type,
+      managementMode: row.management_mode, supervised: !!row.supervised, usage: row.usage,
+      enrollmentState: row.enrollment_state,
+      contactState: contactState(row.last_checkin_at, now, staleDays.get(tenantId) ?? MDM_STALE_AFTER_DAYS_DEFAULT),
+      lastCheckinAt: iso(row.last_checkin_at),
+      complianceState: row.compliance_state, complianceReasons: asArray<ComplianceReason>(row.compliance_reasons),
+      configState: row.config_state, lostModeState: row.lost_mode_state,
+      osVersion: row.os_version ?? null, model: row.model ?? null, modelName: row.model_name ?? null,
+      endUser: row.end_user_id ? {
+        id: Number(row.end_user_id), displayName: row.end_user_display_name ?? null, email: row.end_user_email ?? null,
+      } : null,
+      tags: asArray<string>(row.tags).map(String),
+      enrolledAt: iso(row.enrolled_at),
+    };
+    if (row.tenant_name) summary.tenantName = row.tenant_name;
+    // Absent, never null, when the rules of the device's ownership do not collect it (EX-19).
+    if (r.storeSerialNumber) summary.serialNumber = row.serial_number ?? null;
+    return summary;
+  }
+
+  /** The base query of the registry, joined with the group, the tenant and the end user. */
+  private baseQuery(): Knex.QueryBuilder {
+    return db('devices')
+      .leftJoin('device_groups', function joinGroup() {
+        this.on('device_groups.id', '=', 'devices.group_id').andOn('device_groups.tenant_id', '=', 'devices.tenant_id');
+      })
+      .leftJoin('tenants', 'tenants.id', 'devices.tenant_id')
+      .leftJoin('end_users', function joinEndUser() {
+        this.on('end_users.id', '=', 'devices.end_user_id').andOn('end_users.tenant_id', '=', 'devices.tenant_id');
+      });
+  }
+
+  /** The tenants a list reaches: the request's, or every tenant (or the chosen ones) in the global view. */
+  private async listTenantIds(tenantId: number, view?: TenantView, tenantIds?: number[]): Promise<number[] | 'all'> {
+    if (!isGlobalView(tenantId, view)) return [tenantId];
+    const chosen = (tenantIds ?? []).map(Number).filter((n) => Number.isSafeInteger(n) && n > 0);
+    return chosen.length > 0 ? chosen : 'all';
+  }
+
+  /** The thresholds of mdmStaleAfterDays of the tenants a query reaches (every tenant: read them all). */
+  private async thresholds(scope: number[] | 'all'): Promise<Map<number, number>> {
+    if (scope !== 'all') return staleAfterDaysOf(scope);
+    const ids = (await db('tenants').pluck('id') as number[]).map(Number);
+    return staleAfterDaysOf(ids);
+  }
+
+  /** SQL of a tenant's stale threshold in days (a CASE over the tenants of the query). */
+  private staleDaysSql(thresholds: Map<number, number>): { sql: string; bindings: number[] } {
+    const pairs = [...thresholds.entries()].filter(([, d]) => d !== MDM_STALE_AFTER_DAYS_DEFAULT);
+    if (pairs.length === 0) return { sql: '?::int', bindings: [MDM_STALE_AFTER_DAYS_DEFAULT] };
     return {
-      id: row.id,
-      uuid: row.uuid,
-      tenantId: row.tenant_id,
-      // Surfaces only when the row was joined with `tenants` (master/god
-      // view queries do this so the UI can group devices by tenant).
-      tenantName: row.tenant_name ?? null,
-      groupId: row.group_id,
-      apiKeyId: row.api_key_id,
-      hostname: row.hostname,
-      displayName: row.display_name,
-      description: row.description,
-      ipLocal: row.ip_local,
-      ipPublic: row.ip_public,
-      macAddress: row.mac_address,
-      osType: row.os_type,
-      osName: row.os_name,
-      osVersion: row.os_version,
-      osBuild: row.os_build,
-      osArch: row.os_arch,
-      cpuModel: row.cpu_model,
-      cpuCores: row.cpu_cores,
-      ramTotalGb: row.ram_total_gb,
-      agentVersion: row.agent_version,
-      // No agent on this server: never an agent update to offer.
-      updateAvailable: false,
-      status: row.status,
-      approvalStatus: row.approval_status,
-      approvedBy: row.approved_by,
-      approvedAt: row.approved_at,
-      lastSeenAt: row.last_seen_at,
-      lastPushAt: row.last_push_at,
-      pushIntervalSeconds: row.push_interval_seconds,
-      scanIntervalSeconds: row.scan_interval_seconds ?? null,
-      overrideGroupSettings: row.override_group_settings,
-      maxMissedPushes: row.max_missed_pushes,
-      complianceRemediationEnabled: row.compliance_remediation_enabled ?? true,
-      privacyModeEnabled: row.privacy_mode_enabled ?? false,
-      privacyPasswordSet: row.privacy_password_set ?? false,
-      privacyPasswordSetAt: row.privacy_password_set_at ?? null,
-      airgapEnabled: row.airgap_enabled ?? false,
-      airgapEnabledAt: row.airgap_enabled_at ?? null,
-      virtualizationHostType: row.virtualization_host_type ?? null,
-      backupHostType: row.backup_host_type ?? null,
-      watchdogRestartCount: row.watchdog_restart_count ?? 0,
-      watchdogLastRestartAt: row.watchdog_last_restart_at ?? null,
-      agentFlavor: (row.agent_flavor ?? 'modern') as 'modern' | 'legacy',
-      lastLoggedInUser: row.last_logged_in_user ?? null,
-      lastRebootAt: row.last_reboot_at ?? null,
-      rebootPending: row.reboot_pending ?? false,
-      timezone: row.timezone ?? null,
-      tags: row.tags || [],
-      customFields: row.custom_fields || {},
-      thresholdsOverride: row.thresholds_override
-        ? (typeof row.thresholds_override === 'string' ? JSON.parse(row.thresholds_override) : row.thresholds_override)
-        : {},
-      metricAlertsEnabled: typeof row.metric_alerts_enabled === 'boolean' ? row.metric_alerts_enabled : null,
-      displayConfig: row.display_config || {},
-      sensorDisplayNames: row.sensor_display_names || {},
-      notificationTypes: row.notification_types || {},
-      latestMetrics: row.latest_metrics || {},
-      peakMetrics: row.peak_metrics || null,
-      geoLat: row.geo_lat ? parseFloat(row.geo_lat) : null,
-      geoLng: row.geo_lng ? parseFloat(row.geo_lng) : null,
-      geoCity: row.geo_city ?? null,
-      geoCountry: row.geo_country ?? null,
-      geoRegion: row.geo_region ?? null,
-      purchaseDate: row.purchase_date ?? null,
-      warrantyExpiry: row.warranty_expiry ?? null,
-      warrantyVendor: row.warranty_vendor ?? null,
-      warrantyStatus: row.warranty_status ?? 'unknown',
-      expectedLifetimeYears: row.expected_lifetime_years ?? null,
-      lifecycleStatus: row.lifecycle_status ?? 'unknown',
-      scheduleAlert: row.schedule_alert ? (typeof row.schedule_alert === 'string' ? JSON.parse(row.schedule_alert) : row.schedule_alert) : null,
-      uninstallAt: row.uninstall_at ? new Date(row.uninstall_at).toISOString() : null,
-      identityFingerprints: Array.isArray(row.identity_fingerprints)
-        ? row.identity_fingerprints
-        : (typeof row.identity_fingerprints === 'string' ? safeParseFingerprints(row.identity_fingerprints) : []),
-      duplicateAgentIdSuspected: row.duplicate_agent_id_suspected ?? false,
-      duplicateAgentIdAcknowledgedAt: row.duplicate_agent_id_acknowledged_at
-        ? new Date(row.duplicate_agent_id_acknowledged_at).toISOString()
-        : null,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      sql: `(CASE devices.tenant_id ${pairs.map(() => 'WHEN ?::int THEN ?::int').join(' ')} ELSE ?::int END)`,
+      bindings: [...pairs.flat(), MDM_STALE_AFTER_DAYS_DEFAULT],
     };
   }
 
-  // ─── CRUD ─────────────────────────────────────────────────────────────────
-  async getDevices(tenantId: number, filters?: {
-    groupId?: number; includeSubgroups?: boolean; status?: string; approvalStatus?: string;
-    search?: string; osType?: string; page?: number; pageSize?: number;
-    sortBy?: string; sortOrder?: 'asc' | 'desc';
-    /** When true, only return devices with NULL group_id (the "Ungrouped"
-     *  pseudo-group in the sidebar). Takes precedence over groupId. */
-    ungrouped?: boolean;
-    /** Dashboard hero "Injoignables 72h" → /devices?stale=72. Filter rows
-     *  whose last_seen_at is older than the threshold (in hours). */
-    staleHours?: number;
-    /** Lot C 3-tier OS filter: marketing name (e.g. "Microsoft Windows 10
-     *  IoT Enterprise LTSC 2021"). Accepts a single string (legacy
-     *  single-select callers) OR an array of strings — multi-select
-     *  in the DeviceTable picker. Translated to a WHERE IN clause. */
-    osName?: string | string[];
-    /** Lot C 3-tier OS filter: build / version string (e.g.
-     *  "10.0.19044.7184"). Same single/multi semantics as osName. */
-    osVersion?: string | string[];
-    /** Restrict to devices carrying ANY of these tags (OR semantics).
-     *  Empty/missing means no filter. Tags are matched against the
-     *  JSONB array stored on `devices.tags`. */
-    tags?: string[];
-    /** Master-only: narrow the god-view to a subset of tenants. Sent
-     *  by the DeviceTable tenant chips so the master admin can focus
-     *  on one customer without losing the cross-tenant view they're
-     *  attached to. Ignored without the global view. */
-    tenantIds?: number[];
-  }, view?: TenantView): Promise<{ items: Device[]; total: number; page: number; pageSize: number }> {
-    const page = Math.max(1, filters?.page ?? 1);
-    // Cap is intentionally high to support the sidebar which needs to render
-    // the entire approved fleet in one request. Callers that paginate the
-    // UI (DeviceTable) still use reasonable page sizes from the UI controls.
-    const pageSize = Math.min(10000, Math.max(1, filters?.pageSize ?? 100));
-
-    // The global view (platform administrator on the master tenant) drops
-    // the tenant_id filter; `tenants` is joined so each row carries a
-    // `tenant_name` for the UI to group/sort by. Every other caller stays
-    // strictly scoped, on the master tenant too.
-    const isMaster = isGlobalView(tenantId, view);
-    let q = db('devices')
-      .leftJoin('device_groups', 'devices.group_id', 'device_groups.id')
-      .leftJoin('tenants', 'devices.tenant_id', 'tenants.id');
-    if (!isMaster) q = q.where({ 'devices.tenant_id': tenantId });
-    // Global-view narrow filter: subset of tenants. Silently dropped
-    // for every other caller so a crafted query can't widen scope.
-    if (isMaster && Array.isArray(filters?.tenantIds) && filters!.tenantIds!.length > 0) {
-      q = q.whereIn('devices.tenant_id', filters!.tenantIds!.map(Number).filter(Number.isFinite));
+  private async applyFilters(q: Knex.QueryBuilder, tenantId: number, f: DeviceListFilters, view: TenantView | undefined,
+    thresholds: Map<number, number>): Promise<void> {
+    const scope = await this.listTenantIds(tenantId, view, f.tenantIds);
+    if (scope !== 'all') q.whereIn('devices.tenant_id', scope);
+    if (f.visibleIds !== undefined && f.visibleIds !== 'all') {
+      if (f.visibleIds.length === 0) q.whereRaw('false');
+      else q.whereIn('devices.id', f.visibleIds);
     }
-    // Never show pending_uninstall devices in normal listings
-    q = q.whereNot({ 'devices.status': 'pending_uninstall' });
-    if (filters?.ungrouped) {
-      // "Ungrouped" pseudo-filter — devices without any group. Takes
-      // precedence over groupId so an accidental ungrouped=true+groupId
-      // combination stays predictable.
-      q = q.whereNull('devices.group_id');
-    } else if (filters?.groupId) {
-      if (filters.includeSubgroups) {
-        // Include devices from all descendant groups via closure table
-        const descendants = await db('device_group_closure')
-          .where('ancestor_id', filters.groupId)
-          .select('descendant_id');
-        const allGroupIds = [filters.groupId, ...descendants.map((d: any) => d.descendant_id)];
-        q = q.whereIn('devices.group_id', allGroupIds);
+    const inList = (col: string, values: string[] | undefined) => {
+      if (Array.isArray(values) && values.length > 0) q.whereIn(col, values);
+    };
+    inList('devices.platform', f.platform);
+    inList('devices.ownership', f.ownership);
+    inList('devices.enrollment_state', f.enrollmentState);
+    inList('devices.compliance_state', f.compliance);
+    inList('devices.config_state', f.config);
+    if (typeof f.supervised === 'boolean') q.where('devices.supervised', f.supervised);
+    if (f.osBelow) {
+      const below = versionNum(f.osBelow);
+      if (below === null) throw new AppError(400, 'Invalid OS version', 'invalidRequest');
+      q.where('devices.os_version_num', '<', below);
+    }
+    if (f.ungrouped) {
+      q.whereNull('devices.group_id');
+    } else if (f.groupId) {
+      if (f.includeSubgroups) {
+        q.whereIn('devices.group_id', db('device_group_closure').where('ancestor_id', f.groupId).select('descendant_id'));
       } else {
-        q = q.where({ 'devices.group_id': filters.groupId });
+        q.where('devices.group_id', f.groupId);
       }
     }
-    if (filters?.status === 'connected') {
-      // Virtual status used by the dashboard "En ligne" KPI link —
-      // expands to every reachable status (online / warning / critical /
-      // updating). Keeps the URL ?status=connected human-friendly without
-      // burning a dedicated multi-value query parameter convention.
-      q = q.whereIn('devices.status', ['online', 'warning', 'critical', 'updating']);
-    } else if (filters?.status === 'disconnected') {
-      // Virtual status for the dashboard "Hors ligne" KPI link — offline
-      // and update_error (an update that never completed).
-      q = q.whereIn('devices.status', ['offline', 'update_error']);
-    } else if (filters?.status === 'outdated') {
-      // Former virtual status of the "agent update available" link: no agent
-      // on this server, so no device matches (and the value never reaches
-      // the device_status enum).
-      q = q.whereRaw('false');
-    } else if (filters?.status) {
-      q = q.where({ 'devices.status': filters.status });
+    if (Array.isArray(f.tags) && f.tags.length > 0) {
+      // jsonb ?| text[]: the operator's '?' escaped for Knex.
+      q.whereRaw('devices.tags \\?| ?::text[]', [f.tags]);
     }
-    if (filters?.osType) q = q.where({ 'devices.os_type': filters.osType });
-    if (filters?.osName) {
-      const arr = Array.isArray(filters.osName) ? filters.osName : [filters.osName];
-      if (arr.length === 1) q = q.where({ 'devices.os_name': arr[0] });
-      else if (arr.length > 1) q = q.whereIn('devices.os_name', arr);
+    if (f.endUserId) q.where('devices.end_user_id', f.endUserId);
+    if (Array.isArray(f.contact) && f.contact.length > 0) {
+      const days = this.staleDaysSql(thresholds);
+      q.where(function contact() {
+        for (const c of f.contact!) {
+          if (c === 'never') this.orWhereNull('devices.last_checkin_at');
+          else if (c === 'recent') this.orWhereRaw("devices.last_checkin_at >= now() - interval '24 hours'");
+          else if (c === 'quiet') {
+            this.orWhereRaw(`devices.last_checkin_at < now() - interval '24 hours'
+              AND devices.last_checkin_at >= now() - make_interval(days => ${days.sql})`, days.bindings);
+          } else if (c === 'stale') {
+            this.orWhereRaw(`devices.last_checkin_at < now() - make_interval(days => ${days.sql})`, days.bindings);
+          }
+        }
+      });
     }
-    if (filters?.osVersion) {
-      const arr = Array.isArray(filters.osVersion) ? filters.osVersion : [filters.osVersion];
-      if (arr.length === 1) q = q.where({ 'devices.os_version': arr[0] });
-      else if (arr.length > 1) q = q.whereIn('devices.os_version', arr);
-    }
-    if (filters?.approvalStatus === 'suspended') {
-      q = q.where({ 'devices.status': 'suspended' });
-    } else if (filters?.approvalStatus) {
-      q = q.where({ 'devices.approval_status': filters.approvalStatus });
-    }
-    if (typeof filters?.staleHours === 'number' && filters.staleHours > 0) {
-      const cutoff = new Date(Date.now() - filters.staleHours * 60 * 60 * 1000);
-      q = q.where('devices.last_seen_at', '<', cutoff);
-    }
-    // Tags filter — `tags` is a JSONB array of strings on the
-    // devices table. The Postgres `?|` operator returns true when
-    // the JSONB value contains ANY of the given keys, which is the
-    // OR-semantics we want for the chip-style filter ("show devices
-    // with any of these tags"). The `?|` operator collides with
-    // knex's own `?` parameter placeholder, so we escape it as
-    // `\\?|`. The text[] cast lets us pass a JS array directly.
-    if (Array.isArray(filters?.tags) && filters!.tags.length > 0) {
-      q = q.whereRaw('devices.tags \\?| ?::text[]', [filters!.tags]);
-    }
-    if (filters?.search) q = q.where(function() {
-      const pat = `%${filters.search}%`;
-      // devices.uuid is the PG `uuid` type — ILIKE refuses to match it
-      // directly, so cast to text. devices.tags is a JSONB array, also
-      // cast to text so a substring match across all tag values works.
-      // Other columns are varchar / text — plain ILIKE is fine.
-      this.whereILike('devices.hostname', pat)
+    if (f.q && f.q.trim()) {
+      const pat = `%${f.q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+      q.where(function search() {
+        this.whereILike('devices.label', pat)
           .orWhereILike('devices.display_name', pat)
-          .orWhereILike('devices.ip_local', pat)
-          .orWhereILike('devices.ip_public', pat)
-          .orWhereILike('devices.mac_address', pat)
-          .orWhereILike('devices.last_logged_in_user', pat)
-          .orWhereILike('devices.os_name', pat)
-          .orWhereILike('devices.os_version', pat)
-          .orWhereILike('devices.geo_city', pat)
-          .orWhereILike('devices.geo_country', pat)
-          .orWhereILike('devices.description', pat)
+          .orWhereILike('devices.device_name', pat)
+          .orWhereILike('devices.serial_number', pat)
+          .orWhereILike('devices.model', pat)
+          .orWhereILike('devices.model_name', pat)
+          .orWhereILike('end_users.display_name', pat)
+          .orWhereILike('end_users.email', pat)
+          .orWhereILike('end_users.external_id', pat)
           .orWhereRaw('devices.uuid::text ILIKE ?', [pat])
           .orWhereRaw('devices.tags::text ILIKE ?', [pat]);
-    });
-
-    const countResult = await q.clone().count('devices.id as count').first();
-    const total = Number(countResult?.count ?? 0);
-
-    // Sortable columns. Empty/missing (or unknown) sortBy falls back to the
-    // device's enrolment order (devices.id ASC), which is "the order they
-    // were added" — the user expects this default rather than alpha-sort by
-    // hostname when no explicit sort column is selected.
-    const SORT_MAP: Record<string, string> = {
-      name: 'devices.hostname', status: 'devices.status', os: 'devices.os_type',
-      lastSeen: 'devices.last_seen_at', group: 'device_groups.name',
-    };
-    const sortDir = filters?.sortOrder === 'desc' ? 'desc' : 'asc';
-
-    // Sort by name = sort by the DISPLAYED label (display name, falling back to
-    // hostname when empty) so the table order matches the sidebar / dashboard
-    // (e.g. "003-WEB, 015-DB, 017-APP" rather than raw hostname
-    // order APP/DB/WEB).
-    const nameSortExpr = `COALESCE(NULLIF(devices.display_name, ''), devices.hostname)`;
-
-    // Sort by status = visual priority, NOT the raw enum string (whose
-    // alphabetical order is meaningless). Mirrors the sidebar tiers:
-    //   critical > warning > updating > other > offline > online
-    // Offline is the lowest before online on purpose (a workstation powering
-    // off is normal). asc → most-urgent first.
-    const statusSortExpr = `CASE devices.status
-        WHEN 'critical' THEN 0
-        WHEN 'warning' THEN 1
-        WHEN 'updating' THEN 2
-        WHEN 'offline' THEN 4
-        WHEN 'online' THEN 5
-        ELSE 3 END`;
-
-    let qOrdered = q;
-    if (filters?.sortBy === 'name') {
-      qOrdered = qOrdered.orderByRaw(`${nameSortExpr} ${sortDir}`);
-    } else if (filters?.sortBy === 'status') {
-      qOrdered = qOrdered.orderByRaw(`${statusSortExpr} ${sortDir}, ${nameSortExpr} asc`);
-    } else if (filters?.sortBy && SORT_MAP[filters.sortBy]) {
-      qOrdered = qOrdered.orderBy(SORT_MAP[filters.sortBy], sortDir);
-    } else {
-      // No explicit sort → enrolment order (devices.id ASC).
-      qOrdered = qOrdered.orderBy('devices.id', 'asc');
+      });
     }
+  }
 
-    const rows = await qOrdered
-      .select('devices.*', 'device_groups.name as group_name', 'tenants.name as tenant_name')
-      .limit(pageSize).offset((page - 1) * pageSize);
-
-    const items = rows.map((row: any) => {
-      const device = this.rowToDevice(row);
-      (device as any).groupName = row.group_name ?? null;
-      return device;
-    });
-
+  /** The inventory list (GET /api/mdm/devices), paginated. */
+  async listDevices(tenantId: number, filters: DeviceListFilters = {}, view?: TenantView):
+    Promise<{ items: DeviceSummary[]; total: number; page: number; pageSize: number }> {
+    const page = Math.max(1, Math.floor(filters.page ?? 1));
+    const pageSize = Math.min(1000, Math.max(1, Math.floor(filters.pageSize ?? 100)));
+    const scope = await this.listTenantIds(tenantId, view, filters.tenantIds);
+    const thresholds = await this.thresholds(scope);
+    const q = this.baseQuery();
+    await this.applyFilters(q, tenantId, filters, view, thresholds);
+    const total = Number((await q.clone().clearSelect().count<{ n: string }[]>('devices.id as n').first())?.n ?? 0);
+    const sortCol = filters.sortBy ? SORT_COLUMNS[filters.sortBy] : undefined;
+    const dir = filters.sortOrder === 'desc' ? 'desc' : 'asc';
+    if (sortCol) q.orderByRaw(`${sortCol} ${dir} NULLS LAST, devices.id asc`);
+    else q.orderBy('devices.id', 'asc');
+    const rows = await q.select(SUMMARY_COLUMNS).limit(pageSize).offset((page - 1) * pageSize);
+    const rules = new RulesCache();
+    const now = new Date();
+    const items = await Promise.all(rows.map((row: any) => this.toSummary(row, rules, thresholds, now)));
     return { items, total, page, pageSize };
   }
 
-  /** Legacy non-paginated list — used by sidebar and internal calls. */
-  async getDevicesList(tenantId: number, filters?: { groupId?: number; status?: string; approvalStatus?: string; search?: string }, view?: TenantView): Promise<Device[]> {
-    const result = await this.getDevices(tenantId, { ...filters, page: 1, pageSize: 10000 }, view);
-    return result.items;
+  /** The whole filtered list, for the export (50 000 rows at most). */
+  async exportDevices(tenantId: number, filters: DeviceListFilters = {}, view?: TenantView): Promise<DeviceSummary[]> {
+    const scope = await this.listTenantIds(tenantId, view, filters.tenantIds);
+    const thresholds = await this.thresholds(scope);
+    const q = this.baseQuery();
+    await this.applyFilters(q, tenantId, filters, view, thresholds);
+    const sortCol = filters.sortBy ? SORT_COLUMNS[filters.sortBy] : undefined;
+    if (sortCol) q.orderByRaw(`${sortCol} ${filters.sortOrder === 'desc' ? 'desc' : 'asc'} NULLS LAST, devices.id asc`);
+    else q.orderBy('devices.id', 'asc');
+    const rows = await q.select(SUMMARY_COLUMNS).limit(50_000);
+    const rules = new RulesCache();
+    const now = new Date();
+    return Promise.all(rows.map((row: any) => this.toSummary(row, rules, thresholds, now)));
   }
 
-  /**
-   * Export-oriented query: same filter semantics as getDevices but no
-   * pagination cap, returns every matching row. Used by the /export endpoint
-   * to emit a full CSV/XLSX/PDF regardless of how many pages the UI is on.
-   */
-  async exportDevices(tenantId: number, filters?: {
-    groupId?: number; includeSubgroups?: boolean; status?: string; approvalStatus?: string;
-    search?: string; osType?: string; sortBy?: string; sortOrder?: 'asc' | 'desc';
-    ungrouped?: boolean;
-  }): Promise<Device[]> {
-    let q = db('devices')
-      .leftJoin('device_groups', 'devices.group_id', 'device_groups.id')
-      .where({ 'devices.tenant_id': tenantId });
-    q = q.whereNot({ 'devices.status': 'pending_uninstall' });
-    if (filters?.ungrouped) {
-      q = q.whereNull('devices.group_id');
-    } else if (filters?.groupId) {
-      if (filters.includeSubgroups) {
-        const descendants = await db('device_group_closure')
-          .where('ancestor_id', filters.groupId)
-          .select('descendant_id');
-        const allGroupIds = [filters.groupId, ...descendants.map((d: any) => d.descendant_id)];
-        q = q.whereIn('devices.group_id', allGroupIds);
-      } else {
-        q = q.where({ 'devices.group_id': filters.groupId });
+  /** Counters of the facets (GET /api/mdm/devices/facets): platform, ownership, states, OS version, model, tag. */
+  async getFacets(tenantId: number, view?: TenantView, visibleIds?: number[] | 'all'): Promise<DeviceFacets> {
+    const base = () => {
+      const q = db('devices');
+      if (!isGlobalView(tenantId, view)) q.where('devices.tenant_id', tenantId);
+      if (visibleIds !== undefined && visibleIds !== 'all') {
+        if (visibleIds.length === 0) q.whereRaw('false');
+        else q.whereIn('devices.id', visibleIds);
       }
-    }
-    if (filters?.status === 'connected') {
-      // Virtual status used by the dashboard "En ligne" KPI link —
-      // expands to every reachable status (online / warning / critical /
-      // updating). Keeps the URL ?status=connected human-friendly without
-      // burning a dedicated multi-value query parameter convention.
-      q = q.whereIn('devices.status', ['online', 'warning', 'critical', 'updating']);
-    } else if (filters?.status === 'disconnected') {
-      // Virtual status for the dashboard "Hors ligne" KPI link — offline
-      // and update_error (an update that never completed).
-      q = q.whereIn('devices.status', ['offline', 'update_error']);
-    } else if (filters?.status === 'outdated') {
-      // Former "agent update available" virtual status: nothing matches (see getDevices).
-      q = q.whereRaw('false');
-    } else if (filters?.status) {
-      q = q.where({ 'devices.status': filters.status });
-    }
-    if (filters?.osType) q = q.where({ 'devices.os_type': filters.osType });
-    if (filters?.approvalStatus === 'suspended') {
-      q = q.where({ 'devices.status': 'suspended' });
-    } else if (filters?.approvalStatus) {
-      q = q.where({ 'devices.approval_status': filters.approvalStatus });
-    }
-    if (filters?.search) q = q.where(function() {
-      const pat = `%${filters.search}%`;
-      // devices.uuid is the PG `uuid` type — ILIKE refuses to match it
-      // directly, so cast to text. devices.tags is a JSONB array, also
-      // cast to text so a substring match across all tag values works.
-      // Other columns are varchar / text — plain ILIKE is fine.
-      this.whereILike('devices.hostname', pat)
-          .orWhereILike('devices.display_name', pat)
-          .orWhereILike('devices.ip_local', pat)
-          .orWhereILike('devices.ip_public', pat)
-          .orWhereILike('devices.mac_address', pat)
-          .orWhereILike('devices.last_logged_in_user', pat)
-          .orWhereILike('devices.os_name', pat)
-          .orWhereILike('devices.os_version', pat)
-          .orWhereILike('devices.geo_city', pat)
-          .orWhereILike('devices.geo_country', pat)
-          .orWhereILike('devices.description', pat)
-          .orWhereRaw('devices.uuid::text ILIKE ?', [pat])
-          .orWhereRaw('devices.tags::text ILIKE ?', [pat]);
-    });
-
-    const SORT_MAP: Record<string, string> = {
-      name: 'devices.hostname', status: 'devices.status', os: 'devices.os_type',
-      lastSeen: 'devices.last_seen_at', group: 'device_groups.name',
+      return q;
     };
-    const sortDir = filters?.sortOrder === 'desc' ? 'desc' : 'asc';
-    // Same default as getDevices: empty/missing sortBy → enrolment order.
-    // Name sorts by the displayed label (display name → hostname), matching the
-    // table / sidebar order.
-    const sortCol = (filters?.sortBy && SORT_MAP[filters.sortBy]) ? SORT_MAP[filters.sortBy] : 'devices.id';
-    const exportDir = (filters?.sortBy && SORT_MAP[filters.sortBy]) ? sortDir : 'asc';
-
-    let rowsQuery = q.select('devices.*', 'device_groups.name as group_name');
-    if (filters?.sortBy === 'name') {
-      rowsQuery = rowsQuery.orderByRaw(`COALESCE(NULLIF(devices.display_name, ''), devices.hostname) ${sortDir}`);
-    } else if (filters?.sortBy === 'status') {
-      // Visual priority, mirroring getDevices / the sidebar (offline lowest
-      // before online), not the meaningless raw-enum alphabetical order.
-      rowsQuery = rowsQuery.orderByRaw(`CASE devices.status
-          WHEN 'critical' THEN 0 WHEN 'warning' THEN 1 WHEN 'updating' THEN 2
-          WHEN 'offline' THEN 4 WHEN 'online' THEN 5 ELSE 3 END ${sortDir},
-          COALESCE(NULLIF(devices.display_name, ''), devices.hostname) asc`);
-    } else {
-      rowsQuery = rowsQuery.orderBy(sortCol, exportDir);
-    }
-    const rows = await rowsQuery;
-
-    return rows.map((row: any) => {
-      const device = this.rowToDevice(row);
-      (device as any).groupName = row.group_name ?? null;
-      return device;
-    });
+    const count = async (col: string) => (await base().groupBy(col).select(`${col} as value`)
+      .count<{ value: string; n: string }[]>('devices.id as n').orderBy('n', 'desc').orderBy('value', 'asc'))
+      .filter((r) => r.value !== null && r.value !== undefined)
+      .map((r) => ({ value: String(r.value), count: Number(r.n) }));
+    const os = await base().whereNotNull('devices.os_version').groupBy('devices.platform', 'devices.os_version')
+      .select('devices.platform', 'devices.os_version').count<{ platform: string; os_version: string; n: string }[]>('devices.id as n')
+      .orderBy('devices.platform').orderBy('devices.os_version');
+    const tagRows = await base()
+      .joinRaw("CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(devices.tags, '[]'::jsonb)) AS t(tag)")
+      .groupByRaw('t.tag').select(db.raw('t.tag AS value')).count<{ value: string; n: string }[]>('devices.id as n')
+      .orderBy('n', 'desc').orderBy('value', 'asc');
+    return {
+      platform: await count('devices.platform'),
+      ownership: await count('devices.ownership'),
+      enrollmentState: await count('devices.enrollment_state'),
+      complianceState: await count('devices.compliance_state'),
+      configState: await count('devices.config_state'),
+      osVersion: os.map((r) => ({ platform: r.platform, value: r.os_version, count: Number(r.n) })),
+      model: await count('devices.model_name'),
+      tag: tagRows.map((r) => ({ value: String(r.value), count: Number(r.n) })),
+    };
   }
 
-  async getDeviceById(id: number, tenantId: number, view?: TenantView): Promise<Device | null> {
-    // The global view reaches a device of any tenant; every other caller
-    // only the devices of `tenantId`. We always join `tenants` so the row
-    // carries `tenant_name` for the UI in both modes.
-    const isMaster = isGlobalView(tenantId, view);
-    const q = db('devices')
-      .leftJoin('tenants', 'devices.tenant_id', 'tenants.id')
-      .where('devices.id', id)
-      .select('devices.*', 'tenants.name as tenant_name');
-    if (!isMaster) q.where('devices.tenant_id', tenantId);
-    const row = await q.first();
+  /** Is the device reachable (the request's tenant, or any tenant in the global view)? */
+  async deviceExists(id: number, tenantId: number, view?: TenantView): Promise<boolean> {
+    if (!Number.isSafeInteger(id) || id <= 0) return false;
+    const q = db('devices').where({ id });
+    if (!isGlobalView(tenantId, view)) q.where({ tenant_id: tenantId });
+    return !!(await q.first('id'));
+  }
+
+  /** The record of one device (GET /api/mdm/devices/:id), or null when it is out of reach. */
+  async getDeviceById(id: number, tenantId: number, view?: TenantView): Promise<DeviceDetail | null> {
+    if (!Number.isSafeInteger(id) || id <= 0) return null;
+    const q = this.baseQuery().where('devices.id', id);
+    if (!isGlobalView(tenantId, view)) q.where('devices.tenant_id', tenantId);
+    const row = await q.first([...SUMMARY_COLUMNS, ...DETAIL_COLUMNS]);
     if (!row) return null;
-    return this.rowToDevice(row);
-  }
-
-  async getDeviceByUuid(uuid: string, tenantId: number, view?: TenantView): Promise<Device | null> {
-    const isMaster = isGlobalView(tenantId, view);
-    const q = db('devices').where({ uuid });
-    if (!isMaster) q.where({ tenant_id: tenantId });
-    const row = await q.first();
-    return row ? this.rowToDevice(row) : null;
+    const deviceTenant = Number(row.tenant_id);
+    const rules = new RulesCache();
+    const thresholds = await staleAfterDaysOf([deviceTenant]);
+    const summary = await this.toSummary(row, rules, thresholds, new Date());
+    const r = await rules.get(deviceTenant, row.ownership, row.management_mode);
+    const detail: DeviceDetail = {
+      ...summary,
+      description: row.description ?? null,
+      customFields: asObject(row.custom_fields),
+      osBuild: row.os_build ?? null,
+      storageCapacityBytes: row.storage_capacity_bytes === null || row.storage_capacity_bytes === undefined ? null : Number(row.storage_capacity_bytes),
+      storageAvailableBytes: row.storage_available_bytes === null || row.storage_available_bytes === undefined ? null : Number(row.storage_available_bytes),
+      unenrolledAt: iso(row.unenrolled_at),
+      unenrollReason: row.unenroll_reason ?? null,
+      asset: {
+        purchaseDate: row.purchase_date ? iso(row.purchase_date)!.slice(0, 10) : null,
+        warrantyExpiry: row.warranty_expiry ? iso(row.warranty_expiry)!.slice(0, 10) : null,
+        warrantyVendor: row.warranty_vendor ?? null,
+        warrantyStatus: row.warranty_status ?? null,
+        expectedLifetimeYears: row.expected_lifetime_years ?? null,
+        lifecycleStatus: row.lifecycle_status ?? null,
+      },
+      enrollmentProfileId: row.enrollment_profile_id ?? null,
+      privacy: { collected: collectedFields(r) },
+    };
+    if (r.storeDeviceName) detail.deviceName = row.device_name ?? null;
+    const apple = await db('apple_devices').where({ device_id: id, tenant_id: deviceTenant }).first(
+      'nano_enroll_type', 'proof', 'cert_not_after', 'identity_state', 'push_state', 'has_unlock_token',
+      'activation_lock_enabled', 'find_my_enabled', 'activation_lock_bypass_ref', 'ddm_enabled', 'imei', 'udid',
+      'last_device_info_at', 'last_security_info_at', 'last_apps_at', 'last_profiles_at', 'last_certificates_at',
+    );
+    if (apple) {
+      const a: AppleDeviceDetail = {
+        enrollmentType: apple.nano_enroll_type, proof: apple.proof,
+        certNotAfter: iso(apple.cert_not_after), identityState: apple.identity_state, pushState: apple.push_state,
+        hasUnlockToken: !!apple.has_unlock_token,
+        activationLockEnabled: apple.activation_lock_enabled ?? null, findMyEnabled: apple.find_my_enabled ?? null,
+        activationLockBypassEscrowed: !!apple.activation_lock_bypass_ref, ddmEnabled: !!apple.ddm_enabled,
+        lastInventory: {
+          deviceInfo: iso(apple.last_device_info_at), securityInfo: iso(apple.last_security_info_at),
+          apps: iso(apple.last_apps_at), profiles: iso(apple.last_profiles_at), certificates: iso(apple.last_certificates_at),
+        },
+      };
+      if (r.storeHardwareIds) {
+        a.imei = apple.imei ?? null;
+        a.udid = apple.udid ?? null;
+      }
+      detail.apple = a;
+    }
+    return detail;
   }
 
   /**
-   * Updates a device of `tenantId` (of any tenant for the global view: the
-   * pencil of /devices renames across tenants). Returns null when the
-   * device is not reachable. A group is always one of the DEVICE's tenant:
-   * another tenant's group answers like an unknown one (404), since a
-   * device placed in another tenant's tree would hand that tenant's teams a
-   * scope on it through the closure. `opts.groupWriterId`: the caller when it
-   * is not a platform administrator; moving the device into another group
-   * then also needs write access to that group (403 otherwise), as moving a
-   * group under a parent does (groups.controller).
+   * The operator's edits of a device of `tenantId` (of any tenant for the global view: PATCH
+   * /api/mdm/devices/:id). The group, the end user and the ownership have their own routes. Returns the
+   * record, or null when the device is out of reach.
    */
   async updateDevice(id: number, tenantId: number, data: Partial<{
-    displayName: string;
-    description: string;
-    groupId: number | null;
+    displayName: string | null;
+    description: string | null;
     tags: string[];
     customFields: Record<string, string>;
     purchaseDate: string | null;
@@ -470,37 +413,17 @@ class DeviceService {
     warrantyStatus: string | null;
     expectedLifetimeYears: number | null;
     lifecycleStatus: string | null;
-  }>, view?: TenantView, opts: { groupWriterId?: number } = {}) {
+  }>, view?: TenantView): Promise<DeviceDetail | null> {
     const isMaster = isGlobalView(tenantId, view);
     const lookup = db('devices').where({ id });
     if (!isMaster) lookup.where({ tenant_id: tenantId });
-    const current = await lookup.first('id', 'tenant_id', 'group_id') as { id: number; tenant_id: number; group_id: number | null } | undefined;
+    const current = await lookup.first('id', 'tenant_id') as { id: number; tenant_id: number } | undefined;
     if (!current) return null;
     const deviceTenantId = Number(current.tenant_id);
 
-    let groupId: number | null | undefined;
-    if (data.groupId === null) {
-      groupId = null;
-    } else if (data.groupId !== undefined) {
-      const gid = Number(data.groupId);
-      const group = Number.isSafeInteger(gid) && gid > 0
-        ? await db('device_groups').where({ id: gid, tenant_id: deviceTenantId }).first('id')
-        : undefined;
-      if (!group) throw new AppError(404, 'Group not found');
-      // A form that sends the device's current group back moves nothing.
-      if (opts.groupWriterId !== undefined && gid !== Number(current.group_id)) {
-        const { permissionService } = await import('./permission.service');
-        if (!(await permissionService.canWriteGroup(opts.groupWriterId, gid, false))) {
-          throw new AppError(403, 'No write permission on target group');
-        }
-      }
-      groupId = gid;
-    }
-
-    const updates: any = { updated_at: new Date() };
-    if (data.displayName !== undefined) updates.display_name = data.displayName;
+    const updates: Record<string, unknown> = { updated_at: new Date() };
+    if (data.displayName !== undefined) updates.display_name = data.displayName === null ? null : String(data.displayName).slice(0, 500);
     if (data.description !== undefined) updates.description = data.description;
-    if (groupId !== undefined) updates.group_id = groupId;
     if (data.tags !== undefined) updates.tags = JSON.stringify(data.tags);
     if (data.customFields !== undefined) updates.custom_fields = JSON.stringify(data.customFields);
     if (data.purchaseDate !== undefined) updates.purchase_date = data.purchaseDate;
@@ -512,106 +435,48 @@ class DeviceService {
 
     // Written in the device's own tenant (the one resolved above).
     await db('devices').where({ id, tenant_id: deviceTenantId }).update(updates);
-    const updated = await this.getDeviceById(id, deviceTenantId);
-    if (updated && this.io) {
-      // Emit on the OWNING tenant's room so the device's home tenant
-      // sees the live change too. The global view's echo goes to the
-      // master tenant's admin room (platform administrators only), never
-      // to its plain members: they do not see other tenants' devices.
-      this.io.to(`tenant:${updated.tenantId}`).emit(SocketEvents.DEVICE_UPDATED, updated);
-      if (isMaster && updated.tenantId !== tenantId) {
-        this.io.to(`tenant:${tenantId}:admin`).emit(SocketEvents.DEVICE_UPDATED, updated);
-      }
-    }
-    return updated;
-  }
-
-  // The state changes below (approve, refuse, suspend, unsuspend, delete)
-  // reach the devices of `tenantId` only — never through the global view —
-  // and return null (false for a deletion) when the device is not there.
-
-  async approveDevice(id: number, tenantId: number, approvedBy: number) {
-    const deviceRow = await db('devices').where({ id, tenant_id: tenantId }).first('id', 'group_id', 'api_key_id');
-    if (!deviceRow) return null;
-    // Check if the device's API key has a default group — adopted only when
-    // it is a group of the device's own tenant.
-    let groupId = deviceRow.group_id;
-    if (!groupId && deviceRow.api_key_id) {
-      const keyRow = await db('agent_api_keys as k')
-        .join('device_groups as g', 'g.id', 'k.default_group_id')
-        .where({ 'k.id': deviceRow.api_key_id, 'g.tenant_id': tenantId })
-        .first('g.id as group_id') as { group_id: number } | undefined;
-      if (keyRow?.group_id) groupId = keyRow.group_id;
-    }
-
-    await db('devices').where({ id, tenant_id: tenantId }).update({
-      approval_status: 'approved',
-      status: 'offline',
-      approved_by: approvedBy,
-      approved_at: new Date(),
-      group_id: groupId ?? null,
-      updated_at: new Date(),
-    });
-    const device = await this.getDeviceById(id, tenantId);
-    if (device && this.io) {
-      this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_APPROVED, device);
-    }
-    return device;
-  }
-
-  async refuseDevice(id: number, tenantId: number) {
-    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
-      approval_status: 'refused',
-      status: 'suspended',
-      updated_at: new Date(),
-    });
-    return changed ? this.getDeviceById(id, tenantId) : null;
-  }
-
-  async suspendDevice(id: number, tenantId: number) {
-    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
-      status: 'suspended',
-      updated_at: new Date(),
-    });
-    return changed ? this.getDeviceById(id, tenantId) : null;
-  }
-
-  async unsuspendDevice(id: number, tenantId: number) {
-    const changed = await db('devices').where({ id, tenant_id: tenantId }).update({
-      status: 'offline',
-      updated_at: new Date(),
-    });
-    return changed ? this.getDeviceById(id, tenantId) : null;
+    this.emitChanged(deviceTenantId, [id], isMaster && deviceTenantId !== tenantId ? tenantId : null);
+    return this.getDeviceById(id, deviceTenantId);
   }
 
   /**
-   * Immediately purge the data tied to a hard-deleted device that no DB-level
-   * CASCADE removes with it (polymorphic references), so no orphaned rows
-   * remain. Only for the ids the tenant-scoped DELETE actually removed: an
-   * id of another tenant's device never reaches it.
+   * DEVICE_UPDATED to the device's tenant (identifiers only: integration I12, T-4); the global view's echo
+   * goes to the master tenant's admin room (platform administrators), never to its plain members.
+   */
+  emitChanged(tenantId: number, deviceIds: number[], echoTenantId: number | null = null): void {
+    if (!this.io || deviceIds.length === 0) return;
+    for (const id of deviceIds) {
+      this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_UPDATED, { deviceId: id, tenantId });
+      if (echoTenantId !== null) this.io.to(`tenant:${echoTenantId}:admin`).emit(SocketEvents.DEVICE_UPDATED, { deviceId: id, tenantId });
+    }
+  }
+
+  /**
+   * Immediately purge the data tied to a deleted device that no database cascade removes with it
+   * (polymorphic references). Only for the ids the tenant-scoped DELETE actually removed.
    */
   private async purgeDeviceData(id: number) {
     try { await db('reports').where({ scope_type: 'device', scope_id: id }).delete(); } catch { /* ignore */ }
   }
 
-  /** Deletes a device of `tenantId`; false when it is not there. */
-  async deleteDevice(id: number, tenantId: number): Promise<boolean> {
-    const deleted = await db('devices').where({ id, tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
-    if (deleted.length === 0) return false;
+  /**
+   * Deletes the records of `tenantId` among `ids` that are out of management (enrollment_state
+   * 'unenrolled': a record under management is never deleted, devices_guard_delete refuses it), and purges
+   * the data of those actually deleted. Returns their ids. The guard engine (device.delete) is the caller.
+   */
+  async bulkDelete(ids: number[], tenantId: number): Promise<number[]> {
+    if (ids.length === 0) return [];
+    const deleted = await db('devices').whereIn('id', ids).where({ tenant_id: tenantId, enrollment_state: 'unenrolled' })
+      .delete(['id']) as Array<{ id: number }>;
     await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
     await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
     if (this.io) {
-      this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id });
+      for (const r of deleted) this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id: r.id });
     }
-    return true;
+    return deleted.map((r) => Number(r.id));
   }
 
-  /**
-   * A deleted device can never recover: its active live-alert incidents
-   * (offline, metric, disk health, duplicate id) are resolved so they leave
-   * the web bell and the mobile "À traiter" instead of staying listed for
-   * good. cleanOrphans catches any path that misses this.
-   */
+  /** A deleted device can never recover: its active live-alert incidents are resolved. */
   private async resolveDeletedDeviceAlerts(ids: number[]) {
     if (ids.length === 0) return;
     try {
@@ -623,19 +488,13 @@ class DeviceService {
   }
 
   /**
-   * Self-healing: delete orphaned records that reference devices no longer
-   * in the platform. Run by the job devices.clean-orphans, tenant by tenant
-   * in the tenant's database context (modules/devices.ts), so the DB stays
-   * consistent even if a polymorphic reference (scope_id) has no FK at the
-   * DB level. The steps are independent: one that fails does not skip the
-   * next, and the run then fails (partial_failure: counted, retried and
-   * alerted by the job).
+   * Self-healing: delete orphaned records that reference devices no longer in the platform. Run by the
+   * job devices.clean-orphans, tenant by tenant in the tenant's database context. The steps are
+   * independent: one that fails does not skip the next, and the run then fails (partial_failure).
    */
   async cleanOrphans(tenantId: number) {
     let total = 0;
     let failed = 0;
-
-    // Polymorphic references (no DB FK — must be cleaned in code)
     try {
       const c = await db.raw(`
         DELETE FROM reports
@@ -649,9 +508,6 @@ class DeviceService {
       failed++;
       logger.error({ err: safeErr(err), tenantId }, 'cleanOrphans: reports of deleted devices not removed');
     }
-
-    // Live alerts: active incident rows of devices that no longer exist are
-    // resolved (NOT deleted — resolved rows age out through the trim).
     try {
       const { liveAlertService } = await import('./liveAlert.service');
       const resolved = await liveAlertService.resolveOrphanIncidents(tenantId);
@@ -662,395 +518,163 @@ class DeviceService {
       failed++;
       logger.error({ err: safeErr(err), tenantId }, 'cleanOrphans: live alerts of deleted devices not resolved');
     }
-
-    if (total > 0) {
-      logger.warn({ tenantId, total }, 'cleanOrphans: self-healing complete');
-    }
+    if (total > 0) logger.warn({ tenantId, total }, 'cleanOrphans: self-healing complete');
     if (failed > 0) throw new JobError('partial_failure', 'one cleanup step failed');
   }
 
-  /** Approves the devices of `tenantId` among `ids` (the others are skipped,
-   *  untouched); returns how many were approved. */
-  async bulkApprove(ids: number[], tenantId: number, approvedBy: number): Promise<number> {
-    // Approve each device individually so default group from API key is assigned
-    let approved = 0;
-    for (const id of ids) {
-      if (await this.approveDevice(id, tenantId, approvedBy)) approved++;
-    }
-    return approved;
-  }
+  // ─── Fleet summary and series (dashboard) ─────────────────────────────────
 
   /**
-   * Deletes the devices of `tenantId` among `ids` (the others are skipped,
-   * untouched) and purges the data of those actually deleted. Returns their
-   * ids. The restriction matrix is the caller's (DELETE /bulk/delete).
+   * The fleet of `tenantId` (of every tenant for the global view, unless `strictTenantScope`: the
+   * snapshot jobs store a tenant's own fleet, the series sum them). Counts the devices under management
+   * (every state but 'unenrolled'); 'stale' = no contact for mdmStaleAfterDays days, or none 24 h after
+   * the enrollment.
    */
-  async bulkDelete(ids: number[], tenantId: number): Promise<number[]> {
-    if (ids.length === 0) return [];
-    const deleted = await db('devices').whereIn('id', ids).where({ tenant_id: tenantId }).delete(['id']) as Array<{ id: number }>;
-    await Promise.all(deleted.map((r) => this.purgeDeviceData(r.id)));
-    await this.resolveDeletedDeviceAlerts(deleted.map((r) => r.id));
-    if (this.io) {
-      for (const r of deleted) this.io.to(`tenant:${tenantId}`).emit(SocketEvents.DEVICE_DELETED, { id: r.id });
-    }
-    return deleted.map((r) => Number(r.id));
-  }
-
-  // ─── Inventory pruning ────────────────────────────────────────────────────
-  // Tenant by tenant, in the tenant's database context (modules/devices.ts).
-  async pruneInventory(tenantId: number) {
-    const cfg = await db('app_config').where({ key: 'inventory_retention_days' }).first();
-    const days = parseInt(cfg?.value || '90');
-    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-
-    // Keep only latest hardware snapshot per device
-    // Delete old software scans
-    await db('device_inventory_software')
-      .where({ tenant_id: tenantId })
-      .where('scanned_at', '<', cutoff)
-      .delete();
-
-    logger.debug({ tenantId, days }, 'Inventory pruning complete');
-  }
-
-  // ─── OS facets (Lot C 3-tier filter) ──────────────────────────────────────
-  // Returns the (osType, osName, osVersion) triplets present in the tenant's
-  // approved fleet, with a count of matching devices for each. The client
-  // uses these to populate the cascading filter dropdowns and to hide
-  // options that no longer have any devices behind them.
-  async getOsFacets(tenantId: number, view?: TenantView): Promise<Array<{
-    osType: string; osName: string | null; osVersion: string | null; count: number;
-  }>> {
-    const isMaster = isGlobalView(tenantId, view);
-    const q = db('devices')
-      .where({ approval_status: 'approved' })
-      .whereNot({ status: 'pending_uninstall' })
-      .select('os_type', 'os_name', 'os_version')
-      .count<{ os_type: string; os_name: string | null; os_version: string | null; count: string | number }[]>('* as count')
-      .groupBy('os_type', 'os_name', 'os_version')
-      .orderBy('os_type', 'asc')
-      .orderBy('os_name', 'asc')
-      .orderBy('os_version', 'asc');
-    if (!isMaster) q.where({ tenant_id: tenantId });
-    const rows = await q;
-    return rows.map((r) => ({
-      osType: r.os_type,
-      osName: r.os_name,
-      osVersion: r.os_version,
-      count: typeof r.count === 'number' ? r.count : parseInt(r.count, 10),
-    }));
-  }
-
-  // ─── Tag facets ──────────────────────────────────────────────────────────
-  // Distinct tag list for the tenant with per-tag device counts. Used by
-  // the /devices filter popover so admins pick from existing tags
-  // (typo-free) and see which ones are actually populated.
-  //
-  // `tags` is a JSONB array on devices — `jsonb_array_elements_text`
-  // unnests it so we can group by individual tag. The query skips
-  // pending_uninstall to avoid surfacing stale data.
-  async getTagFacets(tenantId: number, view?: TenantView): Promise<Array<{ tag: string; count: number }>> {
-    const isMaster = isGlobalView(tenantId, view);
-    const where = isMaster
-      ? `d.approval_status = 'approved' AND d.status <> 'pending_uninstall'`
-      : `d.tenant_id = ? AND d.approval_status = 'approved' AND d.status <> 'pending_uninstall'`;
-    const rows = await db.raw(
-      `SELECT t.tag::text AS tag, COUNT(*)::int AS count
-         FROM devices d, jsonb_array_elements_text(COALESCE(d.tags, '[]'::jsonb)) AS t(tag)
-        WHERE ${where}
-        GROUP BY t.tag
-        ORDER BY count DESC, tag ASC`,
-      isMaster ? [] : [tenantId],
-    ) as { rows: Array<{ tag: string; count: number }> };
-    return rows.rows.map((r) => ({ tag: r.tag, count: Number(r.count) }));
-  }
-
-  // ─── Fleet summary ────────────────────────────────────────────────────────
-  async getFleetSummary(tenantId: number, opts?: { strictTenantScope?: boolean; globalView?: boolean }) {
-    // Only the global view (`globalView`, platform administrator on the
-    // master tenant) counts the cross-tenant aggregate; any other caller
-    // counts the devices of `tenantId`. `strictTenantScope` forces the
-    // latter even with the global view: the daily snapshot job stores
-    // master's own fleet in the row of tenant 1, not the install-wide sum
-    // (the master timeseries SUMs across tenants and would double-count).
+  async getFleetSummary(tenantId: number, opts?: { strictTenantScope?: boolean; globalView?: boolean }): Promise<MdmFleetSummary> {
     const isMaster = isGlobalView(tenantId, opts) && !opts?.strictTenantScope;
-    const statusQ = db('devices').select(db.raw('status, count(*) as count')).groupBy('status');
-    if (!isMaster) statusQ.where({ tenant_id: tenantId });
-    const rows = await statusQ;
-
-    const counts: Record<string, number> = {};
-    for (const r of rows) counts[r.status] = parseInt(r.count);
-
-    // No OS update management on this server: never a pending update.
-    const pendingUpdates = 0;
-
-    // OS breakdown — total per OS family + online count per OS family. The
-    // dashboard renders both: a donut (totals) AND a per-OS connectivity bar
-    // (online vs offline) using osConnectivity below.
-    const osQ = db('devices')
-      .select(db.raw("os_type, status = 'online' as is_online, count(*) as count"))
-      .groupBy('os_type', db.raw("status = 'online'"));
-    if (!isMaster) osQ.where({ tenant_id: tenantId });
-    const osRows = await osQ;
-    const osByType = { windows: 0, macos: 0, linux: 0, other: 0 };
-    const osConnectivity: Record<string, { online: number; total: number }> = {
-      windows: { online: 0, total: 0 },
-      macos:   { online: 0, total: 0 },
-      linux:   { online: 0, total: 0 },
-      other:   { online: 0, total: 0 },
+    const scope: number[] | 'all' = isMaster ? 'all' : [tenantId];
+    const thresholds = await this.thresholds(scope);
+    const days = this.staleDaysSql(thresholds);
+    const managed = () => {
+      const q = db('devices').whereNot('devices.enrollment_state', 'unenrolled');
+      if (!isMaster) q.where('devices.tenant_id', tenantId);
+      return q;
     };
-    for (const r of osRows) {
-      const key = r.os_type as keyof typeof osByType;
-      const c = parseInt(r.count);
-      osByType[key] = (osByType[key] || 0) + c;
-      if (osConnectivity[key]) {
-        osConnectivity[key].total += c;
-        if (r.is_online) osConnectivity[key].online += c;
-      }
+    const row = await managed().first(db.raw(`
+      count(*)::int AS total,
+      count(*) FILTER (WHERE enrollment_state = 'enrolled')::int AS enrolled,
+      count(*) FILTER (WHERE enrollment_state = 'enrolling')::int AS enrolling,
+      count(*) FILTER (WHERE enrollment_state = 'awaiting_configuration')::int AS awaiting,
+      count(*) FILTER (WHERE enrollment_state = 'unenrolling')::int AS unenrolling,
+      count(*) FILTER (WHERE compliance_state = 'compliant')::int AS compliant,
+      count(*) FILTER (WHERE compliance_state = 'non_compliant')::int AS non_compliant,
+      count(*) FILTER (WHERE compliance_state = 'unknown')::int AS compliance_unknown,
+      count(*) FILTER (WHERE config_state = 'error')::int AS config_errors,
+      count(*) FILTER (WHERE config_state = 'pending')::int AS config_pending,
+      count(*) FILTER (WHERE lost_mode_state <> 'off')::int AS lost_mode,
+      count(*) FILTER (WHERE last_checkin_at IS NULL)::int AS c_never,
+      count(*) FILTER (WHERE last_checkin_at >= now() - interval '24 hours')::int AS c_recent,
+      count(*) FILTER (WHERE last_checkin_at < now() - interval '24 hours'
+                         AND last_checkin_at >= now() - make_interval(days => ${days.sql}))::int AS c_quiet,
+      count(*) FILTER (WHERE last_checkin_at < now() - make_interval(days => ${days.sql}))::int AS c_stale,
+      count(*) FILTER (WHERE last_checkin_at < now() - make_interval(days => ${days.sql})
+                         OR (last_checkin_at IS NULL AND enrolled_at < now() - interval '24 hours'))::int AS stale`,
+    [...days.bindings, ...days.bindings, ...days.bindings])) as Record<string, number>;
+    const byPlatform: Record<string, number> = {};
+    const byOwnership: Record<string, number> = {};
+    const groups = await managed().groupBy('devices.platform', 'devices.ownership')
+      .select('devices.platform', 'devices.ownership').count<{ platform: string; ownership: string; n: string }[]>('devices.id as n');
+    for (const g of groups) {
+      byPlatform[g.platform] = (byPlatform[g.platform] ?? 0) + Number(g.n);
+      byOwnership[g.ownership] = (byOwnership[g.ownership] ?? 0) + Number(g.n);
     }
-
-    // No remote access on this server: never an active remote session.
-    const activeRemoteSessions = 0;
-
-    // No script schedules on this server: never an upcoming run.
-    const upcomingSchedules = 0;
-
-    // Stale devices (no contact in 72h)
-    const now = new Date();
-    const staleThreshold = new Date(now.getTime() - 72 * 60 * 60 * 1000);
-    const staleQ = db('devices')
-      .whereNotIn('status', ['pending', 'suspended', 'pending_uninstall'])
-      .where('last_seen_at', '<', staleThreshold)
-      .count('id as count');
-    if (!isMaster) staleQ.where({ tenant_id: tenantId });
-    const staleDevices = await staleQ.first().then(r => parseInt(String((r as any)?.count ?? 0)));
-
-    // Total reflects the active managed fleet — devices the user can act on
-    // today. pending (waiting for admin approval), suspended (admin-disabled),
-    // and pending_uninstall (being removed) are admin/lifecycle states tracked
-    // separately by the mini-stats and supervision pages, NOT part of the
-    // daily-ops fleet. Excluding them keeps the breakdown cards (online +
-    // offline + warning + critical + ...) summing to the displayed Total.
-    const adminOnlyStatuses = new Set(['pending', 'suspended', 'pending_uninstall']);
-    const total = Object.entries(counts)
-      .filter(([s]) => !adminOnlyStatuses.has(s))
-      .reduce((sum, [, c]) => sum + c, 0);
-
-    // ── Deltas vs yesterday + week ago ─────────────────────────────────────
-    // Read the two most recent snapshots so the dashboard can show
-    // ↑/↓ comparisons. Missing snapshot → delta = null (UI hides it).
-    const yesterdaySnap = await db('fleet_daily_snapshot')
+    // Deltas against yesterday's snapshot of the tenant (null without one: the console hides them).
+    const yesterday = isMaster ? null : await db('fleet_daily_snapshot')
       .where({ tenant_id: tenantId })
       .where('day', '<', new Date().toISOString().slice(0, 10))
       .orderBy('day', 'desc')
-      .first();
-    const weekAgoSnap = await db('fleet_daily_snapshot')
-      .where({ tenant_id: tenantId })
-      .where('day', '<=', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
-      .orderBy('day', 'desc')
-      .first();
-
-    const deltas = {
-      onlineVsYesterday:        yesterdaySnap ? (counts.online   || 0) - yesterdaySnap.online           : null,
-      offlineVsYesterday:       yesterdaySnap ? (counts.offline  || 0) - yesterdaySnap.offline          : null,
-      pendingUpdatesVsWeek:     weekAgoSnap   ? pendingUpdates           - weekAgoSnap.pending_updates  : null,
-      staleVsYesterday:         yesterdaySnap ? staleDevices             - yesterdaySnap.stale_72h      : null,
-      totalVsYesterday:         yesterdaySnap ? total                    - yesterdaySnap.total          : null,
-    };
-
+      .first('total', 'enrolled', 'non_compliant', 'stale') as { total: number; enrolled: number; non_compliant: number; stale: number } | undefined;
+    const delta = (now: number, before: number | undefined) => (yesterday && before !== undefined ? now - Number(before) : null);
     return {
-      total,
-      online: counts.online || 0,
-      offline: counts.offline || 0,
-      warning: counts.warning || 0,
-      critical: counts.critical || 0,
-      // `updating` + `update_error` devices are still reachable (only an
-      // update is in flight or failed): surfaced so the dashboard can fold
-      // them into the "connected" KPI without changing the underlying
-      // status semantics (the fields are optional in the shared type).
-      updating: counts.updating || 0,
-      updateError: counts.update_error || 0,
-      maintenance: counts.maintenance || 0,
-      pending: counts.pending || 0,
-      suspended: counts.suspended || 0,
-      pendingUpdates,
-      complianceScore: null,
-      // No agent on this server: no agent version to count or to offer.
-      agentUpToDate: 0,
-      agentOutdated: 0,
-      latestAgentVersion: '',
-      osByType,
-      osConnectivity,
-      activeRemoteSessions,
-      upcomingSchedules,
-      staleDevices,
-      deltas,
+      total: row.total, enrolled: row.enrolled, enrolling: row.enrolling, awaitingConfiguration: row.awaiting,
+      unenrolling: row.unenrolling, compliant: row.compliant, nonCompliant: row.non_compliant,
+      complianceUnknown: row.compliance_unknown, configErrors: row.config_errors, configPending: row.config_pending,
+      contact: { never: row.c_never, recent: row.c_recent, quiet: row.c_quiet, stale: row.c_stale },
+      stale: row.stale, lostMode: row.lost_mode,
+      byPlatform, byOwnership,
+      staleAfterDays: isMaster ? MDM_STALE_AFTER_DAYS_DEFAULT : (thresholds.get(tenantId) ?? MDM_STALE_AFTER_DAYS_DEFAULT),
+      deltas: {
+        totalVsYesterday: delta(row.total, yesterday?.total),
+        enrolledVsYesterday: delta(row.enrolled, yesterday?.enrolled),
+        nonCompliantVsYesterday: delta(row.non_compliant, yesterday?.non_compliant),
+        staleVsYesterday: delta(row.stale, yesterday?.stale),
+      },
     };
   }
 
-  // ─── Fleet timeseries ─────────────────────────────────────────────────────
-  // Returns {date, total, online, offline, pendingUpdates, stale72} for the
-  // last N days. The current day is always synthesized from live state — the
-  // nightly snapshot job is for historic comparison only.
-  async getFleetTimeseries(tenantId: number, days: number, view?: TenantView) {
+  private static pointOf(at: string, s: MdmFleetSummary): MdmFleetPoint {
+    return {
+      at, total: s.total, enrolled: s.enrolled, enrolling: s.enrolling + s.awaitingConfiguration,
+      compliant: s.compliant, nonCompliant: s.nonCompliant, configErrors: s.configErrors, stale: s.stale,
+    };
+  }
+
+  private static seriesSums() {
+    return [
+      db.raw('SUM(total)::int AS total'), db.raw('SUM(enrolled)::int AS enrolled'), db.raw('SUM(enrolling)::int AS enrolling'),
+      db.raw('SUM(compliant)::int AS compliant'), db.raw('SUM(non_compliant)::int AS non_compliant'),
+      db.raw('SUM(config_errors)::int AS config_errors'), db.raw('SUM(stale)::int AS stale'),
+    ];
+  }
+
+  /** The daily series of the last `days` days, the current day synthesised from the live state. */
+  async getFleetTimeseries(tenantId: number, days: number, view?: TenantView): Promise<MdmFleetPoint[]> {
     const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    const cutoff = new Date(today.getTime() - (days - 1) * 24 * 60 * 60 * 1000);
-
-    // The global view gets the cross-tenant aggregate: each (day) row is
-    // the sum of all tenant-scoped snapshots for that day. Every other
-    // caller stays strictly scoped.
+    today.setUTCHours(0, 0, 0, 0);
+    const cutoff = new Date(today.getTime() - (Math.max(1, days) - 1) * 86_400_000).toISOString().slice(0, 10);
     const isMaster = isGlobalView(tenantId, view);
-    let rows: any[];
-    if (isMaster) {
-      rows = await db('fleet_daily_snapshot')
-        .where('day', '>=', cutoff.toISOString().slice(0, 10))
-        .groupBy('day')
-        .orderBy('day', 'asc')
-        .select(
-          'day',
-          db.raw('SUM(total)::int as total'),
-          db.raw('SUM(online)::int as online'),
-          db.raw('SUM(offline)::int as offline'),
-          db.raw('SUM(pending_updates)::int as "pendingUpdates"'),
-          db.raw('SUM(stale_72h)::int as stale72'),
-        );
-    } else {
-      rows = await db('fleet_daily_snapshot')
-        .where({ tenant_id: tenantId })
-        .where('day', '>=', cutoff.toISOString().slice(0, 10))
-        .orderBy('day', 'asc')
-        .select('day', 'total', 'online', 'offline', 'pending_updates as pendingUpdates', 'stale_72h as stale72');
-    }
-
-    // Synthesise the live "today" point from current state so the chart
-    // always ends on the current value, regardless of whether the nightly
-    // snapshot job has run.
-    const live = await this.getFleetSummary(tenantId, { globalView: isMaster });
+    const q = db('fleet_daily_snapshot').where('day', '>=', cutoff).groupBy('day').orderBy('day', 'asc')
+      .select('day', ...DeviceService.seriesSums());
+    if (!isMaster) q.where({ tenant_id: tenantId });
+    const rows = await q as Array<Record<string, any>>;
     const todayStr = today.toISOString().slice(0, 10);
-    const todayRow = {
-      day: todayStr,
-      total: live.total,
-      online: live.online,
-      offline: live.offline,
-      pendingUpdates: live.pendingUpdates,
-      stale72: live.staleDevices,
-    };
-    const filtered = rows.filter((r: any) => String(r.day).slice(0, 10) !== todayStr);
-    return [...filtered.map((r: any) => ({ ...r, day: String(r.day).slice(0, 10) })), todayRow];
+    const live = DeviceService.pointOf(todayStr, await this.getFleetSummary(tenantId, { globalView: isMaster }));
+    const points = rows
+      .map((r) => ({ at: (r.day instanceof Date ? r.day.toISOString() : String(r.day)).slice(0, 10), total: r.total,
+        enrolled: r.enrolled, enrolling: r.enrolling, compliant: r.compliant, nonCompliant: r.non_compliant,
+        configErrors: r.config_errors, stale: r.stale }))
+      .filter((p) => p.at !== todayStr);
+    return [...points, live];
   }
 
-  // ─── Hourly snapshot job ─────────────────────────────────────────────────
-  // Run every hour (and at start) by the job devices.fleet-hourly, tenant by
-  // tenant (in the tenant's database context). Writes the tenant's row in
-  // fleet_hourly_snapshot, used by the dashboard "Activité du parc" 24h
-  // view. Retention is 7 days — older rows of the tenant are pruned in the
-  // same run so the table stays small (~168 rows per tenant max).
+  /** The hourly series of the last `hours` hours (7 days at most), the current hour synthesised. */
+  async getFleetHourlySeries(tenantId: number, hours: number, view?: TenantView): Promise<MdmFleetPoint[]> {
+    const cap = Math.min(168, Math.max(2, hours));
+    const cutoff = new Date(Date.now() - cap * 3_600_000);
+    const isMaster = isGlobalView(tenantId, view);
+    const q = db('fleet_hourly_snapshot').where('hour', '>=', cutoff).groupBy('hour').orderBy('hour', 'asc')
+      .select('hour', ...DeviceService.seriesSums());
+    if (!isMaster) q.where({ tenant_id: tenantId });
+    const rows = await q as Array<Record<string, any>>;
+    const nowHour = new Date();
+    nowHour.setMinutes(0, 0, 0);
+    const live = DeviceService.pointOf(nowHour.toISOString(), await this.getFleetSummary(tenantId, { globalView: isMaster }));
+    const points = rows
+      .map((r) => ({ at: r.hour instanceof Date ? r.hour.toISOString() : new Date(String(r.hour)).toISOString(), total: r.total,
+        enrolled: r.enrolled, enrolling: r.enrolling, compliant: r.compliant, nonCompliant: r.non_compliant,
+        configErrors: r.config_errors, stale: r.stale }))
+      .filter((p) => p.at !== live.at);
+    return [...points, live];
+  }
+
+  /** The MDM counters of a snapshot row (the columns of the removed agent are no longer written). */
+  private static snapshotRow(s: MdmFleetSummary) {
+    return {
+      total: s.total, enrolled: s.enrolled, enrolling: s.enrolling + s.awaitingConfiguration,
+      compliant: s.compliant, non_compliant: s.nonCompliant, config_errors: s.configErrors, stale: s.stale,
+    };
+  }
+
+  /** Hourly snapshot of a tenant's own fleet (job devices.fleet-hourly); 7 days kept. */
   async snapshotFleetHourly(tenantId: number) {
-    // Round to the current hour boundary so onConflict-merge keeps a
-    // single row per hour even across multiple boots / clock skew.
     const now = new Date();
     now.setMinutes(0, 0, 0);
-    // strictTenantScope: same rationale as snapshotFleetDaily —
-    // master tenant snapshot must reflect master's OWN devices,
-    // not the cross-tenant aggregate (the read-time SUM does that).
     const summary = await this.getFleetSummary(tenantId, { strictTenantScope: true });
     await db('fleet_hourly_snapshot')
-      .insert({
-        tenant_id: tenantId,
-        hour: now,
-        total: summary.total,
-        online: summary.online,
-        offline: summary.offline,
-        warning: summary.warning,
-        critical: summary.critical,
-        pending_updates: summary.pendingUpdates,
-        stale_72h: summary.staleDevices,
-        active_remote_sessions: summary.activeRemoteSessions,
-      })
+      .insert({ tenant_id: tenantId, hour: now, ...DeviceService.snapshotRow(summary) })
       .onConflict(['tenant_id', 'hour'])
       .merge();
-    // Retention sweep: keep 7 days of hourly history. The daily table
-    // covers anything beyond that.
-    const cutoff = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - 7 * 86_400_000);
     await db('fleet_hourly_snapshot').where({ tenant_id: tenantId }).where('hour', '<', cutoff).del();
     logger.debug({ tenantId }, 'Fleet hourly snapshot complete');
   }
 
-  // Returns up to N most-recent hourly points for the dashboard 24h view.
-  // The current hour is always synthesised from live state so the chart
-  // ends on "now" regardless of the cron cadence, mirroring the daily flow.
-  async getFleetHourlySeries(tenantId: number, hours: number, view?: TenantView) {
-    const cap = Math.min(168, Math.max(2, hours));
-    const cutoff = new Date(Date.now() - cap * 60 * 60 * 1000);
-    const isMaster = isGlobalView(tenantId, view);
-    let rows: Array<{
-      hour: Date | string; total: number; online: number; offline: number; pendingUpdates: number; stale72: number;
-    }>;
-    if (isMaster) {
-      // Cross-tenant aggregate: SUM each metric per hour bucket.
-      rows = await db('fleet_hourly_snapshot')
-        .where('hour', '>=', cutoff)
-        .groupBy('hour')
-        .orderBy('hour', 'asc')
-        .select(
-          'hour',
-          db.raw('SUM(total)::int as total'),
-          db.raw('SUM(online)::int as online'),
-          db.raw('SUM(offline)::int as offline'),
-          db.raw('SUM(pending_updates)::int as "pendingUpdates"'),
-          db.raw('SUM(stale_72h)::int as stale72'),
-        ) as any;
-    } else {
-      rows = await db('fleet_hourly_snapshot')
-        .where({ tenant_id: tenantId })
-        .where('hour', '>=', cutoff)
-        .orderBy('hour', 'asc')
-        .select('hour', 'total', 'online', 'offline', 'pending_updates as pendingUpdates', 'stale_72h as stale72') as any;
-    }
-
-    const live = await this.getFleetSummary(tenantId, { globalView: isMaster });
-    const nowHour = new Date();
-    nowHour.setMinutes(0, 0, 0);
-    const liveRow = {
-      hour: nowHour.toISOString(),
-      total: live.total,
-      online: live.online,
-      offline: live.offline,
-      pendingUpdates: live.pendingUpdates,
-      stale72: live.staleDevices,
-    };
-    const filtered = rows
-      .map((r) => ({ ...r, hour: typeof r.hour === 'string' ? r.hour : r.hour.toISOString() }))
-      .filter((r) => r.hour !== liveRow.hour);
-    return [...filtered, liveRow];
-  }
-
-  // ─── Daily snapshot job ──────────────────────────────────────────────────
-  // Run every day (and at start) by the job devices.fleet-daily, tenant by
-  // tenant (in the tenant's database context). Writes the tenant's row in
-  // fleet_daily_snapshot, used by the dashboard for week-over-week deltas
-  // and for the "Activité du parc" timeseries chart.
+  /** Daily snapshot of a tenant's own fleet (job devices.fleet-daily). */
   async snapshotFleetDaily(tenantId: number) {
     const today = new Date().toISOString().slice(0, 10);
-    // strictTenantScope: snapshot reflects this tenant's OWN
-    // devices only. Without it the master tenant's row would be
-    // the install-wide aggregate, then the master timeseries
-    // would SUM that with each child tenant's row → ~2× counted.
     const summary = await this.getFleetSummary(tenantId, { strictTenantScope: true });
     await db('fleet_daily_snapshot')
-      .insert({
-        tenant_id: tenantId,
-        day: today,
-        total: summary.total,
-        online: summary.online,
-        offline: summary.offline,
-        warning: summary.warning,
-        critical: summary.critical,
-        pending_updates: summary.pendingUpdates,
-        stale_72h: summary.staleDevices,
-        active_remote_sessions: summary.activeRemoteSessions,
-      })
+      .insert({ tenant_id: tenantId, day: today, ...DeviceService.snapshotRow(summary) })
       .onConflict(['tenant_id', 'day'])
       .merge();
     logger.debug({ tenantId }, 'Fleet daily snapshot complete');

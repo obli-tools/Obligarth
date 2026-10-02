@@ -45,6 +45,7 @@ registerAuditResourceName('team', 'user_teams');
 registerAuditResourceName('user', 'users', 'username', { membership: 'user_tenants', key: 'user_id' });
 registerAuditResourceName('group', 'device_groups');
 registerAuditResourceName('tenant', 'tenants', 'name', { column: 'id' });
+registerAuditResourceName('end_user', 'end_users', 'display_name');   // lot B2: the registry's end users
 
 /** Correlated subqueries (each branch evaluated only for its type, comparing
  *  id::text to resource_path), one row of the entry's tenant at most. */
@@ -188,7 +189,7 @@ export async function listEntries(p: ListParams): Promise<{ items: AuditEntryDto
   const q = filtered(p)
     .leftJoin('devices as d', deviceOfEntryTenant)
     .leftJoin('tenants as ten', 'ten.id', 'al.tenant_id')
-    .select('al.*', db.raw('COALESCE(d.display_name, d.hostname) as device_name'), 'ten.name as tenant_name', resourceNameSelect())
+    .select('al.*', 'd.label as device_name', 'ten.name as tenant_name', resourceNameSelect())
     .limit(limit)
     .offset(p.beforeSeq ? 0 : offset);
   if (p.tenantId !== null) q.orderBy('al.chain_seq', 'desc');
@@ -211,7 +212,7 @@ export async function entriesOfDevice(deviceId: number, tenantId: number, limit 
   const rows = await db('audit_logs as al')
     .leftJoin('devices as d', deviceOfEntryTenant)
     .where({ 'al.device_id': deviceId, 'al.tenant_id': tenantId })
-    .select('al.*', db.raw('COALESCE(d.display_name, d.hostname) as device_name'), resourceNameSelect())
+    .select('al.*', 'd.label as device_name', resourceNameSelect())
     .orderBy('al.chain_seq', 'desc')
     .limit(limit);
   return withLabels(rows);
@@ -285,7 +286,7 @@ export async function entryDetail(uuid: string, tenantId: number | null): Promis
     .leftJoin('devices as d', deviceOfEntryTenant)
     .leftJoin('tenants as ten', 'ten.id', 'al.tenant_id')
     .where('al.uuid', uuid)
-    .select('al.*', db.raw('COALESCE(d.display_name, d.hostname) as device_name'), 'ten.name as tenant_name', resourceNameSelect());
+    .select('al.*', 'd.label as device_name', 'ten.name as tenant_name', resourceNameSelect());
   if (tenantId !== null) q.andWhere('al.tenant_id', tenantId);
   const row = await q.first();
   if (!row) return null;

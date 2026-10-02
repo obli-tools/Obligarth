@@ -37,16 +37,12 @@ export const permissionService = {
    * Resolution order (highest level wins):
    *  - Direct device permission (scope='device', scope_id=deviceId)
    *  - Group permission via closure table on devices.group_id
-   *  - **API key claim**: when devices.group_id IS NULL, the device
-   *    inherits the scope of the API key's default_group_id, when that
-   *    group belongs to the device's tenant. This is
-   *    what makes a pre-approval device "belong" to a group even
-   *    though approveDevice() hasn't run yet — an API key targeting
-   *    the "Linux" group implicitly claims its enrolling devices
-   *    for the Linux team's scope.
-   *  - **Ungrouped scope**: when devices.group_id IS NULL and no API
-   *    key claim resolves, a team_permissions row with
-   *    scope='ungrouped' grants access.
+   *  - **Ungrouped scope**: when devices.group_id IS NULL, a
+   *    team_permissions row with scope='ungrouped' of a team of the
+   *    device's tenant grants access.
+   * A device receives its group at enrollment (its enrollment profile:
+   * modele-donnees-mdm §4.5); the claim of the removed agent's API keys
+   * is gone with them.
    */
   async getDevicePermission(
     userId: number,
@@ -57,7 +53,7 @@ export const permissionService = {
 
     const deviceRow = await db('devices')
       .where({ id: deviceId })
-      .select('group_id', 'api_key_id', 'tenant_id')
+      .select('group_id', 'tenant_id')
       .first();
     if (!deviceRow) return null;
 
@@ -69,33 +65,12 @@ export const permissionService = {
       // Group permission (inherited via closure table)
       groupLevel = await this._getGroupPermissionViaClosure(userId, deviceRow.group_id);
     } else {
-      // Ungrouped device — try the API-key default_group_id first,
-      // fall back to a literal scope='ungrouped' grant. The API-key
-      // path covers the typical "enroll into a key targeting a
-      // group" flow; the ungrouped path covers keys with no default
-      // group set (orphan devices).
-      if (deviceRow.api_key_id) {
-        // SECURITY: a key's default group claims the device only when it is
-        // a group of the DEVICE's tenant (same rule as approveDevice). A key
-        // pointing at another tenant's group (written before the key routes
-        // checked it, or by hand) must not hand that tenant's teams a scope
-        // on this device through the closure.
-        const key = await db('agent_api_keys as k')
-          .join('device_groups as g', 'g.id', 'k.default_group_id')
-          .where({ 'k.id': deviceRow.api_key_id, 'g.tenant_id': deviceRow.tenant_id })
-          .first('k.default_group_id') as { default_group_id: number } | undefined;
-        if (key?.default_group_id) {
-          groupLevel = await this._getGroupPermissionViaClosure(userId, key.default_group_id);
-        }
-      }
-      if (!groupLevel) {
-        // SECURITY: only an 'ungrouped' grant of a team of the DEVICE's
-        // tenant (teams are mono-tenant) — the same rule as
-        // getVisibleDeviceIds. Without it, a user with an 'ungrouped' grant
-        // in tenant A passed the single-device check on the ungrouped
-        // devices of every other tenant they could name.
-        groupLevel = await this._getHighestPermission(userId, 'ungrouped', 0, Number(deviceRow.tenant_id));
-      }
+      // SECURITY: only an 'ungrouped' grant of a team of the DEVICE's
+      // tenant (teams are mono-tenant) — the same rule as
+      // getVisibleDeviceIds. Without it, a user with an 'ungrouped' grant
+      // in tenant A passed the single-device check on the ungrouped
+      // devices of every other tenant they could name.
+      groupLevel = await this._getHighestPermission(userId, 'ungrouped', 0, Number(deviceRow.tenant_id));
     }
 
     // Return highest: rw > ro > null
@@ -303,33 +278,8 @@ export const permissionService = {
       .where('scope', 'device')
       .select('scope_id as id');
 
-    // Devices pre-approval claimed via their api_key's default_group:
-    // when group_id IS NULL but the enrolling API key targets a group
-    // the user's team has scope on, the device is treated as if it
-    // already lived in that group. Covers the typical
-    // "Linux-key enrols a device, Linux-team needs to approve it"
-    // case where group_id is only set at approveDevice() time. Only a
-    // default group of the device's own tenant claims it (see
-    // getDevicePermission).
-    const apiKeyClaimedDevices = await db('devices')
-      .join('agent_api_keys', 'agent_api_keys.id', 'devices.api_key_id')
-      .join('device_groups as key_group', function () {
-        this.on('key_group.id', 'agent_api_keys.default_group_id')
-          .andOn('key_group.tenant_id', 'devices.tenant_id');
-      })
-      .join('device_group_closure', 'device_group_closure.descendant_id', 'agent_api_keys.default_group_id')
-      .join('team_permissions', function () {
-        this.on('team_permissions.scope_id', 'device_group_closure.ancestor_id')
-          .andOn(db.raw("team_permissions.scope = 'group'"));
-      })
-      .whereNull('devices.group_id')
-      .whereNotNull('agent_api_keys.default_group_id')
-      .whereIn('team_permissions.team_id', teamIds)
-      .select('devices.id');
-
-    // Devices in the catch-all "Ungrouped" bucket — group_id IS NULL
-    // AND no api_key default group claim — visible to teams that
-    // hold an explicit scope='ungrouped' permission. SECURITY: only the
+    // Devices in the catch-all "Ungrouped" bucket — group_id IS NULL —
+    // visible to teams that hold an explicit scope='ungrouped' permission. SECURITY: only the
     // ungrouped devices of the tenants of those teams (teams are
     // mono-tenant): without that, a master-tenant caller that drops its
     // tenant filter (god view) got every tenant's ungrouped machines.
@@ -350,7 +300,6 @@ export const permissionService = {
     const ids = new Set<number>();
     for (const r of groupDevices) ids.add(r.id);
     for (const r of directDevices) ids.add(r.id);
-    for (const r of apiKeyClaimedDevices) ids.add(r.id);
     for (const r of ungroupedDevices) ids.add(r.id);
 
     return [...ids];

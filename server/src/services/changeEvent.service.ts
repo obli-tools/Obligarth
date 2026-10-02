@@ -31,10 +31,13 @@ import { userLabels } from './userLabels.service';
  *
  * ── Read-through union, no new storage ──────────────────────────────────────
  * Nothing is ingested, backfilled or denormalised: every kind is a live read
- * over the table that already owns that fact. The MDM's own kinds (commands,
- * profiles, apps) join here as their tables appear.
+ * over the table that already owns that fact (modele-donnees-mdm §11.1: kinds
+ * added without a new formatVersion, the addition being compatible).
  *
  *   config_change      audit_logs                      ← ADMIN ONLY, see below
+ *   enrollment         device_enrollments              (a cycle starts, a cycle ends)
+ *   mdm_command        mdm_command_targets             (final targets of the integration's queue)
+ *   os_change          device_status_history           (device.operating-system.version)
  *
  * ── Permissions ─────────────────────────────────────────────────────────────
  * `requireDeviceRead()` is necessary but not sufficient: a source protected
@@ -62,6 +65,9 @@ const FORMAT_VERSION = 4 as const;
 
 export const CHANGE_EVENT_KINDS = [
   'config_change',
+  'enrollment',
+  'mdm_command',
+  'os_change',
 ] as const;
 
 export type ChangeEventKind = (typeof CHANGE_EVENT_KINDS)[number];
@@ -209,6 +215,107 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
       }),
     }];
   }
+
+  // Enrollment cycles (modele-donnees-mdm §4.7): a cycle that starts, a cycle that ends. The device's own
+  // facts, readable by whoever reads the device.
+  sources.enrollment = [{
+    table: 'device_enrollments',
+    base: () => scope('device_enrollments', 'de', ctx).whereBetween('de.started_at', [from, to]),
+    columns: ['de.id', 'de.enrollment_type', 'de.management_mode', 'de.ownership', 'de.started_at as at'],
+    order: 'de.started_at',
+    countOn: 'de.id',
+    map: (r) => ({
+      id: `enrollment:device_enrollments:${r.id}:start`,
+      kind: 'enrollment',
+      at: toIso(r.at),
+      title: `Enrollment started — ${r.enrollment_type}`,
+      detail: `${r.ownership} · ${r.management_mode}`,
+      actor: null,
+      actorType: 'system',
+      severityHint: 'medium',
+      resourceType: 'enrollment',
+      resourceId: String(r.id),
+      resourcePath: null,
+      payload: { phase: 'started', method: r.enrollment_type, mode: r.management_mode, ownership: r.ownership },
+    }),
+  }, {
+    table: 'device_enrollments',
+    base: () => scope('device_enrollments', 'de', ctx).whereNotNull('de.ended_at').whereBetween('de.ended_at', [from, to]),
+    columns: ['de.id', 'de.end_reason', 'de.ended_at as at'],
+    order: 'de.ended_at',
+    countOn: 'de.id',
+    map: (r) => ({
+      id: `enrollment:device_enrollments:${r.id}:end`,
+      kind: 'enrollment',
+      at: toIso(r.at),
+      title: r.end_reason === 'replaced' ? 'Enrollment replaced by a new cycle' : `Left management — ${r.end_reason}`,
+      detail: null,
+      actor: null,
+      actorType: 'system',
+      severityHint: r.end_reason === 'replaced' ? 'medium' : 'high',
+      resourceType: 'enrollment',
+      resourceId: String(r.id),
+      resourcePath: null,
+      payload: { phase: 'ended', reason: r.end_reason },
+    }),
+  }];
+
+  // MDM commands that reached a final state on the device (the integration's queue). No parameter, no result:
+  // the request type, the origin and the outcome only.
+  sources.mdm_command = [{
+    table: 'mdm_command_targets',
+    base: () => scope('mdm_command_targets', 't', ctx)
+      .join('mdm_commands as c', function joinCommand() { this.on('c.id', '=', 't.command_id').andOn('c.tenant_id', '=', 't.tenant_id'); })
+      .whereIn('t.state', ['acknowledged', 'error', 'expired', 'cancelled', 'rejected'])
+      .whereNotNull('t.completed_at')
+      .whereBetween('t.completed_at', [from, to]),
+    columns: ['t.command_id', 't.state', 't.reject_code', 'c.request_type', 'c.origin', 't.completed_at as at',
+      db.raw("CASE WHEN c.actor ~ '^u:[0-9]{1,9}$' THEN substring(c.actor from 3)::int END AS user_id")],
+    order: 't.completed_at',
+    countOn: 't.command_id',
+    map: (r) => ({
+      id: `mdm_command:mdm_command_targets:${String(r.command_id).toUpperCase()}`,
+      kind: 'mdm_command',
+      at: toIso(r.at),
+      title: `MDM command ${r.request_type} — ${r.state}`,
+      detail: r.reject_code ? short(r.reject_code, 64) : null,
+      actor: actorName(r),
+      actorType: r.user_id ? 'user' : 'system',
+      severityHint: /^(EraseDevice|DeviceLock|EnableLostMode|DisableLostMode|ClearPasscode|RemoveProfile|RemoveApplication)$/.test(String(r.request_type)) ? 'high' : 'medium',
+      resourceType: 'mdm_command',
+      resourceId: String(r.command_id).toUpperCase(),
+      resourcePath: null,
+      payload: { requestType: r.request_type, state: r.state, origin: r.origin, rejectCode: r.reject_code ?? null },
+    }),
+  }];
+
+  // OS version changes reported by the device's DDM status channel (history kept at the changes only).
+  sources.os_change = [{
+    table: 'device_status_history',
+    base: () => scope('device_status_history', 'h', ctx)
+      .where('h.item', 'device.operating-system.version')
+      .whereBetween('h.observed_at', [from, to]),
+    columns: ['h.id', 'h.value', 'h.observed_at as at'],
+    order: 'h.observed_at',
+    countOn: 'h.id',
+    map: (r) => {
+      const v = typeof r.value === 'string' ? r.value : (r.value !== null && r.value !== undefined ? JSON.stringify(r.value) : null);
+      return {
+        id: `os_change:device_status_history:${r.id}`,
+        kind: 'os_change',
+        at: toIso(r.at),
+        title: `OS version — ${short(v, 40) ?? 'unknown'}`,
+        detail: null,
+        actor: null,
+        actorType: 'system',
+        severityHint: 'medium',
+        resourceType: 'os',
+        resourceId: null,
+        resourcePath: null,
+        payload: { version: short(v, 40) },
+      };
+    },
+  }];
 
   return sources;
 }

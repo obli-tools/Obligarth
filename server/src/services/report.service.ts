@@ -9,6 +9,9 @@ import { JobError, registerJob, sanitizeError, type JobContext, type JobHandle, 
 import { logger } from '../utils/logger';
 import { renderReportHtml } from './reportRenderer';
 import { launchChromium } from '../utils/chromium';
+import { contactState } from '@obligarth/shared';
+import { privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
+import { staleAfterDays } from '../mdm/settings';
 
 /** A ready output is kept 7 days, an output in error 30 days. */
 const OUTPUT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -211,117 +214,6 @@ class ReportService {
     return v;
   }
 
-  // First real IPv4 addresses of a NIC list — drop IPv6, loopback and
-  // link-local (169.254.x) so the report shows the machine's usable IP.
-  private primaryIps(nics: any): string {
-    if (!Array.isArray(nics)) return '';
-    const ips: string[] = [];
-    for (const n of nics) {
-      for (const a of n?.addresses || []) {
-        if (typeof a !== 'string' || a.includes(':')) continue;   // skip IPv6
-        if (a.startsWith('169.254') || a.startsWith('127.')) continue; // link-local/loopback
-        if (!ips.includes(a)) ips.push(a);
-      }
-    }
-    return ips.join(', ');
-  }
-
-  // Sum disk capacities (bytes) → whole GB. disks[] entries carry `size`.
-  private sumDiskGb(disks: any): number | null {
-    if (!Array.isArray(disks) || disks.length === 0) return null;
-    let bytes = 0;
-    for (const d of disks) bytes += Number(d?.size ?? d?.sizeBytes ?? d?.capacity ?? 0) || 0;
-    return bytes > 0 ? Math.round(bytes / 1073741824) : null;
-  }
-
-  // RAM total (GB): prefer live metrics (memory.totalMb, precise) then the
-  // static inventory (memory.total bytes).
-  private ramGb(mem: any, mt: any): number | null {
-    const liveMb = mt?.memory?.totalMb;
-    if (liveMb) return Math.round(Number(liveMb) / 1024);
-    if (mem?.total) return Math.round(Number(mem.total) / 1073741824);
-    return null;
-  }
-
-  // Disk capacity (GB): sum of live volume totals (reliable; static physical
-  // `disks` is empty on most VMs) then fall back to static disk sizes.
-  private diskGb(staticDisks: any, mt: any): number | null {
-    const live = Array.isArray(mt?.disks) ? mt.disks : [];
-    if (live.length) {
-      const gb = live.reduce((s: number, dk: any) => s + (Number(dk.totalGb) || 0), 0);
-      if (gb > 0) return Math.round(gb);
-    }
-    return this.sumDiskGb(staticDisks);
-  }
-
-  // Standardised OS label — "Windows Server 2022 Standard (21H2)" rather than
-  // the raw jsonb. Falls back to the device row's os_version/os_type.
-  private osLabel(os: any, d: any): string {
-    const edition = String(os?.edition || '').replace(/^Microsoft\s+/i, '').trim();
-    const ver = os?.displayVersion || '';
-    if (edition) return ver ? `${edition} (${ver})` : edition;
-    if (d?.os_version) return String(d.os_version);
-    return d?.os_type ? String(d.os_type) : '';
-  }
-
-  // MAC(s) of the NIC(s) carrying a usable IPv4 (skip purely virtual/link-local).
-  private primaryMacs(nics: any): string {
-    if (!Array.isArray(nics)) return '';
-    const macs: string[] = [];
-    for (const n of nics) {
-      const hasV4 = (n?.addresses || []).some((a: any) =>
-        typeof a === 'string' && !a.includes(':') && !a.startsWith('169.254') && !a.startsWith('127.'));
-      if (hasV4 && n?.mac && !macs.includes(n.mac)) macs.push(n.mac);
-    }
-    return macs.join(', ');
-  }
-
-  // Full parsed hardware for one server — feeds the "detailed" per-server cards.
-  private buildHwDetail(d: any, r: any, mt: any, nameMap: Map<number, string>) {
-    const cpu = this.jval(r?.cpu) || {};
-    const mem = this.jval(r?.memory) || {};
-    const os = this.jval(r?.os) || {};
-    const nics = this.jval(r?.network_interfaces) || [];
-    const gpu = this.jval(r?.gpu) || [];
-    const mobo = this.jval(r?.motherboard) || {};
-    const bios = this.jval(r?.bios) || {};
-    const staticDisks = this.jval(r?.disks) || [];
-    const live = Array.isArray(mt?.disks) ? mt.disks : [];
-    return {
-      device: nameMap.get(d.id) || `#${d.id}`,
-      status: d.status,
-      os: this.osLabel(os, d),
-      osBuild: os?.buildNumber ? String(os.buildNumber) : '',
-      cpu: cpu.model || '',
-      cores: cpu.cores ?? null,
-      threads: cpu.threads ?? null,
-      speed: cpu.speed ?? null,
-      ramGb: this.ramGb(mem, mt),
-      ramSlots: Array.isArray(mem?.slots)
-        ? mem.slots.filter((s: any) => Number(s?.size) > 0)
-            .map((s: any) => ({ bank: s.bank || '', sizeGb: Math.round(Number(s.size) / 1073741824), type: s.type || '' }))
-        : [],
-      volumes: live.map((dk: any) => ({
-        mount: dk.mount || '', totalGb: Math.round(Number(dk.totalGb) || 0),
-        usedGb: Math.round(Number(dk.usedGb) || 0), pct: Math.round(Number(dk.percent) || 0),
-      })).filter((v: any) => v.totalGb > 0),
-      physicalDisks: Array.isArray(staticDisks)
-        ? staticDisks.map((dk: any) => ({ model: dk.model || dk.device || '', sizeGb: Math.round(Number(dk.size || 0) / 1073741824), type: dk.type || '' }))
-            .filter((x: any) => x.sizeGb > 0)
-        : [],
-      nics: Array.isArray(nics)
-        ? nics.map((n: any) => ({
-            name: n.name || '', mac: n.mac || '',
-            ips: (n.addresses || []).filter((a: any) => typeof a === 'string' && !a.includes(':') && !a.startsWith('169.254') && !a.startsWith('127.')),
-          })).filter((n: any) => n.name || n.ips.length)
-        : [],
-      gpu: Array.isArray(gpu) ? gpu.map((g: any) => String(g.name || '')).filter(Boolean) : [],
-      motherboard: `${mobo.manufacturer || ''} ${mobo.model || ''}`.trim(),
-      bios: `${bios.vendor || ''} ${bios.version || ''}`.trim(),
-      scannedAt: r?.scanned_at || null,
-    };
-  }
-
   // Render a single cell value as text (CSV fallback / legacy). DB rows carry
   // JSON columns (objects/arrays) and Dates — stringify them so we never
   // emit "[object Object]".
@@ -420,101 +312,109 @@ class ReportService {
     return Buffer.from(buffer as any);
   }
 
+  /**
+   * The rows of a report (modele-donnees-mdm §11.1): the devices of the report's scope in its tenant, with
+   * the columns of the MDM registry (platform, OS, model, ownership, states, last contact, end user, serial
+   * number when the privacy rules of the device's ownership collect it); the hardware and network sections
+   * from the inventory the MDM keeps; the applications the rules collect. In the report's tenant context.
+   */
   private async collectData(report: any) {
     const sections: Record<string, any> = {};
-    const sections_list: ReportSection[] = report.sections || [];
+    const sectionsList: ReportSection[] = report.sections || [];
+    const tenantId = Number(report.tenant_id);
 
-    let deviceIds: number[] = [];
-
+    const q = db('devices as d')
+      .leftJoin('end_users as u', function joinEndUser() { this.on('u.id', '=', 'd.end_user_id').andOn('u.tenant_id', '=', 'd.tenant_id'); })
+      .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
+      .where('d.tenant_id', tenantId);
     if (report.scope_type === 'device' && report.scope_id) {
-      deviceIds = [report.scope_id];
+      q.where('d.id', report.scope_id);
     } else if (report.scope_type === 'group' && report.scope_id) {
-      const descendants = await db('device_group_closure')
-        .where({ ancestor_id: report.scope_id }).pluck('descendant_id');
-      const devices = await db('devices').where({ tenant_id: report.tenant_id }).whereIn('group_id', descendants).pluck('id');
-      deviceIds = devices;
-    } else {
-      const devices = await db('devices').where({ tenant_id: report.tenant_id }).pluck('id');
-      deviceIds = devices;
+      q.whereIn('d.group_id', db('device_group_closure').where({ ancestor_id: report.scope_id }).select('descendant_id'));
     }
-
-    const devices = await db('devices').where({ tenant_id: report.tenant_id }).whereIn('id', deviceIds);
-    // Only the report's tenant's devices from here on: a scope naming
-    // another tenant's device (scope_id is free) reads none of its data.
-    deviceIds = devices.map((d: any) => Number(d.id));
-    const deviceName = new Map<number, string>(devices.map((d: any) => [d.id, d.display_name || d.hostname || `#${d.id}`]));
-    sections.devices = devices.map((d: any) => ({
-      id: d.id, hostname: d.hostname, displayName: d.display_name,
-      status: d.status, osType: d.os_type, osVersion: d.os_version,
-      lastSeen: d.last_seen_at,
+    // Only the report's tenant's devices: a scope naming another tenant's device (scope_id is free) reads none.
+    const devices = await q.orderBy('d.label', 'asc').select(
+      'd.id', 'd.label', 'd.platform', 'd.os_version', 'd.os_build', 'd.model', 'd.model_name', 'd.ownership',
+      'd.management_mode', 'd.enrollment_state', 'd.compliance_state', 'd.last_checkin_at', 'd.serial_number',
+      'd.supervised', 'd.storage_capacity_bytes', 'd.storage_available_bytes',
+      'u.display_name as end_user_name', 'u.email as end_user_email',
+      'a.model_number', 'a.device_information', 'a.cert_not_after', 'a.activation_lock_enabled', 'a.find_my_enabled',
+    ) as any[];
+    const deviceIds = devices.map((d) => Number(d.id));
+    const rulesCache = new Map<string, PrivacyRules>();
+    const rulesOf = async (d: any): Promise<PrivacyRules> => {
+      const type = d.management_mode === 'user_enrollment' ? 'User Enrollment (Device)' : 'Device';
+      const key = `${d.ownership}:${type}`;
+      if (!rulesCache.has(key)) rulesCache.set(key, await privacyRulesFor(db, tenantId, d.ownership, type));
+      return rulesCache.get(key)!;
+    };
+    const staleDays = await staleAfterDays(tenantId);
+    const now = new Date();
+    const deviceName = new Map<number, string>(devices.map((d) => [Number(d.id), d.label || `#${d.id}`]));
+    const withSerial = (await Promise.all(devices.map(rulesOf))).some((r) => r.storeSerialNumber);
+    sections.devices = await Promise.all(devices.map(async (d) => {
+      const r = await rulesOf(d);
+      return {
+        id: d.id, device: d.label, platform: d.platform, osVersion: d.os_version ?? '', model: d.model_name ?? d.model ?? '',
+        ownership: d.ownership, enrollment: d.enrollment_state, contact: contactState(d.last_checkin_at, now, staleDays),
+        compliance: d.compliance_state, lastContact: d.last_checkin_at ?? null,
+        endUser: d.end_user_name ?? d.end_user_email ?? '',
+        ...(withSerial ? { serialNumber: r.storeSerialNumber ? (d.serial_number ?? '') : '' } : {}),
+      };
     }));
 
-    const wantHw = sections_list.includes('hardware');
-    const wantNet = sections_list.includes('network');
-    const wantDetail = sections_list.includes('inventory_detail');
-    if (wantHw || wantNet || wantDetail) {
-      // device_inventory_hardware keeps ONE ROW PER SCAN (not upserted) → a
-      // long-lived device accumulates thousands of near-identical rows. We want
-      // the CURRENT state, so keep only the LATEST scan per device. Disk/RAM
-      // capacity is read from live metrics (the static `disks` array is often
-      // empty on VMs); everything is parsed into clean columns — never raw JSON
-      // nor the Windows product key.
-      const hwRows = await db('device_inventory_hardware')
-        .whereIn('device_id', deviceIds)
-        .orderBy('scanned_at', 'desc');
-      const latest = new Map<number, any>();
-      for (const r of hwRows) if (!latest.has(r.device_id)) latest.set(r.device_id, r);
-      const metricsById = new Map<number, any>(devices.map((d: any) => [d.id, this.jval(d.latest_metrics) || {}]));
-
-      // Flat inventory table — one row per server, columns chosen by which of
-      // hardware / network was requested (aggregated into a SINGLE table).
-      if (wantHw || wantNet) {
-        sections.hardware = devices.map((d: any) => {
-          const r = latest.get(d.id);
-          const cpu = this.jval(r?.cpu) || {};
-          const mem = this.jval(r?.memory) || {};
-          const os = this.jval(r?.os) || {};
-          const nics = this.jval(r?.network_interfaces) || [];
-          const mt = metricsById.get(d.id) || {};
-          const row: any = { device: deviceName.get(d.id) || `#${d.id}` };
-          if (wantHw) {
-            row.cpu = cpu.model || '';
-            row.cores = cpu.cores ?? null;
-            row.threads = cpu.threads ?? null;
-            row.ram_gb = this.ramGb(mem, mt);
-            row.disk_gb = this.diskGb(this.jval(r?.disks), mt);
-            row.os = this.osLabel(os, d);
-          }
-          if (wantNet) {
-            row.ipv4 = this.primaryIps(nics);
-            row.mac = this.primaryMacs(nics);
-            row.nics = Array.isArray(nics) ? nics.length : 0;
-          }
-          row.scanned_at = r?.scanned_at ?? null;
-          return row;
-        });
-      }
-
-      // Detailed per-server breakdown (only when the box is checked) — full
-      // parsed hardware for the cards the renderer draws below the table.
-      if (wantDetail) {
-        sections.hardwareDetail = devices.map((d: any) =>
-          this.buildHwDetail(d, latest.get(d.id), metricsById.get(d.id) || {}, deviceName));
-      }
+    const gb = (bytes: unknown): number | null => (bytes === null || bytes === undefined ? null : Math.round(Number(bytes) / 1e9));
+    const info = (d: any): Record<string, unknown> => this.jval(d.device_information) || {};
+    const wantHw = sectionsList.includes('hardware');
+    const wantNet = sectionsList.includes('network');
+    const wantDetail = sectionsList.includes('inventory_detail');
+    if (wantHw || wantNet) {
+      // One row per device: the hardware the MDM inventories; of the network, only what the rules kept.
+      sections.hardware = devices.map((d) => {
+        const row: any = { device: deviceName.get(Number(d.id)) };
+        if (wantHw) {
+          row.model = d.model_name ?? d.model ?? '';
+          row.os = [d.os_version, d.os_build ? `(${d.os_build})` : ''].filter(Boolean).join(' ');
+          row.storage_gb = gb(d.storage_capacity_bytes);
+          row.storage_free_gb = gb(d.storage_available_bytes);
+          row.supervised = d.supervised ? 'yes' : 'no';
+        }
+        if (wantNet) {
+          const i = info(d);
+          row.wifi_mac = typeof i.WiFiMAC === 'string' ? i.WiFiMAC : '';
+          row.bluetooth_mac = typeof i.BluetoothMAC === 'string' ? i.BluetoothMAC : '';
+          row.carrier = typeof i.CurrentCarrierNetwork === 'string' ? i.CurrentCarrierNetwork : '';
+        }
+        return row;
+      });
+    }
+    if (wantDetail) {
+      sections.hardwareDetail = devices.map((d) => ({
+        device: deviceName.get(Number(d.id)),
+        contact: contactState(d.last_checkin_at, now, staleDays),
+        lines: [
+          ['OS', [d.platform, d.os_version, d.os_build ? `build ${d.os_build}` : ''].filter(Boolean).join(' · ')],
+          ['Model', [d.model_name ?? d.model ?? '', d.model_number ?? ''].filter(Boolean).join(' · ')],
+          ['Storage', d.storage_capacity_bytes ? `${gb(d.storage_available_bytes) ?? '?'} GB free of ${gb(d.storage_capacity_bytes)} GB` : ''],
+          ['Ownership', d.ownership],
+          ['Supervised', d.supervised ? 'yes' : 'no'],
+          ['Activation Lock', d.activation_lock_enabled === null || d.activation_lock_enabled === undefined ? '' : (d.activation_lock_enabled ? 'on' : 'off')],
+          ['Find My', d.find_my_enabled === null || d.find_my_enabled === undefined ? '' : (d.find_my_enabled ? 'on' : 'off')],
+          ['Identity expires', d.cert_not_after ? new Date(d.cert_not_after).toISOString().slice(0, 10) : ''],
+        ],
+      }));
     }
 
-    if (sections_list.includes('software')) {
-      const sw = await db('device_inventory_software')
-        .whereIn('device_id', deviceIds)
-        .orderBy('name');
-      sections.software = sw.map((s: any) => ({
-        device: deviceName.get(s.device_id) || `#${s.device_id}`,
-        name: s.name, version: s.version, publisher: s.publisher,
-        install_date: s.install_date, source: s.source,
-        // device_id → exact COUNT(DISTINCT device) per app in the catalog
-        // (hidden from generic tables via HIDDEN_COLS; the software section
-        // uses its own catalog renderer, not detailTable).
-        device_id: s.device_id,
+    if (sectionsList.includes('software')) {
+      // device_apps keeps what the rules collect: no unmanaged app of a personal or COPE device.
+      const apps = deviceIds.length ? await db('device_apps').where({ tenant_id: tenantId }).whereIn('device_id', deviceIds)
+        .orderByRaw('lower(COALESCE(name, identifier)) asc') as any[] : [];
+      sections.software = apps.map((a) => ({
+        device: deviceName.get(Number(a.device_id)) || `#${a.device_id}`,
+        name: a.name ?? a.identifier, version: a.short_version ?? a.version ?? '', publisher: '',
+        install_date: null, source: a.managed ? 'managed' : 'installed',
+        // device_id → exact COUNT(DISTINCT device) per app in the catalog (hidden from generic tables).
+        device_id: a.device_id,
       }));
     }
 

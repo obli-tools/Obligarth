@@ -75,6 +75,15 @@ export function registerCoreAuditActions(): void {
     { name: 'device.deleted', criticality: 'standard', label: 'Device record deleted' },
     { name: 'device.bulk_deleted', criticality: 'standard', label: 'Device records deleted' },
     { name: 'device.bulk_approved', criticality: 'standard', label: 'Devices approved' },
+    // The registry of the MDM data model (lot B2, modele-donnees-mdm §10.7): its routes are part of the
+    // core API (/api/mdm), declared with it. The ownership change is critical (P1 in its transaction).
+    { name: 'device.ownership_changed', criticality: 'critical', label: 'Device ownership changed' },
+    { name: 'device.group_changed', criticality: 'standard', label: 'Device moved to a group' },
+    { name: 'device.end_user_assigned', criticality: 'standard', label: 'End user of a device assigned' },
+    { name: 'end_user.created', criticality: 'standard', label: 'End user created' },
+    { name: 'end_user.updated', criticality: 'standard', label: 'End user updated' },
+    { name: 'end_user.departed', criticality: 'standard', label: 'End user departed' },
+    { name: 'end_user.imported', criticality: 'standard', label: 'End users imported' },
 
     // ── Restrictions and approvals ─────────────────────────────────────────
     { name: 'restrictions.updated', criticality: 'critical', label: 'Restrictions matrix changed' },

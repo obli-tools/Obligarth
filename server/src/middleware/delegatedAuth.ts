@@ -51,16 +51,17 @@ export const DELEGATION_HEADER = 'x-obli-delegation';
  * Routes that accept a delegated token, matched against the path RELATIVE to
  * the /devices mount (see routes/index.ts). Absolute forms:
  *
- *   GET /api/devices/:id
  *   GET /api/devices/:id/change-events
  *   GET /api/devices/:id/change-events/summary
  *
  * An allowlist, not a denylist: a route that has not been reviewed for
  * delegated access does not get it, and a route added later stays closed until
- * somebody adds it here on purpose. Every entry is a read.
+ * somebody adds it here on purpose. Every entry is a read. The record of a
+ * device (GET /api/devices/:id) left with the MDM data model for
+ * /api/mdm/devices/:id, not reviewed for delegated access: only the timeline
+ * stays.
  */
 const DELEGATED_ROUTES: RegExp[] = [
-  /^\/\d+$/,
   /^\/\d+\/change-events$/,
   /^\/\d+\/change-events\/summary$/,
 ];

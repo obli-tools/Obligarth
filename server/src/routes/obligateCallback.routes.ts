@@ -803,8 +803,9 @@ router.get('/dashboard-stats', async (req, res) => {
     if (!(await obligateService.verifyInboundBearer(req.headers.authorization))) { res.status(401).json({ success: false }); return; }
 
     const counters: ObligateDashboardStat[] = [
-      { label: 'Devices', color: '#58a6ff', count: async () => Number(((await db('devices').where({ approval_status: 'approved' }).count('id as c').first()) as any)?.c ?? 0) },
-      { label: 'Online', color: '#2ea043', count: async () => Number(((await db('devices').where({ approval_status: 'approved', status: 'online' }).count('id as c').first()) as any)?.c ?? 0) },
+      // The devices under management; 'Active': a contact within 24 hours (modele-donnees-mdm §4.4, §11.1).
+      { label: 'Devices', color: '#58a6ff', count: async () => Number(((await db('devices').whereNot('enrollment_state', 'unenrolled').count('id as c').first()) as any)?.c ?? 0) },
+      { label: 'Active', color: '#2ea043', count: async () => Number(((await db('devices').whereNot('enrollment_state', 'unenrolled').whereRaw("last_checkin_at >= now() - interval '24 hours'").count('id as c').first()) as any)?.c ?? 0) },
       ...moduleDashboardStats(),
     ];
     // Fleet-wide counters: a transverse read with the integration's grant.

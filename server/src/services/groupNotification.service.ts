@@ -1,3 +1,4 @@
+import { MDM_STALE_AFTER_DAYS_DEFAULT } from '@obligarth/shared';
 import { db } from '../db';
 import { groupService } from './group.service';
 import { logger } from '../utils/logger';
@@ -50,18 +51,19 @@ export const groupNotificationService = {
       // Get all descendant group IDs (including self)
       const descendantIds = await groupService.getDescendantIds(group.id);
 
-      // Find devices that are currently offline/degraded in any of these groups
+      // Find the devices under management of these groups that are without contact for the default
+      // mdmStaleAfterDays (a managed device has no online state: modele-donnees-mdm §4.4)
       const downDevices = await db('devices')
         .whereIn('group_id', descendantIds)
-        .whereIn('status', ['offline', 'warning', 'critical'])
-        .where({ approval_status: 'approved' })
-        .select('id', 'display_name', 'hostname', 'status');
+        .whereNot('enrollment_state', 'unenrolled')
+        .whereRaw('last_checkin_at < now() - make_interval(days => ?::int)', [MDM_STALE_AFTER_DAYS_DEFAULT])
+        .select('id', 'label');
 
       if (downDevices.length > 0) {
         const state = getOrCreateState(group.id);
         for (const d of downDevices) {
           state.downMonitorIds.add(d.id);
-          state.downMonitorNames.set(d.id, d.display_name ?? d.hostname);
+          state.downMonitorNames.set(d.id, d.label);
         }
         // If there are already devices down, mark as notified
         // (we don't want to re-send on startup)

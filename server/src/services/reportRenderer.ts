@@ -16,34 +16,26 @@ interface RenderOpts {
 
 // ── palettes ────────────────────────────────────────────────────────────────
 
-const STATUS_META: Record<string, { label: string; color: string }> = {
-  online:            { label: 'Online',            color: '#10b981' },
-  warning:           { label: 'Warning',           color: '#f59e0b' },
-  critical:          { label: 'Critical',          color: '#ef4444' },
-  updating:          { label: 'Updating',          color: '#3b82f6' },
-  update_error:      { label: 'Update error',      color: '#dc2626' },
-  offline:           { label: 'Offline',           color: '#9ca3af' },
-  maintenance:       { label: 'Maintenance',       color: '#8b5cf6' },
-  suspended:         { label: 'Suspended',         color: '#71717a' },
-  pending:           { label: 'Pending',           color: '#eab308' },
-  pending_uninstall: { label: 'Pending uninstall', color: '#f97316' },
+// Contact of a managed device (modele-donnees-mdm §4.4): derived from its last
+// check-in, never stored; a managed device has no online state.
+const CONTACT_META: Record<string, { label: string; color: string }> = {
+  recent: { label: 'Recent contact', color: '#10b981' },
+  quiet:  { label: 'Quiet',          color: '#3b82f6' },
+  stale:  { label: 'Without contact', color: '#f59e0b' },
+  never:  { label: 'Never seen',     color: '#9ca3af' },
 };
 
-const OS_META: Record<string, { label: string; color: string }> = {
-  windows: { label: 'Windows', color: '#0078d4' },
-  macos:   { label: 'macOS',   color: '#374151' },
-  linux:   { label: 'Linux',   color: '#f59e0b' },
-  other:   { label: 'Other',   color: '#9ca3af' },
+const PLATFORM_META: Record<string, { label: string; color: string }> = {
+  ios:      { label: 'iOS',      color: '#0ea5e9' },
+  ipados:   { label: 'iPadOS',   color: '#6366f1' },
+  macos:    { label: 'macOS',    color: '#374151' },
+  tvos:     { label: 'tvOS',     color: '#8b5cf6' },
+  visionos: { label: 'visionOS', color: '#ec4899' },
+  android:  { label: 'Android',  color: '#22c55e' },
 };
 
-// Devices in these states are actually reachable (the box answered a recent
-// push). 'warning'/'critical' encode metric severity, NOT disconnection —
-// filtering on status='online' alone under-counts the live fleet. This is the
-// canonical live set used everywhere else (device.service connected filter,
-// dashboard KPIs, the collectors); 'update_error' is intentionally EXCLUDED —
-// the product buckets it with offline, so we must too or the report's
-// availability number contradicts the dashboard.
-const REACHABLE = new Set(['online', 'warning', 'critical', 'updating']);
+// In contact: a check-in within the tenant's threshold (mdmStaleAfterDays).
+const IN_CONTACT = new Set(['recent', 'quiet']);
 
 const ACCENT = '#6366f1';
 const INK = '#0f172a';
@@ -169,11 +161,11 @@ function computeMetrics(data: Record<string, any>) {
   const osCounts: Record<string, number> = {};
   let reachable = 0;
   for (const d of devices) {
-    const st = String(d.status ?? 'offline');
+    const st = String(d.contact ?? 'never');
     statusCounts[st] = (statusCounts[st] || 0) + 1;
-    if (REACHABLE.has(st)) reachable++;
-    const os = String(d.osType ?? 'other');
-    osCounts[os] = (osCounts[os] || 0) + 1;
+    if (IN_CONTACT.has(st)) reachable++;
+    const platform = String(d.platform ?? 'ios');
+    osCounts[platform] = (osCounts[platform] || 0) + 1;
   }
   const reachablePct = total ? (reachable / total) * 100 : 0;
 
@@ -182,11 +174,7 @@ function computeMetrics(data: Record<string, any>) {
   // Hardware — already curated (one parsed row per device) in collectData.
   const hwRows: any[] = Array.isArray(data.hardware) ? data.hardware : [];
   let totalCores = 0, totalRamGb = 0, totalDiskGb = 0;
-  for (const h of hwRows) {
-    totalCores += Number(h.cores) || 0;
-    totalRamGb += Number(h.ram_gb) || 0;
-    totalDiskGb += Number(h.disk_gb) || 0;
-  }
+  for (const h of hwRows) totalDiskGb += Number(h.storage_gb) || 0;
   const hasHardware = hwRows.length > 0;
 
   return {
@@ -213,10 +201,11 @@ const HIDDEN_COLS = new Set([
 // Human column headers (fallback: snake_case → spaced). Covers the curated
 // hardware/software/devices columns.
 const COLUMN_LABELS: Record<string, string> = {
-  id: 'ID', device: 'Server', hostname: 'Hostname', displayName: 'Display name',
-  status: 'Status', osType: 'OS', osVersion: 'OS version', lastSeen: 'Last seen',
-  cpu: 'CPU', cores: 'Cores', threads: 'Threads', ram_gb: 'RAM (GB)', disk_gb: 'Disk (GB)',
-  ipv4: 'IP address', mac: 'MAC', nics: 'Adapters', os: 'OS', scanned_at: 'Scanned',
+  id: 'ID', device: 'Device', platform: 'Platform', osVersion: 'OS version', model: 'Model',
+  ownership: 'Ownership', enrollment: 'Enrollment', contact: 'Contact', compliance: 'Compliance',
+  lastContact: 'Last contact', endUser: 'End user', serialNumber: 'Serial number',
+  os: 'OS', storage_gb: 'Storage (GB)', storage_free_gb: 'Free (GB)', supervised: 'Supervised',
+  wifi_mac: 'Wi-Fi MAC', bluetooth_mac: 'Bluetooth MAC', carrier: 'Carrier',
   name: 'Name', version: 'Version', publisher: 'Publisher', install_date: 'Installed', source: 'Source',
 };
 const colLabel = (h: string): string => COLUMN_LABELS[h] || h.replace(/_/g, ' ');
@@ -260,6 +249,16 @@ function hardwareDetailBlocks(rows: any[]): string {
   if (!Array.isArray(rows) || rows.length === 0) return '';
   const line = (label: string, val: string) =>
     val ? `<div class="d-line"><span class="d-key">${esc(label)}</span><span class="d-val">${esc(val)}</span></div>` : '';
+  // The MDM's cards (report.service collectData): a title, the contact, label/value lines.
+  if (rows.every((h) => Array.isArray(h?.lines))) {
+    const mdmCards = rows.map((h) => `<div class="dcard">
+<div class="dcard-h">${esc(h.device)}${h.contact ? ` <span class="dstatus" style="color:${CONTACT_META[h.contact]?.color || MUTED}">${esc(CONTACT_META[h.contact]?.label || h.contact)}</span>` : ''}</div>
+<div class="dgrid">
+${(h.lines as Array<[string, string]>).map(([k, v]) => line(k, String(v ?? ''))).join('\n')}
+</div>
+</div>`).join('');
+    return `<h2>Detailed inventory <span class="count">${num(rows.length)}</span></h2><div class="dcards">${mdmCards}</div>`;
+  }
   const cards = rows.map((h) => {
     const cpu = h.cpu ? `${h.cpu}${h.cores != null ? ` — ${h.cores} cores / ${h.threads ?? '?'} threads` : ''}${h.speed ? ` @ ${h.speed} GHz` : ''}` : '';
     const ram = h.ramGb != null
@@ -273,7 +272,7 @@ function hardwareDetailBlocks(rows: any[]): string {
     const nics = (h.nics || []).map((n: any) =>
       `<div class="d-sub">${esc(n.name)}${n.mac ? ` · <span class="mono">${esc(n.mac)}</span>` : ''}${n.ips?.length ? ` · ${esc(n.ips.join(', '))}` : ''}</div>`).join('');
     return `<div class="dcard">
-<div class="dcard-h">${esc(h.device)}${h.status ? ` <span class="dstatus" style="color:${STATUS_META[h.status]?.color || MUTED}">${esc(STATUS_META[h.status]?.label || h.status)}</span>` : ''}</div>
+<div class="dcard-h">${esc(h.device)}${h.status ? ` <span class="dstatus" style="color:${CONTACT_META[h.status]?.color || MUTED}">${esc(CONTACT_META[h.status]?.label || h.status)}</span>` : ''}</div>
 <div class="dgrid">
 ${line('OS', h.os + (h.osBuild ? ` · build ${h.osBuild}` : ''))}
 ${line('CPU', cpu)}
@@ -510,8 +509,8 @@ export function renderReportHtml(data: Record<string, any>, report: any, opts: R
   // KPI row — always device totals; conditional cards for the sections present.
   const kpis: string[] = [
     kpi(num(m.total), 'Devices', 'in scope', ACCENT),
-    kpi(num(m.reachable), 'Reachable', `${pct(m.reachablePct)}% of fleet`, '#10b981'),
-    kpi(num(m.total - m.reachable), 'Offline', `${pct(100 - m.reachablePct)}% of fleet`, '#9ca3af'),
+    kpi(num(m.reachable), 'In contact', `${pct(m.reachablePct)}% of fleet`, '#10b981'),
+    kpi(num(m.total - m.reachable), 'Without contact', `${pct(100 - m.reachablePct)}% of fleet`, '#9ca3af'),
   ];
   if (m.totalCores > 0) kpis.push(kpi(num(m.totalCores), 'CPU cores', 'across fleet', ACCENT));
   if (m.totalRamGb > 0) kpis.push(kpi(capacity(m.totalRamGb), 'RAM', 'total installed', '#8b5cf6'));
@@ -520,12 +519,12 @@ export function renderReportHtml(data: Record<string, any>, report: any, opts: R
 
   // Charts.
   const charts: string[] = [];
-  charts.push(ring(m.reachablePct, m.reachablePct >= 80 ? '#10b981' : m.reachablePct >= 50 ? '#f59e0b' : '#ef4444', 'Fleet availability'));
-  charts.push(donut('Device status',
-    Object.entries(m.statusCounts).map(([k, v]) => ({ label: STATUS_META[k]?.label || k, value: v, color: STATUS_META[k]?.color || MUTED })),
+  charts.push(ring(m.reachablePct, m.reachablePct >= 80 ? '#10b981' : m.reachablePct >= 50 ? '#f59e0b' : '#ef4444', 'Devices in contact'));
+  charts.push(donut('Contact',
+    Object.entries(m.statusCounts).map(([k, v]) => ({ label: CONTACT_META[k]?.label || k, value: v, color: CONTACT_META[k]?.color || MUTED })),
     num(m.total)));
-  charts.push(donut('Operating systems',
-    Object.entries(m.osCounts).map(([k, v]) => ({ label: OS_META[k]?.label || k, value: v, color: OS_META[k]?.color || MUTED })),
+  charts.push(donut('Platforms',
+    Object.entries(m.osCounts).map(([k, v]) => ({ label: PLATFORM_META[k]?.label || k, value: v, color: PLATFORM_META[k]?.color || MUTED })),
     num(m.total)));
 
   // Detail sections, in a stable order. Two sections are special-cased instead

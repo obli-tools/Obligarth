@@ -27,6 +27,7 @@ import { registerVaultJobs } from './vault/jobs';
 import { registerAuditModule } from './audit/module';
 import { registerGuardModule } from './guard/module';
 import { registerAppleModule } from './modules/apple';
+import { registerMdmModule } from './mdm';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -95,6 +96,7 @@ async function main() {
   registerVaultJobs();
   registerAuditModule();
   registerGuardModule();
+  registerMdmModule();
   registerAppleModule();
 
   // Development only: the server migrates its own database (server-migrate

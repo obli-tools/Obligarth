@@ -1,6 +1,6 @@
 import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
-import { isMasterTenant } from '@obligarth/shared';
+import { MDM_STALE_AFTER_DAYS_DEFAULT, isMasterTenant } from '@obligarth/shared';
 import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obligarth/shared';
 import type { TenantView } from './deviceScope.service';
 
@@ -288,40 +288,42 @@ export const groupService = {
     const allGroups = await this.getAll(tenantId, view);
     const groupMap = new Map<number, DeviceGroupTreeNode>();
 
-    // Count devices per group (direct members only). The global view sees
-    // counts across every tenant; every other caller stays strictly scoped.
+    // Count the devices under management per group (direct members only; MDM counters of
+    // modele-donnees-mdm §11.3). The global view sees counts across every tenant; every other caller stays
+    // strictly scoped. 'stale': no contact for the default mdmStaleAfterDays (the tenant's own threshold
+    // qualifies the list and the summary of the registry).
     const isMaster = !!view?.globalView && isMasterTenant(tenantId);
     const countQ = db('devices')
-      .where({ approval_status: 'approved' })
-      .whereNot({ status: 'pending_uninstall' })
+      .whereNot('enrollment_state', 'unenrolled')
       .whereNotNull('group_id')
       .groupBy('group_id')
       .select('group_id', db.raw('count(*) as total'))
       .select(
-        db.raw("count(*) filter (where status = 'online') as online_count"),
-        db.raw("count(*) filter (where status = 'offline') as offline_count"),
-        db.raw("count(*) filter (where status = 'warning') as warning_count"),
-        db.raw("count(*) filter (where status = 'critical') as critical_count"),
+        db.raw("count(*) filter (where enrollment_state = 'enrolled') as enrolled_count"),
+        db.raw("count(*) filter (where compliance_state = 'non_compliant') as non_compliant_count"),
+        db.raw("count(*) filter (where config_state = 'error') as config_error_count"),
+        db.raw("count(*) filter (where last_checkin_at < now() - make_interval(days => ?::int)) as stale_count", [MDM_STALE_AFTER_DAYS_DEFAULT]),
       );
     if (!isMaster) countQ.where('tenant_id', tenantId);
     const countRows = await countQ;
-    const directCounts = new Map<number, { total: number; online: number; offline: number; warning: number; critical: number }>();
+    type Counts = { total: number; enrolled: number; nonCompliant: number; configErrors: number; stale: number };
+    const zero = (): Counts => ({ total: 0, enrolled: 0, nonCompliant: 0, configErrors: 0, stale: 0 });
+    const directCounts = new Map<number, Counts>();
     for (const row of countRows) {
       directCounts.set(row.group_id, {
-        total: parseInt(row.total), online: parseInt(row.online_count),
-        offline: parseInt(row.offline_count), warning: parseInt(row.warning_count),
-        critical: parseInt(row.critical_count),
+        total: parseInt(row.total), enrolled: parseInt(row.enrolled_count), nonCompliant: parseInt(row.non_compliant_count),
+        configErrors: parseInt(row.config_error_count), stale: parseInt(row.stale_count),
       });
     }
 
     // Initialize nodes with direct counts
     for (const g of allGroups) {
-      const dc = directCounts.get(g.id) ?? { total: 0, online: 0, offline: 0, warning: 0, critical: 0 };
+      const dc = directCounts.get(g.id) ?? zero();
       groupMap.set(g.id, {
         ...g, children: [],
         deviceCount: dc.total, total: dc.total,
-        onlineCount: dc.online, offlineCount: dc.offline,
-        warningCount: dc.warning, criticalCount: dc.critical,
+        enrolledCount: dc.enrolled, nonCompliantCount: dc.nonCompliant, configErrorCount: dc.configErrors, staleCount: dc.stale,
+        onlineCount: 0, offlineCount: 0, warningCount: 0, criticalCount: 0,
       });
     }
 
@@ -336,25 +338,24 @@ export const groupService = {
     }
 
     // Accumulate counts from children (bottom-up)
-    function accumulate(node: DeviceGroupTreeNode): { total: number; online: number; offline: number; warning: number; critical: number } {
-      let totals = {
-        total: node.deviceCount ?? 0, online: node.onlineCount ?? 0,
-        offline: node.offlineCount ?? 0, warning: node.warningCount ?? 0,
-        critical: node.criticalCount ?? 0,
+    function accumulate(node: DeviceGroupTreeNode): Counts {
+      const totals: Counts = {
+        total: node.deviceCount ?? 0, enrolled: node.enrolledCount ?? 0, nonCompliant: node.nonCompliantCount ?? 0,
+        configErrors: node.configErrorCount ?? 0, stale: node.staleCount ?? 0,
       };
       for (const child of node.children) {
-        const childTotals = accumulate(child);
-        totals.total += childTotals.total;
-        totals.online += childTotals.online;
-        totals.offline += childTotals.offline;
-        totals.warning += childTotals.warning;
-        totals.critical += childTotals.critical;
+        const c = accumulate(child);
+        totals.total += c.total;
+        totals.enrolled += c.enrolled;
+        totals.nonCompliant += c.nonCompliant;
+        totals.configErrors += c.configErrors;
+        totals.stale += c.stale;
       }
       node.total = totals.total;
-      node.onlineCount = totals.online;
-      node.offlineCount = totals.offline;
-      node.warningCount = totals.warning;
-      node.criticalCount = totals.critical;
+      node.enrolledCount = totals.enrolled;
+      node.nonCompliantCount = totals.nonCompliant;
+      node.configErrorCount = totals.configErrors;
+      node.staleCount = totals.stale;
       return totals;
     }
     for (const root of roots) accumulate(root);

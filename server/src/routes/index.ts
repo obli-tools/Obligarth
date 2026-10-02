@@ -22,11 +22,9 @@ import smtpRoutes from './smtpServer.routes';
 
 // Devices and the other tenant-scoped modules
 import deviceRoutes from './device.routes';
-import inventoryRoutes from './inventory.routes';
 import softwareRepoRoutes from './softwareRepo.routes';
 import repoPublicRoutes from './repoPublic.routes';
 import reportRoutes from './report.routes';
-import agentAdminRoutes from './agentAdmin.routes';
 import systemRoutes from './system.routes';
 import permissionSetsRoutes from './permissionSets.routes';
 import approvalRoutes from './approval.routes';
@@ -41,6 +39,7 @@ import { createVaultAdminRouter } from '../vault/admin.routes';
 import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
+import { createMdmRouter } from '../mdm';
 
 const router = Router();
 
@@ -75,8 +74,10 @@ tenantRouter.use('/devices', delegatedAuth);
 
 tenantRouter.use(requireAuth, requireTenant);
 
+// The device registry of the MDM (modele-donnees-mdm §10.6): devices, inventory, end users, fleet;
+// /devices keeps the two timeline routes of the change events (Oblidesk's contract).
+tenantRouter.use('/mdm',         createMdmRouter());
 tenantRouter.use('/devices',     deviceRoutes);
-tenantRouter.use('/inventory',   inventoryRoutes);
 tenantRouter.use('/software-repo', softwareRepoRoutes);
 tenantRouter.use('/reports',     reportRoutes);
 tenantRouter.use('/groups',      groupsRoutes);
@@ -110,7 +111,6 @@ tenantRouter.use('/admin/audit', createAuditAdminRouter());
 // router (its PUT /:key would take their paths).
 tenantRouter.use('/admin/config', adminRoutes);
 tenantRouter.use('/admin/smtp-servers', smtpRoutes);
-tenantRouter.use('/agent',       agentAdminRoutes);  // admin: API key management
 tenantRouter.use('/permission-sets', permissionSetsRoutes);
 // Software licenses are dormant (design §6.1): license.routes.ts stays in the
 // tree but is not mounted. No capability guards it (any member, viewer

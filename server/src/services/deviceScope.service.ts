@@ -23,8 +23,9 @@ import { permissionService } from './permission.service';
 export type RequestDevice = {
   id: number;
   tenant_id: number;
-  hostname: string | null;
-  approval_status: string | null;
+  /** The displayed name (devices.label: display name, reported name, model…). */
+  label: string;
+  enrollment_state: string;
 };
 
 export type RequestDeviceOutcome =
@@ -75,7 +76,7 @@ export async function resolveRequestDevice(
 
   const q = db('devices').where({ id: deviceId });
   if (!hasGlobalView(req)) q.where({ tenant_id: tenantId });
-  const device = await q.first('id', 'tenant_id', 'hostname', 'approval_status') as RequestDevice | undefined;
+  const device = await q.first('id', 'tenant_id', 'label', 'enrollment_state') as RequestDevice | undefined;
   if (!device) return notFound;
   if (isAdmin) return { ok: true, device, isAdmin };
 

@@ -37,8 +37,8 @@ async function enrichWindow(w: Awaited<ReturnType<typeof maintenanceService.getB
         const row = await db('device_groups').where({ id: w.scopeId }).select('name').first();
         if (row) scopeName = row.name;
       } else if (w.scopeType === 'device') {
-        const row = await db('devices').where({ id: w.scopeId }).select('display_name', 'hostname').first();
-        if (row) scopeName = row.display_name ?? row.hostname;
+        const row = await db('devices').where({ id: w.scopeId }).select('label').first();
+        if (row) scopeName = row.label;
       }
     } catch { /* ignore */ }
   }

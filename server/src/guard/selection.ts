@@ -24,7 +24,7 @@ export interface ResolvedTargets {
   deviceIds: number[];
   /** The selection as kept in pending_actions.selection. */
   selection: { deviceIds: number; groupIds: number[]; tenant: boolean };
-  /** One target: its displayed name (display_name, else hostname). */
+  /** One target: its displayed name (devices.label). */
   singleName: string | null;
 }
 
@@ -114,9 +114,9 @@ export async function resolveTargets(tenantId: number, s: GuardSelection): Promi
   if (!deviceIds.length) throw new AppError(400, 'The selection designates no device', 'noTargets');
   let singleName: string | null = null;
   if (deviceIds.length === 1) {
-    const d = await db('devices').where({ id: deviceIds[0], tenant_id: tenantId }).first('display_name', 'hostname') as
-      { display_name: string | null; hostname: string | null } | undefined;
-    singleName = (d?.display_name || d?.hostname || '').trim() || null;
+    const d = await db('devices').where({ id: deviceIds[0], tenant_id: tenantId }).first('label') as
+      { label: string | null } | undefined;
+    singleName = (d?.label || '').trim() || null;
   }
   return {
     tenantId,

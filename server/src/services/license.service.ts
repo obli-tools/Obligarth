@@ -50,7 +50,7 @@ export const licenseService = {
       .select(
         ...columns('dl.'),
         'dl.license_key_enc',
-        db.raw(`COALESCE(NULLIF(d.display_name, ''), d.hostname) AS device_name`),
+        'd.label AS device_name',
       )
       .orderBy('dl.software_name');
     return Promise.all(rows.map(async (r: any) => ({

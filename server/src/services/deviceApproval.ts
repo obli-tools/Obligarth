@@ -8,17 +8,9 @@ import {
 // Bulk group change, executed AS THE REQUESTER once a second administrator
 // approved it (approval.service). Registered by modules/devices.ts. The
 // deletion of records is the guarded action device.delete (audit-durci
-// §10.2): a deletion request filed before it is refused, as is a tenant
-// transfer request (rls-tenant R10).
-
-/** Payload of a 'device_uninstall' request (device.routes). */
-export interface DeviceUninstallPayload {
-  deviceId: number;
-  /** DELETE /api/devices/:id (record only). */
-  deleteOnly?: boolean;
-  /** The former POST /api/devices/:id/transfer (refused since R10). */
-  targetTenantId?: number;
-}
+// §10.2): a deletion request filed before it is refused. The agent's requests
+// (device_uninstall, the tenant transfer of rls-tenant R10) are gone with the
+// agent (modele-donnees-mdm §11.1): no executor, refused by the engine.
 
 /** Approved bulk group change (device.bulk_group_change): 'change_group'. */
 export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
@@ -49,19 +41,4 @@ const DELETION_GUARDED = 'The deletion of device records goes through the guarde
  */
 export async function executeBulkDelete(_x: ApprovalExecution): Promise<string | void> {
   refuse(DELETION_GUARDED);
-}
-
-/**
- * Approved device request of type 'device_uninstall', filed by the record
- * deletion before the guard engine (deleteOnly), or by the tenant transfer
- * (targetTenantId, gone with rls-tenant R10), or by the agent uninstall: all
- * refused, nothing executed.
- */
-export async function executeDeviceRequest(x: ApprovalExecution): Promise<string | void> {
-  const payload = x.payload as DeviceUninstallPayload;
-  if (payload?.targetTenantId != null) {
-    refuse('The transfer of a device to another tenant is no longer supported — nothing was executed');
-  }
-  if (payload?.deleteOnly) refuse(DELETION_GUARDED);
-  refuse('Agent uninstall is not supported here — nothing was executed');
 }
