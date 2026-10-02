@@ -18,7 +18,8 @@
 //       after a restore (server in JOBS_MODE=paused): one audit.chain_resumed
 //       per chain (restored head, range lost, last head known by the SIEM or
 //       'unknown'), an immediate seal, export cursors brought back to the
-//       restored heads. Exit 0, 1.
+//       restored heads. Runs as the server does (runtime role, signed contexts
+//       with RLS_CONTEXT_KEY_FILE, the vault's KEK). Exit 0, 1.
 //
 // The trusted key ids come from elsewhere (the console's seal keys page, the
 // seal messages received by the SIEM): the keys inside a file only prove its
@@ -280,7 +281,14 @@ async function restoreReconcile(all: string[]): Promise<number> {
     else siem = parsed as typeof siem;
   }
   const { db } = await import('../db');
-  const { asNone, asTenant } = await import('../db/context');
+  const { asNone, asTenant, configureContextSigningFromFile } = await import('../db/context');
+  const { config } = await import('../config');
+  // Signed database context (rls-tenant §4.6, R12): this command queries as the runtime role, like the server.
+  try {
+    configureContextSigningFromFile(config.rlsContextKeyFile);
+  } catch (err) {
+    throw new CliExit(1, (err as Error).message);
+  }
   const { vault, vaultConfigErrors, VaultStartupError } = await import('../vault');
   const { registerAuditModule } = await import('./module');
   const { append } = await import('./writer');

@@ -1,6 +1,6 @@
 import ClientPG from 'knex/lib/dialects/postgres';
 import {
-  DbContextMismatchError, DbContextMissingError, contextAssertMode, contextMode, countContextMismatch,
+  DbContextMismatchError, DbContextMissingError, LEASE_SEARCH_PATH, contextAssertMode, contextMode, countContextMismatch,
   countContextMissing, currentDbContext, encodeContext, leaseKey, type DbContext,
 } from './context';
 import { logger } from '../utils/logger';
@@ -14,8 +14,13 @@ import { logger } from '../utils/logger';
 // statement of the lease, one round trip sets the role and the context of
 // the current AsyncLocalStorage context (bound parameters: never in
 // pg_stat_activity nor in the server logs). No cache, no reset on release:
-// every lease writes all three values (R4), so a connection back in the pool
+// every lease writes all its values (R4), so a connection back in the pool
 // with the context of another request is never used without being rewritten.
+// Lot A8 (hardening): the same round trip sets the search_path again (the
+// brain's schema, then pg_temp, last) and clears the vault's reseal flag, so
+// that nothing an injected statement leaves on the session (search_path
+// towards a schema the runtime role owns, a temporary table named like a
+// table of the brain, the reseal flag at session level) outlives its lease.
 //
 // Knex 3.3.0 is pinned: these overrides rely on its internals
 // (acquireConnection, releaseConnection, _query, _stream).
@@ -28,7 +33,8 @@ export interface PgConnection {
 }
 
 const SET_CONTEXT_SQL =
-  "SELECT set_config('role', $1, false), set_config('obligarth.ctx', $2, false), set_config('obligarth.ctx_sig', $3, false)";
+  "SELECT set_config('role', $1, false), set_config('obligarth.ctx', $2, false), set_config('obligarth.ctx_sig', $3, false), " +
+  "set_config('search_path', $4, false), set_config('obligarth.vault_reseal', '', false)";
 
 /** Context of a query issued without one while DB_CONTEXT_MODE=audit: run
  *  in 'none' (catalogs and own rows only once the RLS is active). */
@@ -160,7 +166,7 @@ export class ContextAwarePgClient extends ClientPG {
     const lease = leaseKey(ctx);
     const conn: PgConnection = await super.acquireConnection();
     try {
-      await exec(conn, SET_CONTEXT_SQL, [enc.role, enc.ctx, enc.sig]);
+      await exec(conn, SET_CONTEXT_SQL, [enc.role, enc.ctx, enc.sig, LEASE_SEARCH_PATH]);
     } catch (err) {
       conn.__knex__disposed = err;                                 // the pool drops it at the next validation
       await super.releaseConnection(conn);

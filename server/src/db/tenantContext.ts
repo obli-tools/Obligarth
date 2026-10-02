@@ -1,8 +1,8 @@
 import type { Knex } from 'knex';
 import { db } from './index';
 import {
-  DbContextMissingError, actorToken, asNone, asTenant, assertValidContext, currentDbContext, encodeContext, leaseKey,
-  runWithDbContext, type DbActor, type DbContext,
+  DbContextMissingError, LEASE_SEARCH_PATH, actorToken, asNone, asTenant, assertValidContext, currentDbContext, encodeContext,
+  leaseKey, runWithDbContext, type DbActor, type DbContext,
 } from './context';
 import type { PgConnection } from './contextPgClient';
 import { logger } from '../utils/logger';
@@ -21,9 +21,13 @@ export function withTenantTransaction<T>(
   return asTenant(tenantId, actor, () => db.transaction((trx) => fn(trx)));
 }
 
-const SET_LOCAL_SQL = "SELECT set_config('obligarth.ctx', ?, true), set_config('obligarth.ctx_sig', ?, true)";
+// Transaction-local switch of the context (rls-tenant §4.5). Lot A8: the role
+// and the search_path are set again with it, so that what an injected
+// statement left in the transaction (SET LOCAL ROLE, SET LOCAL search_path
+// towards pgboss) does not reach the next event of the same transaction.
 const SET_LOCAL_WITH_ROLE_SQL =
-  "SELECT set_config('role', ?, true), set_config('obligarth.ctx', ?, true), set_config('obligarth.ctx_sig', ?, true)";
+  "SELECT set_config('role', ?, true), set_config('obligarth.ctx', ?, true), set_config('obligarth.ctx_sig', ?, true), " +
+  "set_config('search_path', ?, true)";
 
 /** Low level, for a transaction that serves several tenants one after the
  *  other (outbox consumer, inside its SAVEPOINT per event): transaction-local
@@ -37,7 +41,7 @@ export async function applyTenantContext(trx: Knex.Transaction, tenantId: number
     : { kind: 'tenant', tenantId, actor, grantId: null, origin: 'job' };
   assertValidContext(ctx);
   const enc = encodeContext(ctx);
-  await trx.raw(SET_LOCAL_SQL, [enc.ctx, enc.sig]);
+  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [enc.role, enc.ctx, enc.sig, LEASE_SEARCH_PATH]);
 }
 
 /** The connection of a transaction (Knex 3.3.0: its client lends it). */
@@ -62,7 +66,7 @@ export async function withTenantInTransaction<T>(
   const outerLease = conn.__obligarthLease;
   await trx.raw(`SAVEPOINT ${SAVEPOINT}`);
   const encIn = encodeContext(inner);
-  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encIn.role, encIn.ctx, encIn.sig]);
+  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encIn.role, encIn.ctx, encIn.sig, LEASE_SEARCH_PATH]);
   conn.__obligarthLease = leaseKey(inner);
   let result: T;
   try {
@@ -75,7 +79,7 @@ export async function withTenantInTransaction<T>(
   conn.__obligarthLease = outerLease;
   await trx.raw(`RELEASE SAVEPOINT ${SAVEPOINT}`);
   const encOut = encodeContext(outer);
-  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encOut.role, encOut.ctx, encOut.sig]);
+  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encOut.role, encOut.ctx, encOut.sig, LEASE_SEARCH_PATH]);
   return result;
 }
 

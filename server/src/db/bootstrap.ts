@@ -34,7 +34,8 @@ END $$;
 export const BOOTSTRAP_SQL = BOOTSTRAP_ROLES_SQL + String.raw`
 ALTER ROLE obligarth WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION;
 GRANT obligarth_reader TO obligarth WITH INHERIT FALSE, SET TRUE;
-ALTER ROLE obligarth SET search_path = obligarth;
+-- pg_temp last (lot A8): a temporary table never stands for a table of the brain (the leases set it again)
+ALTER ROLE obligarth SET search_path = obligarth, pg_temp;
 ALTER ROLE obligarth SET idle_in_transaction_session_timeout = '60s';
 CREATE SCHEMA IF NOT EXISTS obligarth AUTHORIZATION obligarth_owner;
 CREATE SCHEMA IF NOT EXISTS obligarth_private AUTHORIZATION obligarth_owner;

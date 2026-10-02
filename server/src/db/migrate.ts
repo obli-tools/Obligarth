@@ -26,7 +26,8 @@ import { logger } from '../utils/logger';
 //   4. Knex tracking tables found in `public` moved to `obligarth`;
 //   5. the Knex migrations, every connection as obligarth_owner;
 //   6. before the RLS migration (C): plain privileges of the runtime role;
-//   7. signed context (migration D): key(s) of RLS_CONTEXT_KEY_FILE;
+//   7. signed context (migration D): key(s) of RLS_CONTEXT_KEY_FILE (and
+//      RLS_CONTEXT_KEY_PREVIOUS_FILE) deposited, every other key retired;
 //   8. once the RLS is active: obligarth.rls_audit() must be empty.
 // `--check`: the controls only (roles, schemas, migrations, audit), nothing
 // is changed; exit code 1 on any finding.
@@ -48,6 +49,8 @@ export interface MigrateReport {
   preRlsGrants: boolean;
   rlsActive: boolean;
   contextKeys: string[];
+  /** Keys of the signed context retired by this run (no longer configured). */
+  retiredContextKeys: string[];
   warnings: string[];
 }
 
@@ -137,6 +140,63 @@ function hmacBlocks(key: Buffer): { ikey: Buffer; okey: Buffer } {
   };
 }
 
+/**
+ * Step 7, signed context (rls-tenant §4.6, annex A.5; lot A8): the key of
+ * RLS_CONTEXT_KEY_FILE, and the previous one during a rotation
+ * (RLS_CONTEXT_KEY_PREVIOUS_FILE), are deposited as their two inner HMAC
+ * blocks; every other active key is retired (retired_at), so a rotation is:
+ * server-migrate with the new key and the previous one, restart of the
+ * server on the new key, then server-migrate with the new key alone. A key
+ * retired once is refused (a rotation never brings a key back). Without any
+ * key, nothing changes (warning: the server refuses to start without one).
+ * Written as the owner role (an administrator without superuser can SET ROLE
+ * obligarth_owner, step 2).
+ */
+async function depositContextKeys(q: Q, opts: MigrateOptions, report: MigrateReport): Promise<void> {
+  const given = new Map<string, Buffer>();
+  for (const key of [opts.contextKey, opts.previousContextKey]) {
+    if (Buffer.isBuffer(key)) given.set(contextKeyId(key), key);
+  }
+  if (given.size === 0) {
+    const msg = 'signed context migration applied but RLS_CONTEXT_KEY_FILE is not set: the server will refuse to start';
+    report.warnings.push(msg);
+    logger.warn(msg);
+    return;
+  }
+  const kids = [...given.keys()];
+  await q('SET ROLE obligarth_owner');
+  try {
+    const retired = await q('SELECT kid FROM obligarth_private.context_keys WHERE kid = ANY ($1::text[]) AND retired_at IS NOT NULL', [kids]);
+    if (retired.rowCount) {
+      throw new MigrateRefusal(`context key ${retired.rows.map((r) => String(r.kid)).join(', ')} was retired: a retired key is never ` +
+        'used again; generate a new key for RLS_CONTEXT_KEY_FILE (rotation, rls-tenant §4.6)');
+    }
+    for (const [kid, key] of given) {
+      const { ikey, okey } = hmacBlocks(key);
+      try {
+        await q('INSERT INTO obligarth_private.context_keys (kid, ikey, okey) VALUES ($1, $2, $3) ON CONFLICT (kid) DO NOTHING',
+          [kid, ikey, okey]);
+        // Same kid, other key (64-bit prefix of SHA-256): refused rather than signing with a key the
+        // database would never accept.
+        const same = await q('SELECT ikey = $2 AND okey = $3 AS same FROM obligarth_private.context_keys WHERE kid = $1', [kid, ikey, okey]);
+        if (same.rows[0]?.same !== true) throw new MigrateRefusal(`context key ${kid}: another key with the same identifier is registered`);
+      } finally {
+        ikey.fill(0);
+        okey.fill(0);
+      }
+      report.contextKeys.push(kid);
+    }
+    const out = await q(`UPDATE obligarth_private.context_keys SET retired_at = now()
+                          WHERE retired_at IS NULL AND NOT (kid = ANY ($1::text[])) RETURNING kid`, [kids]);
+    report.retiredContextKeys = out.rows.map((r) => String(r.kid));
+    if (report.retiredContextKeys.length) {
+      logger.info({ retired: report.retiredContextKeys, active: kids }, 'signed context: keys no longer configured retired');
+    }
+  } finally {
+    await q('RESET ROLE');
+  }
+}
+
 /** Runs server-migrate (steps 1 to 8 of the header). Throws MigrateRefusal
  *  (or a database error) when it cannot. */
 export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport> {
@@ -144,7 +204,7 @@ export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport
   if (!opts.appPassword) {
     throw new MigrateRefusal('DB_APP_PASSWORD (or DB_APP_PASSWORD_FILE) is not set: the password of the runtime role obligarth.');
   }
-  const report: MigrateReport = { applied: [], preRlsGrants: false, rlsActive: false, contextKeys: [], warnings: [] };
+  const report: MigrateReport = { applied: [], preRlsGrants: false, rlsActive: false, contextKeys: [], retiredContextKeys: [], warnings: [] };
 
   // ── 1 to 4: bootstrap, as the administrator ───────────────────────────────
   await withAdmin(opts.adminUrl, async (q, client) => {
@@ -221,19 +281,7 @@ export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport
 
     const keysTable = await q(`SELECT to_regclass('obligarth_private.context_keys') IS NOT NULL AS present`);
     if (keysTable.rows[0].present) {
-      const keys = [opts.contextKey, opts.previousContextKey].filter((k): k is Buffer => Buffer.isBuffer(k));
-      if (keys.length === 0) {
-        const msg = 'signed context migration applied but RLS_CONTEXT_KEY_FILE is not set: the server will refuse to start';
-        report.warnings.push(msg);
-        logger.warn(msg);
-      }
-      for (const key of keys) {
-        const kid = contextKeyId(key);
-        const { ikey, okey } = hmacBlocks(key);
-        await q(`INSERT INTO obligarth_private.context_keys (kid, ikey, okey) VALUES ($1, $2, $3) ON CONFLICT (kid) DO NOTHING`,
-          [kid, ikey, okey]);
-        report.contextKeys.push(kid);
-      }
+      await depositContextKeys(q, opts, report);
     }
 
     if (report.rlsActive) {
@@ -256,7 +304,7 @@ export interface CheckReport {
 
 /** `--check`: roles (attributes and memberships), schemas, migrations and RLS
  *  audit, without any change. */
-export async function checkDatabase(adminUrl: string): Promise<CheckReport> {
+export async function checkDatabase(adminUrl: string, contextKey: Buffer | null = null): Promise<CheckReport> {
   if (!adminUrl) throw new MigrateRefusal('DATABASE_ADMIN_URL is not set.');
   return withAdmin(adminUrl, async (q) => {
     const findings: string[] = [];
@@ -300,6 +348,22 @@ export async function checkDatabase(adminUrl: string): Promise<CheckReport> {
       const audit = await q('SELECT object_name, problem FROM obligarth.rls_audit()');
       for (const r of audit.rows) findings.push(`rls_audit: ${r.object_name}: ${r.problem}`);
     }
+    // Signed context (lot A8): an active key, and the key of RLS_CONTEXT_KEY_FILE among them when given.
+    const keysTable = await q(`SELECT to_regclass('obligarth_private.context_keys') IS NOT NULL AS present`);
+    if (keysTable.rows[0].present) {
+      await q('SET ROLE obligarth_owner');
+      try {
+        const keys = await q('SELECT kid FROM obligarth_private.context_keys WHERE retired_at IS NULL');
+        const kids = keys.rows.map((r) => String(r.kid));
+        if (kids.length === 0) findings.push('signed context: no active key (run server-migrate with RLS_CONTEXT_KEY_FILE)');
+        if (contextKey && !kids.includes(contextKeyId(contextKey))) {
+          findings.push(`signed context: the key of RLS_CONTEXT_KEY_FILE (${contextKeyId(contextKey)}) is not an active key of ` +
+            'the database: the server would refuse to start (run server-migrate with it)');
+        }
+      } finally {
+        await q('RESET ROLE');
+      }
+    }
     return { ok: findings.length === 0, findings, rlsActive: active, pending };
   });
 }
@@ -313,7 +377,7 @@ async function main(): Promise<void> {
   const check = process.argv.includes('--check');
   const adminUrl = process.env.DATABASE_ADMIN_URL || '';
   if (check) {
-    const res = await checkDatabase(adminUrl);
+    const res = await checkDatabase(adminUrl, loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE));
     for (const f of res.findings) logger.error(f);
     logger.info({ ok: res.ok, rlsActive: res.rlsActive, pending: res.pending.length }, 'server-migrate --check');
     process.exitCode = res.ok ? 0 : 1;
@@ -323,11 +387,11 @@ async function main(): Promise<void> {
     adminUrl,
     appPassword: readSecret(process.env.DB_APP_PASSWORD, process.env.DB_APP_PASSWORD_FILE),
     contextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE),
-    previousContextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_PREVIOUS_FILE),
+    previousContextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_PREVIOUS_FILE, 'RLS_CONTEXT_KEY_PREVIOUS_FILE'),
   });
   logger.info({
     applied: report.applied.length, rlsActive: report.rlsActive, preRlsGrants: report.preRlsGrants,
-    contextKeys: report.contextKeys, warnings: report.warnings.length,
+    contextKeys: report.contextKeys, retiredContextKeys: report.retiredContextKeys, warnings: report.warnings.length,
   }, 'server-migrate complete');
 }
 

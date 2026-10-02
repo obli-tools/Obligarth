@@ -1,6 +1,6 @@
 import { db } from './index';
 import { PRIVILEGED_ROLES_SQL, READER_REACHES_SQL } from './bootstrap';
-import { asNone, asTenant, contextMode, contextSigningEnabled, type DbActor } from './context';
+import { asNone, asTenant, contextMode, contextSigningEnabled, contextSigningKeyId, type DbActor } from './context';
 import { missingMigrations, rlsMigrationApplied } from './migrationFiles';
 import { logger } from '../utils/logger';
 
@@ -135,10 +135,14 @@ export async function bootGuard(): Promise<void> {
     const res = await asTenant(1, BOOT_ACTOR, () => db.raw('SELECT obligarth.ctx_tenant() AS t')) as Rows<{ t: number | null }>;
     if (Number(res.rows[0]?.t) !== 1) {
       findings.push('database context self-test failed: obligarth.ctx_tenant() did not return the tenant of the context' +
-        (contextSigningEnabled() ? ' (the database does not know the server\'s context key: run server-migrate)' : ''));
+        (contextSigningEnabled()
+          ? ` (the database does not know the server's context key ${contextSigningKeyId()}, or retired it: ` +
+            'run server-migrate with this RLS_CONTEXT_KEY_FILE)'
+          : ''));
     }
   }
 
   if (findings.length) throw new BootGuardError(findings);
-  logger.info({ rlsActive, contextMode: contextMode(), signed: contextSigningEnabled() }, 'database boot guard passed');
+  logger.info({ rlsActive, contextMode: contextMode(), signed: contextSigningEnabled(), contextKeyId: contextSigningKeyId() },
+    'database boot guard passed');
 }

@@ -19,12 +19,14 @@
 // The escrow commands (escrow split | combine | verify) come with the escrow
 // lot (A8). "Server stopped": the command takes the vault's online lock
 // exclusively (vault/lock.ts). Never a value, a key or a sealed value on the
-// output: identifiers, kek_ids, counts.
+// output: identifiers, kek_ids, counts. The commands that query the database
+// run as the runtime role with signed contexts (RLS_CONTEXT_KEY_FILE,
+// rls-tenant §4.6).
 import '../env';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { config } from '../config';
 import { db } from '../db';
-import { asNone, type DbActor } from '../db/context';
+import { asNone, configureContextSigningFromFile, type DbActor } from '../db/context';
 import { auditService } from '../services/audit.service';
 import { withVaultIntent } from './events';
 import { logger } from '../utils/logger';
@@ -309,6 +311,13 @@ const COMMANDS: Record<string, (args: string[]) => Promise<number>> = {
 };
 
 async function main(): Promise<number> {
+  // Signed database context (rls-tenant §4.6, R12): the commands query as the
+  // runtime role, like the server.
+  try {
+    configureContextSigningFromFile(config.rlsContextKeyFile);
+  } catch (err) {
+    throw new CliExit(1, (err as Error).message);
+  }
   // The modules' sealed columns, as index.ts registers them (no I/O): every
   // walk of the registry (verify, recovery) must see them all.
   registerDeviceModule();

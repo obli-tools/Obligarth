@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash, createHmac } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { closeSync, constants as fsConstants, existsSync, fstatSync, openSync, readSync } from 'node:fs';
 import { config } from '../config';
 
 // =============================================================================
@@ -21,9 +21,16 @@ import { config } from '../config';
 //   identity  accounts and platform settings, no tenant data;
 //   none      catalogs and the actor's own rows only.
 //
-// Only this file, contextPgClient.ts and tenantContext.ts set obligarth.ctx
-// or the role: application code never runs SET, RESET, DISCARD, SET ROLE nor
-// set_config.
+// Signed mode (rls-tenant §4.6, R12; migration D): the context carries an
+// expiry and travels with its HMAC-SHA256 (obligarth.ctx_sig) under the key
+// of RLS_CONTEXT_KEY_FILE, which server-migrate deposits in the database;
+// obligarth.ctx_raw() refuses a context whose signature, key or expiry does
+// not hold, so an injected set_config no longer opens another tenant.
+//
+// Only this file, contextPgClient.ts and tenantContext.ts set obligarth.ctx,
+// the role or the search_path: application code never runs SET, RESET,
+// DISCARD, SET ROLE nor set_config (one exception, vault/reseal.ts: SET
+// LOCAL obligarth.vault_reseal; checked by the testbed, essai 118).
 
 export type DbContextKind = 'tenant' | 'member' | 'platform' | 'identity' | 'none';
 
@@ -148,7 +155,8 @@ export function contextKeyId(key: Buffer): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 16);
 }
 
-/** At start (index.ts), from RLS_CONTEXT_KEY_FILE; null: plain mode. */
+/** At start (index.ts, the CLIs), from RLS_CONTEXT_KEY_FILE; null: plain
+ *  mode (refused by the boot guard once migration D is applied). */
 export function configureContextSigning(key: Buffer | null): void {
   if (key !== null && key.length < 32) throw new Error('the database context key must be at least 32 bytes long');
   signingKey = key ? { kid: contextKeyId(key), key } : null;
@@ -158,20 +166,91 @@ export function contextSigningEnabled(): boolean {
   return signingKey !== null;
 }
 
+/** The kid of the configured signing key (null: plain mode), for messages:
+ *  never the key. */
+export function contextSigningKeyId(): string | null {
+  return signingKey?.kid ?? null;
+}
+
+/** Largest context key file read (a key is 32 bytes, 44 in base64). */
+const CONTEXT_KEY_FILE_MAX_BYTES = 1024;
+
+/** Does a setting that should name a key file hold a key instead (64+ hex
+ *  characters, or base64 of 32 bytes or more)? Such a value is never used as
+ *  a file name nor repeated in a message (hardening, lot A8: the vault's KEK
+ *  setting got the same rule at the review of lot A2). */
+export function looksLikeContextKey(value: string): boolean {
+  if (typeof value !== 'string') return false;
+  const compact = value.replace(/\s+/g, '');
+  if (/^[0-9A-Fa-f]{64,}$/.test(compact)) return true;
+  return /^[A-Za-z0-9+/_-]{43,}={0,2}$/.test(compact) && Buffer.from(compact, 'base64').length >= 32;
+}
+
 /** A key file (RLS_CONTEXT_KEY_FILE, Docker secret rls_context_key): 64+
  *  hex characters or base64 text are decoded, anything else is taken as
- *  raw bytes; at least 32 bytes. No file name: null. */
-export function loadContextKeyFile(file: string | undefined | null): Buffer | null {
+ *  raw bytes; at least 32 bytes. No file name: null. The messages never
+ *  carry the file's content, nor the setting when it holds a key instead of
+ *  a path; a file that is not a regular one (a named pipe would block the
+ *  start) is refused. `setting`: the variable named in the messages. */
+export function loadContextKeyFile(file: string | undefined | null, setting = 'RLS_CONTEXT_KEY_FILE'): Buffer | null {
   if (!file) return null;
-  const raw = readFileSync(file);
+  if (!existsSync(file) && looksLikeContextKey(file)) {
+    throw new Error(`${setting} names no file and looks like a key (value not shown): give the path of the key file`);
+  }
+  let fd: number;
+  try {
+    // O_NONBLOCK: a named pipe is refused below (not a regular file) instead of blocking the start.
+    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    throw new Error(`${setting} ${file}: ${code === 'ENOENT' ? 'no such file' : code === 'EISDIR' ? 'not a regular file'
+      : code === 'EACCES' || code === 'EPERM' ? 'permission denied' : 'unreadable'}`);
+  }
+  const buf = Buffer.alloc(CONTEXT_KEY_FILE_MAX_BYTES + 1);
+  let size = 0;
+  try {
+    if (!fstatSync(fd).isFile()) throw new Error(`${setting} ${file}: not a regular file`);
+    for (;;) {
+      const n = readSync(fd, buf, size, buf.length - size, null);
+      if (n === 0) break;
+      size += n;
+      if (size > CONTEXT_KEY_FILE_MAX_BYTES) throw new Error(`${setting} ${file}: too large for a context key file`);
+    }
+  } finally {
+    closeSync(fd);
+  }
+  const raw = Buffer.from(buf.subarray(0, size));
+  buf.fill(0);
   const text = raw.toString('utf8').trim();
   let key: Buffer;
   if (/^[0-9a-fA-F]{64,}$/.test(text) && text.length % 2 === 0) key = Buffer.from(text, 'hex');
   else if (/^[A-Za-z0-9+/]{43,}={0,2}$/.test(text)) key = Buffer.from(text, 'base64');
   else key = raw;
-  if (key.length < 32) throw new Error(`${file}: the database context key must be at least 32 bytes long`);
+  if (key !== raw) raw.fill(0);
+  if (key.length < 32) {
+    key.fill(0);
+    throw new Error(`${setting} ${file}: the database context key must be at least 32 bytes long`);
+  }
   return key;
 }
+
+/** The signing of index.ts and of the commands that query as the runtime
+ *  role (vault and audit CLIs): the key of RLS_CONTEXT_KEY_FILE, or plain
+ *  mode without one (refused by the boot guard once migration D is applied).
+ *  Returns the kid configured (null: plain mode); throws a message that
+ *  never carries a key. */
+export function configureContextSigningFromFile(file: string | undefined | null): string | null {
+  const key = loadContextKeyFile(file);
+  configureContextSigning(key);
+  return key ? contextKeyId(key) : null;
+}
+
+/** search_path of every lease (rls-tenant §4.4, lot A8): the schema of the
+ *  brain, then the session's temporary schema, last, so that a temporary
+ *  table never stands for a table of the brain; set again at every lease, so
+ *  that a search_path changed by an injected statement never reaches the
+ *  next lease of the same pooled connection. */
+export const LEASE_SEARCH_PATH = 'obligarth, pg_temp';
 
 /** DB_CONTEXT_ASSERT: 'throw' in test and development, 'log' in production. */
 export const contextAssertMode = (): 'throw' | 'log' | 'off' => config.dbContextAssert;
