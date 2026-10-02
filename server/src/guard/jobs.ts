@@ -69,12 +69,19 @@ export function registerGuardJobs(): void {
     handler: async (ctx) => (await import('./executor')).executeDelayed(ctx),
   });
 
+  // Polling at rest (file-durable L3: the idle server stays under 5
+  // statements per second): the hourly and daily jobs every 60 s; the
+  // per-minute watch every 60 s; the freeze at apple-edge woken by NOTIFY
+  // (sent rarely, retried every minute), polled every 30 s otherwise; the
+  // delayed execution woken by NOTIFY (backstop 30 s) and, for a delay of
+  // 0 s, by this instance (wakeExecutor).
   registerJob({
     name: 'actions.expire-paused',
     scope: 'platform',
     description: 'Expire the guarded actions paused for more than 24 hours',
     payload: empty,
     schedule: { cron: '5 * * * *' },
+    pollSeconds: 60,
     timeoutSeconds: 600,
     handler: async (ctx) => (await import('./executor')).expirePaused(ctx),
   });
@@ -88,6 +95,8 @@ export function registerGuardJobs(): void {
     retry: { limit: 10, delaySeconds: 60, backoff: false },
     timeoutSeconds: 120,
     deadLetter: true,
+    notify: true,
+    pollSeconds: 30,
     handler: async (ctx) => (await import('./executor')).edgeFreezeSync(ctx),
   });
 
@@ -97,7 +106,7 @@ export function registerGuardJobs(): void {
     description: 'Alert on every new administrator or approver grant, whatever its path',
     payload: empty,
     schedule: { cron: '* * * * *' },
-    pollSeconds: 30,
+    pollSeconds: 60,
     timeoutSeconds: 60,
     handler: async (ctx) => (await import('./executor')).privilegeWatch(ctx),
   });
@@ -108,6 +117,7 @@ export function registerGuardJobs(): void {
     description: 'Purge the finished guarded actions and the privilege grants older than 13 months',
     payload: empty,
     schedule: { cron: '35 3 * * *' },
+    pollSeconds: 60,
     timeoutSeconds: 600,
     handler: async (ctx) => (await import('./executor')).purge(ctx),
   });
