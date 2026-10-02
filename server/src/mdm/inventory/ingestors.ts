@@ -75,6 +75,40 @@ export function filterQueryResponses(responses: Record<string, unknown>, rules: 
   return Object.fromEntries(Object.entries(responses ?? {}).filter(([k]) => allowed.has(k)));
 }
 
+/**
+ * The privacy rules of a device applied to what its inventory already holds, once they narrowed (§5.2: a value
+ * the rules do not collect is never kept; criterion 7: no unmanaged app of a personal or COPE device in base): a
+ * new ownership (changeOwnership) or a new enrollment cycle under another profile (onAuthenticate). The unmanaged
+ * apps leave the inventory when only the managed ones are collected, the reported name and the hardware
+ * identifiers when they are not, and the last DeviceInformation answer keeps only the keys the rules ask for.
+ * Returns the number of apps purged. In the caller's transaction and the tenant's context.
+ */
+export async function applyCollectionRules(trx: Knex.Transaction, tenantId: number, deviceId: number,
+  rules: PrivacyRules): Promise<{ purgedApps: number }> {
+  const purgedApps = rules.installedApps === 'managed_only'
+    ? await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, managed: false }).del()
+    : 0;
+  if (!rules.storeDeviceName) {
+    await trx('devices').where({ tenant_id: tenantId, id: deviceId }).whereNotNull('device_name')
+      .update({ device_name: null, updated_at: new Date() });
+  }
+  const sat = await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId })
+    .first('device_information', 'imei') as { device_information: unknown; imei: string | null } | undefined;
+  if (sat) {
+    const update: Record<string, unknown> = {};
+    if (!rules.storeHardwareIds && sat.imei !== null) update.imei = null;
+    const info = sat.device_information;
+    if (info && typeof info === 'object' && !Array.isArray(info)) {
+      const kept = filterQueryResponses(info as Record<string, unknown>, rules);
+      if (Object.keys(kept).length !== Object.keys(info).length) update.device_information = JSON.stringify(kept);
+    }
+    if (Object.keys(update).length) {
+      await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ ...update, updated_at: new Date() });
+    }
+  }
+  return { purgedApps };
+}
+
 /** Capacity in decimal gigabytes (DeviceCapacity, AvailableDeviceCapacity) → bytes [J1: units to confirm]. */
 const gigabytes = (v: unknown): number | null => {
   const n = num(v);

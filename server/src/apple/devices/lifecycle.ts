@@ -11,6 +11,7 @@ import {
   type SessionFacts,
 } from '../../mdm/registry/authenticateRules';
 import { closeEpisode, markEpisodeEnrolled, openEpisode } from '../../mdm/registry/episodes';
+import { applyCollectionRules } from '../../mdm/inventory/ingestors';
 import { enrollmentReleaseJob } from '../../mdm/jobs';
 import { privacyRulesFor, type PrivacyRules } from './privacy';
 
@@ -237,6 +238,9 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     const satCols = satelliteColumns(f, session);
     const updated = await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(satCols);
     if (!updated) await trx('apple_devices').insert({ device_id: deviceId, tenant_id: tenantId, ...satCols });
+    // What the rules of the new cycle do not collect leaves the inventory of the previous one (§5.2, criterion 7:
+    // a device enrolled again under a narrower ownership, corporate → COPE, keeps no unmanaged app).
+    await applyCollectionRules(trx, tenantId, deviceId, rules);
     // The erased device lost its declarations: the set is to be synchronised again (§7.3, step 4).
     await trx('apple_declaration_sets').where({ tenant_id: tenantId, device_id: deviceId })
       .update({ sent_token: null, fetched_token: null, sync_command_id: null });

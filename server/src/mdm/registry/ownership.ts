@@ -3,6 +3,7 @@ import type { Ownership } from '@obligarth/shared';
 import { audit, type AuditWriteContext } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import { privacyRulesFor } from '../../apple/devices/privacy';
+import { applyCollectionRules } from '../inventory/ingestors';
 
 // =============================================================================
 // Changes of the record an operator makes (docs: modele-donnees-mdm §4.3,
@@ -41,18 +42,8 @@ export async function changeOwnership(trx: Knex.Transaction, tenantId: number, d
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update({ ownership: to, updated_at: new Date() });
   let purgedApps = 0;
   if (to === 'corporate_personal') {
-    const rules = await privacyRulesFor(trx, tenantId, to, 'Device');
-    if (rules.installedApps === 'managed_only') {
-      purgedApps = await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, managed: false }).del();
-    }
-    if (!rules.storeDeviceName) await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update({ device_name: null });
-    const sat = await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).first('device_information') as
-      { device_information: Record<string, unknown> | null } | undefined;
-    if (sat?.device_information && typeof sat.device_information === 'object') {
-      const allowed = new Set(rules.deviceInformationQueries);
-      const kept = Object.fromEntries(Object.entries(sat.device_information).filter(([k]) => allowed.has(k)));
-      await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ device_information: JSON.stringify(kept) });
-    }
+    // Narrowing: the rules of the new ownership apply at once to what the inventory holds.
+    ({ purgedApps } = await applyCollectionRules(trx, tenantId, deviceId, await privacyRulesFor(trx, tenantId, to, 'Device')));
   }
   await audit.appendInTx(trx, {
     tenantId, action: 'device.ownership_changed', target: { type: 'device', id: String(deviceId), device: deviceId },
