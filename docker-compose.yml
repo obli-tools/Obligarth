@@ -133,6 +133,9 @@ services:
       AUDIT_TSA_TIMEOUT_MS: ${AUDIT_TSA_TIMEOUT_MS:-10000}
       AUDIT_EXPORT: ${AUDIT_EXPORT:-on}
       AUDIT_MAX_CLOCK_SKEW_SECONDS: ${AUDIT_MAX_CLOCK_SKEW_SECONDS:-240}
+      # Guards against mass erasure: validity of an approval request of the
+      # guards (30 to 4320 minutes) — see .env.example
+      GUARD_APPROVAL_TTL_MINUTES: ${GUARD_APPROVAL_TTL_MINUTES:-240}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
