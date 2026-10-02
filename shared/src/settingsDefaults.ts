@@ -6,6 +6,7 @@ export const SETTINGS_KEYS = {
   NOTIFICATION_COOLDOWN:    'notificationCooldown',   // min seconds between alerts
   INVENTORY_RETENTION_DAYS: 'inventoryRetentionDays', // how long to keep inventory snapshots
   TFA_TRUST_HOURS:          'tfaTrustHours',          // how long a "trust this IP" 2FA grant lasts
+  MDM_STALE_AFTER_DAYS:     'mdmStaleAfterDays',      // device contact: stale after (MDM data model)
 } as const;
 
 export type SettingKey = typeof SETTINGS_KEYS[keyof typeof SETTINGS_KEYS];
@@ -58,10 +59,22 @@ export const SETTINGS_DEFINITIONS: SettingDefinition[] = [
     defaultValue: 24,
     globalOnly: true,
   },
+  {
+    key: SETTINGS_KEYS.MDM_STALE_AFTER_DAYS,
+    label: 'Device contact: stale after',
+    description: 'A managed device without any contact for this many days is shown and counted as without contact.',
+    type: 'number',
+    unit: 'days',
+    min: 1,
+    max: 90,
+    defaultValue: 7,
+    globalOnly: true,
+  },
 ];
 
 export const HARDCODED_DEFAULTS: Record<SettingKey, number | boolean> = {
   [SETTINGS_KEYS.NOTIFICATION_COOLDOWN]:    300,
   [SETTINGS_KEYS.INVENTORY_RETENTION_DAYS]: 90,
   [SETTINGS_KEYS.TFA_TRUST_HOURS]:          24,
+  [SETTINGS_KEYS.MDM_STALE_AFTER_DAYS]:     7,
 };

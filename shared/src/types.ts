@@ -115,8 +115,15 @@ export interface DeviceGroupTreeNode extends DeviceGroup {
   offlineCount?: number;
   warningCount?: number;
   criticalCount?: number;
-  /** Total device count (alias/aggregate) */
+  /** Total device count (alias/aggregate): the devices under management (MDM). */
   total?: number;
+  /** MDM counters of the group and its subtree (modele-donnees-mdm §11.3): enrolled, non compliant, in
+   *  configuration error, without contact for mdmStaleAfterDays days. The online / offline / warning /
+   *  critical counters of the removed agent stay at 0 until the console moves to these (lot B6). */
+  enrolledCount?: number;
+  nonCompliantCount?: number;
+  configErrorCount?: number;
+  staleCount?: number;
   /** Optional kind discriminator for mixed-type trees */
   kind?: string;
 }
