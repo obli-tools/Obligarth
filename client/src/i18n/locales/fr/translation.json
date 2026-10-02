@@ -412,6 +412,10 @@
       "tfaTrustHours": {
         "label": "Durée de « Faire confiance à cette IP » (2FA)",
         "description": "Durée pendant laquelle le choix « Faire confiance à cette IP » évite la demande de code 2FA à un utilisateur depuis la même IP, après un code valide. 0 = confiance par IP désactivée (code toujours demandé)."
+      },
+      "mdmStaleAfterDays": {
+        "label": "Contact des appareils : sans contact après",
+        "description": "Un appareil géré sans aucun contact depuis ce nombre de jours est affiché et compté comme sans contact."
       }
     }
   },
@@ -1171,6 +1175,24 @@
       "device_suspended": "Appareil suspendu",
       "device_unsuspended": "Appareil réactivé",
       "device_updated": "Appareil modifié",
+      "device_ownership_changed": "Propriété de l'appareil changée",
+      "device_group_changed": "Appareil déplacé dans un groupe",
+      "device_end_user_assigned": "Utilisateur de l'appareil affecté",
+      "end_user_created": "Utilisateur final créé",
+      "end_user_updated": "Utilisateur final modifié",
+      "end_user_departed": "Départ d'un utilisateur final",
+      "end_user_imported": "Utilisateurs finaux importés",
+      "enrollment_ownership_mismatch": "Inscription refusée : propriété et mode",
+      "policy_created": "Politique créée",
+      "policy_draft_saved": "Brouillon de politique enregistré",
+      "policy_submitted": "Politique soumise",
+      "policy_published": "Politique publiée",
+      "policy_rejected": "Version de politique rejetée",
+      "policy_archived": "Politique archivée",
+      "assignment_changed": "Affectations modifiées",
+      "app_created": "Application ajoutée au catalogue",
+      "app_updated": "Application du catalogue modifiée",
+      "app_archived": "Application du catalogue archivée",
       "group_created": "Groupe d'appareils créé",
       "group_updated": "Groupe d'appareils modifié",
       "group_deleted": "Groupe d'appareils supprimé",
