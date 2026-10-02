@@ -1,5 +1,13 @@
 name: obligarth
 
+# Log rotation of the services of the device surface (apple-edge, edge-proxy):
+# Docker's json-file driver keeps everything by default.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,11 +25,12 @@ services:
     # Tuning sized for the former RMM agent, kept until the load of the MDM is
     # measured — see docker-compose.yml for rationale. Scale
     # shared_buffers≈25% / effective_cache_size≈75% of host RAM. Keep
-    # max_connections above knexfile.ts pool.max + session pool + headroom.
+    # max_connections above the server (knexfile.ts pool.max + sessions +
+    # pg-boss), apple-edge (EDGE_DB_MAX_CONNS + 8 per replica) and headroom.
     command:
       - "postgres"
       - "-c"
-      - "max_connections=200"
+      - "max_connections=256"
       - "-c"
       - "shared_buffers=2GB"
       - "-c"
@@ -50,6 +59,10 @@ services:
       - "autovacuum_max_workers=4"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    # default: the server and its migrations; backend: apple-edge.
+    networks:
+      - default
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U obligarth_admin -d obligarth"]
       interval: 5s
@@ -83,6 +96,96 @@ services:
     # The image's health check is the server's: nothing listens here.
     healthcheck:
       disable: true
+
+  # One-shot: apple-edge's roles, schemas and migrations, with the
+  # administration account, after server-migrate (role obligarth) — see
+  # docker-compose.yml.
+  apple-edge-migrate:
+    build:
+      context: ./apple-edge
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${OBLIGARTH_VERSION:-dev}
+    command: ["migrate", "up"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
+    environment:
+      EDGE_ADMIN_DATABASE_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth?sslmode=disable
+      # Password given to the role apple_edge_app (the one apple-edge uses).
+      EDGE_APP_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
+      EDGE_OUTBOX_READER_GRANTEE: obligarth
+    secrets:
+      - apple_edge_db_password
+    networks:
+      - backend
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    # The image's health check is the service's: nothing listens here.
+    healthcheck:
+      disable: true
+    logging: *logging
+
+  # Apple MDM engine — see docker-compose.yml. Built from ./apple-edge (its
+  # own context and .dockerignore); runs as uid 65532, which must be able to
+  # read its secret files.
+  apple-edge:
+    build:
+      context: ./apple-edge
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${OBLIGARTH_VERSION:-dev}
+    command: ["serve"]
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      apple-edge-migrate:
+        condition: service_completed_successfully
+    environment:
+      # Public URL of the device surface: final for every enrolled device — see .env.example
+      MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
+      EDGE_DATABASE_URL: postgres://apple_edge_app@postgres:5432/obligarth?sslmode=disable
+      EDGE_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
+      EDGE_KEK_FILE: /run/secrets/edge_kek
+      EDGE_API_TOKEN_FILE: /run/secrets/apple_edge_api_token
+      EDGE_DDM_URL: http://server:3001/internal/apple-edge/ddm
+      EDGE_DDM_HMAC_KEY_FILE: /run/secrets/apple_edge_ddm_hmac
+      # Tunables — see .env.example
+      EDGE_CROSS_TENANT_POLICY: ${EDGE_CROSS_TENANT_POLICY:-refuse}
+      EDGE_FAIL_LIMIT_PER_IP: ${EDGE_FAIL_LIMIT_PER_IP:-60}
+      EDGE_DB_MAX_CONNS: ${EDGE_DB_MAX_CONNS:-32}
+      EDGE_LOG_LEVEL: ${EDGE_LOG_LEVEL:-info}
+    secrets:
+      - apple_edge_db_password
+      - edge_kek
+      - apple_edge_api_token
+      - apple_edge_ddm_hmac
+    networks:
+      - edge
+      - backend
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 512m
+    ulimits:
+      core: 0
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/apple-edge", "healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging: *logging
 
   server:
     build:
@@ -129,6 +232,15 @@ services:
       # Guards against mass erasure: validity of an approval request of the
       # guards (30 to 4320 minutes) — see .env.example
       GUARD_APPROVAL_TTL_MINUTES: ${GUARD_APPROVAL_TTL_MINUTES:-240}
+      # apple-edge: internal API, DDM relay, public URL of the devices; the
+      # integration and the consumer of its outbox stay off until enabled —
+      # see .env.example
+      APPLE_EDGE_MODE: ${APPLE_EDGE_MODE:-off}
+      APPLE_EDGE_URL: http://apple-edge:9100
+      APPLE_EDGE_API_TOKEN_FILE: /run/secrets/apple_edge_api_token
+      APPLE_EDGE_DDM_HMAC_KEY_FILE: /run/secrets/apple_edge_ddm_hmac
+      MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
+      OUTBOX_CONSUMER: ${OUTBOX_CONSUMER:-off}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}
@@ -160,13 +272,41 @@ services:
     secrets:
       - rls_context_key
       - server_kek
+      - apple_edge_api_token
+      - apple_edge_ddm_hmac
     volumes:
       # Persistent custom directory: reports, software repository, phone-key cache.
       - ${CUSTOM_DIR:-./custom}:/custom
+    # default: the console and the database; edge: the enrollment pages
+    # reached through the edge-proxy; backend: apple-edge and the database.
+    networks:
+      - default
+      - edge
+      - backend
     # No core file: a dump of the process would hold the vault's keys
     # (coffre-secrets §9.1).
     ulimits:
       core: 0
+
+  # TLS of the device surface — see docker-compose.yml.
+  edge-proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      apple-edge:
+        condition: service_healthy
+      server:
+        condition: service_healthy
+    ports:
+      - "${MDM_LISTEN_PORT:-443}:443"
+    volumes:
+      - ${EDGE_PROXY_CONF:-./edge-proxy/mdm.conf}:/etc/nginx/conf.d/default.conf:ro
+      - ${MDM_TLS_DIR:-./certs/mdm}:/etc/nginx/certs/mdm:ro
+    networks:
+      - edge
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
 
   client:
     build:
@@ -182,6 +322,11 @@ services:
 volumes:
   postgres_data:
 
+networks:
+  default:
+  edge:
+  backend:
+
 secrets:
   # 32 random bytes (base64), mode 600, created by install.sh; never in .env.
   rls_context_key:
@@ -191,3 +336,12 @@ secrets:
   # in .env, never in a backup of the database: escrow it (vault escrow split).
   server_kek:
     file: ./secrets/server_kek
+  # apple-edge's secrets (see docker-compose.yml), owned by uid 65532.
+  edge_kek:
+    file: ./secrets/edge_kek
+  apple_edge_api_token:
+    file: ./secrets/apple_edge_api_token
+  apple_edge_ddm_hmac:
+    file: ./secrets/apple_edge_ddm_hmac
+  apple_edge_db_password:
+    file: ./secrets/apple_edge_db_password

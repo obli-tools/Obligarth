@@ -51,8 +51,9 @@ export const runtimeConfig: Knex.Config = {
     // max:10 kept the pool saturated and every UI request queued behind it);
     // kept until the load of the MDM is measured.
     // NOTE: keep pool.max × server-replicas comfortably under the Postgres
-    // max_connections — docker-compose sets it to 200; the session store keeps
-    // its own small pool, so 60 leaves ample margin.
+    // max_connections — docker-compose sets it to 256, shared with apple-edge
+    // (about 40 per replica) and pg-boss; the session store keeps its own
+    // small pool, so 60 leaves ample margin.
     min: 4,
     max: 60,
   },
