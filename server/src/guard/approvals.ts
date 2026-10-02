@@ -56,6 +56,8 @@ export async function guardReviewerPolicy(x: ApprovalReviewCheck): Promise<void>
   const required: GuardApproverSide = p.requiredSide === 'client' || p.requiredSide === 'msp' ? p.requiredSide : 'any';
   const requesterIds = [x.approval.requestedBy];
   if (typeof p.originalRequesterId === 'number') requesterIds.push(p.originalRequesterId);
+  // The account a designation names never reviews it (no self-elevation).
+  if (p.action === 'guard_approver_designate' && typeof p.userId === 'number') requesterIds.push(p.userId);
   const tenantId = x.approval.tenantId;
   // No approval of a guarded action while the tenant is frozen (§10.7); a
   // refusal is protective and stays possible.
@@ -73,12 +75,13 @@ export async function guardReviewerPolicy(x: ApprovalReviewCheck): Promise<void>
   }
 }
 
-/** The side of the account that approved (approver_side of the action). */
+/** The side of the account that approved (approver_side of the action): a
+ *  platform administrator is always on the MSP side (§9.1). */
 async function approverSideOf(reviewerId: number | undefined, tenantId: number): Promise<GuardSide | null> {
   if (!reviewerId) return null;
   const f = await personFacts(reviewerId, tenantId);
   const d = await designationsOf(reviewerId, tenantId);
-  return d.client && f.audience === 'client' ? 'client' : 'msp';
+  return d.client && f.audience === 'client' && !f.platformAdmin ? 'client' : 'msp';
 }
 
 /** The required side of a request filed by `requester` in the tenant. */
@@ -267,10 +270,12 @@ export async function applySettings(tenantId: number, input: GuardSettingsInput,
 }
 
 /** Checks of a designation (§10.4): an active account; for the client side,
- *  a member of the tenant with a client-audience role; for the MSP side, a
+ *  a member of the tenant with a client-audience role who is not a platform
+ *  administrator (always on the MSP side, §9.1); for the MSP side, a
  *  platform administrator or an MSP-audience role; a second factor. */
 export async function designationRefusal(f: PersonFacts, side: GuardSide): Promise<string | null> {
   if (!f.exists || !f.active) return 'The account is not active';
+  if (side === 'client' && f.platformAdmin) return 'A platform administrator is on the MSP side: never a client approver';
   if (side === 'client' && f.audience !== 'client') return 'A client approver needs a client role in this tenant (approver, auditor…)';
   if (side === 'msp' && !f.platformAdmin && f.audience !== 'msp') return 'An MSP approver is a platform administrator or holds an MSP role in this tenant';
   if (!f.hasSecondFactor) return 'An approver needs a second factor (authenticator app, or an Obligate account)';

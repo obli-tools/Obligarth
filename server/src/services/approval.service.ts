@@ -271,8 +271,11 @@ export interface ApprovalReviewCheck {
   decision: 'approve' | 'deny';
 }
 
-/** Throws (an error with `status` and `code`) when the reviewer may not decide. */
-export type ApprovalReviewerPolicy = (x: ApprovalReviewCheck) => Promise<void>;
+/** Throws (an error with `status` and `code`) when the reviewer may not
+ *  decide. May also ask the strict step-up of the reviewer for this request
+ *  (a policy that applies the guard's rule to a request of another type: the
+ *  journal's requests examined by a client approver, audit-durci §7.2). */
+export type ApprovalReviewerPolicy = (x: ApprovalReviewCheck) => Promise<void | { reviewerStepUp?: 'strict' }>;
 
 /** A request closed without execution: denied, cancelled (by its requester
  *  or withdrawn), expired. */
@@ -442,11 +445,11 @@ function requestedEntry(row: any, params: NewApproval): AuditEntryInput {
 }
 
 /** May the reviewer decide this request (policy of its type, then for an
- *  approval the strict step-up the type asks)? Throws an error with `status`
- *  (403, 423…) or ApprovalStepUpError. */
+ *  approval the strict step-up the type, or the policy, asks)? Throws an
+ *  error with `status` (403, 423…) or ApprovalStepUpError. */
 async function checkReviewer(row: any, reviewerId: number, decision: 'approve' | 'deny', req?: Request): Promise<void> {
   const payload = parseJson(row.payload) ?? {};
-  await policyOf(row, payload)({
+  const verdict = await policyOf(row, payload)({
     approval: {
       id: Number(row.id), tenantId: Number(row.tenant_id), requestedBy: Number(row.requested_by),
       requestType: String(row.request_type), payload,
@@ -454,7 +457,9 @@ async function checkReviewer(row: any, reviewerId: number, decision: 'approve' |
     reviewerId,
     decision,
   });
-  if (decision !== 'approve' || typeOptions.get(String(row.request_type))?.reviewerStepUp !== 'strict') return;
+  const strict = typeOptions.get(String(row.request_type))?.reviewerStepUp === 'strict'
+    || (!!verdict && verdict.reviewerStepUp === 'strict');
+  if (decision !== 'approve' || !strict) return;
   if (!req) forbidden('This request is approved from the console only (second factor of the reviewer)', 'reviewerStepUpRequired');
   const { checkSecondFactor } = await import('./deviceKey/stepUpProof');
   const outcome = await checkSecondFactor(req!, { actionKey: 'approvals.review', allowTrustedIp: false, allowDevice: true });

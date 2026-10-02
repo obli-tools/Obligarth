@@ -19,7 +19,7 @@ import {
   closeAwaiting, designationRefusal, fileGuardRequest, mayOperate, requiredSideFor,
 } from './approvals';
 import { guardedActionDef } from './catalog';
-import { fallbackNotice, GuardStepUpError } from './engine';
+import { fallbackNotice, GuardStepUpError, requestFallbackNotice } from './engine';
 import { actionEntry } from './executor';
 import { freezeTenant, type FreezeResult } from './freeze';
 import { cancelJob } from './jobs';
@@ -209,6 +209,7 @@ export async function requestUnfreeze(req: Request, body: { reason?: unknown; te
     const approval = await fileGuardRequest(req, tenantId, 'guard_unfreeze',
       `Unfreeze the tenant (frozen since ${settings.frozen_at.toISOString()}, ${settings.frozen_source}) — reason: ${r.reason}`,
       { action: 'guard_unfreeze', requiredSide: required.side, approverFallback: required.fallback, reason: r.reason });
+    if (required.fallback) await requestFallbackNotice(tenantId, approval, await audit.fromRequest(req, tenantId));
     return approval;
   });
 }
@@ -248,8 +249,10 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
     input.hourlyCapMin !== undefined ? `cap minimum ${s.hourly_cap_min} → ${input.hourlyCapMin}` : null,
     input.massApproverSide !== undefined ? `approver of mass actions ${s.mass_approver_side} → ${input.massApproverSide}` : null,
   ].filter(Boolean);
-  return fileGuardRequest(req, tenantId, 'guard_settings_change', `Guard settings: ${parts.join(', ')}`,
+  const approval = await fileGuardRequest(req, tenantId, 'guard_settings_change', `Guard settings: ${parts.join(', ')}`,
     { action: 'guard_settings_change', requiredSide: required.side, approverFallback: required.fallback, settings: input });
+  if (required.fallback) await requestFallbackNotice(tenantId, approval, await audit.fromRequest(req, tenantId));
+  return approval;
 }
 
 // ── Designated approvers (§10.4) ────────────────────────────────────────────
@@ -297,9 +300,11 @@ export async function requestDesignation(req: Request, raw: unknown): Promise<Pe
     throw new AppError(409, 'This account is already a designated approver of the tenant', 'alreadyDesignated');
   }
   const required = await requiredSideFor(requester, tenantId);
-  return fileGuardRequest(req, tenantId, 'guard_approver_designate',
+  const approval = await fileGuardRequest(req, tenantId, 'guard_approver_designate',
     `Designate ${facts.username ?? `#${target}`} as ${side === 'client' ? 'client' : 'MSP'} approver of the tenant`,
     { action: 'guard_approver_designate', requiredSide: required.side, approverFallback: required.fallback, userId: target, side });
+  if (required.fallback) await requestFallbackNotice(tenantId, approval, await audit.fromRequest(req, tenantId));
+  return approval;
 }
 
 /** Revocation, immediate (P4): a platform administrator, the tenant's

@@ -88,13 +88,14 @@ export async function designationsOf(userId: number, tenantId: number): Promise<
 }
 
 /** Designated client approvers of a tenant whose account is active and whose
- *  role in the tenant is a client one: what decides the fallback (§10.4). */
+ *  role in the tenant is a client one: what decides the fallback (§10.4). A
+ *  platform administrator never counts (always on the MSP side, §9.1). */
 export async function activeClientApprovers(tenantId: number): Promise<number> {
   const ids = await db('tenant_approvers').where({ tenant_id: tenantId, side: 'client' }).whereNull('revoked_at').pluck('user_id') as number[];
   let n = 0;
   for (const id of ids) {
     const f = await personFacts(Number(id), tenantId);
-    if (f.active && f.audience === 'client') n++;
+    if (f.active && f.audience === 'client' && !f.platformAdmin) n++;
   }
   return n;
 }

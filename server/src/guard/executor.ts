@@ -11,7 +11,8 @@
 //      with its entry guard.action_executing (P1: targets and, when the
 //      action gives them, serial numbers, J29), committed;
 //   2. execution OUTSIDE any transaction (calls to apple-edge allowed),
-//      idempotent: a run found 'executing' (crash) runs it again;
+//      idempotent: a run found 'executing' (crash) runs it again, unless
+//      the tenant was frozen meanwhile (then paused, 'frozen');
 //   3. 'done', 'partial' or 'failed', executed_at, result, then the entry
 //      guard.action_executed (P3).
 import type { Knex } from 'knex';
@@ -99,6 +100,13 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
   const def = guardedActionDef(row.action_key);
   if (row.state === 'executing') {
     if (!def) return { kind: 'skip', why: 'unknown_action' };
+    // A run after a crash: a freeze set meanwhile pauses the action (as
+    // restore-reconcile does) instead of replaying it; resumed (a new
+    // approval, the full delay), it starts again from its revalidation.
+    if ((await readSettings(tenantId, trx)).frozen_at) {
+      await trx('pending_actions').where({ id: row.id }).update({ state: 'paused', paused_at: new Date(), updated_at: new Date() });
+      return { kind: 'paused', row, code: 'frozen' };
+    }
     return { kind: 'execute', row, def, retained: retainedOf(row), summary: (row.result ?? { done: 0, failed: 0, skipped: 0 }) as GuardResultSummary };
   }
   if (row.state !== 'scheduled') return { kind: 'skip', why: row.state };

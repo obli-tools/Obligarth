@@ -54,11 +54,15 @@ const SealKeyPayload = z.object({ action: z.literal('audit_seal_key_rotate') });
 
 let registered = false;
 
-/** Who examines a retention change or the release of a legal hold. */
-async function journalReviewerPolicy(x: ApprovalReviewCheck): Promise<void> {
+/** Who examines a retention change or the release of a legal hold: in the
+ *  master tenant, another platform administrator; in a client's tenant, its
+ *  designated client approver under the guard's policy, strict step-up of
+ *  the reviewer included (§7.2, §10.4 point 5). */
+async function journalReviewerPolicy(x: ApprovalReviewCheck): Promise<void | { reviewerStepUp: 'strict' }> {
   if (x.approval.tenantId === MASTER_TENANT_ID) { await platformAdminPolicy(x); return; }
   const { guardReviewerPolicy } = await import('../guard/approvals');
   await guardReviewerPolicy({ ...x, approval: { ...x.approval, payload: { ...(x.approval.payload ?? {}), requiredSide: 'client' } } });
+  return { reviewerStepUp: 'strict' };
 }
 
 export function registerAuditModule(): void {

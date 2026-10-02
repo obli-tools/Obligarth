@@ -343,6 +343,24 @@ export async function fallbackNotice(tenantId: number, uuid: string, ctx: AuditW
   });
 }
 
+/** The same fallback for the guard's other requests (unfreeze, settings,
+ *  designation of an approver): the entry names the approval request, the
+ *  client keeps its trace and gets the warning. */
+export async function requestFallbackNotice(tenantId: number, approval: Pick<PendingApproval, 'id' | 'requestType'>,
+  ctx: AuditWriteContext): Promise<void> {
+  await audit.append({
+    tenantId, action: 'guard.approver_fallback', outcome: 'success', approvalIds: [approval.id],
+    details: { reason: 'no_client_approver', requestType: approval.requestType },
+  }, ctx);
+  await alertTenants([tenantId], {
+    severity: 'warning',
+    title: 'Approval by the MSP instead of a client approver',
+    message: 'No client approver is designated: a second administrator of the MSP approves this request (fallback).',
+    stableKey: `guard:fallback:${approval.id}`,
+    navigateTo: '/admin/security?tab=approvals',
+  });
+}
+
 /** A3 (§10.9): the requester's destructive requests in 2 tenants or more
  *  within an hour. Never throws. */
 async function checkA3(a: Assessment): Promise<void> {

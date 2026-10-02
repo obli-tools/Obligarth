@@ -126,15 +126,17 @@ export type ReviewerRefusal =
  * May this reviewer approve (or deny) a request of the guard (§10.4 points 1
  * to 3)? The requester never reviews; an inactive account or one in its
  * cooldown never does; the client side takes a designated client approver
- * holding a client-audience role in the tenant; the MSP side a platform
- * administrator or a designated MSP approver; 'any' either.
+ * holding a client-audience role in the tenant, never a platform
+ * administrator (always on the MSP side, §9.1, whatever its role in the
+ * tenant); the MSP side a platform administrator or a designated MSP
+ * approver; 'any' either.
  */
 export function reviewerRefusal(required: GuardApproverSide, requesterIds: readonly number[], r: ReviewerFacts,
   now: Date = new Date()): ReviewerRefusal | null {
   if (requesterIds.includes(r.userId)) return 'selfApproval';
   if (!r.active) return 'reviewerInactive';
   if (r.cooldownUntil && r.cooldownUntil.getTime() > now.getTime()) return 'privilegeCooldown';
-  const client = r.designatedClient && r.audience === 'client';
+  const client = r.designatedClient && r.audience === 'client' && !r.platformAdmin;
   const msp = r.platformAdmin || r.designatedMsp;
   const ok = required === 'client' ? client : required === 'msp' ? msp : (client || msp);
   return ok ? null : 'approverSideRequired';
