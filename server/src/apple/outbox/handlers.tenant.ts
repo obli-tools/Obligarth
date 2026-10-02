@@ -16,7 +16,9 @@ import { P } from './schemas';
 //                         apple.tenant_provisioned at the first key; mirror;
 //                         provisioning job when the CA or the enrollment
 //                         configuration is still missing; unknown
-//                         external_ref: platform.edge_orphan
+//                         external_ref: platform.edge_orphan; another key
+//                         than the tenant's, or a key another tenant holds:
+//                         tenant.mdm_key_conflict, nothing written
 //   tenant.state_changed  platform: tenant by key; mirror; audit in the
 //                         tenant's chain; retired: platform.tenant_retired
 //   tenant.load_failed    platform: mirror load_failed, platform.tenant_load_failed
@@ -74,6 +76,13 @@ async function onTenantCreated(ctx: OutboxHandlerContext<Payload<'tenant.created
     return;
   }
   if (current.mdm_key === null) {
+    // A key another tenant of the brain already holds: the two bases disagree (partial restore). As the
+    // provisioning job does (§6.2): the critical alert, the key never written, no retry (waiting cannot heal).
+    const holder = await trx('tenants').where({ mdm_key: p.key }).whereNot({ id: t.id }).first('id') as { id: number } | undefined;
+    if (holder) {
+      await raiseMasterInTx(trx, 'tenant.mdm_key_conflict', { discriminant: t.id, params: { tenantName: t.name } }, ctx.actor, t.id);
+      return;
+    }
     await trx.raw('SELECT obligarth.tenant_set_mdm_key(?, ?)', [t.id, p.key]);
     ctx.audit({
       tenantId: t.id, action: 'apple.tenant_provisioned', target: { type: 'tenant', id: String(t.id) },

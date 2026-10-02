@@ -264,7 +264,8 @@ export const appleTenants = {
   },
 
   /** README §5, temporary measure: before the hard deletion of a tenant, its retirement at apple-edge.
-   *  APPLE_EDGE_MODE=off with a key: refused (the tenant would stay active at apple-edge, without reference). */
+   *  APPLE_EDGE_MODE=off with a key: refused (the tenant would stay active at apple-edge, without reference).
+   *  Unknown to apple-edge, or already retired there: nothing left to retire, the deletion goes on. */
   async retireBeforeDeletion(tenantId: number, actor: DbActor): Promise<'retiring' | 'no_edge_tenant'> {
     const key = await appleTenants.keyOrNull(tenantId);
     if (!key) return 'no_edge_tenant';
@@ -275,7 +276,9 @@ export const appleTenants = {
       return await appleTenants.retire(tenantId, actor);
     } catch (err) {
       if (isAppleEdgeError(err)) {
-        if (err.code === 'tenant_not_found') return 'no_edge_tenant';
+        // apple-edge's Retire answers 409 tenant_not_live for a retired tenant only (a retiring one: 200), e.g.
+        // a tenant brought back by the restore of an older backup of the brain: otherwise never deletable here.
+        if (err.code === 'tenant_not_found' || err.code === 'tenant_not_live') return 'no_edge_tenant';
         const { edgeErrorResponse } = await import('../edge/errors');
         const r = edgeErrorResponse(err, 'console');
         throw new AppError(r.status, r.message, r.code);

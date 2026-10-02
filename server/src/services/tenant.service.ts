@@ -10,6 +10,7 @@ import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type 
 import { vault } from '../vault';
 import { audit, type AuditWriteContext } from '../audit';
 import { appleTenants } from '../apple/tenants/registry';
+import { logger } from '../utils/logger';
 
 // Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
 // caller's context (each sees the tenants it may: its own memberships, every
@@ -232,7 +233,14 @@ export const tenantService = {
     try {
       await tenantService.deleteHere(id, userId, ctx);
     } catch (err) {
-      if (edge === 'retiring') await switchToNone(() => appleTenants.restore(id, actor)).catch(() => undefined);
+      if (edge === 'retiring') {
+        await switchToNone(() => appleTenants.restore(id, actor)).catch((restoreErr: unknown) => {
+          // Never silent: the tenant stays retiring at apple-edge (destroyed there after 30 days) while it still
+          // exists here. Replay the deletion, or restore the tenant at apple-edge within the 30 days.
+          logger.error({ tenantId: id, code: (restoreErr as { code?: unknown } | null)?.code },
+            'tenant deletion failed after its retirement at apple-edge, and its restoration there failed too: the tenant stays retiring at apple-edge');
+        });
+      }
       throw err;
     }
   },
