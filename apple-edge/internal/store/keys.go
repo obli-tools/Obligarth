@@ -138,11 +138,23 @@ func (k *Keyring) EnsureInstance(ctx context.Context) (pseudonymKey []byte, err 
 	return k.Open(ctx, k.db, "", "apple_edge.instance_secrets", "value_enc", aadPK, enc)
 }
 
-// RotateKEK re-wraps, row by row, every DEK wrapped by old with k's KEK.
-// It returns the number of rows re-wrapped.
+// RotateKEK re-wraps, row by row, every DEK wrapped by old with current and
+// returns the number of rows re-wrapped. Like the brain's kek-rotate, it
+// refuses before re-wrapping anything when a live DEK is wrapped by a third
+// KEK, and ends with the canary of the start-up (CheckKEK) under current
+// alone. Running it again resumes an interrupted rotation.
 func RotateKEK(ctx context.Context, db *sql.DB, old, current *envelope.KEK) (int, error) {
 	if old.ID() == current.ID() {
-		return 0, errors.New("keys: the previous and the current KEK are identical")
+		return 0, errors.New("keys: the previous and the current KEK are the same key")
+	}
+	var unknown sql.NullString
+	if err := db.QueryRowContext(ctx, `
+SELECT min(kek_id) FROM apple_edge.data_keys
+ WHERE dek_wrapped IS NOT NULL AND kek_id <> $1 AND kek_id <> $2`, old.ID(), current.ID()).Scan(&unknown); err != nil {
+		return 0, err
+	}
+	if unknown.Valid {
+		return 0, fmt.Errorf("keys: a data key is wrapped by another KEK (kek_id %s): nothing re-wrapped", printableKEKID(unknown.String))
 	}
 	type row struct {
 		id, wrapped string
@@ -189,6 +201,10 @@ func RotateKEK(ctx context.Context, db *sql.DB, old, current *envelope.KEK) (int
 	}
 	if others > 0 {
 		return n, fmt.Errorf("keys: %d data keys remain wrapped by an unknown KEK", others)
+	}
+	// The canary with the new KEK alone.
+	if err := CheckKEK(ctx, db, current); err != nil {
+		return n, err
 	}
 	return n, nil
 }

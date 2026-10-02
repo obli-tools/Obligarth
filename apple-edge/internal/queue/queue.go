@@ -164,6 +164,9 @@ func (q *Queue) check(tenant string, plistBytes []byte, req EnqueueRequest) (*ch
 	if !ids.ValidUUID(req.CommandUUID) {
 		return nil, apierr.BadRequest("command_uuid must be a UUID")
 	}
+	if !ids.ValidCommandUUID(req.CommandUUID) {
+		return nil, apierr.BadRequest("command_uuid must be in upper case, like the CommandUUID of the plist (compared case-sensitively)")
+	}
 	if len(plistBytes) == 0 || len(plistBytes) > MaxCommandBytes {
 		return nil, apierr.New(413, "payload_too_large", "the command plist must hold 1 byte to 4 MiB")
 	}
@@ -195,6 +198,11 @@ func (q *Queue) check(tenant string, plistBytes []byte, req EnqueueRequest) (*ch
 			return nil, apierr.Unprocessable("validation_failed", "secret placeholders are allowed once, for the UnlockToken of a single-target ClearPasscode")
 		}
 		c.secretKind = store.SecretUnlockToken
+	}
+	// No other secret in clear: the plist stays in nanomdm.commands until the
+	// device acknowledges it (review RC2; sensitive.go).
+	if err := checkSecrets(plistBytes, cmd.Command.RequestType); err != nil {
+		return nil, err
 	}
 	if req.ExpiresAt != nil {
 		if !req.ExpiresAt.After(time.Now()) {

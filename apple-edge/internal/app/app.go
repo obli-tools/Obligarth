@@ -108,40 +108,62 @@ type Options struct {
 	DisableAlertJobs bool
 }
 
+// SecretFileError names the variable of a secret file that could not be
+// used (missing, unreadable by the uid of apple-edge, malformed). The cause
+// never repeats the content of the file.
+type SecretFileError struct {
+	Variable string
+	Err      error
+}
+
+func (e *SecretFileError) Error() string { return e.Variable + ": " + e.Err.Error() }
+func (e *SecretFileError) Unwrap() error { return e.Err }
+
 // LoadSecrets reads the secret files named by the configuration.
 func LoadSecrets(cfg *config.Config) (Secrets, error) {
 	var s Secrets
 	var err error
 	if s.DBPassword, err = config.ReadSecretFile(cfg.DBPasswordFile); err != nil {
-		return s, fmt.Errorf("EDGE_DB_PASSWORD_FILE: %w", err)
+		return s, &SecretFileError{"EDGE_DB_PASSWORD_FILE", err}
 	}
-	kekText, err := config.ReadSecretFile(cfg.KEKFile)
-	if err != nil {
-		return s, fmt.Errorf("EDGE_KEK_FILE: %w", err)
-	}
-	if s.KEK, err = envelope.ParseKEK(kekText); err != nil {
+	if s.KEK, err = LoadKEK(cfg.KEKFile); err != nil {
 		return s, err
 	}
 	tok, err := config.ReadSecretFile(cfg.APITokenFile)
 	if err != nil {
-		return s, fmt.Errorf("EDGE_API_TOKEN_FILE: %w", err)
+		return s, &SecretFileError{"EDGE_API_TOKEN_FILE", err}
 	}
 	s.APITokens = append(s.APITokens, tok)
 	if cfg.APITokenNextFile != "" {
 		next, err := config.ReadSecretFile(cfg.APITokenNextFile)
 		if err != nil {
-			return s, fmt.Errorf("EDGE_API_TOKEN_NEXT_FILE: %w", err)
+			return s, &SecretFileError{"EDGE_API_TOKEN_NEXT_FILE", err}
 		}
 		s.APITokens = append(s.APITokens, next)
 	}
 	hk, err := config.ReadSecretFile(cfg.DDMHMACKeyFile)
 	if err != nil {
-		return s, fmt.Errorf("EDGE_DDM_HMAC_KEY_FILE: %w", err)
+		return s, &SecretFileError{"EDGE_DDM_HMAC_KEY_FILE", err}
 	}
 	if s.DDMKey, err = ddm.ParseKey(hk); err != nil {
-		return s, fmt.Errorf("EDGE_DDM_HMAC_KEY_FILE: %w", err)
+		return s, &SecretFileError{"EDGE_DDM_HMAC_KEY_FILE", err}
 	}
 	return s, nil
+}
+
+// LoadKEK reads the KEK file. A missing, unreadable or malformed file is a
+// *store.KEKRefusal (the brain's message for its own KEK file, exit code 1);
+// the cause never repeats the content of the file.
+func LoadKEK(path string) (*envelope.KEK, error) {
+	text, err := config.ReadSecretFile(path)
+	if err != nil {
+		return nil, &store.KEKRefusal{Code: "kek_file", Message: store.KEKFileRefusal(obs.ErrString(err))}
+	}
+	kek, err := envelope.ParseKEK(text)
+	if err != nil {
+		return nil, &store.KEKRefusal{Code: "kek_file", Message: store.KEKFileRefusal(obs.ErrString(err))}
+	}
+	return kek, nil
 }
 
 // readCerts reads the PEM certificates of a file.
@@ -215,6 +237,11 @@ func StartWithOptions(ctx context.Context, cfg *config.Config, sec Secrets, logg
 		return fail(err)
 	}
 	a.Health.SchemaOK.Store(true)
+	// The canary of the brain's vault: refused (message A or B, exit code 1)
+	// unless the KEK opens this database's keys.
+	if err := store.CheckKEK(ctx, a.DB, sec.KEK); err != nil {
+		return fail(err)
+	}
 	a.Keys = store.NewKeyring(a.DB, sec.KEK)
 	pseudo, err := a.Keys.EnsureInstance(ctx)
 	if err != nil {

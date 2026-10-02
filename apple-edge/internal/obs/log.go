@@ -29,7 +29,7 @@ var allowed = map[string]bool{
 	"method": true, "status": true, "duration_ms": true, "tenant": true, "eref": true,
 	"request_id": true, "command_uuid": true, "request_type": true, "message_type": true,
 	"topic": true, "outcome": true, "count": true, "version": true, "actor": true,
-	"ade_token": true, "phase": true,
+	"ade_token": true, "phase": true, "operation": true, "kek_id": true, "previous_kek_id": true,
 }
 
 // renamed maps library keys onto allowed keys.
@@ -111,7 +111,24 @@ func (l *Logger) Debug(kvs ...any) {
 // Error logs at the error level.
 func (l *Logger) Error(kvs ...any) { l.write("error", kvs) }
 
-func (l *Logger) write(level string, kvs []any) {
+// maxFatal bounds the message of a fatal line.
+const maxFatal = 1000
+
+// Fatal logs a refusal to start or to run at the fatal level. msg must be a
+// fixed text of apple-edge (no value received from a device or a library):
+// unlike the other messages it is not masked, so that the variable names and
+// commands it gives the operator stay readable. Other keys are filtered as
+// usual.
+func (l *Logger) Fatal(msg string, kvs ...any) {
+	if len(msg) > maxFatal {
+		msg = msg[:maxFatal]
+	}
+	l.writeWith("fatal", kvs, &msg)
+}
+
+func (l *Logger) write(level string, kvs []any) { l.writeWith(level, kvs, nil) }
+
+func (l *Logger) writeWith(level string, kvs []any, fixedMsg *string) {
 	all := make([]any, 0, len(l.kvs)+len(kvs))
 	all = append(append(all, l.kvs...), kvs...)
 	fields := make(map[string]any, 8)
@@ -144,6 +161,9 @@ func (l *Logger) write(level string, kvs []any) {
 			continue
 		}
 		set(k, sanitizeValue(k, v))
+	}
+	if fixedMsg != nil {
+		set("msg", *fixedMsg)
 	}
 	var b strings.Builder
 	b.WriteString(`{"ts":`)
@@ -202,7 +222,7 @@ var structuredKeys = map[string]bool{
 	"tenant": true, "eref": true, "request_id": true, "command_uuid": true,
 	"request_type": true, "message_type": true, "topic": true, "route": true,
 	"method": true, "component": true, "outcome": true, "version": true, "actor": true,
-	"ade_token": true, "phase": true,
+	"ade_token": true, "phase": true, "operation": true, "kek_id": true, "previous_kek_id": true,
 }
 
 func maskIfFree(key, s string) string {

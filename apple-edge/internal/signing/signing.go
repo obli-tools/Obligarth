@@ -10,8 +10,10 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"database/sql"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -135,6 +137,49 @@ ON CONFLICT (name) DO UPDATE SET value_enc = EXCLUDED.value_enc, cert_pem = EXCL
     not_after = EXCLUDED.not_after, updated_at = now()`, Name, enc, chain.String(), id.Chain[0].NotAfter.UTC())
 		return err
 	})
+}
+
+// Info is the public description of the profile signing identity: the
+// SHA-256 of its leaf certificate (DER, lower-case hexadecimal) and its
+// expiry. It holds no secret.
+type Info struct {
+	SHA256   string    `json:"sha256"`
+	NotAfter time.Time `json:"not_after"`
+}
+
+// Describe returns the public description of the signing identity, or nil
+// when none was imported. The key is never opened.
+func Describe(ctx context.Context, q store.Querier) (*Info, error) {
+	var chainPEM sql.NullString
+	var notAfter sql.NullTime
+	err := q.QueryRowContext(ctx, `SELECT cert_pem, not_after FROM apple_edge.instance_secrets WHERE name = $1`, Name).Scan(&chainPEM, &notAfter)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	info := &Info{}
+	rest := []byte(chainPEM.String)
+	for {
+		var blk *pem.Block
+		if blk, rest = pem.Decode(rest); blk == nil {
+			break
+		}
+		if blk.Type != "CERTIFICATE" {
+			continue
+		}
+		sum := sha256.Sum256(blk.Bytes)
+		info.SHA256 = hex.EncodeToString(sum[:])
+		if c, err := x509.ParseCertificate(blk.Bytes); err == nil {
+			info.NotAfter = c.NotAfter.UTC()
+		}
+		break
+	}
+	if notAfter.Valid {
+		info.NotAfter = notAfter.Time.UTC()
+	}
+	return info, nil
 }
 
 // Load reads and decrypts the identity.

@@ -24,6 +24,7 @@ import (
 	"github.com/MeeJay/Obligarth/apple-edge/internal/queue"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/reqctx"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/scep"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/signing"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store/nanomdmsql"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/tenant"
@@ -40,12 +41,23 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	// Public description of the profile signing identity (deadlines of the
+	// brain), null until one is imported; never the key.
+	sid, err := signing.Describe(r.Context(), s.DB)
+	if err != nil {
+		return err
+	}
 	return writeJSON(w, http.StatusOK, map[string]any{
 		"version":  s.Version,
 		"upstream": upstreamVersions(),
 		"schema":   expected,
 		"tenants":  len(s.Reg.Keys()),
 		"outbox":   lag,
+		// Fingerprint of the KEK (not secret): the brain checks at start-up
+		// that it differs from its own (a KEK copied from one service to the
+		// other) and shows it with the state of its vault.
+		"kek_id":           s.Keys.KEKID(),
+		"signing_identity": sid,
 	})
 }
 
@@ -440,6 +452,9 @@ func (s *Server) cancel(w http.ResponseWriter, r *http.Request) error {
 	key, err := tenantKey(r)
 	if err != nil {
 		return err
+	}
+	if !ids.ValidCommandUUID(r.PathValue("uuid")) {
+		return apierr.BadRequest("the command UUID must be in upper case, like the CommandUUID of the plist (compared case-sensitively)")
 	}
 	var req struct {
 		Targets []string `json:"targets"`

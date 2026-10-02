@@ -25,6 +25,10 @@ var (
 	keyRe   = regexp.MustCompile(`^[a-km-np-z2-9]{16}$`)
 	rawIDRe = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 	uuidRe  = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	// commandUUIDRe is the canonical upper-case form required for a
+	// CommandUUID (any version: v4 random, or v8 deterministic for an
+	// action of the guards).
+	commandUUIDRe = regexp.MustCompile(`^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$`)
 )
 
 // NewTenantKey returns a new random tenant key (10 bytes, 80 bits, 16 chars).
@@ -51,6 +55,13 @@ func ValidRawID(id string) bool { return rawIDRe.MatchString(id) }
 
 // ValidUUID reports whether s looks like a UUID (any version, any case).
 func ValidUUID(s string) bool { return uuidRe.MatchString(s) }
+
+// ValidCommandUUID reports whether s is a CommandUUID in canonical upper-case
+// form. The CommandUUID of a plist and the command_uuid of the API are
+// compared byte for byte (case-sensitive), and searched as such in the
+// queue: a lower-case UUID from the brain is refused at once (400) instead of
+// failing later as a mismatch (422) or an unknown command (404).
+func ValidCommandUUID(s string) bool { return commandUUIDRe.MatchString(s) }
 
 // Namespace returns "<key>_<id>", or "" for an empty id.
 func Namespace(key, id string) string {

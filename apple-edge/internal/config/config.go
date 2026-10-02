@@ -5,6 +5,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/netip"
 	"net/url"
 	"os"
@@ -259,12 +260,22 @@ func (c *Config) validatePublicBase() error {
 	return nil
 }
 
+// NonrootUID is the user of the image (gcr.io/distroless/static:nonroot):
+// the secret files of apple-edge must be readable by it.
+const NonrootUID = 65532
+
 // ReadSecretFile reads a secret file and trims surrounding white space.
 func ReadSecretFile(path string) (string, error) {
 	if path == "" {
 		return "", errors.New("no secret file configured")
 	}
 	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrPermission) {
+		// The image runs as the distroless user nonroot: a secret file of
+		// compose is a bind mount that keeps its owner and mode on the host.
+		return "", fmt.Errorf("reading secret file: permission denied: apple-edge runs as uid %d, "+
+			"make the file readable by it (install.sh: chown %d:%d, mode 600)", NonrootUID, NonrootUID, NonrootUID)
+	}
 	if err != nil {
 		return "", fmt.Errorf("reading secret file: %w", err)
 	}
