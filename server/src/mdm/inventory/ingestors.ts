@@ -4,7 +4,7 @@ import type { NanoEnrollType, Ownership } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { raiseInTx } from '../../apple/alerts/service';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
-import { platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
+import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 
 // =============================================================================
 // The inventory contract (docs: modele-donnees-mdm §5.2 to §5.4, §10.4): the
@@ -132,7 +132,8 @@ export interface DeviceInformationEffects {
  * that is not the identity's raises security.identity_mismatch (neither is stored over the known value). A
  * record without a serial number takes the reported one unless another record holds it (devices_serial_uq):
  * device data never take the identity of another device (review of lot B2, MDM-B2-R1): alert
- * security.identity_mismatch, nothing written.
+ * security.identity_mismatch, nothing written. A serial number is written in the form the Authenticate
+ * stores (normalizeSerial), never as another value (second review of lot B2).
  */
 export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: number, deviceId: number,
   queryResponses: Record<string, unknown>, occurredAt: Date): Promise<DeviceInformationEffects> {
@@ -167,18 +168,21 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   if (modelNumber) sat.model_number = modelNumber;
   if (rules.storeDeviceName) { const n = str(q.DeviceName, 255); if (n) device.device_name = n; }
   if (rules.storeSerialNumber && !personal) {
-    const serial = str(q.SerialNumber, 64);
-    if (serial) {
-      if (f.serial && serial.toUpperCase() !== f.serial.toUpperCase()) {
+    const reported = str(q.SerialNumber, 64);
+    if (reported) {
+      // The stored form of the Authenticate (normalizeSerial: letters and digits, upper case): any other value
+      // (separators, invisible or lookalike characters, a spreadsheet formula) is never written as a serial number.
+      const serial = normalizeSerial(reported);
+      if (f.serial && serial !== f.serial.toUpperCase()) {
         effects.serialChanged = true;
         await raiseInTx(trx, tenantId, 'device.serial_changed', { discriminant: deviceId });
-      } else if (!f.serial) {
-        const holder = await serialHolderOf(trx, tenantId, serial.toUpperCase(), deviceId);
+      } else if (!f.serial && serial) {
+        const holder = await serialHolderOf(trx, tenantId, serial, deviceId);
         if (holder !== null) {
           effects.serialHeld = true;
           await raiseInTx(trx, tenantId, 'security.identity_mismatch', { discriminant: holder, params: { field: 'serial' } });
         } else {
-          device.serial_number = serial.toUpperCase();
+          device.serial_number = serial;
         }
       }
     }
