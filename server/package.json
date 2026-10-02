@@ -38,6 +38,7 @@
     "pino-pretty": "^11.0.0",
     "playwright-chromium": "^1.58.2",
     "qrcode": "^1.5.4",
+    "shamir-secret-sharing": "0.0.4",
     "socket.io": "^4.7.4",
     "undici": "^7.21.0",
     "zod": "^3.22.4"

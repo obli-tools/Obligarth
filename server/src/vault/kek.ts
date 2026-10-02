@@ -144,7 +144,9 @@ export function inspectKekFile(file: string): KekFileCheck {
   if (looksLikeKek(file)) return { ok: false, reason: 'the setting holds a key instead of the path of a file' };
   let fd: number;
   try {
-    fd = fs.openSync(file, 'r');
+    // O_NONBLOCK (lot A8, review of lot A2): a named pipe given as the KEK file is refused below (not a
+    // regular file) instead of blocking the start until a writer opens it. Unknown to Windows: 0.
+    fd = fs.openSync(file, fs.constants.O_RDONLY | (fs.constants.O_NONBLOCK ?? 0));
   } catch (err) {
     return { ok: false, reason: fileError(err) };
   }

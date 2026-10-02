@@ -15,13 +15,20 @@
 //   recover-lost-kek --confirm-lost <id>     SERVER STOPPED: the KEK is lost and     0, 4, 1
 //                                            not escrowed; every sealed value is
 //                                            dropped, new keys under SERVER_KEK_FILE
+//   escrow split --kek server=<f> [--kek edge=<f>] [--extra <name>=<f>]      0, 2, 1
+//                [--threshold 2] [--shares 3]   the escrow bundle in printed shares
+//   escrow combine --out-dir <dir>           shares on stdin: the keys rebuilt     0, 2, 1
+//                                            into <dir> (never over a file)
+//   escrow verify --expect server=<kek_id> [--expect edge=<kek_id>]               0, 2, 1
+//                                            shares on stdin, nothing written
 //
-// The escrow commands (escrow split | combine | verify) come with the escrow
-// lot (A8). "Server stopped": the command takes the vault's online lock
+// The escrow commands (vault/escrow.ts, coffre-secrets §9.2) need neither the
+// database nor the network (`docker run --network none`); they alone load the
+// Shamir library. "Server stopped": the command takes the vault's online lock
 // exclusively (vault/lock.ts). Never a value, a key or a sealed value on the
-// output: identifiers, kek_ids, counts. The commands that query the database
-// run as the runtime role with signed contexts (RLS_CONTEXT_KEY_FILE,
-// rls-tenant §4.6).
+// output: identifiers, kek_ids, counts (escrow split prints the shares, which
+// is its purpose). The commands that query the database run as the runtime
+// role with signed contexts (RLS_CONTEXT_KEY_FILE, rls-tenant §4.6).
 import '../env';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { config } from '../config';
@@ -308,11 +315,39 @@ const COMMANDS: Record<string, (args: string[]) => Promise<number>> = {
   'dek-rotate': dekRotate,
   'kek-rotate': kekRotate,
   'recover-lost-kek': recoverLostKek,
+  escrow,
 };
 
+/** stdin read to its end (shares of escrow combine and verify). */
+function readStdin(): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    process.stdin.on('data', (b: Buffer) => chunks.push(b));
+    process.stdin.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      for (const c of chunks) c.fill(0);
+      resolve(text);
+    });
+    process.stdin.on('error', reject);
+  });
+}
+
+async function escrow(args: string[]): Promise<number> {
+  const { EscrowError, escrowCli } = await import('./escrow');
+  try {
+    return await escrowCli(args, { readStdin, write: (text) => process.stdout.write(text) });
+  } catch (err) {
+    if (err instanceof EscrowError) throw new CliExit(err.exitCode, err.message);
+    throw err;
+  }
+}
+
 async function main(): Promise<number> {
-  // Signed database context (rls-tenant §4.6, R12): the commands query as the
-  // runtime role, like the server.
+  const [first, ...rest] = process.argv.slice(2);
+  // Escrow (coffre-secrets §9.2): neither the database nor the network.
+  if (first === 'escrow') return escrow(rest);
+  // Signed database context (rls-tenant §4.6, R12): the commands below query
+  // as the runtime role, like the server.
   try {
     configureContextSigningFromFile(config.rlsContextKeyFile);
   } catch (err) {
