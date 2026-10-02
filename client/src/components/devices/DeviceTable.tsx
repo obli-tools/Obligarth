@@ -30,7 +30,7 @@ import { Modal } from '@/components/common/Modal';
 import { Drawer } from '@/components/common/Drawer';
 import { ActionMenu } from '@/components/common/ActionMenu';
 import { IconButton } from '@/components/common/IconButton';
-import { useConfirm } from '@/components/common/ConfirmDialog';
+import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import {
  LINE2_FIELDS,
  loadVisibleFields,
@@ -86,7 +86,6 @@ export function DeviceTable({
  // cover the whole ~300px-high list pane. Mouse screens never match.
  const isShortTouch = useMediaQuery('(pointer: coarse) and (max-height: 520px)');
  const compactToolbar = isPhone || isShortTouch;
- const confirm = useConfirm();
  // Phone: the filter chips live in a bottom sheet opened from a
  // "Filters (n)" button instead of a tall sticky band.
  const [filtersOpen, setFiltersOpen] = useState(false);
@@ -301,6 +300,9 @@ export function DeviceTable({
  // Batch actions
  const [batchMenuOpen, setBatchMenuOpen] = useState(false);
  const [isBatchRunning, setIsBatchRunning] = useState(false);
+ // Record deletion is a guarded action (audit-durci §10.2): reason, typed
+ // confirmation, step-up or second approver, decided by the server.
+ const [guardedDelete, setGuardedDelete] = useState<number[] | null>(null);
 
  // Export
  const [exportMenuOpen, setExportMenuOpen] = useState(false);
@@ -535,17 +537,14 @@ export function DeviceTable({
  // a no-op in the Android WebView — docs §5.6) and the batch button must
  // not show its spinner while the question is still open.
  if (action === 'delete') {
- if (!(await confirm({ message: t('devices.batch.confirmDelete'), danger: true }))) return;
+ setGuardedDelete(Array.from(selectedIds));
+ return;
  }
  setIsBatchRunning(true);
  try {
  if (action === 'approve') {
  const ids = selectAllGroup && groupId ? undefined : Array.from(selectedIds);
  if (ids) { await Promise.all(ids.map(id => deviceApi.approve(id))); toast.success(t('devices.batch.approved', { count: ids.length })); }
- } else {
- const ids = Array.from(selectedIds);
- await Promise.all(ids.map(id => deviceApi.delete(id)));
- toast.success(t('devices.batch.deleted', { count: ids.length }));
  }
  setSelectedIds(new Set()); setSelectAllGroup(false); await load(true);
  } catch { toast.error(t('common.error')); } finally { setIsBatchRunning(false); }
@@ -1433,6 +1432,16 @@ export function DeviceTable({
  }}
  />
  )}
+
+ {/* ── Guarded deletion of device records ───────────────────────── */}
+ <GuardedActionDialog
+ open={guardedDelete !== null}
+ onClose={() => setGuardedDelete(null)}
+ actionKey="device.delete"
+ selection={{ deviceIds: guardedDelete ?? [] }}
+ title={t('devices.batch.delete')}
+ onDone={() => { setSelectedIds(new Set()); setSelectAllGroup(false); void load(true); }}
+ />
  </div>
  );
 }

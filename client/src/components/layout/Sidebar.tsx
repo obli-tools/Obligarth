@@ -258,8 +258,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const hasAgentConfigCap =
     tenantCaps.has('agent_config:keys') ||
     tenantCaps.has('agent_config:approval');
-  //   - audit.read / approvals.review → Security (the journal; the approvals)
-  const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review');
+  //   - audit.read / approvals.review / devices.manage → Security (the
+  //     journal; the approvals; the guarded actions)
+  const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review') || tenantCaps.has('devices.manage');
   const { toggleSidebarFloating, toggleSidebarCollapsed } = useUiStore();
   // Effective (device-aware) mode — see useEffectiveSidebar(). The drawer is
   // always the full, expanded sidebar.

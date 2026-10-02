@@ -1229,7 +1229,24 @@
       "vault_kek_rotated": "Key-encryption key rotated",
       "vault_kek_rotation_requested": "Key-encryption key rotation requested",
       "vault_tenant_secret_created": "Tenant secret created",
-      "vault_verify_failed": "Vault verification failed"
+      "vault_verify_failed": "Vault verification failed",
+      "guard_action_requested": "Guarded action requested",
+      "guard_action_targets": "Targets of the guarded action (continued)",
+      "guard_action_scheduled": "Guarded action scheduled",
+      "guard_action_resumed": "Guarded action resumed",
+      "guard_action_executing": "Guarded action executing",
+      "guard_action_executed": "Guarded action executed",
+      "guard_action_cancelled": "Guarded action cancelled",
+      "guard_action_paused": "Guarded action paused",
+      "guard_action_refused": "Guarded action refused",
+      "guard_action_expired": "Guarded action expired",
+      "guard_tenant_frozen": "Tenant frozen",
+      "guard_tenant_unfrozen": "Tenant unfrozen",
+      "guard_settings_changed": "Guard settings changed",
+      "guard_approver_designated": "Approver designated",
+      "guard_approver_revoked": "Approver revoked",
+      "guard_anomaly_detected": "Anomaly detected by the guards",
+      "guard_approver_fallback": "Approval by the MSP instead of a client approver"
     },
     "families": {
       "auth": "Authentication",
@@ -1250,7 +1267,8 @@
       "vault": "Vault",
       "audit": "Journal",
       "jobs": "Background jobs",
-      "approval": "Approval"
+      "approval": "Approval",
+      "guard": "Guards"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -1411,7 +1429,8 @@
     "tabAudit": "Audit log",
     "tabApprovals": "Approvals",
     "tabVault": "Vault",
-    "tabAuditSettings": "Journal settings"
+    "tabAuditSettings": "Journal settings",
+    "tabGuard": "Guards"
   },
   "deviceKeys": {
     "level": {
@@ -1683,5 +1702,153 @@
   },
   "auth": {
     "loggingNotice": "The actions taken in this console are logged for security and traceability, and kept 12 months by default."
+  },
+  "guard": {
+    "actions": {
+      "device": {
+        "delete": "Delete device records"
+      },
+      "mdm": {
+        "erase_device": "Erase device",
+        "remove_management": "Remove management",
+        "device_lock": "Lock device",
+        "lost_mode_enable": "Enable lost mode"
+      }
+    },
+    "state": {
+      "awaiting_approval": "awaiting approval",
+      "scheduled": "scheduled",
+      "paused": "paused",
+      "executing": "running",
+      "done": "done",
+      "partial": "done in part",
+      "cancelled": "cancelled",
+      "refused": "refused",
+      "failed": "failed",
+      "expired": "expired"
+    },
+    "side": {
+      "msp": "MSP",
+      "client": "client",
+      "any": "any side"
+    },
+    "errors": {
+      "noTargets": "The selection designates no device.",
+      "targetsOutsideScope": "Some devices are outside your scope.",
+      "tenantFrozen": "The tenant is frozen: no guarded action until it is unfrozen.",
+      "privilegeCooldown": "Your administrator or approver rights are too recent (72-hour cooldown, until {{until}}).",
+      "personalDeviceForbidden": "This action is refused on personal devices.",
+      "wholeFleetForbidden": "This action is refused on the whole fleet.",
+      "hourlyCapExceeded": "The hourly cap of destructive actions would be exceeded ({{remaining}} of {{cap}} devices left).",
+      "confirmationMismatch": "The confirmation does not match.",
+      "reasonRequired": "A reason of 5 to 500 characters is required.",
+      "crossTenantBatch": "One request acts on one tenant only.",
+      "approverSideRequired": "This request needs an approver of the other side (a client approver by default).",
+      "selfApproval": "The requester cannot review this request."
+    },
+    "delay": {
+      "none": "no delay",
+      "seconds": "{{count}} s",
+      "minutes": "{{count}} min"
+    },
+    "dialog": {
+      "targets_one": "{{count}} device",
+      "targets_other": "{{count}} devices",
+      "bulk": "batch",
+      "requalified": "(third request in 15 minutes: treated as a batch)",
+      "delay": "Delay before execution: {{delay}} (cancellable)",
+      "quota": "Hourly budget: {{remaining}} of {{cap}} devices left",
+      "reason": "Reason (required)",
+      "ticket": "Ticket number (optional)",
+      "typeName": "Type the device name to confirm: {{name}}",
+      "typeCount": "Type the number of devices to confirm: {{count}}",
+      "request": "Request",
+      "confirm": "Confirm"
+    },
+    "level": {
+      "restricted": "A second approver is required",
+      "sensitive": "Your second factor is required"
+    },
+    "toast": {
+      "scheduled": "Scheduled: runs at {{at}} unless cancelled",
+      "running": "Accepted: the action runs now",
+      "awaitingFallback": "Waiting for a second MSP administrator (no client approver designated)",
+      "awaitingClient": "Waiting for the approval of a client approver",
+      "awaiting": "Waiting for a second approver"
+    },
+    "list": {
+      "due": "due",
+      "cancelTitle": "Cancel this action?",
+      "cancelReason": "Reason (optional)",
+      "cancel": "Cancel the action",
+      "lateCancel": "Withdrawn on {{done}} of {{total}} devices (the others had received it)",
+      "cancelled": "Action cancelled",
+      "resumeConfirm": "Request the resumption? A second person approves it; the full delay starts again.",
+      "resumeRequested": "Resumption requested: waiting for an approver",
+      "showClosed": "Show closed",
+      "empty": "No guarded action in progress.",
+      "fallback": "MSP approval (no client approver)",
+      "resume": "Resume",
+      "result": "done {{done}}, failed {{failed}}, skipped {{skipped}}"
+    },
+    "freeze": {
+      "banner": "Tenant frozen since {{since}}",
+      "bannerAnomaly": "Tenant frozen automatically (anomaly) since {{since}}",
+      "effects": "No guarded action is possible and no MDM command is delivered until the tenant is unfrozen (second approver).",
+      "unfreeze": "Request unfreeze",
+      "title": "Freeze the tenant now?",
+      "reason": "Reason (required)",
+      "freeze": "Freeze",
+      "done": "Tenant frozen",
+      "unfreezeTitle": "Request the end of the freeze?",
+      "unfreezeRequested": "Unfreeze requested: waiting for an approver"
+    },
+    "approvers": {
+      "title": "Designated approvers",
+      "help": "A batch requested by the MSP is approved by a client approver; without one, by a second MSP administrator (marked as a fallback).",
+      "none": "No approver designated.",
+      "cooldown": "cooldown until {{until}}",
+      "revoke": "Revoke",
+      "revokeConfirm": "Revoke {{name}}?",
+      "revoked": "Approver revoked",
+      "requested": "Designation requested: waiting for an approver",
+      "pick": "Choose an account",
+      "designate": "Designate"
+    },
+    "settings": {
+      "title": "Guard settings",
+      "percent": "Hourly cap (% of the fleet)",
+      "min": "Minimum (devices)",
+      "side": "Approver of the mass actions of the MSP",
+      "save": "Request the change",
+      "help": "A change is approved by a second person (a client approver by default).",
+      "requested": "Change requested: waiting for an approver",
+      "unchanged": "Nothing changed"
+    },
+    "quota": "Hourly budget: {{remaining}} of {{cap}} devices left",
+    "approval": {
+      "client": "Client approver required",
+      "msp": "MSP approver required",
+      "any": "Any designated approver"
+    },
+    "alerts": {
+      "awaiting_approval": "Guarded action awaiting approval",
+      "scheduled": "Guarded action scheduled",
+      "executing": "Guarded action running",
+      "done": "Guarded action done",
+      "partial": "Guarded action done in part",
+      "failed": "Guarded action failed",
+      "cancelled": "Guarded action cancelled",
+      "paused": "Guarded action paused",
+      "expired": "Guarded action expired",
+      "refused": "Guarded action refused",
+      "fallback": "Approval by the MSP instead of a client approver",
+      "freeze": "Tenant frozen",
+      "unfreeze": "Tenant unfrozen",
+      "a3": "Destructive actions requested in several tenants",
+      "grant": "New privilege granted",
+      "cooldown": "A new administrator attempted a destructive action",
+      "edge-freeze": "Freeze not applied at apple-edge yet"
+    }
   }
 }

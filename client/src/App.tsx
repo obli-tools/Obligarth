@@ -78,7 +78,7 @@ export default function App() {
  {/* Security — the journal for the holders of audit.read (tenant
      administrators, the client sets approver and auditor), the
      approvals; platform administrators always. */}
- <Route element={<ProtectedRoute requiredCapabilities={['audit.read', 'approvals.review']} />}>
+ <Route element={<ProtectedRoute requiredCapabilities={['audit.read', 'approvals.review', 'devices.manage']} />}>
  <Route path="/admin/audit-log" element={<AuditLogPage />} />
  <Route path="/admin/security" element={<SecurityPage />} />
  </Route>

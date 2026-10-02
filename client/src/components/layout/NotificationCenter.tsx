@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { liveAlertTitle } from '@/components/guard/alertTitle';
 import { Bell, X, Trash2, CheckCheck } from 'lucide-react';
 import { useLiveAlertsStore, countUnread } from '@/store/liveAlertsStore';
 import type { LiveAlert, AlertSeverity } from '@/store/liveAlertsStore';
@@ -66,7 +67,7 @@ function AlertRow({ alert, showTenantBadge, onRead, onRemove }: AlertRowProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <p className={cn('text-sm font-semibold truncate', styles.title)}>
-            {alert.title}
+            {liveAlertTitle(alert, t)}
           </p>
           {!alert.readAt && (
             <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" />

@@ -11,6 +11,8 @@ import { TenantBadge } from '@/components/common/TenantBadge';
 import { PageContainer } from '@/components/common/PageContainer';
 import { IconButton } from '@/components/common/IconButton';
 import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
+import { isStepUpHandled } from '@/api/client';
+import { guardErrorMessage } from '@/components/guard/GuardedActionDialog';
 
 // 2-step approval review page. Shows pending destructive-command requests
 // waiting for a second admin's approval. Self-requests (current user is
@@ -94,6 +96,28 @@ function isSecretField(key: string): boolean {
  const n = key.toLowerCase().replace(/[_\-\s]/g, '');
  if (/(id|ids)$/.test(n)) return false;
  return SECRET_FIELD.test(n);
+}
+
+/** What a request of the guard needs (audit-durci §10.4): its devices, the
+ *  side of the approver, the fallback to the MSP when the client has no
+ *  designated approver. */
+function GuardRequirement({ approval }: { approval: PendingApproval }) {
+ const { t } = useTranslation();
+ if (!String(approval.requestType).startsWith('guard')) return null;
+ const p = (approval.payload ?? {}) as { targetCount?: number; requiredSide?: string; approverFallback?: boolean };
+ return (
+ <div className="flex items-center gap-2 flex-wrap mt-0.5 text-[11px]">
+ {typeof p.targetCount === 'number' && <span className="text-text-secondary">{t('guard.dialog.targets', { count: p.targetCount }) || `${p.targetCount} device(s)`}</span>}
+ {p.requiredSide && (
+ <span className="px-1.5 py-0.5 rounded border border-accent/30 text-accent">
+ {p.requiredSide === 'client' ? (t('guard.approval.client') || 'Client approver required')
+ : p.requiredSide === 'msp' ? (t('guard.approval.msp') || 'MSP approver required')
+ : (t('guard.approval.any') || 'Any designated approver')}
+ </span>
+ )}
+ {p.approverFallback && <span className="px-1.5 py-0.5 rounded border border-orange-400/40 text-orange-400">{t('guard.list.fallback') || 'MSP approval (no client approver)'}</span>}
+ </div>
+ );
 }
 
 function fmtValue(v: unknown): string {
@@ -253,7 +277,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  }
  await load(false);
  } catch (err: any) {
- toast.error(err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'));
+ if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -275,7 +299,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  toast(t('approvals.deniedToast', 'Denied'));
  await load(false);
  } catch (err: any) {
- toast.error(err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'));
+ if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -293,7 +317,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  toast(t('approvals.cancelledToast', 'Cancelled'));
  await load(false);
  } catch (err: any) {
- toast.error(err?.response?.data?.error || t('approvals.cancelFailed', 'Cancel failed'));
+ if (!isStepUpHandled(err)) toast.error(err?.response?.data?.error || t('approvals.cancelFailed', 'Cancel failed'));
  } finally {
  setBusyId(null);
  }
@@ -374,6 +398,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  <TenantBadge tenantId={a.tenantId} />
  </div>
  <RequestDescription text={a.description} />
+ <GuardRequirement approval={a} />
  <RequestDetails payload={a.payload} />
  <div className="flex items-center gap-3 mt-1 text-[11px] text-text-muted flex-wrap">
  <span>{t('approvals.by', 'By')} <strong className="text-text-secondary">{a.requestedByName || `#${a.requestedBy}`}</strong></span>

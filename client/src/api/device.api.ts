@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { Device, FleetSummary, AgentApiKey } from '@obligarth/shared';
+import type { Device, FleetSummary, AgentApiKey, GuardOutcome } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 
@@ -155,14 +155,19 @@ export const deviceApi = {
     const res = await apiClient.post<ApiResponse<Device>>(`/devices/${id}/refuse`);
     return res.data.data!;
   },
-  async delete(id: number): Promise<void> {
-    await apiClient.delete(`/devices/${id}`);
+  /** The guarded action device.delete on one device (audit-durci §10.2):
+   *  202 with the engine's outcome. The console uses GuardedActionDialog. */
+  async delete(id: number, body: { reason: string; ticket?: string; confirm: string }): Promise<GuardOutcome> {
+    const res = await apiClient.delete<ApiResponse<GuardOutcome>>(`/devices/${id}`, { data: body });
+    return res.data.data!;
   },
   async bulkApprove(deviceIds: number[]): Promise<void> {
     await apiClient.post('/devices/bulk/approve', { deviceIds });
   },
-  async bulkDelete(deviceIds: number[]): Promise<void> {
-    await apiClient.delete('/devices/bulk/delete', { data: { deviceIds } });
+  /** device.delete on several devices (from 3: a second approver). */
+  async bulkDelete(deviceIds: number[], body: { reason: string; ticket?: string; confirm: string }): Promise<GuardOutcome> {
+    const res = await apiClient.delete<ApiResponse<GuardOutcome>>('/devices/bulk/delete', { data: { deviceIds, ...body } });
+    return res.data.data!;
   },
   async suspend(id: number): Promise<Device> {
     const res = await apiClient.post<ApiResponse<Device>>(`/devices/${id}/suspend`);

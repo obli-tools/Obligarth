@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Shield, FileText, ShieldCheck, KeyRound, Settings2 } from 'lucide-react';
+import { Shield, FileText, ShieldCheck, KeyRound, Settings2, ShieldAlert } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { AuditLogPage } from './AuditLogPage';
@@ -13,16 +13,20 @@ import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { VaultPanel } from './admin/VaultPanel';
 import { AuditSettingsPage } from './admin/AuditSettingsPage';
+import { PendingActionsPanel } from '@/components/guard/PendingActionsPanel';
 
-type Tab = 'audit' | 'approvals' | 'vault' | 'auditSettings';
+type Tab = 'audit' | 'approvals' | 'guard' | 'vault' | 'auditSettings';
 
 // The "Security" page groups, as tabs: the journal (holders of audit.read:
 // tenant administrators, the client sets approver and auditor, platform
-// administrators), the two-step approval review queue (platform
-// administrators), and, for the platform administrators on the master
-// tenant, the vault of secrets and the journal's settings (retention, SIEM
-// destinations, sealing). Tab selection is reflected in the URL
-// (?tab=audit|approvals|vault|auditSettings) so a deep-link stays stable.
+// administrators), the two-step approval queue (reviewers: platform
+// administrators and holders of approvals.review; a member who requested an
+// action sees its own requests), the guarded actions (audit-durci §10.11:
+// holders of devices.manage, approvals.review or audit.read), and, for the
+// platform administrators on the master tenant, the vault of secrets and the
+// journal's settings (retention, SIEM destinations, sealing). Tab selection
+// is reflected in the URL (?tab=audit|approvals|guard|vault|auditSettings) so
+// a deep-link stays stable.
 
 export function SecurityPage() {
  const { t } = useTranslation();
@@ -33,11 +37,12 @@ export function SecurityPage() {
  const platformOnMaster = isPlatformAdmin && currentTenantId === MASTER_TENANT_ID;
  const visible: Record<Tab, boolean> = {
  audit: isPlatformAdmin || caps.includes('audit.read'),
- approvals: isPlatformAdmin,
+ approvals: isPlatformAdmin || caps.includes('approvals.review') || caps.includes('devices.manage'),
+ guard: isPlatformAdmin || caps.includes('devices.manage') || caps.includes('approvals.review') || caps.includes('audit.read'),
  vault: platformOnMaster,
  auditSettings: platformOnMaster,
  };
- const firstVisible = (['audit', 'approvals', 'vault', 'auditSettings'] as Tab[]).find((k) => visible[k]) ?? 'audit';
+ const firstVisible = (['audit', 'approvals', 'guard', 'vault', 'auditSettings'] as Tab[]).find((k) => visible[k]) ?? 'audit';
  const asked = searchParams.get('tab') as Tab | null;
  const initial: Tab = asked && visible[asked] ? asked : firstVisible;
  const [tab, setTab] = useState<Tab>(initial);
@@ -111,6 +116,12 @@ export function SecurityPage() {
  )}
  </TabBtn>
  )}
+ {visible.guard && (
+ <TabBtn active={tab === 'guard'} onClick={() => setTab('guard')}>
+ <ShieldAlert className="w-4 h-4" />
+ {t('security.tabGuard') || 'Guards'}
+ </TabBtn>
+ )}
  {visible.vault && (
  <TabBtn active={tab === 'vault'} onClick={() => setTab('vault')}>
  <KeyRound className="w-4 h-4" />
@@ -127,6 +138,7 @@ export function SecurityPage() {
 
  {tab === 'audit' && visible.audit && <AuditLogPage embedded />}
  {tab === 'approvals' && visible.approvals && <ApprovalsPage embedded />}
+ {tab === 'guard' && visible.guard && <PendingActionsPanel />}
  {tab === 'vault' && visible.vault && <VaultPanel />}
  {tab === 'auditSettings' && visible.auditSettings && <AuditSettingsPage />}
  </PageContainer>

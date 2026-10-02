@@ -1229,7 +1229,24 @@
       "vault_kek_rotated": "Clé de chiffrement des clés renouvelée",
       "vault_kek_rotation_requested": "Renouvellement de la clé de chiffrement des clés demandé",
       "vault_tenant_secret_created": "Secret de tenant créé",
-      "vault_verify_failed": "Échec de la vérification du coffre"
+      "vault_verify_failed": "Échec de la vérification du coffre",
+      "guard_action_requested": "Action gardée demandée",
+      "guard_action_targets": "Cibles de l'action gardée (suite)",
+      "guard_action_scheduled": "Action gardée programmée",
+      "guard_action_resumed": "Action gardée reprise",
+      "guard_action_executing": "Action gardée en cours d'exécution",
+      "guard_action_executed": "Action gardée exécutée",
+      "guard_action_cancelled": "Action gardée annulée",
+      "guard_action_paused": "Action gardée mise en pause",
+      "guard_action_refused": "Action gardée refusée",
+      "guard_action_expired": "Action gardée expirée",
+      "guard_tenant_frozen": "Tenant gelé",
+      "guard_tenant_unfrozen": "Tenant dégelé",
+      "guard_settings_changed": "Réglages des garde-fous modifiés",
+      "guard_approver_designated": "Approbateur désigné",
+      "guard_approver_revoked": "Approbateur révoqué",
+      "guard_anomaly_detected": "Anomalie détectée par les garde-fous",
+      "guard_approver_fallback": "Approbation par le MSP faute d'approbateur client"
     },
     "families": {
       "auth": "Authentification",
@@ -1250,7 +1267,8 @@
       "vault": "Coffre",
       "audit": "Journal",
       "jobs": "Tâches de fond",
-      "approval": "Approbation"
+      "approval": "Approbation",
+      "guard": "Garde-fous"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -1411,7 +1429,8 @@
     "tabAudit": "Journal d'audit",
     "tabApprovals": "Approbations",
     "tabVault": "Coffre",
-    "tabAuditSettings": "Réglages du journal"
+    "tabAuditSettings": "Réglages du journal",
+    "tabGuard": "Garde-fous"
   },
   "deviceKeys": {
     "level": {
@@ -1683,5 +1702,153 @@
   },
   "auth": {
     "loggingNotice": "Les actions faites dans cette console sont journalisées pour la sécurité et la traçabilité, et conservées 12 mois par défaut."
+  },
+  "guard": {
+    "actions": {
+      "device": {
+        "delete": "Supprimer des fiches d'appareils"
+      },
+      "mdm": {
+        "erase_device": "Effacer l'appareil",
+        "remove_management": "Retirer la gestion",
+        "device_lock": "Verrouiller l'appareil",
+        "lost_mode_enable": "Activer le mode perdu"
+      }
+    },
+    "state": {
+      "awaiting_approval": "en attente d'approbation",
+      "scheduled": "programmée",
+      "paused": "en pause",
+      "executing": "en cours",
+      "done": "faite",
+      "partial": "faite en partie",
+      "cancelled": "annulée",
+      "refused": "refusée",
+      "failed": "en échec",
+      "expired": "expirée"
+    },
+    "side": {
+      "msp": "MSP",
+      "client": "client",
+      "any": "l'un ou l'autre côté"
+    },
+    "errors": {
+      "noTargets": "La sélection ne désigne aucun appareil.",
+      "targetsOutsideScope": "Certains appareils sont hors de votre portée.",
+      "tenantFrozen": "Le tenant est gelé : aucune action gardée avant son dégel.",
+      "privilegeCooldown": "Vos droits d'administrateur ou d'approbateur sont trop récents (refroidissement de 72 h, jusqu'au {{until}}).",
+      "personalDeviceForbidden": "Cette action est refusée sur les appareils personnels.",
+      "wholeFleetForbidden": "Cette action est refusée sur tout le parc.",
+      "hourlyCapExceeded": "Le plafond horaire des actions destructrices serait dépassé (reste {{remaining}} appareils sur {{cap}}).",
+      "confirmationMismatch": "La confirmation ne correspond pas.",
+      "reasonRequired": "Un motif de 5 à 500 caractères est requis.",
+      "crossTenantBatch": "Une demande ne vise qu'un seul tenant.",
+      "approverSideRequired": "Cette demande attend un approbateur de l'autre côté (un approbateur client par défaut).",
+      "selfApproval": "Le demandeur ne peut pas examiner sa demande."
+    },
+    "delay": {
+      "none": "sans délai",
+      "seconds": "{{count}} s",
+      "minutes": "{{count}} min"
+    },
+    "dialog": {
+      "targets_one": "{{count}} appareil",
+      "targets_other": "{{count}} appareils",
+      "bulk": "lot",
+      "requalified": "(troisième demande en 15 minutes : traitée comme un lot)",
+      "delay": "Délai avant exécution : {{delay}} (annulable)",
+      "quota": "Budget horaire : reste {{remaining}} appareils sur {{cap}}",
+      "reason": "Motif (requis)",
+      "ticket": "Numéro de ticket (facultatif)",
+      "typeName": "Saisissez le nom de l'appareil pour confirmer : {{name}}",
+      "typeCount": "Saisissez le nombre d'appareils pour confirmer : {{count}}",
+      "request": "Demander",
+      "confirm": "Confirmer"
+    },
+    "level": {
+      "restricted": "Un second approbateur est requis",
+      "sensitive": "Votre second facteur est requis"
+    },
+    "toast": {
+      "scheduled": "Programmée : exécution à {{at}} sauf annulation",
+      "running": "Acceptée : l'action s'exécute",
+      "awaitingFallback": "En attente d'un second administrateur du MSP (aucun approbateur client désigné)",
+      "awaitingClient": "En attente de l'approbation d'un approbateur client",
+      "awaiting": "En attente d'un second approbateur"
+    },
+    "list": {
+      "due": "échue",
+      "cancelTitle": "Annuler cette action ?",
+      "cancelReason": "Motif (facultatif)",
+      "cancel": "Annuler l'action",
+      "lateCancel": "Retirée sur {{done}} appareils sur {{total}} (les autres l'avaient reçue)",
+      "cancelled": "Action annulée",
+      "resumeConfirm": "Demander la reprise ? Une autre personne l'approuve ; le délai complet repart.",
+      "resumeRequested": "Reprise demandée : en attente d'un approbateur",
+      "showClosed": "Afficher les actions closes",
+      "empty": "Aucune action gardée en cours.",
+      "fallback": "Approbation du MSP (aucun approbateur client)",
+      "resume": "Reprendre",
+      "result": "faites {{done}}, en échec {{failed}}, écartées {{skipped}}"
+    },
+    "freeze": {
+      "banner": "Tenant gelé depuis le {{since}}",
+      "bannerAnomaly": "Tenant gelé automatiquement (anomalie) depuis le {{since}}",
+      "effects": "Aucune action gardée n'est possible et aucune commande MDM n'est livrée avant le dégel (second approbateur).",
+      "unfreeze": "Demander le dégel",
+      "title": "Geler le tenant maintenant ?",
+      "reason": "Motif (requis)",
+      "freeze": "Geler",
+      "done": "Tenant gelé",
+      "unfreezeTitle": "Demander la fin du gel ?",
+      "unfreezeRequested": "Dégel demandé : en attente d'un approbateur"
+    },
+    "approvers": {
+      "title": "Approbateurs désignés",
+      "help": "Un lot demandé par le MSP est approuvé par un approbateur client ; à défaut, par un second administrateur du MSP (repli signalé).",
+      "none": "Aucun approbateur désigné.",
+      "cooldown": "refroidissement jusqu'au {{until}}",
+      "revoke": "Révoquer",
+      "revokeConfirm": "Révoquer {{name}} ?",
+      "revoked": "Approbateur révoqué",
+      "requested": "Désignation demandée : en attente d'un approbateur",
+      "pick": "Choisir un compte",
+      "designate": "Désigner"
+    },
+    "settings": {
+      "title": "Réglages des garde-fous",
+      "percent": "Plafond horaire (% du parc)",
+      "min": "Minimum (appareils)",
+      "side": "Approbateur des actions de masse du MSP",
+      "save": "Demander le changement",
+      "help": "Un changement est approuvé par une seconde personne (un approbateur client par défaut).",
+      "requested": "Changement demandé : en attente d'un approbateur",
+      "unchanged": "Rien n'a changé"
+    },
+    "quota": "Budget horaire : reste {{remaining}} appareils sur {{cap}}",
+    "approval": {
+      "client": "Approbateur client requis",
+      "msp": "Approbateur du MSP requis",
+      "any": "Tout approbateur désigné"
+    },
+    "alerts": {
+      "awaiting_approval": "Action gardée en attente d'approbation",
+      "scheduled": "Action gardée programmée",
+      "executing": "Action gardée en cours",
+      "done": "Action gardée faite",
+      "partial": "Action gardée faite en partie",
+      "failed": "Action gardée en échec",
+      "cancelled": "Action gardée annulée",
+      "paused": "Action gardée en pause",
+      "expired": "Action gardée expirée",
+      "refused": "Action gardée refusée",
+      "fallback": "Approbation par le MSP faute d'approbateur client",
+      "freeze": "Tenant gelé",
+      "unfreeze": "Tenant dégelé",
+      "a3": "Actions destructrices demandées dans plusieurs tenants",
+      "grant": "Nouveau privilège accordé",
+      "cooldown": "Un nouvel administrateur a tenté une action destructrice",
+      "edge-freeze": "Gel pas encore appliqué par apple-edge"
+    }
   }
 }
