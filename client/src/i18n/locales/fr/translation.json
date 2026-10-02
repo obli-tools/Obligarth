@@ -1854,5 +1854,305 @@
       "approver-lost": "Approbateur client retiré",
       "credentials": "Facteurs d'un compte privilégié changés par un autre compte"
     }
+  },
+  "apple": {
+    "alerts": {
+      "enrollment": {
+        "unknown_session": {
+          "title": "Enrôlements sans session",
+          "message": "{{count}} appareil(s) authentifié(s) sans session d'enrôlement de ce tenant : rattachez-les à un profil d'enrôlement ou libérez-les."
+        },
+        "spike": {
+          "title": "Pic d'enrôlements",
+          "message": "{{count}} enrôlements en {{minutes}} minutes."
+        },
+        "setup_timeout": {
+          "title": "Configuration non terminée à temps",
+          "message": "Un appareil a attendu sa configuration plus longtemps que permis et a été libéré de l'assistant de configuration."
+        },
+        "profile_misconfigured": {
+          "title": "Profil d'enrôlement à corriger",
+          "message": "Le profil d'enrôlement {{profileName}} ne peut pas servir d'enrôlement tel qu'il est configuré."
+        },
+        "invitation_locked": {
+          "title": "Invitation d'enrôlement verrouillée",
+          "message": "Une invitation d'enrôlement a été révoquée après trop de codes erronés."
+        },
+        "ownership_mismatch": {
+          "title": "Propriété différente de celle du profil d'enrôlement",
+          "message": "Un appareil s'est enrôlé avec une propriété que son profil d'enrôlement n'autorise pas."
+        }
+      },
+      "device": {
+        "checked_out": {
+          "title": "Appareil sorti de la gestion",
+          "message": "Un appareil de l'entreprise a retiré son profil de gestion."
+        },
+        "superseded": {
+          "title": "Appareil enrôlé de nouveau ailleurs",
+          "message": "Un appareil de ce tenant a été enrôlé de nouveau et son enrôlement précédent a été libéré."
+        },
+        "serial_changed": {
+          "title": "Numéro de série modifié",
+          "message": "Un appareil a signalé un autre numéro de série que celui enregistré."
+        }
+      },
+      "devices": {
+        "apns_inactive_released": {
+          "title": "Appareils inactifs libérés",
+          "message": "{{count}} appareil(s) injoignable(s) par notification push ont été libérés."
+        },
+        "identity_expired": {
+          "title": "Identités d'appareils expirées",
+          "message": "{{count}} appareil(s) présentent un certificat d'identité expiré."
+        },
+        "inactive": {
+          "title": "Appareils inactifs",
+          "message": "{{count}} appareil(s) sans contact depuis {{days}} jours."
+        }
+      },
+      "command": {
+        "failed": {
+          "title": "Commande en échec",
+          "message": "Une commande {{requestType}} a échoué sur {{count}} appareil(s)."
+        }
+      },
+      "policy": {
+        "conflict": {
+          "title": "Conflit de politiques",
+          "message": "Deux politiques règlent différemment un même réglage sur certains appareils."
+        }
+      },
+      "security": {
+        "topic_mismatch": {
+          "title": "Sujet push incohérent",
+          "message": "{{count}} appareil(s) ont présenté un sujet push qui n'est pas celui de ce tenant."
+        },
+        "identity_revoked": {
+          "title": "Identité révoquée présentée",
+          "message": "{{count}} connexion(s) avec une identité d'appareil révoquée ont été refusées."
+        },
+        "identity_mismatch": {
+          "title": "Identité d'appareil incohérente",
+          "message": "Un appareil a présenté un {{field}} différent de son identité vérifiée."
+        },
+        "device_id_conflict": {
+          "title": "Conflit d'identifiant d'appareil",
+          "message": "Un identifiant d'appareil est revendiqué par un autre enrôlement ({{outcome}})."
+        }
+      },
+      "apns": {
+        "no_certificate": {
+          "title": "Aucun certificat push",
+          "message": "Ce tenant n'a aucun certificat push actif : les appareils ne peuvent ni s'enrôler ni être joints."
+        },
+        "circuit_open": {
+          "title": "Notifications push refusées par Apple",
+          "message": "Apple refuse les notifications push de ce tenant (HTTP {{httpStatus}}) : vérifiez le certificat push."
+        },
+        "topic_config": {
+          "title": "Sujet push mal configuré",
+          "message": "Apple refuse le sujet push de ce tenant ({{reason}})."
+        },
+        "certificate_expired": {
+          "title": "Certificat push expiré",
+          "message": "Le certificat push {{topic}} a expiré : renouvelez-le avec le même compte Apple."
+        },
+        "throttled": {
+          "title": "Notifications push limitées",
+          "message": "Apple a limité {{count}} notification(s) push de ce tenant."
+        }
+      },
+      "ade": {
+        "token_error": {
+          "title": "Serveur ADE en erreur",
+          "message": "Le serveur ADE {{serverName}} n'arrive pas à se synchroniser ({{code}})."
+        },
+        "terms_not_signed": {
+          "title": "Conditions d'Apple Business à accepter",
+          "message": "Le serveur ADE {{serverName}} est bloqué jusqu'à l'acceptation des nouvelles conditions dans Apple Business."
+        },
+        "token_expired": {
+          "title": "Jeton du serveur ADE expiré",
+          "message": "Le jeton du serveur ADE {{serverName}} a expiré : renouvelez-le dans Apple Business."
+        },
+        "assignment_failed": {
+          "title": "Échec de l'attribution du profil ADE",
+          "message": "{{count}} appareil(s) n'ont pas pu recevoir leur profil ADE."
+        }
+      },
+      "vpp": {
+        "foreign_mdm": {
+          "title": "Jeton de contenu utilisé ailleurs",
+          "message": "Le jeton de contenu {{label}} est utilisé par un autre MDM."
+        },
+        "token_invalid": {
+          "title": "Jeton de contenu invalide",
+          "message": "Le jeton de contenu {{label}} n'est plus valide : importez-en un nouveau."
+        },
+        "operation_failed": {
+          "title": "Opérations Apps and Books en échec",
+          "message": "{{count}} opération(s) de licence ont échoué."
+        },
+        "notification_auth_failed": {
+          "title": "Notifications Apps and Books refusées",
+          "message": "{{count}} notification(s) ont présenté un mauvais secret."
+        }
+      },
+      "deadline": {
+        "apns_certificate": {
+          "title": "Certificat push bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "ade_token": {
+          "title": "Jeton ADE bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vpp_token": {
+          "title": "Jeton de contenu bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "device_ca": {
+          "title": "CA des appareils bientôt expirée",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "mdm_tls_certificate": {
+          "title": "Certificat TLS du service des appareils bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vendor_certificate": {
+          "title": "Certificat d'éditeur MDM bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "mdm_domain": {
+          "title": "Domaine du service des appareils bientôt expiré",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "profile_signing_identity": {
+          "title": "Identité de signature des profils bientôt expirée",
+          "message": "{{label}} expire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vault_escrow_test": {
+          "title": "Test du séquestre à faire",
+          "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vault_kek_rotation": {
+          "title": "Rotation de clé à faire",
+          "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vault_old_shares": {
+          "title": "Anciennes parts du séquestre à détruire",
+          "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "vault_dek_destruction": {
+          "title": "Destruction de clé de données à faire",
+          "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        }
+      },
+      "tenant": {
+        "provisioning_failed": {
+          "title": "Tenant non provisionné au service des appareils",
+          "message": "Le tenant {{tenantName}} n'a pas pu être créé chez apple-edge : nouvel essai toutes les heures."
+        },
+        "edge_retired": {
+          "title": "Tenant retiré du service des appareils",
+          "message": "apple-edge tient le tenant {{tenantName}} pour retiré : ses appareils ne peuvent pas être servis. Créez un nouveau tenant."
+        },
+        "mdm_key_conflict": {
+          "title": "Conflit de clé MDM",
+          "message": "La clé MDM du tenant {{tenantName}} diffère entre le cerveau et apple-edge (restauration partielle ?)."
+        },
+        "edge_missing": {
+          "title": "Tenant absent du service des appareils",
+          "message": "apple-edge ne connaît pas la clé MDM du tenant {{tenantName}}."
+        }
+      },
+      "platform": {
+        "device_id_conflict": {
+          "title": "Identifiant d'appareil revendiqué par deux tenants",
+          "message": "Un identifiant d'appareil de {{holder}} a été revendiqué par {{requester}} (politique {{policy}})."
+        },
+        "foreign_certificate": {
+          "title": "Certificat d'un autre tenant présenté",
+          "message": "Un appareil a présenté à {{urlTenant}} une identité émise par {{issuerTenant}}."
+        },
+        "edge_orphan": {
+          "title": "Tenant d'apple-edge inconnu du cerveau",
+          "message": "apple-edge détient un tenant ({{key}}) qu'aucun tenant du cerveau ne référence."
+        },
+        "tenant_retired": {
+          "title": "Tenant retiré du service des appareils",
+          "message": "Le tenant {{tenantName}} est retiré chez apple-edge."
+        },
+        "tenant_load_failed": {
+          "title": "Tenant non chargé par le service des appareils",
+          "message": "apple-edge n'a pas réussi à charger le tenant {{tenantName}} : ses appareils sont refusés."
+        }
+      },
+      "edge": {
+        "unreachable": {
+          "title": "Service des appareils injoignable",
+          "message": "apple-edge ne répond pas : ni enrôlement, ni commande, ni événement jusqu'à son retour."
+        },
+        "incompatible": {
+          "title": "Version du service des appareils incompatible",
+          "message": "apple-edge tourne en version {{version}}, hors de la matrice de compatibilité de ce cerveau : appels refusés."
+        },
+        "auth_failed": {
+          "title": "Le service des appareils refuse le cerveau",
+          "message": "apple-edge a refusé le jeton du cerveau : vérifiez le secret apple_edge_api_token des deux côtés."
+        },
+        "kek_shared": {
+          "title": "Même clé pour le cerveau et le service des appareils",
+          "message": "apple-edge et le cerveau utilisent la même clé de chiffrement de clés : donnez à chaque service la sienne."
+        }
+      },
+      "mdm": {
+        "command_invalid": {
+          "title": "Commande refusée par le service des appareils",
+          "message": "apple-edge a refusé une commande {{requestType}} ({{code}})."
+        }
+      },
+      "ddm": {
+        "relay_auth_failed": {
+          "title": "Signatures du relais DDM refusées",
+          "message": "{{count}} requête(s) du relais DDM ont échoué à la vérification de leur signature."
+        },
+        "secret_in_declaration": {
+          "title": "Secret dans une déclaration",
+          "message": "Une déclaration de {{provider}} portait un secret et a été refusée."
+        }
+      },
+      "signing": {
+        "identity_missing": {
+          "title": "Profils d'enrôlement non signés",
+          "message": "Aucune identité de signature des profils n'est importée : les profils d'enrôlement sont servis sans signature."
+        }
+      }
+    },
+    "errors": {
+      "appleIntegrationDisabled": "L'intégration Apple est désactivée sur cette instance",
+      "appleEdgeUnavailable": "Le service des appareils (apple-edge) est indisponible",
+      "appleEdgeIncompatible": "Le service des appareils (apple-edge) tourne dans une version incompatible",
+      "appleEdgeProtocol": "Le service des appareils (apple-edge) a donné une réponse illisible",
+      "appleEdgeRejected": "La demande au service des appareils a été refusée",
+      "appleTenantNotProvisioned": "Ce tenant n'est pas encore provisionné au service des appareils",
+      "appleTenantNotLive": "Ce tenant est en cours de retrait au service des appareils",
+      "appleTenantNotRetiring": "Ce tenant n'est pas en cours de retrait au service des appareils",
+      "pushTopicBoundElsewhere": "Ce sujet push appartient à un autre tenant",
+      "appleTenantHasEnrollments": "Des appareils sont encore enrôlés dans ce tenant : désenrôlez-les d'abord",
+      "appleTenantHasAdeTokens": "Des serveurs ADE sont encore reliés à ce tenant : retirez-les d'abord",
+      "appleEnrollmentActive": "L'enrôlement doit d'abord être libéré",
+      "appleSigningUnavailable": "Les profils d'enrôlement ne peuvent pas être signés sur cette instance",
+      "adeTokenNotActive": "Le serveur ADE n'est pas actif",
+      "appleEdgePayloadTooLarge": "Trop volumineux pour le service des appareils",
+      "appleTargetOutsideTenant": "Une cible n'est pas un appareil enrôlé de ce tenant",
+      "unlockTokenUnavailable": "Le jeton de déverrouillage de cet appareil est indisponible",
+      "appleSecretInCommand": "La commande porte un secret en clair",
+      "appleMachineInfoRefused": "Les informations de l'appareil n'ont pas pu être vérifiées",
+      "appleEdgeValidationFailed": "Le service des appareils a refusé la demande",
+      "appleEdgeNotFound": "Introuvable au service des appareils",
+      "invalidState": "L'état doit être « active » ou « suspended »"
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { liveAlertTitle } from '@/components/guard/alertTitle';
+import { liveAlertMessage, liveAlertTitle } from '@/components/guard/alertTitle';
 import { Bell, X, Trash2, CheckCheck } from 'lucide-react';
 import { useLiveAlertsStore, countUnread } from '@/store/liveAlertsStore';
 import type { LiveAlert, AlertSeverity } from '@/store/liveAlertsStore';
@@ -73,7 +73,7 @@ function AlertRow({ alert, showTenantBadge, onRead, onRemove }: AlertRowProps) {
             <span className="shrink-0 h-1.5 w-1.5 rounded-full bg-accent" />
           )}
         </div>
-        <p className="text-xs text-text-muted mt-0.5 truncate">{alert.message}</p>
+        <p className="text-xs text-text-muted mt-0.5 truncate">{liveAlertMessage(alert, t)}</p>
         <div className="flex items-center gap-1.5 mt-1 flex-wrap">
           <p className="text-xs text-text-muted/60">{timeAgo(alert.createdAt, t)}</p>
           {/* Tenant badge: shown in Global tab for alerts from other tenants */}

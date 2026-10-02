@@ -827,6 +827,14 @@ export interface LiveAlert {
   createdAt: string;
   /** Optional: tenant name (populated for cross-tenant alerts) */
   tenantName?: string;
+  /** Catalogue kind of an alert of a module (Apple integration: integration-apple-edge §12.1); null for the
+   *  core's own alerts. */
+  kind?: string | null;
+  /** Translatable text (I11): the console renders `${i18nKey}.title` and `.message` with i18nParams, the
+   *  English title and message being the fallback. */
+  i18nKey?: string | null;
+  /** Scalar parameters of the text; never personal data. */
+  i18nParams?: Record<string, string | number | boolean> | null;
 }
 
 /** Payload of the `NOTIFICATION_RESOLVED` socket event. */

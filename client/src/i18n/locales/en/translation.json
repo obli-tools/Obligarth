@@ -1854,5 +1854,305 @@
       "approver-lost": "Client approver removed",
       "credentials": "Credentials of a privileged account changed by another account"
     }
+  },
+  "apple": {
+    "alerts": {
+      "enrollment": {
+        "unknown_session": {
+          "title": "Enrollments without a session",
+          "message": "{{count}} device(s) authenticated without an enrollment session of this tenant: attach them to an enrollment profile or release them."
+        },
+        "spike": {
+          "title": "Spike of enrollments",
+          "message": "{{count}} enrollments in {{minutes}} minutes."
+        },
+        "setup_timeout": {
+          "title": "Setup not completed in time",
+          "message": "A device waited for its configuration longer than allowed and was released from the setup assistant."
+        },
+        "profile_misconfigured": {
+          "title": "Enrollment profile to fix",
+          "message": "The enrollment profile {{profileName}} cannot serve enrollments as configured."
+        },
+        "invitation_locked": {
+          "title": "Enrollment invitation locked",
+          "message": "An enrollment invitation was revoked after too many wrong codes."
+        },
+        "ownership_mismatch": {
+          "title": "Ownership differs from the enrollment profile",
+          "message": "A device enrolled with an ownership its enrollment profile does not allow."
+        }
+      },
+      "device": {
+        "checked_out": {
+          "title": "Device left management",
+          "message": "A company device removed its management profile."
+        },
+        "superseded": {
+          "title": "Device enrolled again elsewhere",
+          "message": "A device of this tenant was enrolled again and its previous enrollment was released."
+        },
+        "serial_changed": {
+          "title": "Serial number changed",
+          "message": "A device reported another serial number than the one recorded."
+        }
+      },
+      "devices": {
+        "apns_inactive_released": {
+          "title": "Inactive devices released",
+          "message": "{{count}} device(s) no longer reachable through push were released."
+        },
+        "identity_expired": {
+          "title": "Device identities expired",
+          "message": "{{count}} device(s) present an expired identity certificate."
+        },
+        "inactive": {
+          "title": "Inactive devices",
+          "message": "{{count}} device(s) without contact for {{days}} days."
+        }
+      },
+      "command": {
+        "failed": {
+          "title": "Command failed",
+          "message": "A {{requestType}} command failed on {{count}} device(s)."
+        }
+      },
+      "policy": {
+        "conflict": {
+          "title": "Policy conflict",
+          "message": "Two policies set the same setting differently on some devices."
+        }
+      },
+      "security": {
+        "topic_mismatch": {
+          "title": "Push topic mismatch",
+          "message": "{{count}} device(s) presented a push topic that is not this tenant's."
+        },
+        "identity_revoked": {
+          "title": "Revoked identity presented",
+          "message": "{{count}} connection(s) with a revoked device identity were refused."
+        },
+        "identity_mismatch": {
+          "title": "Device identity mismatch",
+          "message": "A device presented a {{field}} that differs from its verified identity."
+        },
+        "device_id_conflict": {
+          "title": "Device identifier conflict",
+          "message": "A device identifier is claimed by another enrollment ({{outcome}})."
+        }
+      },
+      "apns": {
+        "no_certificate": {
+          "title": "No push certificate",
+          "message": "This tenant has no active push certificate: devices cannot enroll nor be reached."
+        },
+        "circuit_open": {
+          "title": "Push refused by Apple",
+          "message": "Apple refuses the pushes of this tenant (HTTP {{httpStatus}}): check the push certificate."
+        },
+        "topic_config": {
+          "title": "Push topic misconfigured",
+          "message": "Apple refuses the push topic of this tenant ({{reason}})."
+        },
+        "certificate_expired": {
+          "title": "Push certificate expired",
+          "message": "The push certificate {{topic}} has expired: renew it with the same Apple account."
+        },
+        "throttled": {
+          "title": "Pushes throttled",
+          "message": "Apple throttled {{count}} push(es) of this tenant."
+        }
+      },
+      "ade": {
+        "token_error": {
+          "title": "ADE server in error",
+          "message": "The ADE server {{serverName}} fails to synchronise ({{code}})."
+        },
+        "terms_not_signed": {
+          "title": "Apple Business terms to accept",
+          "message": "The ADE server {{serverName}} is blocked until new terms are accepted in Apple Business."
+        },
+        "token_expired": {
+          "title": "ADE server token expired",
+          "message": "The token of the ADE server {{serverName}} has expired: renew it in Apple Business."
+        },
+        "assignment_failed": {
+          "title": "ADE profile assignment failed",
+          "message": "{{count}} device(s) could not receive their ADE profile."
+        }
+      },
+      "vpp": {
+        "foreign_mdm": {
+          "title": "Content token used elsewhere",
+          "message": "The content token {{label}} is used by another MDM."
+        },
+        "token_invalid": {
+          "title": "Content token invalid",
+          "message": "The content token {{label}} is no longer valid: import a new one."
+        },
+        "operation_failed": {
+          "title": "Apps and Books operations failed",
+          "message": "{{count}} licence operation(s) failed."
+        },
+        "notification_auth_failed": {
+          "title": "Apps and Books notifications refused",
+          "message": "{{count}} notification(s) presented a wrong secret."
+        }
+      },
+      "deadline": {
+        "apns_certificate": {
+          "title": "Push certificate expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "ade_token": {
+          "title": "ADE token expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vpp_token": {
+          "title": "Content token expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "device_ca": {
+          "title": "Device CA expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "mdm_tls_certificate": {
+          "title": "TLS certificate of the device service expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vendor_certificate": {
+          "title": "MDM vendor certificate expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "mdm_domain": {
+          "title": "Domain of the device service expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "profile_signing_identity": {
+          "title": "Profile signing identity expiring",
+          "message": "{{label}} expires in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vault_escrow_test": {
+          "title": "Escrow test due",
+          "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vault_kek_rotation": {
+          "title": "Key rotation due",
+          "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vault_old_shares": {
+          "title": "Old escrow shares to destroy",
+          "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "vault_dek_destruction": {
+          "title": "Data key destruction due",
+          "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
+        }
+      },
+      "tenant": {
+        "provisioning_failed": {
+          "title": "Tenant not provisioned at the device service",
+          "message": "The tenant {{tenantName}} could not be created at apple-edge: retried every hour."
+        },
+        "edge_retired": {
+          "title": "Tenant retired at the device service",
+          "message": "apple-edge holds the tenant {{tenantName}} as retired: its devices cannot be served. Create a new tenant."
+        },
+        "mdm_key_conflict": {
+          "title": "MDM key conflict",
+          "message": "The MDM key of the tenant {{tenantName}} differs between the brain and apple-edge (partial restore?)."
+        },
+        "edge_missing": {
+          "title": "Tenant missing at the device service",
+          "message": "apple-edge does not know the MDM key of the tenant {{tenantName}}."
+        }
+      },
+      "platform": {
+        "device_id_conflict": {
+          "title": "Device identifier claimed by two tenants",
+          "message": "A device identifier of {{holder}} was claimed by {{requester}} (policy {{policy}})."
+        },
+        "foreign_certificate": {
+          "title": "Certificate of another tenant presented",
+          "message": "A device presented to {{urlTenant}} an identity issued by {{issuerTenant}}."
+        },
+        "edge_orphan": {
+          "title": "Tenant of apple-edge unknown to the brain",
+          "message": "apple-edge holds a tenant ({{key}}) that no tenant of the brain references."
+        },
+        "tenant_retired": {
+          "title": "Tenant retired at the device service",
+          "message": "The tenant {{tenantName}} is retired at apple-edge."
+        },
+        "tenant_load_failed": {
+          "title": "Tenant not loaded by the device service",
+          "message": "apple-edge failed to load the tenant {{tenantName}}: its devices are refused."
+        }
+      },
+      "edge": {
+        "unreachable": {
+          "title": "Device service unreachable",
+          "message": "apple-edge does not answer: no enrollment, command nor event until it is back."
+        },
+        "incompatible": {
+          "title": "Device service version incompatible",
+          "message": "apple-edge runs version {{version}}, out of the compatibility matrix of this brain: calls refused."
+        },
+        "auth_failed": {
+          "title": "Device service refuses the brain",
+          "message": "apple-edge refused the token of the brain: check the secret apple_edge_api_token on both sides."
+        },
+        "kek_shared": {
+          "title": "Same key for the brain and the device service",
+          "message": "apple-edge and the brain use the same key encryption key: give each service its own."
+        }
+      },
+      "mdm": {
+        "command_invalid": {
+          "title": "Command refused by the device service",
+          "message": "apple-edge refused a {{requestType}} command ({{code}})."
+        }
+      },
+      "ddm": {
+        "relay_auth_failed": {
+          "title": "DDM relay signatures refused",
+          "message": "{{count}} request(s) of the DDM relay failed their signature."
+        },
+        "secret_in_declaration": {
+          "title": "Secret in a declaration",
+          "message": "A declaration of {{provider}} carried a secret and was refused."
+        }
+      },
+      "signing": {
+        "identity_missing": {
+          "title": "Enrollment profiles not signed",
+          "message": "No profile signing identity is imported: enrollment profiles are served unsigned."
+        }
+      }
+    },
+    "errors": {
+      "appleIntegrationDisabled": "The Apple integration is turned off on this instance",
+      "appleEdgeUnavailable": "The device service (apple-edge) is unavailable",
+      "appleEdgeIncompatible": "The device service (apple-edge) runs an incompatible version",
+      "appleEdgeProtocol": "The device service (apple-edge) gave an answer that cannot be read",
+      "appleEdgeRejected": "The request to the device service was refused",
+      "appleTenantNotProvisioned": "This tenant is not provisioned at the device service yet",
+      "appleTenantNotLive": "This tenant is being retired at the device service",
+      "appleTenantNotRetiring": "This tenant is not being retired at the device service",
+      "pushTopicBoundElsewhere": "This push topic belongs to another tenant",
+      "appleTenantHasEnrollments": "Devices are still enrolled in this tenant: unenroll them first",
+      "appleTenantHasAdeTokens": "ADE servers are still connected to this tenant: remove them first",
+      "appleEnrollmentActive": "The enrollment must be released first",
+      "appleSigningUnavailable": "Enrollment profiles cannot be signed on this instance",
+      "adeTokenNotActive": "The ADE server is not active",
+      "appleEdgePayloadTooLarge": "Too large for the device service",
+      "appleTargetOutsideTenant": "A target is not an enrolled device of this tenant",
+      "unlockTokenUnavailable": "The unlock token of this device is unavailable",
+      "appleSecretInCommand": "The command carries a secret in clear",
+      "appleMachineInfoRefused": "The device information could not be verified",
+      "appleEdgeValidationFailed": "The device service refused the request",
+      "appleEdgeNotFound": "Not found at the device service",
+      "invalidState": "The state must be \"active\" or \"suspended\""
+    }
   }
 }

@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { liveAlertTitle } from '@/components/guard/alertTitle';
+import { liveAlertMessage, liveAlertTitle } from '@/components/guard/alertTitle';
 import { X } from 'lucide-react';
 import { useLiveAlertsStore } from '@/store/liveAlertsStore';
 import type { LiveAlert, AlertSeverity } from '@/store/liveAlertsStore';
@@ -74,7 +74,7 @@ function AlertCard({ alert, opacity = 1, lifetimeMs }: AlertCardProps) {
           {liveAlertTitle(alert, t)}
         </p>
         <p className="text-xs text-text-muted mt-0.5 leading-snug line-clamp-2">
-          {alert.message}
+          {liveAlertMessage(alert, t)}
         </p>
       </div>
 
