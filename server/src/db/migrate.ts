@@ -1,4 +1,5 @@
 import '../env';
+import { createHash, createHmac, pbkdf2Sync, randomBytes } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import knex from 'knex';
 import pg from 'pg';
@@ -22,7 +23,8 @@ import { logger } from '../utils/logger';
 //      rls-tenant §10.5, or adopt it with annex B);
 //   2. bootstrap (annex A.1): roles, schemas, pgboss;
 //   3. the runtime role's password (DB_APP_PASSWORD / DB_APP_PASSWORD_FILE),
-//      client-side escaped, never logged;
+//      sent as its SCRAM-SHA-256 verifier (the password itself never reaches
+//      the database, nor its statement log), never logged;
 //   4. Knex tracking tables found in `public` moved to `obligarth`;
 //   5. the Knex migrations, every connection as obligarth_owner;
 //   6. before the RLS migration (C): plain privileges of the runtime role;
@@ -197,6 +199,24 @@ async function depositContextKeys(q: Q, opts: MigrateOptions, report: MigrateRep
   }
 }
 
+/**
+ * The SCRAM-SHA-256 verifier of a password, in PostgreSQL's stored form
+ * (RFC 5802, RFC 7677: SCRAM-SHA-256$<iterations>:<salt>$<StoredKey>:<ServerKey>),
+ * which ALTER ROLE stores as it is. PostgreSQL normalises a password with
+ * SASLprep before hashing it, which is the identity for printable ASCII; a
+ * password with any other character is not converted here (null: sent as it
+ * is, as before).
+ */
+export function scramVerifier(password: string, o: { salt?: Buffer; iterations?: number } = {}): string | null {
+  if (!/^[\x20-\x7e]+$/.test(password)) return null;
+  const salt = o.salt ?? randomBytes(16);
+  const iterations = o.iterations ?? 4096;
+  const salted = pbkdf2Sync(Buffer.from(password, 'utf8'), salt, iterations, 32, 'sha256');
+  const storedKey = createHash('sha256').update(createHmac('sha256', salted).update('Client Key').digest()).digest();
+  const serverKey = createHmac('sha256', salted).update('Server Key').digest();
+  return `SCRAM-SHA-256$${iterations}:${salt.toString('base64')}$${storedKey.toString('base64')}:${serverKey.toString('base64')}`;
+}
+
 /** Runs server-migrate (steps 1 to 8 of the header). Throws MigrateRefusal
  *  (or a database error) when it cannot. */
 export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport> {
@@ -224,8 +244,12 @@ export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport
       await q(`GRANT obligarth_owner TO ${client.escapeIdentifier(admin)} WITH INHERIT FALSE, SET TRUE`);
       await q(BOOTSTRAP_SQL);
     }
-    // Never logged: the statement carries the password.
-    await q(`ALTER ROLE obligarth PASSWORD ${client.escapeLiteral(String(opts.appPassword))}`);
+    // Never logged. The statement carries the SCRAM-SHA-256 verifier, not the
+    // password: a database that logs DDL (log_statement = ddl or all) or a
+    // failed statement (log_min_error_statement) records only the verifier
+    // (review of lot A1; integration of lot A).
+    const secret = String(opts.appPassword);
+    await q(`ALTER ROLE obligarth PASSWORD ${client.escapeLiteral(scramVerifier(secret) ?? secret)}`);
 
     const pgboss = await q(`SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'pgboss'`);
     if (pgboss.rowCount === 1 && pgboss.rows[0].owner !== 'obligarth') {

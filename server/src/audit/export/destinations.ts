@@ -214,9 +214,24 @@ export async function createDestination(input: CreateDestination, ctx: AuditWrit
 }
 
 /** Is this patch a "pause of the journal" (RE 2024/2690 3.2.3 (k)): disabling,
- *  or no longer required for the purge? Such a patch needs 'restricted'. */
-export function patchStopsCopy(row: Pick<DestinationRow, 'enabled' | 'required_for_purge'>, patch: UpdateDestination): boolean {
-  return (patch.enabled === false && row.enabled) || (patch.requiredForPurge === false && row.required_for_purge);
+ *  or no longer required for the purge? Or does it divert or weaken the
+ *  copy: a new target (config: host, port, URL) or the seals no longer sent
+ *  (review of lot A6, AUD-A6-R9; integration of lot A)? Such a patch needs
+ *  'restricted' (a second administrator), like a deletion. */
+export function patchStopsCopy(row: Pick<DestinationRow, 'enabled' | 'required_for_purge' | 'include_seals'>, patch: UpdateDestination): boolean {
+  return (patch.enabled === false && row.enabled) || (patch.requiredForPurge === false && row.required_for_purge)
+    || patch.config !== undefined || (patch.includeSeals === false && row.include_seals);
+}
+
+/** The approval description of such a patch (English, server-built). */
+export function stopDescription(row: Pick<DestinationRow, 'name'>, patch: UpdateDestination): string {
+  const what = [
+    patch.enabled === false ? 'disable' : null,
+    patch.requiredForPurge === false ? 'make optional for the purge' : null,
+    patch.config !== undefined ? 'change the target of' : null,
+    patch.includeSeals === false ? 'stop sending the seals to' : null,
+  ].filter(Boolean).join(', ');
+  return `${what.charAt(0).toUpperCase()}${what.slice(1)} the SIEM destination "${row.name}"`;
 }
 
 export async function updateDestination(id: number, patch: UpdateDestination, ctx: AuditWriteContext): Promise<AuditDestinationDto> {

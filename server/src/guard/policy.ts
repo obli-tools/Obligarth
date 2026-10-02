@@ -94,15 +94,32 @@ export function checkReason(reason: unknown, ticket: unknown): { ok: true; reaso
  * the tenant's mass_approver_side (the client by default), and falls back on
  * the MSP side (marked) when the client side is required while the tenant
  * has no designated client approver; a client requester may be approved by
- * any designated approver of either side.
+ * any designated approver of either side. The fallback is held (AUD-A7-R4)
+ * while a loss of a client approver that the approver did not decide is
+ * recent (`fallbackHeldUntil` in the future): the client side stays
+ * required, with nobody to approve, and the caller refuses the request
+ * (approverFallbackHeld) — the MSP cannot remove the client approvers and
+ * then approve alone.
  */
 export function requiredApproverSide(requesterSide: GuardSide, massApproverSide: GuardSide,
-  activeClientApprovers: number): { side: GuardApproverSide; fallback: boolean } {
+  activeClientApprovers: number, fallbackHeldUntil: Date | null = null, now: Date = new Date()): RequiredApproverSide {
   if (requesterSide === 'client') return { side: 'any', fallback: false };
   if (massApproverSide === 'client') {
-    return activeClientApprovers > 0 ? { side: 'client', fallback: false } : { side: 'msp', fallback: true };
+    if (activeClientApprovers > 0) return { side: 'client', fallback: false };
+    if (fallbackHeldUntil && fallbackHeldUntil.getTime() > now.getTime()) {
+      return { side: 'client', fallback: false, heldUntil: fallbackHeldUntil };
+    }
+    return { side: 'msp', fallback: true };
   }
   return { side: 'msp', fallback: false };
+}
+
+/** The side a request requires; `heldUntil`: no client approver, and the
+ *  fallback on the MSP side held until then (AUD-A7-R4). */
+export interface RequiredApproverSide {
+  side: GuardApproverSide;
+  fallback: boolean;
+  heldUntil?: Date;
 }
 
 /** What a reviewer is, for the guard's examination policy. */

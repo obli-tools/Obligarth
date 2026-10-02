@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { requireAuth } from '../middleware/auth';
 import { requireRole } from '../middleware/rbac';
+import { AppError } from '../middleware/errorHandler';
 import { permissionSetService } from '../services/permissionSet.service';
 import { logger } from '../utils/logger';
 
@@ -67,6 +68,10 @@ router.put('/:id', requireRole('admin'), async (req: Request, res: Response) => 
     }
     res.json({ success: true, data: updated });
   } catch (err) {
+    if (err instanceof AppError) {
+      res.status(err.statusCode).json({ success: false, error: err.message, code: err.code, details: err.details });
+      return;
+    }
     logger.error(err, 'Failed to update permission set');
     res.status(500).json({ success: false, error: 'Failed to update permission set' });
   }

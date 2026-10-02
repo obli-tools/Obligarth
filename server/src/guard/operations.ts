@@ -16,7 +16,7 @@ import { approvalService, type PendingApproval } from '../services/approval.serv
 import { hasGlobalView } from '../services/deviceScope.service';
 import { userLabels } from '../services/userLabels.service';
 import {
-  closeAwaiting, designationRefusal, fileGuardRequest, mayOperate, requiredSideFor,
+  closeAwaiting, designationRefusal, fileGuardRequest, mayOperate, refuseHeldFallback, requiredSideFor,
 } from './approvals';
 import { guardedActionDef } from './catalog';
 import { fallbackNotice, GuardStepUpError, requestFallbackNotice } from './engine';
@@ -151,6 +151,7 @@ export async function requestResume(req: Request, uuid: string): Promise<Pending
     if (row.state !== 'paused') throw new AppError(409, `The action is ${row.state}`, 'actionNotPaused');
     const original = await personFacts(row.requested_by, tenantId);
     const required = await requiredSideFor({ ...original, side: row.requester_side }, tenantId);
+    refuseHeldFallback(required);
     const def = guardedActionDef(row.action_key);
     const payload: GuardApprovalPayload = {
       action: 'guard_resume', actionUuid: row.uuid, actionKey: row.action_key, family: row.family,
@@ -206,6 +207,7 @@ export async function requestUnfreeze(req: Request, body: { reason?: unknown; te
     const settings = await readSettings(tenantId);
     if (!settings.frozen_at) throw new AppError(409, 'The tenant is not frozen', 'notFrozen');
     const required = await requiredSideFor(facts, tenantId);
+    refuseHeldFallback(required);
     const approval = await fileGuardRequest(req, tenantId, 'guard_unfreeze',
       `Unfreeze the tenant (frozen since ${settings.frozen_at.toISOString()}, ${settings.frozen_source}) — reason: ${r.reason}`,
       { action: 'guard_unfreeze', requiredSide: required.side, approverFallback: required.fallback, reason: r.reason });
@@ -244,6 +246,7 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
   if (!changed) return null;
   const facts = await personFacts(userId, tenantId);
   const required = await requiredSideFor(facts, tenantId);
+  refuseHeldFallback(required);
   const parts = [
     input.hourlyCapPercent !== undefined ? `hourly cap ${s.hourly_cap_percent} % → ${input.hourlyCapPercent} %` : null,
     input.hourlyCapMin !== undefined ? `cap minimum ${s.hourly_cap_min} → ${input.hourlyCapMin}` : null,
@@ -300,6 +303,7 @@ export async function requestDesignation(req: Request, raw: unknown): Promise<Pe
     throw new AppError(409, 'This account is already a designated approver of the tenant', 'alreadyDesignated');
   }
   const required = await requiredSideFor(requester, tenantId);
+  refuseHeldFallback(required);
   const approval = await fileGuardRequest(req, tenantId, 'guard_approver_designate',
     `Designate ${facts.username ?? `#${target}`} as ${side === 'client' ? 'client' : 'MSP'} approver of the tenant`,
     { action: 'guard_approver_designate', requiredSide: required.side, approverFallback: required.fallback, userId: target, side });

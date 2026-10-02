@@ -1744,7 +1744,8 @@
       "reasonRequired": "A reason of 5 to 500 characters is required.",
       "crossTenantBatch": "One request acts on one tenant only.",
       "approverSideRequired": "This request needs an approver of the other side (a client approver by default).",
-      "selfApproval": "The requester cannot review this request."
+      "selfApproval": "The requester cannot review this request.",
+      "approverFallbackHeld": "No client approver: one was removed recently, and the fallback on an MSP approver stays closed until {{until}}. Designate a client approver (approved by the client), or wait."
     },
     "delay": {
       "none": "no delay",
@@ -1813,7 +1814,8 @@
       "revoked": "Approver revoked",
       "requested": "Designation requested: waiting for an approver",
       "pick": "Choose an account",
-      "designate": "Designate"
+      "designate": "Designate",
+      "fallbackHeld": "A client approver was removed on {{lostAt}}: while no client approver is designated, requests that need one do not fall back on an MSP approver until {{until}}."
     },
     "settings": {
       "title": "Guard settings",
@@ -1848,7 +1850,9 @@
       "a3": "Destructive actions requested in several tenants",
       "grant": "New privilege granted",
       "cooldown": "A new administrator attempted a destructive action",
-      "edge-freeze": "Freeze not applied at apple-edge yet"
+      "edge-freeze": "Freeze not applied at apple-edge yet",
+      "approver-lost": "Client approver removed",
+      "credentials": "Credentials of a privileged account changed by another account"
     }
   }
 }

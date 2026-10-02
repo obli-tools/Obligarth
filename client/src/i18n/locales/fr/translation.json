@@ -1744,7 +1744,8 @@
       "reasonRequired": "Un motif de 5 à 500 caractères est requis.",
       "crossTenantBatch": "Une demande ne vise qu'un seul tenant.",
       "approverSideRequired": "Cette demande attend un approbateur de l'autre côté (un approbateur client par défaut).",
-      "selfApproval": "Le demandeur ne peut pas examiner sa demande."
+      "selfApproval": "Le demandeur ne peut pas examiner sa demande.",
+      "approverFallbackHeld": "Aucun approbateur client : un approbateur client a été retiré récemment, et le repli sur un approbateur du MSP reste fermé jusqu'au {{until}}. Désignez un approbateur client (avec l'accord du client), ou attendez."
     },
     "delay": {
       "none": "sans délai",
@@ -1813,7 +1814,8 @@
       "revoked": "Approbateur révoqué",
       "requested": "Désignation demandée : en attente d'un approbateur",
       "pick": "Choisir un compte",
-      "designate": "Désigner"
+      "designate": "Désigner",
+      "fallbackHeld": "Un approbateur client a été retiré le {{lostAt}} : tant qu'aucun approbateur client n'est désigné, les demandes qui en attendent un ne passent pas à un approbateur du MSP avant le {{until}}."
     },
     "settings": {
       "title": "Réglages des garde-fous",
@@ -1848,7 +1850,9 @@
       "a3": "Actions destructrices demandées dans plusieurs tenants",
       "grant": "Nouveau privilège accordé",
       "cooldown": "Un nouvel administrateur a tenté une action destructrice",
-      "edge-freeze": "Gel pas encore appliqué par apple-edge"
+      "edge-freeze": "Gel pas encore appliqué par apple-edge",
+      "approver-lost": "Approbateur client retiré",
+      "credentials": "Facteurs d'un compte privilégié changés par un autre compte"
     }
   }
 }

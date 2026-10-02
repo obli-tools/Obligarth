@@ -12,7 +12,7 @@ import { auditJobHandles, wakeAuditJob } from './jobs';
 import { fromRequest } from './actor';
 import {
   CreateDestinationInput, UpdateDestinationInput, createDestination, destinationDto, getDestination, listDestinationRows,
-  patchStopsCopy, rotateDestinationSecret, updateDestination,
+  patchStopsCopy, rotateDestinationSecret, stopDescription, updateDestination,
 } from './export/destinations';
 import { auditExporter, exportLagSeconds } from './export/exporter';
 import { RETENTION_ACTOR, applyLegalHold, legalHoldOf } from './retention';
@@ -46,15 +46,25 @@ function masterPlatformAdmin(req: Request, _res: Response, next: NextFunction): 
  * (audit-durci §7.2, §10.4): when the client has a designated client
  * approver, the request is filed in the client's tenant and examined there by
  * that approver (journalReviewerPolicy, module.ts); otherwise in the master
- * tenant, by another platform administrator. The floor of these actions is
- * 'restricted': always a request. True when the request was filed (202 sent).
+ * tenant, by another platform administrator — unless the client lost its
+ * client approver recently through someone else's act: then refused (409
+ * approverFallbackHeld) until the end of the hold (AUD-A7-R4, as for the
+ * guard's own requests). The floor of these actions is 'restricted': always
+ * a request. True when the request was filed (202 sent).
  */
 async function fileWithClientApprover(req: Request, res: Response, tenantId: number, description: string,
   payload: Record<string, unknown>): Promise<boolean> {
   if (tenantId === MASTER_TENANT_ID) return false;
   const userId = Number(req.session.userId);
-  const { activeClientApprovers } = await import('../guard/people');
-  const clients = await asTenant(tenantId, { type: 'user', userId }, () => activeClientApprovers(tenantId));
+  const { activeClientApprovers, fallbackHold } = await import('../guard/people');
+  const { clients, hold } = await asTenant(tenantId, { type: 'user', userId }, async () => {
+    const n = await activeClientApprovers(tenantId);
+    return { clients: n, hold: n === 0 ? await fallbackHold(tenantId) : null };
+  });
+  if (hold) {
+    throw new AppError(409, 'The client lost its client approver recently: the fallback on another platform administrator stays closed until '
+      + `${hold.until.toISOString()} (designate a client approver, or wait)`, 'approverFallbackHeld', { until: hold.until.toISOString() });
+  }
   if (clients === 0) return false;
   const { approvalService } = await import('../services/approval.service');
   const approval = await approvalService.create({ tenantId, userId, requestType: 'batch_command', description, payload });
@@ -206,13 +216,19 @@ export function createAuditAdminRouter(): Router {
     const row = await getDestination(id);
     if (!row) throw new AppError(404, 'Destination not found');
     if (patchStopsCopy(row, parsed.data)) {
+      // The patch goes to an approval request, whose payload is no place for a
+      // secret: the client key or the bearer token change apart.
+      if (parsed.data.clientKeyPem !== undefined || parsed.data.bearerToken !== undefined) {
+        throw new AppError(400, 'Change the client key or the bearer token in a separate request: this change needs an approval',
+          'secretWithApproval');
+      }
       const approved = await applyRestriction(res, {
         req, actionKey: 'audit.destination_stop', approvalRequestType: 'batch_command',
-        approvalDescription: `${parsed.data.enabled === false ? 'Disable' : 'Make optional for the purge'} the SIEM destination "${row.name}"`,
+        approvalDescription: stopDescription(row, parsed.data),
         approvalPayload: { action: 'audit_destination_change', op: 'update', id, patch: parsed.data },
       });
       if (!approved) return;
-      throw new AppError(409, 'Stopping a SIEM copy needs an approval', 'approvalRequired');
+      throw new AppError(409, 'Stopping, diverting or weakening a SIEM copy needs an approval', 'approvalRequired');
     }
     const ok = await applyRestriction(res, { req, actionKey: 'audit.destination_change' });
     if (!ok) return;

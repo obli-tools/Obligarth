@@ -181,6 +181,14 @@ async function kekRotate(args: string[]): Promise<number> {
           throw new CliExit(5, `kek-rotate: operation ${id} is not an authorized KEK rotation`
             + (resume ? ' (nor a running one)' : '') + ': request it in the console (double validation), within 24 hours.');
         }
+        // The double validation authorized the rotation AWAY from one KEK (the
+        // server's at the time): the previous file must hold that one (review
+        // of lot A4; integration of lot A).
+        const authorized = op.params && typeof op.params === 'object' ? (op.params as Record<string, unknown>).kekId : undefined;
+        if (typeof authorized === 'string' && authorized !== previous.id) {
+          throw new CliExit(5, `kek-rotate: operation ${id} authorized the rotation of kek_id ${authorized}, `
+            + `but SERVER_KEK_PREVIOUS_FILE holds kek_id ${previous.id}`);
+        }
         const rows = await db('data_keys').whereNotNull('dek_wrapped')
           .select('id', 'tenant_id', 'version', 'kek_id', 'dek_wrapped') as Array<{
             id: string; tenant_id: number | null; version: number; kek_id: string; dek_wrapped: string;

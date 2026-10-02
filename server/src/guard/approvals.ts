@@ -34,9 +34,9 @@ import { unfreezeTenant } from './freeze';
 import { executeJob } from './jobs';
 import { notifyAction } from './notify';
 import {
-  activeClientApprovers, cooldownUntil, designationsOf, personFacts, reviewerFacts, type PersonFacts,
+  activeClientApprovers, cooldownUntil, designationsOf, fallbackHold, personFacts, reviewerFacts, type PersonFacts,
 } from './people';
-import { capAllows, requiredApproverSide, reviewerRefusal } from './policy';
+import { capAllows, requiredApproverSide, reviewerRefusal, type RequiredApproverSide } from './policy';
 import { recordRefusal } from './refusals';
 import { targetsWithoutRights } from './selection';
 import { readSettings } from './settings';
@@ -53,7 +53,24 @@ const REVIEWER_MESSAGES: Record<string, string> = {
  *  type's reviewerStepUp). */
 export async function guardReviewerPolicy(x: ApprovalReviewCheck): Promise<void> {
   const p = (x.approval.payload ?? {}) as GuardApprovalPayload;
-  const required: GuardApproverSide = p.requiredSide === 'client' || p.requiredSide === 'msp' ? p.requiredSide : 'any';
+  let required: GuardApproverSide = p.requiredSide === 'client' || p.requiredSide === 'msp' ? p.requiredSide : 'any';
+  // A request filed as a fallback (no client approver then) is approved on
+  // the MSP side only while that still holds (AUD-A7-R4): a client approver
+  // designated since takes it over; a client approver lost since (removal,
+  // deactivation… not decided by the approver) holds it (409). A refusal
+  // stays open to both (protective).
+  if (x.decision === 'approve' && p.approverFallback === true && required === 'msp'
+    && (await readSettings(x.approval.tenantId)).mass_approver_side === 'client') {
+    if ((await activeClientApprovers(x.approval.tenantId)) > 0) required = 'client';
+    else {
+      const hold = await fallbackHold(x.approval.tenantId);
+      if (hold) {
+        throw Object.assign(new Error(`A client approver was removed recently: the fallback on an MSP approver stays closed until ${hold.until.toISOString()}`), {
+          status: 409, code: 'approverFallbackHeld', details: { until: hold.until.toISOString() },
+        });
+      }
+    }
+  }
   const requesterIds = [x.approval.requestedBy];
   if (typeof p.originalRequesterId === 'number') requesterIds.push(p.originalRequesterId);
   // The account a designation names never reviews it (no self-elevation).
@@ -84,10 +101,27 @@ async function approverSideOf(reviewerId: number | undefined, tenantId: number):
   return d.client && f.audience === 'client' && !f.platformAdmin ? 'client' : 'msp';
 }
 
-/** The required side of a request filed by `requester` in the tenant. */
-export async function requiredSideFor(requester: PersonFacts, tenantId: number): Promise<{ side: GuardApproverSide; fallback: boolean }> {
+/** The required side of a request filed by `requester` in the tenant (the
+ *  fallback held after the loss of a client approver, AUD-A7-R4). */
+export async function requiredSideFor(requester: PersonFacts, tenantId: number): Promise<RequiredApproverSide> {
   const settings = await readSettings(tenantId);
-  return requiredApproverSide(requester.side, settings.mass_approver_side, await activeClientApprovers(tenantId));
+  if (requester.side === 'client' || settings.mass_approver_side !== 'client') {
+    return requiredApproverSide(requester.side, settings.mass_approver_side, 0);
+  }
+  const clients = await activeClientApprovers(tenantId);
+  const hold = clients > 0 ? null : await fallbackHold(tenantId);
+  return requiredApproverSide(requester.side, settings.mass_approver_side, clients, hold?.until ?? null);
+}
+
+/** A request that needs a client approver while the tenant has none and the
+ *  fallback is held (AUD-A7-R4): refused, 409 approverFallbackHeld with the
+ *  end of the hold. Nothing is filed: nobody could approve it. */
+export function refuseHeldFallback(required: RequiredApproverSide): void {
+  if (!required.heldUntil) return;
+  throw new AppError(409,
+    'No client approver: a client approver was removed recently, and the fallback on an MSP approver stays closed until '
+      + `${required.heldUntil.toISOString()} (designate a client approver, or wait)`,
+    'approverFallbackHeld', { until: required.heldUntil.toISOString() });
 }
 
 /** May this account act on the tenant's freeze, cancellations and

@@ -38,6 +38,12 @@ export const GUARD_HOURLY_CAP_MIN_DEFAULT = 5;
 export const GUARD_REASON_MIN = 5;
 export const GUARD_REASON_MAX = 500;
 export const GUARD_TICKET_MAX = 64;
+/** After a client approver of a tenant is lost through someone else's act
+ *  (revocation by another account, deactivation, change or removal of the
+ *  role, deletion), the fallback of D24 on an MSP approver stays closed for
+ *  this many days: the MSP cannot remove the client approvers and then
+ *  approve alone (AUD-A7-R4). */
+export const GUARD_FALLBACK_HOLD_DAYS = 30;
 
 export interface GuardSelection {
   deviceIds?: number[];
@@ -56,7 +62,7 @@ export interface GuardRequestInput {
 
 export type GuardRefusalCode =
   | 'noTargets' | 'targetsOutsideScope' | 'tenantFrozen' | 'privilegeCooldown' | 'personalDeviceForbidden'
-  | 'wholeFleetForbidden' | 'hourlyCapExceeded' | 'confirmationMismatch' | 'reasonRequired';
+  | 'wholeFleetForbidden' | 'hourlyCapExceeded' | 'confirmationMismatch' | 'reasonRequired' | 'approverFallbackHeld';
 
 export type GuardOutcome =
   | { state: 'scheduled'; actionUuid: string; executeAfter: string; delaySeconds: number }
@@ -113,6 +119,12 @@ export interface GuardSettingsDto {
   frozenSource: 'manual' | 'anomaly' | null;
   frozenReason: string | null;
   updatedAt: string | null;
+  /** Last loss of a client approver not decided by the approver (null: none
+   *  within GUARD_FALLBACK_HOLD_DAYS). */
+  clientApproverLostAt?: string | null;
+  /** Until then, a request that needs a client approver does not fall back
+   *  on an MSP approver (null: the fallback is open). */
+  fallbackHeldUntil?: string | null;
 }
 
 export interface GuardSettingsInput {

@@ -1,5 +1,6 @@
 import { db } from '../db';
 import { switchToIdentity } from '../db/context';
+import { AppError } from '../middleware/errorHandler';
 import type { TenantCapability } from '@obligarth/shared';
 
 // Permission sets are a catalog (rls-tenant §5.2): read in any context,
@@ -12,8 +13,15 @@ interface PermissionSetRow {
   slug: string;
   capabilities: unknown;
   is_default: boolean;
+  audience?: string;
   created_at: Date;
 }
+
+/** What a set of audience 'client' may hold (D42, option 1: the approver and
+ *  the auditor of a client). An operational capability would make its holders
+ *  requesters of the client side, whose batches any approver approves (D24):
+ *  refused here and by the database (permission_sets_client_capabilities). */
+export const CLIENT_SET_CAPABILITIES: readonly string[] = ['approvals.review', 'audit.read'];
 
 export interface PermissionSet {
   id: number;
@@ -76,7 +84,14 @@ export const permissionSetService = {
 
     const update: Record<string, unknown> = {};
     if (data.name !== undefined) update.name = data.name;
-    if (data.capabilities !== undefined) update.capabilities = JSON.stringify(knownTenantCapabilities(data.capabilities));
+    if (data.capabilities !== undefined) {
+      const caps = knownTenantCapabilities(data.capabilities);
+      if (existing.audience === 'client' && caps.some((c) => !CLIENT_SET_CAPABILITIES.includes(c))) {
+        throw new AppError(400, `A client set holds only ${CLIENT_SET_CAPABILITIES.join(', ')}`, 'clientSetCapabilities',
+          { allowed: [...CLIENT_SET_CAPABILITIES] });
+      }
+      update.capabilities = JSON.stringify(caps);
+    }
 
     if (Object.keys(update).length > 0) {
       await switchToIdentity(() => db('permission_sets').where({ id }).update(update));

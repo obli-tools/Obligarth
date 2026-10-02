@@ -59,7 +59,34 @@ let registered = false;
  *  designated client approver under the guard's policy, strict step-up of
  *  the reviewer included (§7.2, §10.4 point 5). */
 async function journalReviewerPolicy(x: ApprovalReviewCheck): Promise<void | { reviewerStepUp: 'strict' }> {
-  if (x.approval.tenantId === MASTER_TENANT_ID) { await platformAdminPolicy(x); return; }
+  if (x.approval.tenantId === MASTER_TENANT_ID) {
+    await platformAdminPolicy(x);
+    // A client's chain examined in the master tenant (no client approver when
+    // the request was filed): approved there only while that still holds
+    // (integration of lot A, AUD-A7-R4): a client approver designated since
+    // reviews it in the client's tenant (the request is filed again), and a
+    // client approver lost since holds the fallback. A refusal stays open.
+    const chain = Number((x.approval.payload as { tenantId?: unknown } | null)?.tenantId);
+    if (x.decision === 'approve' && Number.isSafeInteger(chain) && chain > 0 && chain !== MASTER_TENANT_ID) {
+      const { activeClientApprovers, fallbackHold } = await import('../guard/people');
+      const { asTenant } = await import('../db/context');
+      const now = await asTenant(chain, userActor(x.reviewerId), async () => {
+        const clients = await activeClientApprovers(chain);
+        return { clients, hold: clients === 0 ? await fallbackHold(chain) : null };
+      });
+      if (now.clients > 0) {
+        throw Object.assign(new Error('The client has a client approver now: file the request again, it will be reviewed in the client\'s tenant'), {
+          status: 409, code: 'approverSideRequired',
+        });
+      }
+      if (now.hold) {
+        throw Object.assign(new Error(`The client lost its client approver recently: the fallback stays closed until ${now.hold.until.toISOString()}`), {
+          status: 409, code: 'approverFallbackHeld', details: { until: now.hold.until.toISOString() },
+        });
+      }
+    }
+    return;
+  }
   const { guardReviewerPolicy } = await import('../guard/approvals');
   await guardReviewerPolicy({ ...x, approval: { ...x.approval, payload: { ...(x.approval.payload ?? {}), requiredSide: 'client' } } });
   return { reviewerStepUp: 'strict' };

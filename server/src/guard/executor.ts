@@ -16,7 +16,7 @@
 //   3. 'done', 'partial' or 'failed', executed_at, result, then the entry
 //      guard.action_executed (P3).
 import type { Knex } from 'knex';
-import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { GUARD_FALLBACK_HOLD_DAYS, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit, type AuditEntryInput, type AuditWriteContext } from '../audit';
 import { db } from '../db';
 import { asIdentity, asNone, asTenant } from '../db/context';
@@ -292,23 +292,99 @@ export async function privilegeWatch(ctx: JobContext<Record<string, never>>): Pr
     .leftJoin('users as u', 'u.id', 'g.user_id')
     .where('g.source', 'change')
     .andWhere('g.granted_at', '>', db.raw("now() - interval '15 minutes'"))
-    .select('g.id', 'g.user_id', 'g.tenant_id', 'g.kind', 'u.username')) as
-    Array<{ id: number; user_id: number; tenant_id: number | null; kind: string; username: string | null }>;
+    .select('g.id', 'g.user_id', 'g.tenant_id', 'g.kind', 'g.cause', 'u.username')) as
+    Array<{ id: number; user_id: number; tenant_id: number | null; kind: string; cause: string | null; username: string | null }>;
   let alerted = 0;
   for (const g of rows) {
     const done = await ctx.once(`grant:${g.id}`, 7 * 86_400, async () => {
       const what = g.kind === 'platform_admin' ? 'platform administrator' : g.kind === 'tenant_admin' ? 'tenant administrator' : 'approver';
+      const who = g.username ?? `Account #${g.user_id}`;
+      // Causes of the integration of lot A (privilege_grants.cause): the
+      // reactivation of a privileged account, a role holding a destructive
+      // capability, the credentials of an approver or a platform administrator
+      // changed by another account.
+      const message = g.cause === 'credentials_reset'
+        ? `The password, second factor or SSO identity of ${who} (${what}) was changed by another account: 72-hour cooldown before destructive actions and reviews.`
+        : g.cause === 'reactivated' ? `${who} (${what}) was reactivated: 72-hour cooldown before destructive actions.`
+          : g.cause === 'capability_set' ? `${who} received a role that can delete or erase devices: 72-hour cooldown before destructive actions.`
+            : `${who} became ${what}: 72-hour cooldown before destructive actions.`;
       await alertTenants(g.tenant_id ? [MASTER_TENANT_ID, Number(g.tenant_id)] : [MASTER_TENANT_ID], {
-        severity: 'warning',
-        title: 'New privilege granted',
-        message: `${g.username ?? `Account #${g.user_id}`} became ${what}: 72-hour cooldown before destructive actions.`,
-        stableKey: `guard:grant:${g.id}`,
+        severity: g.cause === 'credentials_reset' ? 'critical' : 'warning',
+        title: g.cause === 'credentials_reset' ? 'Credentials of a privileged account changed by another account' : 'New privilege granted',
+        message,
+        stableKey: g.cause === 'credentials_reset' ? `guard:credentials:${g.id}` : `guard:grant:${g.id}`,
         navigateTo: '/admin/security?tab=guard',
       });
     });
     if (done === 'done') alerted++;
   }
-  return { output: { grants: rows.length, alerted } };
+  const losses = await approverLossWatch(ctx);
+  return { output: { grants: rows.length, alerted, ...losses } };
+}
+
+const LOSS_CAUSES: Record<string, string> = {
+  revoked: 'designation revoked',
+  deactivated: 'account deactivated',
+  platform_admin: 'account made platform administrator',
+  role_changed: 'client role changed',
+  removed: 'removed from the tenant',
+  deleted: 'account deleted',
+  audience_changed: 'client role no longer of the client audience',
+};
+
+/**
+ * The losses of a client approver (AUD-A7-R4), recorded by the database
+ * whatever their path (guard_approver_losses): for each one not alerted yet,
+ * the entry guard.approver_lost in the tenant's chain (the client keeps the
+ * trace), then a live alert in the tenant and the master tenant, then
+ * alerted_at (context identity). At least once: a stop between the entry
+ * and the mark repeats them at the next run, a loss is never skipped.
+ */
+async function approverLossWatch(ctx: JobContext<Record<string, never>>): Promise<{ losses: number; lossesAlerted: number }> {
+  const rows = await asIdentity(ctx.dbActor, () => db('guard_approver_losses as l')
+    .leftJoin('users as u', 'u.id', 'l.user_id')
+    .whereNull('l.alerted_at')
+    .orderBy('l.id')
+    .limit(200)
+    .select('l.id', 'l.tenant_id', 'l.user_id', 'l.cause', 'l.actor', 'l.self', 'l.remaining', 'l.lost_at', 'u.username')) as Array<{
+      id: number | string; tenant_id: number; user_id: number; cause: string; actor: string | null; self: boolean;
+      remaining: number; lost_at: Date | string; username: string | null;
+    }>;
+  if (!rows.length) return { losses: 0, lossesAlerted: 0 };
+  const auditCtx = audit.fromJob({ name: ctx.name, requestId: ctx.requestId });
+  let lossesAlerted = 0;
+  for (const l of rows) {
+    ctx.throwIfAborted();
+    const tenantId = Number(l.tenant_id);
+    const lostAt = new Date(l.lost_at);
+    const heldUntil = l.self ? null : new Date(lostAt.getTime() + GUARD_FALLBACK_HOLD_DAYS * 86_400_000);
+    const noneLeft = Number(l.remaining) === 0;
+    const who = l.username ?? `Account #${l.user_id}`;
+    try {
+      await asTenant(tenantId, ctx.dbActor, () => audit.append({
+        tenantId, action: 'guard.approver_lost', outcome: 'success', target: { type: 'user', id: String(l.user_id) },
+        details: {
+          cause: l.cause, self: l.self === true, remaining: Number(l.remaining), by: l.actor ?? null,
+          lostAt: lostAt.toISOString(), ...(heldUntil ? { fallbackHeldUntil: heldUntil.toISOString() } : {}),
+        },
+      }, auditCtx));
+      const hold = heldUntil && noneLeft
+        ? ` No client approver is left: until ${heldUntil.toISOString()}, the MSP cannot approve in their place (the fallback stays closed).`
+        : '';
+      await alertTenants([tenantId, MASTER_TENANT_ID], {
+        severity: heldUntil && noneLeft ? 'critical' : 'warning',
+        title: 'Client approver removed',
+        message: `${who}: ${LOSS_CAUSES[l.cause] ?? l.cause}${l.actor ? ` (by ${l.actor})` : ''}.${hold}`,
+        stableKey: `guard:approver-lost:${l.id}`,
+        navigateTo: '/admin/security?tab=guard',
+      });
+      await asIdentity(ctx.dbActor, () => db('guard_approver_losses').where({ id: l.id }).whereNull('alerted_at').update({ alerted_at: new Date() }));
+      lossesAlerted++;
+    } catch (err) {
+      logger.warn({ err: safeErr(err), loss: Number(l.id), tenantId }, 'guard: approver loss not alerted yet (next run)');
+    }
+  }
+  return { losses: rows.length, lossesAlerted };
 }
 
 /** actions.purge: obligarth.guard_purge() (reserved to this job's actor). */

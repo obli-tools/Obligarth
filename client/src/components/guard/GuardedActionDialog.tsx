@@ -32,6 +32,8 @@ export function guardErrorMessage(t: TFunction, code: string | undefined, fallba
     case 'crossTenantBatch': return t('guard.errors.crossTenantBatch') || 'One request acts on one tenant only.';
     case 'approverSideRequired': return t('guard.errors.approverSideRequired') || 'This request needs an approver of the other side.';
     case 'selfApproval': return t('guard.errors.selfApproval') || 'The requester cannot review this request.';
+    case 'approverFallbackHeld': return t('guard.errors.approverFallbackHeld', { until: details?.until ? new Date(String(details.until)).toLocaleString() : '' })
+      || 'No client approver: one was removed recently, and the fallback on an MSP approver stays closed for now.';
     case 'auditUnavailable': return t('audit.errors.unavailable') || 'The action was not carried out: the audit log is unavailable.';
     default: return fallback;
   }

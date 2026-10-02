@@ -5,7 +5,8 @@
 //                             never redriven by hand (a destructive action)
 //   actions.expire-paused     hourly: pauses older than 24 h expire
 //   actions.edge-freeze-sync  tenant, on demand: the freeze at apple-edge
-//   actions.privilege-watch   every minute: an alert per privilege grant
+//   actions.privilege-watch   every minute: an alert per privilege grant, and
+//                             per loss of a client approver (AUD-A7-R4)
 //   actions.purge             daily: finished actions and grants after 13 months
 import { z } from 'zod';
 import { defaultRuntime, registerJob, type JobHandle } from '../jobs';
@@ -103,7 +104,7 @@ export function registerGuardJobs(): void {
   registerJob({
     name: 'actions.privilege-watch',
     scope: 'platform',
-    description: 'Alert on every new administrator or approver grant, whatever its path',
+    description: 'Alert on every new administrator or approver grant and every loss of a client approver, whatever its path',
     payload: empty,
     schedule: { cron: '* * * * *' },
     pollSeconds: 60,

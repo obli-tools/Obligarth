@@ -28,10 +28,10 @@ import { guardedActionDef, ownershipOf } from './catalog';
 import { executeJob, wakeExecutor } from './jobs';
 import { guardMetrics } from './metrics';
 import { alertTenants, notifyAction } from './notify';
-import { activeClientApprovers, cooldownUntil, personFacts, type PersonFacts } from './people';
+import { cooldownUntil, personFacts, type PersonFacts } from './people';
 import {
   capAllows, checkReason, classify, confirmationMatches, expectedConfirmation, isWholeFleet, requestLevel,
-  requiredApproverSide, stricter, type MatrixLevel,
+  stricter, type MatrixLevel,
 } from './policy';
 import { recordRefusal } from './refusals';
 import { parseSelection, resolveTargets, targetTenantOf, targetsWithoutRights, type ResolvedTargets } from './selection';
@@ -252,6 +252,23 @@ export async function request(req: Request, input: Partial<GuardRequestInput>): 
 
 async function requestInTenant(req: Request, f: ReturnType<typeof form>, tenantId: number, confirm: unknown): Promise<GuardOutcome> {
   const a = await assess(req, f, tenantId, { preview: false, confirm });
+  const restricted = a.level === 'restricted';
+  // The approver's side (D24) of a restricted request: refused, and
+  // journaled like the refusals of the steps 3 to 9, while the tenant has no
+  // client approver and the fallback is held (AUD-A7-R4).
+  let approver: { side: GuardApprovalPayload['requiredSide']; fallback: boolean } = { side: 'msp', fallback: false };
+  if (restricted) {
+    const { requiredSideFor, refuseHeldFallback } = await import('./approvals');
+    const required = await requiredSideFor(a.requester, tenantId);
+    if (required.heldUntil) {
+      await recordRefusal(req, {
+        tenantId, def: a.def, code: 'approverFallbackHeld', deviceIds: a.targets.deviceIds, reason: a.reason, ticket: a.ticket,
+        requester: a.requester, details: { until: required.heldUntil.toISOString() },
+      });
+      refuseHeldFallback(required);
+    }
+    approver = { side: required.side, fallback: required.fallback };
+  }
   // 11. Step-up at the 'sensitive' level (no trusted-IP shortcut for a strict floor).
   if (a.level === 'sensitive') {
     const { checkSecondFactor } = await import('../services/deviceKey/stepUpProof');
@@ -264,12 +281,6 @@ async function requestInTenant(req: Request, f: ReturnType<typeof form>, tenantI
   const ctx = await audit.fromRequest(req, tenantId);
   const uuid = randomUUID();
   const requesterId = a.requester.userId;
-  const restricted = a.level === 'restricted';
-  let approver = { side: 'msp' as GuardApprovalPayload['requiredSide'], fallback: false };
-  if (restricted) {
-    const settings = await readSettings(tenantId);
-    approver = requiredApproverSide(a.requester.side, settings.mass_approver_side, await activeClientApprovers(tenantId));
-  }
   const description = restricted ? await describe(a) : '';
   const selection = {
     ...a.targets.selection, mode: a.bulk && !a.requalified ? 'bulk' : 'single', ...(a.requalified ? { requalified: true } : {}),
@@ -388,6 +399,15 @@ export async function preview(req: Request, input: Partial<GuardRequestInput>): 
   return asTargetTenant(req, tenantId, async () => {
     const a = await assess(req, f, tenantId, { preview: true });
     const quota = a.def.hourlyCap ? await quotaOf(tenantId) : null;
+    // The approver's side of a restricted request; held fallback: refused
+    // here too (AUD-A7-R4), nothing journaled.
+    let approver: { approverSide: string; approverFallback: boolean } | null = null;
+    if (a.level === 'restricted') {
+      const { requiredSideFor, refuseHeldFallback } = await import('./approvals');
+      const required = await requiredSideFor(a.requester, tenantId);
+      refuseHeldFallback(required);
+      approver = { approverSide: required.side, approverFallback: required.fallback };
+    }
     return {
       tenantId,
       actionKey: a.def.key,
@@ -400,6 +420,7 @@ export async function preview(req: Request, input: Partial<GuardRequestInput>): 
         : (!a.bulk && a.targets.deviceIds.length === 1 && a.targets.singleName ? 'name' : 'count'),
       expectedConfirmation: a.expectedConfirmation,
       quota,
+      ...(approver ?? {}),
     };
   });
 }

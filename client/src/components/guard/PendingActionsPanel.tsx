@@ -262,6 +262,14 @@ export function PendingActionsPanel() {
       <section className="rounded bg-bg-secondary p-3 space-y-2">
         <h3 className="flex items-center gap-2 text-sm font-medium text-text-primary"><UserCheck className="w-4 h-4" />{t('guard.approvers.title') || 'Designated approvers'}</h3>
         <p className="text-xs text-text-muted">{t('guard.approvers.help') || 'A batch requested by the MSP is approved by a client approver; without one, by a second MSP administrator (marked as a fallback).'}</p>
+        {settings?.fallbackHeldUntil && new Date(settings.fallbackHeldUntil).getTime() > Date.now() && (
+          <p className="text-xs text-orange-400">
+            {t('guard.approvers.fallbackHeld', {
+              lostAt: settings.clientApproverLostAt ? new Date(settings.clientApproverLostAt).toLocaleString() : '',
+              until: new Date(settings.fallbackHeldUntil).toLocaleString(),
+            }) || `A client approver was removed recently: while no client approver is designated, requests that need one do not fall back on an MSP approver until ${new Date(settings.fallbackHeldUntil).toLocaleString()}.`}
+          </p>
+        )}
         {approvers.length === 0 ? (
           <p className="text-xs text-text-muted italic">{t('guard.approvers.none') || 'No approver designated.'}</p>
         ) : (

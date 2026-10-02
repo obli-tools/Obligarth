@@ -149,6 +149,21 @@ function rowToBinding(row: BindingRow): NotificationBinding {
   };
 }
 
+/**
+ * The text of a send error, without the URL it may quote: fetch() and URL
+ * parsing repeat the address they were given ("Failed to parse URL from
+ * https://hooks.example.com/services/<secret>"), and a webhook URL or a token
+ * in a query string are write-only secrets of the channel (review of lot A4;
+ * integration of lot A). Kept for the test's answer and the send log.
+ */
+export function channelErrorText(err: unknown): string {
+  const raw = err instanceof Error ? err.message : 'Unknown error';
+  return raw
+    .replace(/Failed to parse URL from .*/gs, 'Failed to parse the URL')
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/\S+/gi, '<url>')
+    .slice(0, 500);
+}
+
 export const notificationService = {
   // ── Channel CRUD ──
 
@@ -751,7 +766,7 @@ export const notificationService = {
         await this.logNotification(channel.id, 'group_status_change', true);
         logger.info(`Group notification sent: ${channel.name} (${channel.type}) for group "${groupName}"`);
       } catch (error) {
-        const errMsg = error instanceof Error ? error.message : 'Unknown error';
+        const errMsg = channelErrorText(error);
         await this.logNotification(channel.id, 'group_status_change', false, errMsg);
         logger.error(`Group notification failed: ${channel.name} (${channel.type}): ${errMsg}`);
       }

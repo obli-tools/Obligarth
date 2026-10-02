@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { notificationService } from '../services/notification.service';
+import { channelErrorText, notificationService } from '../services/notification.service';
 import { deviceService } from '../services/device.service';
 import { getPluginMetas } from '../notifications/registry';
 import { AppError } from '../middleware/errorHandler';
@@ -152,7 +152,7 @@ export const notificationsController = {
       // A vault error (the channel's secrets cannot be opened) is never
       // echoed: the error handler answers 500, the vault logged and alerted.
       if (err instanceof Error && !(err instanceof AppError) && !isVaultError(err)) {
-        next(new AppError(400, `Test failed: ${err.message}`));
+        next(new AppError(400, `Test failed: ${channelErrorText(err)}`));
       } else {
         next(err);
       }

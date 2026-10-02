@@ -157,7 +157,13 @@ export function createVaultAdminRouter(): Router {
         kind: 'dek_rotation', state: 'authorized', tenantId, requestedBy: req.session.userId ?? null, reason,
         params: { tenantId },
       });
-      await sendDekRotation(created.id, tenantId, trx);
+      // Two simultaneous requests both pass the check above: the job of the
+      // second is deduplicated (singletonKey) and its operation would wait,
+      // authorized and without a job, for a restart. Refused, nothing kept
+      // (review of lot A4; integration of lot A).
+      if (!(await sendDekRotation(created.id, tenantId, trx))) {
+        throw new AppError(409, 'A rotation of this key is already in progress (or failed and resumable)', 'rotationInProgress');
+      }
       const details = { operationId: created.id, tenantId, reason };
       await writeVaultAuditInTx(trx, [
         ...(tenantId !== null ? [{ tenantId, userId: req.session.userId, action: 'vault.dek_rotation_requested', resourceType: 'vault', details }] : []),

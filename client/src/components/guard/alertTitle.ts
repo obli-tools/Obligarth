@@ -3,7 +3,8 @@ import type { TFunction } from 'i18next';
 // The server writes the live alerts of the guard engine in English, with a
 // stable key that names them (audit-durci §10.10): guard:<action uuid>:<state>,
 // guard:<uuid>:fallback, guard:freeze:…, guard:unfreeze:…, guard:a3:…,
-// guard:grant:…, guard:cooldown:…, guard:edge-freeze:…. The console
+// guard:grant:…, guard:credentials:…, guard:cooldown:…, guard:edge-freeze:…,
+// guard:approver-lost:…. The console
 // translates the title by that key (guard.alerts.<kind>), the server's text
 // as the fallback.
 

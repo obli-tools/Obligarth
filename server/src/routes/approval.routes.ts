@@ -51,7 +51,7 @@ router.use(requireAuth, requireApprovalAccess);
 /** An error of the approval service: its status and code, else the error handler. */
 function serviceError(err: any, res: Response, next: NextFunction): void {
   if (err instanceof ApprovalStepUpError) { sendStepUpFailure(res, err.outcome); return; }
-  if (err?.status) { next(new AppError(err.status, err.message, err.code)); return; }
+  if (err?.status) { next(new AppError(err.status, err.message, err.code, err.details)); return; }
   next(err);
 }
 

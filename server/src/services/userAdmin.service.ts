@@ -186,8 +186,11 @@ export async function updateUserAccount(
   const roleChanged = data.role !== undefined && data.role !== scoped.role;
   const detailsBefore = { username: scoped.username, before: { role: scoped.role, isActive: scoped.is_active } };
   // A platform role change is critical (P2): the intent before the change.
+  // The intent names every change of the request (AUD-A6-R10: a role change
+  // and a deactivation in one PUT left the deactivation out of the entry).
+  const after = { role: data.role, ...(data.isActive !== undefined ? { isActive: data.isActive } : {}) };
   const user = roleChanged
-    ? await withAccountIntent(actor, ctx, 'user.role_changed', targetId, { ...detailsBefore, after: { role: data.role } },
+    ? await withAccountIntent(actor, ctx, 'user.role_changed', targetId, { ...detailsBefore, after },
       () => switchToIdentity(() => userService.update(targetId, data)))
     : await switchToIdentity(() => userService.update(targetId, data));
   if (!user) throw new AppError(404, 'User not found');

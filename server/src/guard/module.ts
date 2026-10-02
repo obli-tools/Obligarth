@@ -39,6 +39,7 @@ export function registerGuardModule(): void {
     { name: 'guard.action_expired', criticality: 'standard', label: 'Guarded action expired' },
     { name: 'guard.anomaly_detected', criticality: 'standard', label: 'Anomaly detected by the guards' },
     { name: 'guard.approver_fallback', criticality: 'standard', label: 'Approval by the MSP instead of a client approver' },
+    { name: 'guard.approver_lost', criticality: 'standard', label: 'Client approver removed' },
   ]);
   registerRestrictableActions(GUARD_RESTRICTABLE_ACTIONS, {}, {
     'guard.unfreeze': { level: 'restricted' },

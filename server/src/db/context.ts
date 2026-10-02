@@ -336,16 +336,6 @@ export const switchToTenant = <T>(tenantId: number, fn: () => T | PromiseLike<T>
 export const switchToIdentity = <T>(fn: () => T | PromiseLike<T>): Promise<T> => asIdentity(currentActor(), fn);
 export const switchToNone = <T>(fn: () => T | PromiseLike<T>): Promise<T> => asNone(currentActor(), fn);
 
-/** Runs fn where the actor may write its own rows: the current context,
- *  unless it is a read-only one (member, platform), then 'none' with the
- *  same actor. For writes of one's own second factors and trusts from a
- *  route served in the global view. */
-export async function withWritableContext<T>(fn: () => T | PromiseLike<T>): Promise<T> {
-  const cur = als.getStore();
-  if (cur && (cur.kind === 'member' || cur.kind === 'platform')) return asNone(cur.actor, fn);
-  return await fn();
-}
-
 // ── Counters (instant view for FND-14) ──────────────────────────────────────
 
 const counters = { missing: 0, mismatch: 0, rlsDenied: new Map<string, number>() };

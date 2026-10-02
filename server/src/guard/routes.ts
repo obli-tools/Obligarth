@@ -29,6 +29,7 @@ import { GuardStepUpError, preview, request } from './engine';
 import {
   cancelAction, freeze, listApprovers, requestDesignation, requestResume, requestSettings, requestUnfreeze, revokeDesignation,
 } from './operations';
+import { fallbackHold } from './people';
 import { readSettings, settingsToDto } from './settings';
 import { ACTION_COLUMNS, findAction, normaliseRow, toDto, toDtos } from './store';
 
@@ -145,14 +146,14 @@ export function createGuardRouter(): Router {
 
   router.get('/settings', async (req, res, next) => {
     try {
-      res.json({ data: settingsToDto(await readSettings(req.tenantId!)) });
+      res.json({ data: settingsToDto(await readSettings(req.tenantId!), await fallbackHold(req.tenantId!)) });
     } catch (err) { next(err); }
   });
 
   router.put('/settings', async (req, res, next) => {
     try {
       const approval = await requestSettings(req, req.body);
-      if (!approval) { res.json({ data: settingsToDto(await readSettings(req.tenantId!)) }); return; }
+      if (!approval) { res.json({ data: settingsToDto(await readSettings(req.tenantId!), await fallbackHold(req.tenantId!)) }); return; }
       res.status(202).json({ data: { approvalId: approval.id, status: 'pending_approval', expiresAt: approval.expiresAt } });
     } catch (err) { fail(err, res, next); }
   });

@@ -9,6 +9,9 @@
 //       anchor, the seals (signature by a TRUSTED key only, proof, chain of
 //       the seals, time-stamp imprint; with --tsa-ca the CMS signature of the
 //       tokens by OpenSSL), the target digests. JSON report on the output.
+//       --require-seal: every entry covered by a verified seal; without it,
+//       the entries after the last verified seal may wait for the next one,
+//       but at least the first entry of the range must be covered.
 //       Exit 0 intact, 2 broken, 1 error.
 //   spool-import --dir <folder>
 //       with the administration DSN (DATABASE_ADMIN_URL, the server-migrate
@@ -203,6 +206,13 @@ export function verifyExportText(text: string, o: { trustedKeys: string[]; requi
   if (!trusted.size) problems.push({ type: 'seal_key', message: 'no trusted key given (--trusted-key)' });
   if (o.requireSeal && entries.length && report.coveredThrough < Number(report.toSeq)) {
     problems.push({ type: 'seal_leaf_mismatch', seq: report.coveredThrough + 1, message: `entries after ${report.coveredThrough} are covered by no verified seal` });
+  } else if (!o.requireSeal && entries.length && trusted.size && report.coveredThrough < Number(report.fromSeq)) {
+    // Without --require-seal, the entries after the last verified seal may
+    // wait for the next one; but an export that no verified seal covers at
+    // all proves only its own consistency: recomputed from end to end and
+    // stripped of its seals, it would pass (review of lot A6; integration of lot A).
+    problems.push({ type: 'seal_leaf_mismatch', seq: Number(report.fromSeq),
+      message: 'no entry of the export is covered by a verified seal (its internal consistency only): export a sealed range, or wait for the next seal' });
   }
   report.ok = problems.length === 0;
   return report;

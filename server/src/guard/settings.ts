@@ -70,7 +70,10 @@ function normalise(row: Record<string, unknown> | undefined, tenantId: number): 
   };
 }
 
-export function settingsToDto(s: GuardSettingsRow): GuardSettingsDto {
+/** The settings as the console reads them; `hold`: the last loss of a client
+ *  approver not decided by the approver, and the end of the fallback hold
+ *  (AUD-A7-R4, guard/people.ts fallbackHold). */
+export function settingsToDto(s: GuardSettingsRow, hold: { lostAt: Date; until: Date } | null = null): GuardSettingsDto {
   return {
     tenantId: s.tenant_id,
     hourlyCapPercent: s.hourly_cap_percent,
@@ -82,6 +85,8 @@ export function settingsToDto(s: GuardSettingsRow): GuardSettingsDto {
     frozenSource: s.frozen_source,
     frozenReason: s.frozen_reason,
     updatedAt: s.updated_at ? s.updated_at.toISOString() : null,
+    clientApproverLostAt: hold ? hold.lostAt.toISOString() : null,
+    fallbackHeldUntil: hold ? hold.until.toISOString() : null,
   };
 }
 

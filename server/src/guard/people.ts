@@ -1,9 +1,10 @@
 // Who requests, reviews or is designated (docs: audit-durci §9.1, §10.4,
 // §10.8): the side of an account in a tenant, its designations, its 72-hour
-// cooldown. Accounts are read in the identity context (an MSP technician who
-// is not a member of the client's tenant is not readable from the tenant's
-// context), designations in the tenant's.
-import { MASTER_TENANT_ID, type GuardSide } from '@obligarth/shared';
+// cooldown, and the losses of client approvers that hold the fallback of
+// D24 (AUD-A7-R4). Accounts are read in the identity context (an MSP
+// technician who is not a member of the client's tenant is not readable from
+// the tenant's context), designations and losses in the tenant's.
+import { GUARD_FALLBACK_HOLD_DAYS, MASTER_TENANT_ID, type GuardSide } from '@obligarth/shared';
 import { db } from '../db';
 import { currentActor, switchToIdentity } from '../db/context';
 import type { ReviewerFacts } from './policy';
@@ -98,6 +99,26 @@ export async function activeClientApprovers(tenantId: number): Promise<number> {
     if (f.active && f.audience === 'client' && !f.platformAdmin) n++;
   }
   return n;
+}
+
+/**
+ * The fallback of D24 held (AUD-A7-R4): the last loss of a client approver
+ * of the tenant that the approver did not decide (revocation by another
+ * account, deactivation, role changed or removed, deletion, promotion to
+ * platform administrator — recorded by the database whatever the path,
+ * table guard_approver_losses), less than GUARD_FALLBACK_HOLD_DAYS old;
+ * null otherwise. Read in the tenant's context.
+ */
+export async function fallbackHold(tenantId: number): Promise<{ lostAt: Date; until: Date } | null> {
+  const res = await db.raw(
+    `SELECT max(lost_at) AS lost_at FROM guard_approver_losses
+      WHERE tenant_id = ? AND NOT self AND lost_at > now() - make_interval(days => ?)`,
+    [tenantId, GUARD_FALLBACK_HOLD_DAYS],
+  ) as { rows: Array<{ lost_at: Date | string | null }> };
+  const v = res.rows[0]?.lost_at;
+  if (!v) return null;
+  const lostAt = new Date(v);
+  return { lostAt, until: new Date(lostAt.getTime() + GUARD_FALLBACK_HOLD_DAYS * 86_400_000) };
 }
 
 /** The facts the examination policy reads (policy.ts reviewerRefusal). */
