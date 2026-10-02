@@ -37,11 +37,12 @@ import (
 // of an InstallProfile command must be such a profile.
 
 // secretKeyRe lists the keys that hold a secret in Apple's payloads and
-// commands, as a whole key or as the end of a key after a lower-case letter
-// (RemovalPassword, XAuthPassword, UserPassword...): the closed list of the
-// brain's scanner. Boolean or numeric values (PasswordRequired...) are never
-// secrets.
-var secretKeyRe = regexp.MustCompile(`(^|[a-z])(Password|Passphrase|Secret|SharedSecret|Challenge|PIN|PrivateKey|AuthPassword|IncomingPassword|OutgoingPassword|UnlockToken|BootstrapToken)$`)
+// commands, as a whole key or as the end of any key (RemovalPassword,
+// XAuthPassword, UserPassword, and after an acronym CalDAVPassword or
+// CardDAVPassword, which a lower-case boundary missed): the closed list of
+// the brain's scanner. Boolean or numeric values (PasswordRequired...) are
+// never secrets.
+var secretKeyRe = regexp.MustCompile(`(Password|Passphrase|Secret|SharedSecret|Challenge|PIN|PrivateKey|AuthPassword|IncomingPassword|OutgoingPassword|UnlockToken|BootstrapToken)$`)
 
 var pemPrivateKeyRe = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 
