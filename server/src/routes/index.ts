@@ -38,6 +38,7 @@ import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
 import { createVaultAdminRouter } from '../vault/admin.routes';
 import { createAuditAdminRouter } from '../audit/admin.routes';
+import { createGuardRouter } from '../guard/routes';
 
 const router = Router();
 
@@ -85,6 +86,9 @@ tenantRouter.use('/maintenance', maintenanceRoutes);
 tenantRouter.use('/approvals',   approvalRoutes);
 tenantRouter.use('/audit-log',   auditRoutes);
 tenantRouter.use('/restrictions', restrictionRoutes);
+// Guards against mass erasure (audit-durci §10.11): guarded actions, freeze,
+// settings, designated approvers.
+tenantRouter.use('/guard',       createGuardRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));

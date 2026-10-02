@@ -24,6 +24,7 @@ import { registerSsoSyncJobs } from './routes/obligateCallback.routes';
 import { BackfillError, backfillLegacySecrets, isVaultError, vault, vaultConfigErrors, VaultStartupError } from './vault';
 import { registerVaultJobs } from './vault/jobs';
 import { registerAuditModule } from './audit/module';
+import { registerGuardModule } from './guard/module';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -90,6 +91,7 @@ async function main() {
   registerSsoSyncJobs();
   registerVaultJobs();
   registerAuditModule();
+  registerGuardModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.

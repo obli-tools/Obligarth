@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { deviceService } from '../services/device.service';
 import { requireDeviceRead, requireDeviceWrite, requireTenantCapability } from '../middleware/rbac';
 import { permissionService } from '../services/permission.service';
@@ -395,51 +395,21 @@ router.post('/bulk/approve', requireTenantCapability('agent_config:approval'), a
   } catch (err) { next(err); }
 });
 
-// DELETE /api/devices/bulk/delete — body { ids } or { deviceIds }.
-// The ids are narrowed to the devices of the session's tenant BEFORE
-// anything else (no mass deletion across tenants, even for the global
-// view): an id of another tenant reaches neither the restriction check nor
-// the purge, and a request with none of the tenant's devices answers 404.
-// Then the same gate as a single deletion: the `device.delete` restriction
-// (step-up, or a two-person approval executed by deviceApproval.ts).
+// DELETE /api/devices/bulk/delete — body { ids } or { deviceIds }, reason,
+// ticket, confirm. The deletion of device records is a guarded action
+// (device.delete, audit-durci §10.2): the guard engine checks the targets
+// (devices of the session's tenant only: an id of another tenant answers
+// 404, nothing is done), the floors (a batch of 3 or more needs a second
+// approver), the whole fleet, the typed confirmation and the step-up, then
+// answers 202 with its outcome; the deletion runs in the engine's executor.
 router.delete('/bulk/delete', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
-    const { ids, deviceIds } = (req.body ?? {}) as { ids?: unknown; deviceIds?: unknown };
-    const raw = ids ?? deviceIds;
+    const body = (req.body ?? {}) as { ids?: unknown; deviceIds?: unknown; reason?: unknown; ticket?: unknown; confirm?: unknown };
+    const raw = body.ids ?? body.deviceIds;
     if (!Array.isArray(raw) || raw.length === 0) {
       return res.status(400).json({ error: 'deviceIds required' });
     }
-    const requested = [...new Set(raw.map(parseRequestDeviceId).filter((n): n is number => n !== null))];
-    const devices = requested.length
-      ? await db('devices').whereIn('id', requested).andWhere({ tenant_id: req.tenantId! }).select('id') as Array<{ id: number }>
-      : [];
-    if (devices.length === 0) {
-      return res.status(404).json({ error: 'No matching devices in this tenant' });
-    }
-    const validIds = devices.map((d) => Number(d.id));
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const { deviceList } = await import('../services/approvalDescribe');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'device.delete',
-      deviceIds: validIds,
-      approvalRequestType: 'batch_command',
-      approvalDescription: `Delete ${await deviceList(req.tenantId!, validIds)}`,
-      approvalPayload: { action: 'delete_devices', deviceIds: validIds },
-    });
-    if (!approved) return;
-
-    const deleted = await deviceService.bulkDelete(validIds, req.tenantId!);
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.bulk_deleted', {
-        resourceType: 'device',
-        resourcePath: deleted.join(','),
-        details: { count: deleted.length },
-      });
-    } catch {}
-    res.json({ success: true, count: deleted.length });
+    await guardedDeletion(req, res, next, raw, body);
   } catch (err) { next(err); }
 });
 
@@ -682,38 +652,57 @@ router.post('/:id/unsuspend', requireTenantCapability('devices.manage'), async (
 // never moves from one tenant to another. In an MDM a device changes client
 // by a verified retirement, then a new enrollment.
 
-// DELETE /api/devices/:id
+// DELETE /api/devices/:id — body { reason, ticket?, confirm }: the guarded
+// action device.delete on one device (step-up, typed name), 202 with the
+// engine's outcome. The session's tenant only (404 otherwise).
 router.delete('/:id', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
     const id = parseRequestDeviceId(req.params.id);
     if (id === null) return res.status(404).json({ error: 'Device not found' });
-    // The session's tenant only (no global view for a deletion).
-    const existing = await deviceService.getDeviceById(id, req.tenantId!);
-    if (!existing) return res.status(404).json({ error: 'Device not found' });
-
-    const { applyRestriction } = await import('../services/restriction.service');
-    const approved = await applyRestriction(res, {
-      req,
-      actionKey: 'device.delete',
-      deviceIds: [id],
-      approvalRequestType: 'device_uninstall',
-      approvalDescription: `Delete device ${existing.displayName || existing.hostname || `#${id}`}`,
-      approvalPayload: { deviceId: id, deleteOnly: true },
-    });
-    if (!approved) return;
-
-    if (!(await deviceService.deleteDevice(id, req.tenantId!))) {
-      return res.status(404).json({ error: 'Device not found' });
-    }
-    try {
-      const { auditService } = await import('../services/audit.service');
-      await auditService.logReq(req, 'device.deleted', {
-        deviceId: id, resourceType: 'device', resourcePath: String(id),
-        details: { hostname: existing?.hostname, displayName: existing?.displayName },
-      });
-    } catch {}
-    res.status(204).send();
+    const body = (req.body ?? {}) as { reason?: unknown; ticket?: unknown; confirm?: unknown };
+    await guardedDeletion(req, res, next, [id], body);
   } catch (err) { next(err); }
 });
+
+/** device.delete through the guard engine: 202 GuardOutcome, or the
+ *  engine's refusal (its step-up's own answer included). The session's
+ *  tenant only, for everyone (no global view for a deletion on these
+ *  routes; the guard's own route serves it, one tenant per request): a list
+ *  with any id of another tenant, or unknown, answers 404 and nothing is
+ *  done (audit-durci §10.3 step 2: never which ones exist). */
+async function guardedDeletion(req: Request, res: Response, next: NextFunction, rawIds: unknown[],
+  body: { reason?: unknown; ticket?: unknown; confirm?: unknown }): Promise<void> {
+  const parsed = rawIds.map(parseRequestDeviceId);
+  const ids = [...new Set(parsed.filter((n): n is number => n !== null))];
+  if (parsed.some((n) => n === null) || ids.length === 0) {
+    res.status(404).json({ error: 'No matching devices in this tenant' });
+    return;
+  }
+  const inTenant = ids.length
+    ? await db('devices').whereIn('id', ids).andWhere({ tenant_id: req.tenantId! }).pluck('id') as number[]
+    : [];
+  if (inTenant.length !== ids.length || inTenant.length === 0) {
+    res.status(404).json({ error: 'No matching devices in this tenant' });
+    return;
+  }
+  const { guard, GuardStepUpError } = await import('../guard');
+  try {
+    const outcome = await guard.request(req, {
+      actionKey: 'device.delete',
+      selection: { deviceIds: ids },
+      reason: typeof body.reason === 'string' ? body.reason : '',
+      ticket: typeof body.ticket === 'string' ? body.ticket : undefined,
+      confirm: typeof body.confirm === 'string' ? body.confirm : undefined,
+    });
+    res.status(202).json({ data: outcome });
+  } catch (err) {
+    if (err instanceof GuardStepUpError) {
+      const { sendStepUpFailure } = await import('../services/deviceKey/stepUpProof');
+      sendStepUpFailure(res, err.outcome);
+      return;
+    }
+    next(err);
+  }
+}
 
 export default router;

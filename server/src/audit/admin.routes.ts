@@ -41,6 +41,27 @@ function masterPlatformAdmin(req: Request, _res: Response, next: NextFunction): 
   next();
 }
 
+/**
+ * A retention change or the release of a legal hold of a client's chain
+ * (audit-durci §7.2, §10.4): when the client has a designated client
+ * approver, the request is filed in the client's tenant and examined there by
+ * that approver (journalReviewerPolicy, module.ts); otherwise in the master
+ * tenant, by another platform administrator. The floor of these actions is
+ * 'restricted': always a request. True when the request was filed (202 sent).
+ */
+async function fileWithClientApprover(req: Request, res: Response, tenantId: number, description: string,
+  payload: Record<string, unknown>): Promise<boolean> {
+  if (tenantId === MASTER_TENANT_ID) return false;
+  const userId = Number(req.session.userId);
+  const { activeClientApprovers } = await import('../guard/people');
+  const clients = await asTenant(tenantId, { type: 'user', userId }, () => activeClientApprovers(tenantId));
+  if (clients === 0) return false;
+  const { approvalService } = await import('../services/approval.service');
+  const approval = await approvalService.create({ tenantId, userId, requestType: 'batch_command', description, payload });
+  res.status(202).json({ data: { approvalId: approval.id, status: 'pending_approval', tenantId } });
+  return true;
+}
+
 const idParam = (req: Request): number => {
   const n = Number(req.params.id);
   if (!Number.isSafeInteger(n) || n <= 0) throw new AppError(404, 'Not found');
@@ -110,10 +131,12 @@ export function createAuditAdminRouter(): Router {
     }
     const exists = await db('tenants').where({ id: tenantId }).first('id');
     if (!exists) throw new AppError(404, 'Tenant not found');
+    const description = `Set the audit retention of tenant ${tenantId} to ${parsed.data.months} months — justification: ${justification ?? '(default)'}`;
+    const payload = { action: 'audit_retention_change', tenantId, months: parsed.data.months, justification };
+    if (await fileWithClientApprover(req, res, tenantId, description, payload)) return;
     const approved = await applyRestriction(res, {
       req, actionKey: 'audit.retention_change', approvalRequestType: 'batch_command',
-      approvalDescription: `Set the audit retention of tenant ${tenantId} to ${parsed.data.months} months — justification: ${justification ?? '(default)'}`,
-      approvalPayload: { action: 'audit_retention_change', tenantId, months: parsed.data.months, justification },
+      approvalDescription: description, approvalPayload: payload,
     });
     if (!approved) return;
     // Reached only if the floor were lowered: never (floors are not configurable).
@@ -140,10 +163,12 @@ export function createAuditAdminRouter(): Router {
     const current = await legalHoldOf(tenantId);
     const releases = until === null || (current !== null && until.getTime() < current.until.getTime());
     if (releases) {
+      const description = until ? `Shorten the legal hold of tenant ${tenantId} to ${until.toISOString()}` : `Lift the legal hold of tenant ${tenantId}`;
+      const payload = { action: 'audit_legal_hold_release', tenantId, until: until ? until.toISOString() : null, reason };
+      if (await fileWithClientApprover(req, res, tenantId, description, payload)) return;
       const approved = await applyRestriction(res, {
         req, actionKey: 'audit.legal_hold_release', approvalRequestType: 'batch_command',
-        approvalDescription: until ? `Shorten the legal hold of tenant ${tenantId} to ${until.toISOString()}` : `Lift the legal hold of tenant ${tenantId}`,
-        approvalPayload: { action: 'audit_legal_hold_release', tenantId, until: until ? until.toISOString() : null, reason },
+        approvalDescription: description, approvalPayload: payload,
       });
       if (!approved) return;
       throw new AppError(409, 'Lifting a legal hold needs an approval', 'approvalRequired');

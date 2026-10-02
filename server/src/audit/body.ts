@@ -292,9 +292,16 @@ export function lateText(built: BuiltBody): string {
   return canonicalJson({ ...built.body, late: true });
 }
 
+/** The action of the continuation entries of a large target list (§3.6):
+ *  guard.action_targets for the guard engine's entries, audit.targets for
+ *  any other entry. */
+export function continuationAction(mainAction: string): string {
+  return mainAction.startsWith('guard.') ? 'guard.action_targets' : 'audit.targets';
+}
+
 /** The bodies of an entry: the main one, then one continuation entry
- *  (audit.targets) per chunk of a large target list, all with the same
- *  context. */
+ *  (guard.action_targets or audit.targets) per chunk of a large target
+ *  list, all with the same context. */
 export function buildEntryGroup(entry: AuditEntryInput, ctx: AuditWriteContext, o: BuildOptions): BuiltBody[] {
   if (!entry.targets) return [buildBody(entry, ctx, o)];
   const split = splitTargets(entry.targets);
@@ -304,7 +311,7 @@ export function buildEntryGroup(entry: AuditEntryInput, ctx: AuditWriteContext, 
   split.chunks.forEach((t, i) => {
     out.push(buildBody({
       tenantId: entry.tenantId,
-      action: 'audit.targets',
+      action: continuationAction(entry.action),
       outcome: entry.outcome,
       details: { part: i + 1, of: split.chunks.length, of_action: entry.action },
       links: { ...(entry.links ?? {}), action: entry.links?.action ?? main.uuid },

@@ -135,7 +135,10 @@ export function verifyExportText(text: string, o: { trustedKeys: string[]; requi
     if (!t?.digest) continue;
     const ids: number[] = [];
     for (const c of bodies) {
-      if (c?.action === 'audit.targets' && c?.links?.action === (b?.links?.action ?? b?.id) && Array.isArray(c?.targets?.devices)) ids.push(...c.targets.devices);
+      // A continuation names its entry's action (details.of_action): two
+      // entries of one guarded action (request, execution) share links.action.
+      if ((c?.action === 'audit.targets' || c?.action === 'guard.action_targets') && c?.links?.action === (b?.links?.action ?? b?.id)
+        && (c?.details?.of_action === undefined || c.details.of_action === b?.action) && Array.isArray(c?.targets?.devices)) ids.push(...c.targets.devices);
     }
     if (ids.length === Number(t.count) && targetsDigest(ids) !== t.digest) {
       problems.push({ type: 'targets_digest', message: `entry ${String(b.id)}: its target digest does not match its continuation entries` });

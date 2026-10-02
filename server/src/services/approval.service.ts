@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import { db } from '../db';
 import { logger } from '../utils/logger';
 import { getIO } from '../socket';
@@ -42,7 +43,12 @@ async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise
 //
 // Safety:
 //   - Requester cannot approve (nor deny) their own request.
-//   - Requests expire after EXPIRY_MINUTES (default 30); the job
+//   - Who reviews is the policy of the request's type (audit-durci §10.4):
+//     an active platform administrator for the inherited types; a type may
+//     register its own (the guard engine: a client approver by default) and
+//     a strict step-up of the reviewer at approval.
+//   - Requests expire after EXPIRY_MINUTES (default 30; a type may set its
+//     own validity: 240 minutes for the guard's); the job
 //     core.approvals.expire (every minute) marks them 'expired', audits and
 //     pushes APPROVAL_UPDATED; an access past the deadline expires the
 //     request on the spot (_openRow) between two runs.
@@ -63,7 +69,8 @@ async function readAsPlatformRequester<T>(requesterId: number, fn: () => Promise
 
 const EXPIRY_MINUTES = 30;
 
-export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_kek_rotation';
+export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_kek_rotation'
+  | 'guarded_action' | 'guard_resume' | 'guard_unfreeze' | 'guard_settings_change' | 'guard_approver_designate';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */
@@ -246,6 +253,103 @@ export interface ApprovalExecution {
   payload: any;
   /** Executor-only data (sealed_payload_enc, opened by the vault), never returned by the API. */
   sealed: Record<string, unknown>;
+  /** The request (pending_approvals.id) and who approved it. */
+  approvalId?: number;
+  reviewerId?: number;
+}
+
+// ── Examination policies (docs: audit-durci §10.4) ──────────────────────────
+// Who may approve or deny a request. A request type registered without one
+// keeps the inherited rule: an active platform administrator (other than the
+// requester). The guard engine registers its own (client approver by
+// default, D24), with a strict step-up of the reviewer.
+
+/** What a policy examines: the request as stored, the reviewer, the decision. */
+export interface ApprovalReviewCheck {
+  approval: { id: number; tenantId: number; requestedBy: number; requestType: string; payload: any };
+  reviewerId: number;
+  decision: 'approve' | 'deny';
+}
+
+/** Throws (an error with `status` and `code`) when the reviewer may not decide. */
+export type ApprovalReviewerPolicy = (x: ApprovalReviewCheck) => Promise<void>;
+
+/** A request closed without execution: denied, cancelled (by its requester
+ *  or withdrawn), expired. */
+export interface ApprovalClosed {
+  approvalId: number;
+  tenantId: number;
+  status: 'denied' | 'cancelled' | 'expired';
+  byUserId: number | null;
+  payload: any;
+}
+
+export interface ApprovalTypeOptions {
+  /** Validity of a request of this type (default 30 minutes). */
+  expiryMinutes?: number | (() => number);
+  /** Who may approve or deny (default: an active platform administrator). */
+  reviewerPolicy?: ApprovalReviewerPolicy;
+  /** 'strict': the reviewer proves a second factor at approval, never the
+   *  trusted-IP shortcut (action key approvals.review). */
+  reviewerStepUp?: 'strict' | 'none';
+  /** Called once the request is closed without execution (never throws out). */
+  onClosed?: (x: ApprovalClosed) => Promise<void>;
+}
+
+/** The reviewer's step-up was not satisfied: the route sends `outcome` as is
+ *  (401 prompt, 403 no factor, 429…). */
+export class ApprovalStepUpError extends Error {
+  constructor(readonly outcome: { status: number; body: Record<string, unknown>; headers?: Record<string, string> }) {
+    super('step-up required');
+    this.name = 'ApprovalStepUpError';
+  }
+}
+
+const typeOptions = new Map<string, ApprovalTypeOptions>();
+const batchPolicies: Array<{ match: ApprovalActionMatcher; policy: ApprovalReviewerPolicy }> = [];
+
+/** The policy of 'batch_command' requests of some actions (the journal's
+ *  requests: retention, legal hold…), instead of the inherited rule. */
+export function registerApprovalReviewerPolicy(action: string | ApprovalActionMatcher, policy: ApprovalReviewerPolicy): void {
+  const match: ApprovalActionMatcher = typeof action === 'string' ? (a) => a === action : action;
+  batchPolicies.push({ match, policy });
+}
+
+const forbidden = (message: string, code?: string): never => {
+  throw Object.assign(new Error(message), { status: 403, code });
+};
+
+/** The inherited rule: an active platform administrator. */
+export async function platformAdminPolicy(x: ApprovalReviewCheck): Promise<void> {
+  const row = await db('users').where({ id: x.reviewerId }).first('role', 'is_active') as { role: string; is_active: boolean } | undefined;
+  if (!row?.is_active || row.role !== 'admin') forbidden('Only a platform administrator can review this request', 'approvalReviewerNotAllowed');
+}
+
+function policyOf(row: any, payload: any): ApprovalReviewerPolicy {
+  const type = String(row.request_type);
+  if (type === 'batch_command') {
+    const action = typeof payload?.action === 'string' ? payload.action : '';
+    for (const p of batchPolicies) if (p.match(action, payload)) return p.policy;
+    return platformAdminPolicy;
+  }
+  return typeOptions.get(type)?.reviewerPolicy ?? platformAdminPolicy;
+}
+
+function expiryOf(requestType: string): number {
+  const o = typeOptions.get(requestType)?.expiryMinutes;
+  const v = typeof o === 'function' ? o() : o;
+  return Number.isInteger(v) && (v as number) > 0 ? (v as number) : EXPIRY_MINUTES;
+}
+
+/** Calls the onClosed hook of a request's type; never throws. */
+async function closed(row: any, status: ApprovalClosed['status'], byUserId: number | null): Promise<void> {
+  const hook = typeOptions.get(String(row.request_type))?.onClosed;
+  if (!hook) return;
+  try {
+    await hook({ approvalId: Number(row.id), tenantId: Number(row.tenant_id), status, byUserId, payload: parseJson(row.payload) ?? {} });
+  } catch (err) {
+    logger.error({ err, approvalId: row.id, status }, 'approval: closing hook failed');
+  }
 }
 
 /**
@@ -283,11 +387,79 @@ export function registerDefaultApprovalExecutor(run: ApprovalExecutor): void {
   defaultExecutor = run;
 }
 
-/** Executor of a whole request type other than 'batch_command'. */
-export function registerApprovalRequestType(requestType: string, run: ApprovalExecutor): void {
+/** Executor of a whole request type other than 'batch_command', with its
+ *  options (validity, examination policy, step-up of the reviewer, closing
+ *  hook); without options nothing changes (30 minutes, platform
+ *  administrator). */
+export function registerApprovalRequestType(requestType: string, run: ApprovalExecutor, options?: ApprovalTypeOptions): void {
   if (requestType === 'batch_command') throw new Error("'batch_command' requests are dispatched by action (registerApprovalExecutor)");
   if (requestTypeExecutors.has(requestType)) throw new Error(`Approval request type '${requestType}' registered twice`);
   requestTypeExecutors.set(requestType, run);
+  if (options) typeOptions.set(requestType, Object.freeze({ ...options }));
+}
+
+interface NewApproval {
+  tenantId: number;
+  userId: number;
+  requestType: ApprovalRequestType;
+  description: string;
+  payload: BatchCommandPayload | Record<string, unknown>;
+  sealed?: Record<string, unknown>;
+}
+
+/** The row of a new request, in `trx`. The payload is shown to every
+ *  reviewer: a secret-named key that still reaches this point is stripped
+ *  (last safety net). */
+async function insertApproval(trx: any, params: NewApproval): Promise<any> {
+  const { scrubSecrets } = await import('./approvalSecrets');
+  const { clean, removed } = scrubSecrets(params.payload);
+  if (removed.length) {
+    logger.warn({ requestType: params.requestType, removed }, 'approval payload: secret fields dropped');
+  }
+  const expiresAt = new Date(Date.now() + expiryOf(params.requestType) * 60 * 1000);
+  // The id comes first: it is part of the AAD of the sealed part.
+  const id = await vault.allocateId('pending_approvals', { trx });
+  const [row] = await trx('pending_approvals').insert({
+    id,
+    tenant_id: params.tenantId,
+    requested_by: params.userId,
+    request_type: params.requestType,
+    description: capDescription(params.description),
+    payload: JSON.stringify(clean),
+    sealed_payload_enc: params.sealed ? await vault.sealJson(sealedAt(id, params.tenantId), params.sealed, { trx }) : null,
+    status: 'pending',
+    expires_at: expiresAt,
+  }).returning('*');
+  return row;
+}
+
+function requestedEntry(row: any, params: NewApproval): AuditEntryInput {
+  return {
+    tenantId: params.tenantId, action: 'approval.requested', target: { type: 'approval', id: String(row.id) },
+    approvalIds: [Number(row.id)],
+    details: { requestType: params.requestType, description: capDescription(params.description) },
+  };
+}
+
+/** May the reviewer decide this request (policy of its type, then for an
+ *  approval the strict step-up the type asks)? Throws an error with `status`
+ *  (403, 423…) or ApprovalStepUpError. */
+async function checkReviewer(row: any, reviewerId: number, decision: 'approve' | 'deny', req?: Request): Promise<void> {
+  const payload = parseJson(row.payload) ?? {};
+  await policyOf(row, payload)({
+    approval: {
+      id: Number(row.id), tenantId: Number(row.tenant_id), requestedBy: Number(row.requested_by),
+      requestType: String(row.request_type), payload,
+    },
+    reviewerId,
+    decision,
+  });
+  if (decision !== 'approve' || typeOptions.get(String(row.request_type))?.reviewerStepUp !== 'strict') return;
+  if (!req) forbidden('This request is approved from the console only (second factor of the reviewer)', 'reviewerStepUpRequired');
+  const { checkSecondFactor } = await import('./deviceKey/stepUpProof');
+  const outcome = await checkSecondFactor(req!, { actionKey: 'approvals.review', allowTrustedIp: false, allowDevice: true });
+  if (!outcome.ok) throw new ApprovalStepUpError(outcome);
+  req!.stepUpVia = outcome.via;
 }
 
 export const approvalService = {
@@ -309,51 +481,60 @@ export const approvalService = {
     payload: BatchCommandPayload | Record<string, unknown>;
     sealed?: Record<string, unknown>;
   }): Promise<PendingApproval> {
-    const { scrubSecrets } = await import('./approvalSecrets');
-    const { clean, removed } = scrubSecrets(params.payload);
-    if (removed.length) {
-      logger.warn({ requestType: params.requestType, removed }, 'approval payload: secret fields dropped');
-    }
-    const expiresAt = new Date(Date.now() + EXPIRY_MINUTES * 60 * 1000);
     // The id comes first: it is part of the AAD of the sealed part.
-    const [row] = await inApprovalTenant(params.tenantId, () => db.transaction(async (trx) => {
-      const id = await vault.allocateId('pending_approvals', { trx });
-      return trx('pending_approvals').insert({
-        id,
-        tenant_id: params.tenantId,
-        requested_by: params.userId,
-        request_type: params.requestType,
-        description: capDescription(params.description),
-        payload: JSON.stringify(clean),
-        sealed_payload_enc: params.sealed ? await vault.sealJson(sealedAt(id, params.tenantId), params.sealed, { trx }) : null,
-        status: 'pending',
-        expires_at: expiresAt,
-      }).returning('*');
-    }));
+    const row = await inApprovalTenant(params.tenantId, () => db.transaction((trx) => insertApproval(trx, params)));
 
     // Audit trail (P3), in the approval's tenant (from its context, like the row).
-    await inApprovalTenant(params.tenantId, async () => audit.append({
-      tenantId: params.tenantId, action: 'approval.requested', target: { type: 'approval', id: String(row.id) },
-      approvalIds: [Number(row.id)],
-      details: { requestType: params.requestType, description: capDescription(params.description) },
-    }, await audit.fromDbActor(userActor(params.userId), params.tenantId)));
+    await inApprovalTenant(params.tenantId, async () => audit.append(requestedEntry(row, params),
+      await audit.fromDbActor(userActor(params.userId), params.tenantId)));
 
     // Live push to all admins in the tenant so a red badge appears immediately.
-    try { getIO().to(`tenant:${params.tenantId}`).emit('APPROVAL_CREATED', rowToApproval(row)); } catch {}
+    this.announceCreated(rowToApproval(row));
 
     return rowToApproval(row);
+  },
+
+  /** Same, in the caller's transaction (its tenant's context): the request
+   *  exists if and only if the transaction commits (audit-durci §10.3 step
+   *  12). Its approval.requested entry is written in the transaction too;
+   *  the caller writes its own critical entries last, then announces the
+   *  request after the commit (announceCreated). */
+  async createInTx(trx: any, params: {
+    tenantId: number;
+    userId: number;
+    requestType: ApprovalRequestType;
+    description: string;
+    payload: BatchCommandPayload | Record<string, unknown>;
+    auditCtx: AuditWriteContext;
+  }): Promise<PendingApproval> {
+    const row = await insertApproval(trx, params);
+    await audit.appendInTx(trx, requestedEntry(row, params), params.auditCtx);
+    return rowToApproval(row);
+  },
+
+  /** APPROVAL_CREATED to the tenant's room (a red badge appears at once). */
+  announceCreated(approval: PendingApproval): void {
+    try { getIO().to(`tenant:${approval.tenantId}`).emit('APPROVAL_CREATED', approval); } catch {}
   },
 
   /** List pending approvals for a tenant (optionally all statuses).
    *  Master tenant gets the cross-tenant feed — useful for the
    *  platform admin to spot stuck approvals across customer accounts.
    *  "Pending" excludes the requests already past their expiry. */
-  async list(tenantId: number, opts: { includeResolved?: boolean; limit?: number } = {}): Promise<PendingApproval[]> {
+  async list(tenantId: number, opts: {
+    includeResolved?: boolean; limit?: number;
+    /** The master tenant's feed of every tenant (a platform administrator's
+     *  global view, context 'platform'); otherwise the tenant's requests only. */
+    globalView?: boolean;
+    /** Only this requester's own requests (a member who does not review). */
+    requesterId?: number;
+  } = {}): Promise<PendingApproval[]> {
     const isMaster = isMasterTenant(tenantId);
     const q = db('pending_approvals as pa')
       .select('pa.*')
       .orderBy('pa.created_at', 'desc');
-    if (!isMaster) q.where({ 'pa.tenant_id': tenantId });
+    if (!isMaster || opts.globalView === false) q.where({ 'pa.tenant_id': tenantId });
+    if (opts.requesterId !== undefined) q.where({ 'pa.requested_by': opts.requesterId });
     if (!opts.includeResolved) q.where('pa.status', 'pending').andWhere('pa.expires_at', '>', new Date(Date.now()));
     if (opts.limit) q.limit(opts.limit);
     const rows = await q;
@@ -373,12 +554,20 @@ export const approvalService = {
    *  approval.approved written in the same transaction, before the execution;
    *  when the entry cannot be written the request stays pending and the
    *  reviewer gets 503 auditUnavailable. */
-  async approve(params: { tenantId: number; approvalId: number; reviewerId: number; reason?: string; auditCtx?: AuditWriteContext }): Promise<PendingApproval> {
+  async approve(params: {
+    tenantId: number; approvalId: number; reviewerId: number; reason?: string; auditCtx?: AuditWriteContext;
+    /** The reviewer's request: its type may ask a strict step-up (guard). */
+    req?: Request;
+  }): Promise<PendingApproval> {
     const row = await this._openRow(params.tenantId, params.approvalId);
     if (row.requested_by === params.reviewerId) {
       throw Object.assign(new Error('Cannot approve your own request'), { status: 403 });
     }
-    const ctx = await reviewerContext(params.auditCtx, params.reviewerId, Number(row.tenant_id));
+    // The examination policy of the request's type (audit-durci §10.4), then
+    // its step-up; the audit context is taken after it (actor.stepUp).
+    await checkReviewer(row, params.reviewerId, 'approve', params.req);
+    const ctx = params.req ? await audit.fromRequest(params.req, Number(row.tenant_id))
+      : await reviewerContext(params.auditCtx, params.reviewerId, Number(row.tenant_id));
 
     // Conditional on 'pending' and the deadline: two approvers (or a double
     // click) racing on the same request execute it once.
@@ -410,7 +599,7 @@ export const approvalService = {
         ? await vault.openJson<Record<string, unknown>>(sealedAt(Number(row.id), Number(row.tenant_id)), row.sealed_payload_enc)
         : {};
       partial = await runInApprovalScope(Number(row.id), () => asTenant(Number(row.tenant_id), userActor(Number(row.requested_by)),
-        () => this._execute(row, payload, sealed))) ?? null;
+        () => this._execute(row, payload, sealed, params.reviewerId))) ?? null;
     } catch (err) {
       failure = (err instanceof Error ? err.message : String(err)) || 'Execution failed';
       logger.error({ err, approvalId: row.id }, 'approval execution failed');
@@ -440,6 +629,9 @@ export const approvalService = {
     if (row.requested_by === params.reviewerId) {
       throw Object.assign(new Error('Cannot deny your own request'), { status: 403 });
     }
+    // The same examination policy as an approval, without the step-up: a
+    // refusal is protective.
+    await checkReviewer(row, params.reviewerId, 'deny');
     const done = await stillOpen(db('pending_approvals').where({ id: row.id })).update({
       status: 'denied',
       reviewed_by: params.reviewerId,
@@ -457,6 +649,7 @@ export const approvalService = {
     }, await reviewerContext(params.auditCtx, params.reviewerId, Number(row.tenant_id)));
     const fresh = await db('pending_approvals').where({ id: row.id }).first();
     emitUpdated(fresh);
+    await closed(row, 'denied', params.reviewerId);
     return rowToApproval(fresh);
   },
 
@@ -476,7 +669,30 @@ export const approvalService = {
     }, await reviewerContext(params.auditCtx, params.userId, Number(row.tenant_id)));
     const fresh = await db('pending_approvals').where({ id: row.id }).first();
     emitUpdated(fresh);
+    await closed(row, 'cancelled', params.userId);
     return rowToApproval(fresh);
+  },
+
+  /** A pending request withdrawn by the module that filed it (the guard
+   *  engine, when its action is cancelled by someone allowed to: the
+   *  requester, an administrator, an approver). Protective: the request is
+   *  closed whatever the journal says (approval.cancelled, P4). No closing
+   *  hook: the caller closes its own state. False when no longer pending. */
+  async withdraw(params: { tenantId: number; approvalId: number; byUserId: number | null; auditCtx: AuditWriteContext; reason?: string }): Promise<boolean> {
+    const row = await db('pending_approvals').where({ id: params.approvalId, tenant_id: params.tenantId })
+      .first('id', 'tenant_id', 'request_type', 'status') as { id: number; tenant_id: number; request_type: string; status: string } | undefined;
+    if (!row || row.status !== 'pending') return false;
+    const done = await db('pending_approvals').where({ id: row.id, status: 'pending' })
+      .update({ status: 'cancelled', reviewed_at: new Date(), review_reason: params.reason ?? null, sealed_payload_enc: null, sealed_payload: null });
+    if (!done) return false;
+    await audit.append({
+      tenantId: Number(row.tenant_id), action: 'approval.cancelled', target: { type: 'approval', id: String(row.id) },
+      approvalIds: [Number(row.id)], reason: params.reason || undefined,
+      details: { requestType: row.request_type, withdrawn: true, ...(params.byUserId !== null ? { by: params.byUserId } : {}) },
+    }, params.auditCtx);
+    const fresh = await db('pending_approvals').where({ id: row.id }).first();
+    emitUpdated(fresh);
+    return true;
   },
 
   /** The request, still open for review: 404 unknown, 409 already resolved,
@@ -541,6 +757,7 @@ export const approvalService = {
         details: { requestType: row.request_type, description: capDescription(row.description), requestedBy: Number(row.requested_by) },
       }, ctx);
       emitUpdated(row);
+      await closed(row, 'expired', null);
     }
     return rows.length;
   },
@@ -550,14 +767,14 @@ export const approvalService = {
   // action cannot be carried out; may return a note when it was carried out
   // only in part (→ 'executed' + execution_error).
 
-  async _execute(row: any, payload: any, sealed: Record<string, unknown>): Promise<string | void> {
+  async _execute(row: any, payload: any, sealed: Record<string, unknown>, reviewerId?: number): Promise<string | void> {
     const tenantId = Number(row.tenant_id);
     const requesterId = Number(row.requested_by);
     if (row.request_type === 'batch_command') return this._executeBatch(tenantId, requesterId, payload, sealed);
     // Any other request type belongs to the module that files it.
     const run = requestTypeExecutors.get(String(row.request_type));
     if (!run) refuse(`Unknown request type '${String(row.request_type)}'`);
-    return run({ tenantId, requesterId, payload, sealed });
+    return run({ tenantId, requesterId, payload, sealed, approvalId: Number(row.id), reviewerId });
   },
 
   async _executeBatch(tenantId: number, userId: number, payload: BatchCommandPayload, sealed: Record<string, unknown> = {}): Promise<string | void> {

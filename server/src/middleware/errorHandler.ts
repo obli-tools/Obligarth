@@ -11,6 +11,9 @@ export class AppError extends Error {
     message: string,
     /** Optional machine-readable code, sent next to `error` (lets the client translate). */
     public code?: string,
+    /** Optional values of the refusal, sent as `details` (specs README §14):
+     *  never a secret nor another tenant's data. */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
     this.name = 'AppError';
@@ -69,6 +72,7 @@ export function errorHandler(
       success: false,
       error: err.message,
       ...(err.code ? { code: err.code } : {}),
+      ...(err.details ? { details: err.details } : {}),
     });
     return;
   }

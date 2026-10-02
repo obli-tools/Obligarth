@@ -8,7 +8,9 @@ import { config } from '../config';
 import { userActor } from '../db/context';
 import { jobs } from '../jobs';
 import { registerStartTask, registerStopTask } from '../lifecycle';
-import { refuse, registerApprovalExecutor, requirePlatformAdmin } from '../services/approval.service';
+import {
+  platformAdminPolicy, refuse, registerApprovalExecutor, registerApprovalReviewerPolicy, requirePlatformAdmin, type ApprovalReviewCheck,
+} from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { logger } from '../utils/logger';
 import { fromDbActor } from './actor';
@@ -52,6 +54,13 @@ const SealKeyPayload = z.object({ action: z.literal('audit_seal_key_rotate') });
 
 let registered = false;
 
+/** Who examines a retention change or the release of a legal hold. */
+async function journalReviewerPolicy(x: ApprovalReviewCheck): Promise<void> {
+  if (x.approval.tenantId === MASTER_TENANT_ID) { await platformAdminPolicy(x); return; }
+  const { guardReviewerPolicy } = await import('../guard/approvals');
+  await guardReviewerPolicy({ ...x, approval: { ...x.approval, payload: { ...(x.approval.payload ?? {}), requiredSide: 'client' } } });
+}
+
 export function registerAuditModule(): void {
   if (registered) return;
   registered = true;
@@ -69,25 +78,31 @@ export function registerAuditModule(): void {
   });
 
   // Approved requests (executed as the requester, who must still be an
-  // active platform administrator; filed from the master tenant).
-  const masterAdmin = async (tenantId: number, requesterId: number): Promise<void> => {
+  // active platform administrator), filed from the master tenant; the
+  // retention and the release of a legal hold of a client's chain, in that
+  // client's tenant when it has a designated client approver (§7.2, lot A7).
+  const masterAdmin = async (tenantId: number, requesterId: number, chainTenantId?: number): Promise<void> => {
     await requirePlatformAdmin(requesterId);
-    if (tenantId !== MASTER_TENANT_ID) refuse('The audit log is administered from the master tenant only');
+    if (tenantId !== MASTER_TENANT_ID && tenantId !== chainTenantId) refuse('The audit log is administered from the master tenant only');
   };
   registerApprovalExecutor('audit_retention_change', async ({ tenantId, requesterId, payload }) => {
-    await masterAdmin(tenantId, requesterId);
     const p = RetentionPayload.safeParse(payload);
     if (!p.success) refuse('Invalid retention request');
+    await masterAdmin(tenantId, requesterId, p.data.tenantId);
     await applyRetentionChange({ tenantId: p.data.tenantId, months: p.data.months, justification: p.data.justification }, requesterId);
   });
   registerApprovalExecutor('audit_legal_hold_release', async ({ tenantId, requesterId, payload }) => {
-    await masterAdmin(tenantId, requesterId);
     const p = HoldReleasePayload.safeParse(payload);
     if (!p.success) refuse('Invalid legal hold request');
+    await masterAdmin(tenantId, requesterId, p.data.tenantId);
     const until = p.data.until ? new Date(p.data.until) : null;
     if (until && Number.isNaN(until.getTime())) refuse('Invalid legal hold date');
     await applyLegalHold(p.data.tenantId, until, p.data.reason, requesterId);
   });
+  // Examination (§7.2, §10.4): a request filed in the master tenant, by
+  // another platform administrator; one filed in a client's tenant, by a
+  // designated client approver of that tenant (the guard's policy, client side).
+  registerApprovalReviewerPolicy((a) => a === 'audit_retention_change' || a === 'audit_legal_hold_release', journalReviewerPolicy);
   registerApprovalExecutor('audit_destination_change', async ({ tenantId, requesterId, payload }) => {
     await masterAdmin(tenantId, requesterId);
     const p = DestinationPayload.safeParse(payload);

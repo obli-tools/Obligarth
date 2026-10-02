@@ -150,6 +150,13 @@ export const config = {
   /** Hardened audit journal (docs: audit-durci §13.1). Not configurable on
    *  purpose: floors, delays, retention bounds (a new version changes them). */
   audit: auditConfigFromEnv(),
+  /** Guards against mass erasure (docs: audit-durci §13.1): validity of an
+   *  approval request of the guard, in minutes (30 to 4320, 240 by default).
+   *  Floors, bulk threshold, delays, cooldown and pause expiry are not
+   *  configurable: a new version changes them. */
+  guard: {
+    approvalTtlMinutes: intEnv('GUARD_APPROVAL_TTL_MINUTES', 240),
+  },
   // Device-bound 2FA (docs/mobile/device-bound-2fa.md §9). Parsed and
   // validated by services/deviceKey/deviceKey.service.ts.
   deviceKeys: {
@@ -240,6 +247,11 @@ export function startupConfigErrors(): string[] {
   if (a.tsaUrl && !/^https?:\/\/[^\s]+$/i.test(a.tsaUrl)) errors.push('AUDIT_TSA_URL must be an http(s) URL of an RFC 3161 time-stamping authority.');
   if (a.tsaCertSha256 && !/^[0-9a-f]{64}$/.test(a.tsaCertSha256)) errors.push('AUDIT_TSA_CERT_SHA256 must be the SHA-256 of a certificate (64 hexadecimal characters).');
   if (a.sealCron.split(/\s+/).length !== 5) errors.push('AUDIT_SEAL_CRON must be a 5-field cron expression (12 * * * * by default).');
+  // Guards (audit-durci §13.1): refused in every environment.
+  const ttl2 = config.guard.approvalTtlMinutes;
+  if (!Number.isInteger(ttl2) || ttl2 < 30 || ttl2 > 4320) {
+    errors.push('GUARD_APPROVAL_TTL_MINUTES must be an integer from 30 to 4320 (240 by default).');
+  }
   // Background jobs: refused in every environment as well.
   errors.push(...jobsEnv.errors);
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {

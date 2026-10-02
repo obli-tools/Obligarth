@@ -36,6 +36,12 @@ export const SocketEvents = {
   // Maintenance
   MAINTENANCE_CHANGED:    'MAINTENANCE_CHANGED',
 
+  // Guards against mass erasure (PLT-11): a guarded action changed state
+  // (PendingActionDto), the emergency freeze of a tenant changed
+  // (GuardStateChanged). Both to the tenant room.
+  GUARD_ACTION_UPDATED:   'GUARD_ACTION_UPDATED',
+  GUARD_STATE_CHANGED:    'GUARD_STATE_CHANGED',
+
   // Client → Server
   DEVICE_SUBSCRIBE:       'DEVICE_SUBSCRIBE',
   DEVICE_UNSUBSCRIBE:     'DEVICE_UNSUBSCRIBE',
