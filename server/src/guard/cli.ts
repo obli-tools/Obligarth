@@ -9,23 +9,38 @@
 //       'restore') and every pending approval request expires. No destructive
 //       action prior to the restore runs without being confirmed again
 //       (conception §5.9, R24). JSON report on the output. Exit 0, 1.
-// Runs as the server does (runtime role, DATABASE_URL), in the database
-// context of its job actor (j:actions.restore-reconcile).
+// Runs as the server does (runtime role, DATABASE_URL, signed contexts with
+// RLS_CONTEXT_KEY_FILE: rls-tenant §4.6), in the database context of its job
+// actor (j:actions.restore-reconcile). A context the database does not accept
+// would hide every row and pause nothing: the command checks its context
+// first and stops (exit 1) when the database refuses it.
 import '../env';
 
 function out(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, process.stdout.isTTY ? 2 : undefined)}\n`);
 }
 
+const ACTOR = { type: 'job' as const, name: 'actions.restore-reconcile' };
+
 async function restoreReconcile(): Promise<number> {
   const { db } = await import('../db');
+  const { asTenant, configureContextSigningFromFile } = await import('../db/context');
+  const { config } = await import('../config');
   const { registerAuditModule } = await import('../audit/module');
   const { registerGuardModule } = await import('./module');
   const { restoreReconcile: run } = await import('./executor');
-  registerAuditModule();
-  registerGuardModule();
   try {
-    const report = await run({ type: 'job', name: 'actions.restore-reconcile' }, `restore-${new Date().toISOString()}`);
+    configureContextSigningFromFile(config.rlsContextKeyFile);
+    // Self-test of the database context (as the server's boot guard does).
+    const probe = await asTenant(1, ACTOR, () => db.raw('SELECT obligarth.ctx_tenant() AS t')) as { rows: Array<{ t: number | null }> };
+    if (Number(probe.rows[0]?.t) !== 1) {
+      process.stderr.write('restore-reconcile: the database refused the context of this command '
+        + '(set RLS_CONTEXT_KEY_FILE to the key of the server): nothing was done\n');
+      return 1;
+    }
+    registerAuditModule();
+    registerGuardModule();
+    const report = await run(ACTOR, `restore-${new Date().toISOString()}`);
     out(report);
   } finally {
     await db.destroy().catch(() => undefined);
