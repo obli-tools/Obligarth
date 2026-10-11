@@ -27,11 +27,24 @@ export function enrollmentReleaseJob(): JobHandle<z.infer<typeof ReleasePayload>
   return releaseJob;
 }
 
+/** A certificate fingerprint as the events and apple-edge write it (SHA-256, lower-case hexadecimal), or null. */
+function fingerprint(v: unknown): string | null {
+  const s = typeof v === 'string' ? v.trim().toLowerCase() : '';
+  return /^[0-9a-f]{64}$/.test(s) ? s : null;
+}
+
 /**
- * mdm.enrollment-release (barrier 2 of modele §4.3, §4.5): an Authenticate whose observed mode the session's
- * ownership forbids created no record; the enrollment is released at apple-edge (apple-edge §3.7). The
- * enrollment id is read from the outbox event (never carried by the payload) and checked against the
- * tenant's key (integration T-3). Done when apple-edge no longer knows it.
+ * mdm.enrollment-release (barrier 2 of modele §4.3, §4.5; integration §7.3): an Authenticate the brain refused (a
+ * mode the session's ownership forbids, a serial number or a kind of identifier that contradicts what is verified)
+ * wrote no record; the enrollment apple-edge accepted is released there (apple-edge §3.7). The enrollment id is
+ * read from the outbox event (never carried by the payload) and checked against the tenant's key (integration
+ * T-3). A release takes a device out of management (its certificates are revoked): only the enrollment of the
+ * refused Authenticate is released (review of lot B2, MDM-B2-R3):
+ *   - the event is an mdm.authenticate, and not the one a record under management was enrolled by (the record's
+ *     current certificate is not the event's): a payload that names another event releases nothing;
+ *   - apple-edge still holds the enrollment under the certificate of that Authenticate: authenticated again since
+ *     (another certificate), the enrollment has its own event, accepted, or refused with its own release.
+ * Done when apple-edge no longer knows the enrollment.
  */
 async function releaseEnrollment(ctx: JobContext<z.infer<typeof ReleasePayload>>): Promise<JobResult> {
   if (config.apple.mode !== 'on') return { output: { skipped: 'apple_edge_off' } };
@@ -39,9 +52,17 @@ async function releaseEnrollment(ctx: JobContext<z.infer<typeof ReleasePayload>>
   const target = await ctx.inTenant(async () => {
     const t = await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
     if (!t?.mdm_key) return null;
-    const ev = await db('apple_edge.outbox').where({ event_id: ctx.payload.eventId }).first('tenant_key', 'enrollment_id') as
-      { tenant_key: string | null; enrollment_id: string | null } | undefined;
-    return { key: t.mdm_key, event: ev ?? null };
+    const ev = await db('apple_edge.outbox').where({ event_id: ctx.payload.eventId })
+      .first('tenant_key', 'enrollment_id', 'type', db.raw("payload #>> '{identity,cert_sha256}' AS cert_sha256")) as
+      { tenant_key: string | null; enrollment_id: string | null; type: string; cert_sha256: string | null } | undefined;
+    // The record of the tenant still under management that holds this enrollment id, if any.
+    const holder = ev?.enrollment_id
+      ? await db('apple_devices as a')
+        .join('devices as d', function joinDevice() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
+        .where({ 'a.tenant_id': tenantId, 'a.enrollment_id': ev.enrollment_id }).whereNot('d.enrollment_state', 'unenrolled')
+        .first('a.cert_sha256') as { cert_sha256: string | null } | undefined
+      : undefined;
+    return { key: t.mdm_key, event: ev ?? null, holder: holder ? { cert: fingerprint(holder.cert_sha256) } : null };
   });
   if (!target) throw new PermanentJobError('tenant_without_key', 'the tenant has no MDM key');
   if (!target.event) return { output: { skipped: 'event_purged' } };
@@ -49,8 +70,20 @@ async function releaseEnrollment(ctx: JobContext<z.infer<typeof ReleasePayload>>
   if (target.event.tenant_key !== target.key || !enrollmentId.startsWith(`${target.key}_`)) {
     throw new PermanentJobError('tenant_mismatch', 'the event is not an enrollment of this tenant');
   }
+  if (target.event.type !== 'mdm.authenticate') throw new PermanentJobError('not_an_authenticate', 'the event is not an Authenticate');
+  const refused = fingerprint(target.event.cert_sha256);
+  if (target.holder && (refused === null || target.holder.cert === refused)) {
+    // The Authenticate a record under management was enrolled by, or one that cannot be told from it.
+    throw new PermanentJobError('enrollment_accepted', 'the Authenticate is the one of a record under management');
+  }
+  const o = { actor: ctx.actor, requestId: ctx.requestId, signal: ctx.signal };
   try {
-    const r = await appleEdge.releaseEnrollment(target.key, enrollmentId, { actor: ctx.actor, requestId: ctx.requestId, signal: ctx.signal });
+    const detail = await appleEdge.getEnrollment(target.key, enrollmentId, o);
+    const atEdge = fingerprint(detail.enrollment.cert_sha256);
+    if (refused !== null && atEdge !== null && atEdge !== refused) return { output: { released: false, reason: 'superseded' } };
+    // An enrollment whose certificate apple-edge does not show, while a record under management holds its id.
+    if (atEdge === null && target.holder) return { output: { released: false, reason: 'unverified' } };
+    const r = await appleEdge.releaseEnrollment(target.key, enrollmentId, o);
     return { output: { released: true, idsReleased: r.released.length, revokedCertificates: r.revoked_certificates } };
   } catch (err) {
     if (isAppleEdgeError(err) && (err.code === 'enrollment_not_found' || err.status === 404)) return { output: { released: false, reason: 'not_found' } };

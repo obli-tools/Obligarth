@@ -30,6 +30,8 @@ export function registerAppleAuditActions(): void {
     { name: 'security.identity_revoked', criticality: 'standard', label: 'Revoked device identity presented' },
     { name: 'security.identity_mismatch', criticality: 'standard', label: 'Device identity mismatch' },
     { name: 'security.device_id_conflict', criticality: 'standard', label: 'Device identifier conflict' },
+    // The platform event of §7.4 (audited in the master tenant), not listed by annex F (lot B3).
+    { name: 'security.foreign_certificate', criticality: 'standard', label: 'Certificate of another tenant presented' },
     { name: 'apns.push_refused', criticality: 'standard', label: 'Push refused by Apple' },
     { name: 'integration.push_certificate_activated', criticality: 'standard', label: 'Push certificate activated' },
     { name: 'integration.ade_token_activated', criticality: 'standard', label: 'ADE server activated' },

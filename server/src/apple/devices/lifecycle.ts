@@ -5,7 +5,7 @@ import {
 } from '@obligarth/shared';
 import { JobError } from '../../jobs/errors';
 import { jobIdFor } from '../../jobs/ids';
-import { raiseInTx } from '../alerts/service';
+import { raiseCountedInTx, raiseInTx } from '../alerts/service';
 import {
   findDeviceForAuthenticate, findSessionForAuthenticate, managementModeFor, platformFromProductName, serialClaimOf,
   serialHolderOf, type DeviceMatch, type SessionFacts,
@@ -72,6 +72,11 @@ export interface AuthenticateResult {
    *  record when the device was found by its enrollment id), which keeps it: the device was recorded without it
    *  and the alert security.identity_mismatch raised (the handler audits it). */
   serialHeldBy?: number;
+  /** identity_mismatch: what the Authenticate contradicts. Absent: the serial number of the session's MachineInfo;
+   *  'udid': the kind of the identifier of the record of this enrollment id (a UDID presented as an EnrollmentID, or
+   *  the reverse), whose record (recordId) is not written (review of lot B2, MDM-B2-R13); the enrollment is released
+   *  in both cases. */
+  mismatch?: { field: 'udid'; recordId: number };
 }
 
 export interface TokenUpdateFacts {
@@ -94,6 +99,7 @@ interface SatelliteRow {
   enrollment_state: string;
   enrollment_state_at: Date | null;
   ownership: string;
+  nano_enroll_type: string;
 }
 
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
@@ -109,18 +115,14 @@ async function satelliteOf(trx: Knex.Transaction, tenantId: number, enrollmentId
     .where({ 'a.tenant_id': tenantId, 'a.enrollment_id': enrollmentId })
     .forUpdate()
     .first('a.device_id', 'a.enrollment_session_id', 'a.authenticated_at', 'a.cert_sha256', 'a.cert_not_after',
-      'a.id_activated_at', 'd.enrollment_state', 'd.enrollment_state_at', 'd.ownership') as Promise<SatelliteRow | undefined>;
+      'a.id_activated_at', 'd.enrollment_state', 'd.enrollment_state_at', 'd.ownership', 'a.nano_enroll_type') as Promise<SatelliteRow | undefined>;
 }
 
-/** Number of enrollments without a session waiting for an operator (the count of the aggregated alert). */
-async function raiseUnknownSession(trx: Knex.Transaction, tenantId: number): Promise<void> {
-  const open = await trx('live_alerts')
-    .where({ tenant_id: tenantId, stable_key: 'apple:enrollment.unknown_session' })
-    .whereNull('resolved_at')
-    .orderBy('id', 'desc')
-    .first('i18n_params') as { i18n_params: Record<string, unknown> | null } | undefined;
-  const count = Number(open?.i18n_params?.count ?? 0);
-  await raiseInTx(trx, tenantId, 'enrollment.unknown_session', { params: { count: (Number.isFinite(count) ? count : 0) + 1 } });
+/** Number of enrollments without a session waiting for an operator (the count of the aggregated alert): one per
+ *  Authenticate, counted once whatever the replays of its event (review of lot B2, MDM-B2-R7: the occurrence is
+ *  ordered by the event's time and id, raiseCountedInTx). */
+async function raiseUnknownSession(trx: Knex.Transaction, tenantId: number, f: AuthenticateFacts): Promise<void> {
+  await raiseCountedInTx(trx, tenantId, 'enrollment.unknown_session', { at: f.occurredAt, eventId: f.eventId });
 }
 
 /** The columns of the record a new cycle writes (§4.5 rule 3, §10.4): from the session and the message. The
@@ -203,8 +205,9 @@ function satelliteColumns(f: AuthenticateFacts, s: SessionFacts) {
  * same certificate again; 'stale': older than the current cycle or than the record's last state; no write
  * for 'no_session' (alert enrollment.unknown_session), 'ownership_mismatch' (alert
  * enrollment.ownership_mismatch, job mdm.enrollment-release) nor 'identity_mismatch' (the message's serial
- * number contradicts the session's verified one: alert security.identity_mismatch, job mdm.enrollment-release);
- * the handler writes the audit entries. The record is found by its enrollment id, else by its serial number
+ * number contradicts the session's verified one, or, with `mismatch`, the kind of the identifier differs from
+ * the record's of this enrollment id: alert security.identity_mismatch, job mdm.enrollment-release); the
+ * handler writes the audit entries. The record is found by its enrollment id, else by its serial number
  * (findDeviceForAuthenticate): an unverified serial number never takes a record still under management
  * ('created' with serialHeldBy: a record of its own, without that serial number, and an alert).
  */
@@ -212,6 +215,23 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   Promise<AuthenticateResult> {
   const sat = await satelliteOf(trx, tenantId, f.enrollmentId);
   if (sat) {
+    // The kind of the identifier never changes under one enrollment id (review of lot B2, MDM-B2-R13): apple-edge
+    // shares '<key>_<id>' between a UDID and an EnrollmentID, so a User Enrollment whose EnrollmentID is the UDID of
+    // a device of the tenant (or the reverse) would take its record (a company device turned personal). Nothing is
+    // written on the record and the alert is raised. apple-edge accepted that Authenticate: the enrollment id now
+    // answers to the other device (NanoMDM bound it to the new certificate, the record's own device is refused
+    // from then on), and its next TokenUpdate would read as a refresh of this record, whose commands and profiles
+    // it would receive. As every refused Authenticate, the enrollment is released (mdm.enrollment-release, which
+    // releases it only while apple-edge still holds it under the refused certificate): device.id_released then
+    // takes the record out of management, and the device it belongs to enrolls again. An event older than the
+    // record's cycle (consumed late, replayed after a new cycle) is stale: nothing raised nor released.
+    if (sat.nano_enroll_type !== f.enrollmentType) {
+      if (f.occurredAt.getTime() <= time(sat.authenticated_at)) return { deviceId: Number(sat.device_id), outcome: 'stale' };
+      await raiseInTx(trx, tenantId, 'security.identity_mismatch', { discriminant: Number(sat.device_id), params: { field: 'udid' } });
+      await enrollmentReleaseJob().sendInTx(trx, { tenantId, eventId: f.eventId },
+        { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
+      return { deviceId: null, outcome: 'identity_mismatch', mismatch: { field: 'udid', recordId: Number(sat.device_id) } };
+    }
     if (f.certSha256 && sha(sat.cert_sha256) === f.certSha256) {
       if (!sat.cert_not_after && f.certNotAfter) {
         await trx('apple_devices').where({ tenant_id: tenantId, device_id: sat.device_id }).update({ cert_not_after: f.certNotAfter });
@@ -226,7 +246,7 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   // Rule 1: the session (DM25). Rule 2: barrier 2.
   const session = await findSessionForAuthenticate(trx, tenantId, f);
   if (!session) {
-    await raiseUnknownSession(trx, tenantId);
+    await raiseUnknownSession(trx, tenantId, f);
     return { deviceId: null, outcome: 'no_session' };
   }
   const mode = managementModeFor(f, session);
@@ -391,6 +411,26 @@ export async function onTokenUpdate(trx: Knex.Transaction, tenantId: number, f: 
 }
 
 const RELEASE_REASONS = new Set<string>(ID_RELEASE_REASONS);
+
+/**
+ * device.id_released for a record already out of management (§7.3, modele §4.5, DM26): apple-edge released the
+ * identifier later than the departure (a departure without release: 'wiped', 'removed_by_command',
+ * 'disabled_in_edge'), or the release of a departure already recorded. The identifier of the current cycle
+ * leaves the unique index of the active identifiers when it is still in it (id_released_at, the reason of
+ * apple-edge); an event of a previous cycle changes nothing. Returns true when it released the identifier.
+ */
+export async function releaseIdentifier(trx: Knex.Transaction, tenantId: number, enrollmentId: string,
+  reason: IdReleaseReason, occurredAt: Date): Promise<boolean> {
+  if (!RELEASE_REASONS.has(reason)) return false;
+  const n = await trx('apple_devices')
+    .where({ tenant_id: tenantId, enrollment_id: enrollmentId })
+    .whereNull('id_released_at')
+    .where('authenticated_at', '<=', occurredAt)
+    // A record out of management only: the release of a managed one is onUnenrolled's.
+    .whereIn('device_id', (q) => q.select('id').from('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' }))
+    .update({ id_released_at: occurredAt, id_release_reason: reason, push_state: 'disabled', push_state_at: occurredAt, updated_at: new Date() });
+  return Number(n) > 0;
+}
 
 /**
  * A device leaves management (§7.3 onUnenrolled, modele §4.4): mdm.checkout ('checkout'), device.id_released

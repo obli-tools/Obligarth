@@ -9,6 +9,7 @@ import { announce, emitResolved, trimTenant } from '../../services/liveAlert.ser
 import { logger } from '../../utils/logger';
 import {
   APPLE_ALERTS, cleanParams, isAppleAlertKind, render, stableKeyOf, type AlertParams, type AppleAlertKind,
+  type AppleAlertSeverity,
 } from './catalog';
 
 // =============================================================================
@@ -34,6 +35,17 @@ export interface RaiseOptions {
   discriminant?: string | number;
   params?: AlertParams;
   navigateTo?: string | null;
+  /** A severity above the catalogue's for this occurrence (§12.1: ade.token_error is critical when Apple refuses
+   *  the token); never below it. */
+  severity?: AppleAlertSeverity;
+}
+
+const SEVERITY_RANK: Record<AppleAlertSeverity, number> = { info: 0, warning: 1, critical: 2 };
+
+/** The catalogue's severity, raised by the occurrence's when higher. */
+function severityOf(kind: AppleAlertKind, wanted: AppleAlertSeverity | undefined): AppleAlertSeverity {
+  const base = APPLE_ALERTS[kind].severity as AppleAlertSeverity;
+  return wanted && SEVERITY_RANK[wanted] > SEVERITY_RANK[base] ? wanted : base;
 }
 
 const DeliverPayload = z.object({
@@ -76,22 +88,109 @@ export async function raiseInTx(trx: Knex.Transaction, tenantId: number, kindNam
     .where({ tenant_id: tenantId, stable_key: stableKey })
     .whereNull('resolved_at')
     .orderBy('id', 'desc')
-    .first('id', 'i18n_params') as { id: number; i18n_params: AlertParams | null } | undefined;
+    .first('id', 'i18n_params', 'severity') as { id: number; i18n_params: AlertParams | null; severity: string } | undefined;
   const title = render(def.title, params).slice(0, 500);
   const message = render(def.message, params).slice(0, 2000);
   if (existing) {
-    if (JSON.stringify(existing.i18n_params ?? {}) !== JSON.stringify(params)) {
-      await trx('live_alerts').where({ id: existing.id, tenant_id: tenantId }).update({ i18n_params: JSON.stringify(params), title, message });
-    }
+    const set: Record<string, unknown> = {};
+    if (JSON.stringify(existing.i18n_params ?? {}) !== JSON.stringify(params)) Object.assign(set, { i18n_params: JSON.stringify(params), title, message });
+    // An occurrence graver than the open row raises it (an ADE server first in error, then refused by Apple); a
+    // lighter one never lowers it.
+    const wanted = severityOf(kind, opts.severity);
+    if (SEVERITY_RANK[wanted] > (SEVERITY_RANK[existing.severity as AppleAlertSeverity] ?? 0)) set.severity = wanted;
+    if (Object.keys(set).length > 0) await trx('live_alerts').where({ id: existing.id, tenant_id: tenantId }).update(set);
     return { id: Number(existing.id), created: false };
   }
   const [row] = await trx('live_alerts').insert({
-    tenant_id: tenantId, severity: def.severity, title, message, navigate_to: opts.navigateTo ?? null, stable_key: stableKey,
+    tenant_id: tenantId, severity: severityOf(kind, opts.severity), title, message, navigate_to: opts.navigateTo ?? null, stable_key: stableKey,
     kind, i18n_key: `apple.alerts.${kind}`, i18n_params: JSON.stringify(params),
   }).returning('id') as Array<{ id: number }>;
   const id = Number(row.id);
   await sendDelivery(trx, tenantId, id, 'raised');
   return { id, created: true };
+}
+
+/** The occurrence an event adds to a counted alert: its time and id order the occurrences (a total order). */
+export interface CountedOccurrence {
+  /** occurred_at of the event. */
+  at: Date;
+  /** event_id of the event (ties of the same millisecond). */
+  eventId: string;
+  /** What the occurrence adds to the count (1 by default). */
+  increment?: number;
+}
+
+const counted = z.object({ lastAt: z.string(), lastEvent: z.string() });
+
+/** (at, eventId) of `o` after the occurrence a row of the alert counted last? */
+function isAfter(o: CountedOccurrence, params: unknown): boolean {
+  const last = counted.safeParse(params);
+  if (!last.success) return true;
+  const lastAt = Date.parse(last.data.lastAt);
+  if (!Number.isFinite(lastAt)) return true;
+  const at = o.at.getTime();
+  return at > lastAt || (at === lastAt && o.eventId.toLowerCase() > last.data.lastEvent.toLowerCase());
+}
+
+/**
+ * A counted alert (aggregates whose count the events add up: enrollment.unknown_session, security.topic_mismatch,
+ * security.identity_revoked, apns.throttled, ade.assignment_failed), idempotent: an occurrence adds to the count
+ * only when it is after the last one counted by the alert's latest row (resolved or not), so that an event applied
+ * again (at-least-once delivery, consumed_at reset) counts once (review of lot B2, MDM-B2-R7). An occurrence
+ * consumed after a later one (events reordered across two batches) is not counted: the count is a lower bound.
+ * The params carry lastAt and lastEvent (the event's time and id: never device data). In the caller's
+ * transaction (tenant context). `counted` is false when the occurrence was already counted (nothing written).
+ */
+export async function raiseCountedInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind,
+  o: CountedOccurrence, opts: RaiseOptions = {}): Promise<{ id: number | null; created: boolean; counted: boolean }> {
+  const kind = requireKind(kindName);
+  checkScope(kind, tenantId);
+  const stableKey = stableKeyOf(kind, opts.discriminant);
+  await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`live_alert:${tenantId}:${stableKey}`]);
+  const latest = await trx('live_alerts')
+    .where({ tenant_id: tenantId, stable_key: stableKey })
+    .orderBy('id', 'desc')
+    .first('id', 'i18n_params', 'resolved_at') as { id: number; i18n_params: AlertParams | null; resolved_at: Date | null } | undefined;
+  if (latest && !isAfter(o, latest.i18n_params)) return { id: Number(latest.id), created: false, counted: false };
+  const previous = latest && latest.resolved_at === null ? Number(latest.i18n_params?.count ?? 0) : 0;
+  const increment = Math.max(0, Math.floor(o.increment ?? 1));
+  const r = await raiseInTx(trx, tenantId, kind, {
+    ...opts,
+    params: {
+      ...(opts.params ?? {}),
+      count: (Number.isFinite(previous) ? previous : 0) + increment,
+      lastAt: o.at.toISOString(),
+      lastEvent: o.eventId.toLowerCase(),
+    },
+  });
+  return { ...r, counted: true };
+}
+
+/** Window of the spike of enrollments (§12.1). */
+const SPIKE_WINDOW_MINUTES = 10;
+/** The spike also exceeds this many times the average of the last seven days (per window). */
+const SPIKE_FACTOR = 5;
+
+/**
+ * enrollment.spike (§12.1): APPLE_ENROLLMENT_SPIKE_COUNT enrollments of the tenant ended in the last 10 minutes
+ * (episodes enrolled up to `at`), and more than five times the average of the seven previous days per 10 minutes.
+ * Counted from the episodes: idempotent. Resolved automatically after 24 h (alerts.auto-resolve, lot C5).
+ */
+export async function checkEnrollmentSpike(trx: Knex.Transaction, tenantId: number, at: Date, threshold: number): Promise<boolean> {
+  const since = new Date(at.getTime() - SPIKE_WINDOW_MINUTES * 60_000);
+  const recent = await trx('device_enrollments').where({ tenant_id: tenantId })
+    .where('enrolled_at', '>', since).where('enrolled_at', '<=', at)
+    .count('* as n').first() as { n: string | number } | undefined;
+  const count = Number(recent?.n ?? 0);
+  if (count < threshold) return false;
+  const weekStart = new Date(since.getTime() - 7 * 86_400_000);
+  const week = await trx('device_enrollments').where({ tenant_id: tenantId })
+    .where('enrolled_at', '>', weekStart).where('enrolled_at', '<=', since)
+    .count('* as n').first() as { n: string | number } | undefined;
+  const average = Number(week?.n ?? 0) / ((7 * 24 * 60) / SPIKE_WINDOW_MINUTES);
+  if (count <= SPIKE_FACTOR * average) return false;
+  await raiseInTx(trx, tenantId, 'enrollment.spike', { params: { count, minutes: SPIKE_WINDOW_MINUTES } });
+  return true;
 }
 
 /** Resolves the unresolved rows of the kind (and discriminant) in the caller's transaction (tenant context). */

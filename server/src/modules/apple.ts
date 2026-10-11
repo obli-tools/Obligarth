@@ -7,6 +7,8 @@ import { registerSecretColumn, setEdgeKekIdSource } from '../vault';
 import { registerAppleEdgeAdmin } from '../apple/admin.routes';
 import { registerAppleAlertJobs } from '../apple/alerts/service';
 import { registerAppleAuditActions } from '../apple/audit';
+import { registerMvpResultIngestors, registerResultJobs } from '../apple/commands/results';
+import { registerDeviceJobs } from '../apple/devices/jobs';
 import { checkEdgeAtStart, edgeKekId } from '../apple/edge/health';
 import { registerAppleOutboxHandlers } from '../apple/outbox';
 import { registerTenantJobs } from '../apple/tenants/jobs';
@@ -23,8 +25,11 @@ import { appleTenants } from '../apple/tenants/registry';
 // deferred work goes through durable jobs.
 // Lot B1: the tenant registry (provisioning, mirror, state, CA), the probe of
 // apple-edge, the handlers of the tenant events, the platform alerts, the
-// administration routes; the device surface, the commands, the DDM relay and
-// the integrations of the console come with their lots (B3 to C4).
+// administration routes. Lot B3: the handlers of every event of the outbox
+// (enrollment cycles, commands, security, push, ADE), their follow-up jobs and
+// the ingestion of the results; the device surface, the command queue, the
+// DDM relay and the integrations of the console come with their lots (B4 to
+// C4).
 // =============================================================================
 
 let registered = false;
@@ -55,7 +60,10 @@ export function registerAppleModule(): void {
   // ── Durable jobs and outbox handlers ───────────────────────────────────────
   registerTenantJobs();
   registerAppleAlertJobs();
-  registerAppleOutboxHandlers();
+  registerDeviceJobs();           // apple.device-onboard, apple.await-configuration, devices.unenroll-cleanup
+  registerResultJobs();           // apple.command-result-ingest
+  registerMvpResultIngestors();   // §7.6: the ingestors whose writers the data model provides
+  registerAppleOutboxHandlers();  // the 34 handlers of §7.4
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
   registerAppleAuditActions();
