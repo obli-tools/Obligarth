@@ -31,6 +31,8 @@ export const TENANT_CAPABILITIES = [
   'audit.read',
   // Review the approval requests of the tenant (audit-durci §10.4, lot A7).
   'approvals.review',
+  // Write the policies and their assignments (modele-donnees-mdm §10.7, lot B5b); reading them needs none.
+  'mdm.policies.manage',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -47,6 +49,7 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'users.manage':          'User Management',
   'audit.read':            "Audit · Read the tenant's log",
   'approvals.review':      'Approvals · Review requests',
+  'mdm.policies.manage':   'Policies · Edit, assign and publish',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

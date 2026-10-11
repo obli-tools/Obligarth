@@ -42,6 +42,12 @@ export const SocketEvents = {
   GUARD_ACTION_UPDATED:   'GUARD_ACTION_UPDATED',
   GUARD_STATE_CHANGED:    'GUARD_STATE_CHANGED',
 
+  // Policies (modele-donnees-mdm §11.2), identifiers only, to the tenant room:
+  // policies created, changed or published ({ policyIds }), effective
+  // configuration of devices recomputed by a resolution ({ deviceIds }).
+  POLICY_CHANGED:         'POLICY_CHANGED',
+  DEVICE_CONFIG_CHANGED:  'DEVICE_CONFIG_CHANGED',
+
   // Apple integration (integration-apple-edge §12.4): identifiers only, the
   // client reads the objects back through the REST routes (scopes applied).
   // APPLE_DEVICE_CHANGED { deviceIds }, MDM_COMMAND_CHANGED { commandIds,
