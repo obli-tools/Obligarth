@@ -1189,6 +1189,8 @@
       "policy_published": "Policy published",
       "policy_rejected": "Policy version rejected",
       "policy_archived": "Policy archived",
+      "policy_updated": "Policy renamed or described",
+      "policy_draft_discarded": "Policy draft discarded",
       "assignment_changed": "Assignments changed",
       "app_created": "App added to the catalog",
       "app_updated": "App of the catalog updated",
@@ -1334,7 +1336,8 @@
       "settings": "Settings",
       "users_manage": "User Management",
       "audit_read": "Audit · Read the tenant's log",
-      "approvals_review": "Approvals · Review requests"
+      "approvals_review": "Approvals · Review requests",
+      "mdm_policies_manage": "Policies · Edit, assign and publish"
     }
   },
   "notificationCenter": {

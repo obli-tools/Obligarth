@@ -1189,6 +1189,8 @@
       "policy_published": "Politique publiée",
       "policy_rejected": "Version de politique rejetée",
       "policy_archived": "Politique archivée",
+      "policy_updated": "Politique renommée ou décrite",
+      "policy_draft_discarded": "Brouillon de politique abandonné",
       "assignment_changed": "Affectations modifiées",
       "app_created": "Application ajoutée au catalogue",
       "app_updated": "Application du catalogue modifiée",
@@ -1334,7 +1336,8 @@
       "settings": "Paramètres",
       "users_manage": "Gestion des utilisateurs",
       "audit_read": "Audit · Lire le journal du tenant",
-      "approvals_review": "Approbations · Examiner les demandes"
+      "approvals_review": "Approbations · Examiner les demandes",
+      "mdm_policies_manage": "Politiques · Modifier, affecter et publier"
     }
   },
   "notificationCenter": {
