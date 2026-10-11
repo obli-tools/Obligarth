@@ -2,22 +2,23 @@ import type { Knex } from 'knex';
 
 // =============================================================================
 // Retention rules of the data model (docs: modele-donnees-mdm §5.5, EX-17,
-// DM19), handed to the generic retention of the privacy specification (CNF-04:
-// files privacy.retention-all and privacy.retention-tenant, tenant by tenant,
-// in slices: motif M8). Each rule purges at most `limit` rows of one tenant
-// per call, in the caller's transaction and the tenant's context, and returns
-// how many it removed (the caller loops until 0).
-//   - devices.records: a record past its retention_until; the caller purges
-//     its enrollments at apple-edge first (appleDevices.purgeInEdge,
-//     integration §13.3), outside any transaction, and postpones the deletion
-//     when that fails; deleting the record cascades to its satellite,
-//     episodes, inventory, statuses, effective state and artifacts;
+// DM19), handed to the generic retention (CNF-04: jobs privacy.retention-all
+// and privacy.retention-tenant, modules/privacy.ts), tenant by tenant, in
+// slices (motif M8). Each rule purges at most `limit` rows of one tenant per
+// call, in the caller's transaction and the tenant's context, and returns how
+// many it removed (the caller loops while a slice is full).
 //   - end_users.departed: an end user departed for 90 days (the device ↔
 //     employee link becomes NULL, composite keys ON DELETE SET NULL);
 //   - device_status_history: 90 days;
 //   - lost_mode_locations: purge_at (62 days at most, by constraint).
-// The commands keep the queue's retention (6 months, integration §4.9); DM19
-// proposes 30 days for the origin 'inventory', left to CNF-04.
+// The record of a device past its retention_until is NOT one of these rules:
+// a record is deleted only after its enrollments were purged at apple-edge
+// (integration §13.3), which no generic caller can do. The retention job
+// lists the records due (devicesDueForPurge), purges each one at apple-edge
+// (apple/retention.ts, purgeDeviceInEdge) outside any transaction, then
+// deletes the purged ones (deleteDueDeviceRecords); a failure postpones the
+// record to the next run. The commands of the queue and the other tables of
+// the integration: apple/retention.ts.
 // =============================================================================
 
 export interface MdmRetentionRule {
@@ -34,24 +35,29 @@ export const STATUS_HISTORY_DAYS = 90;
 
 const days = (n: number) => n * 86_400_000;
 
-/** The records due for purge (retention_until passed, out of management), oldest first: the caller purges
- *  them at apple-edge before mdmRetentionRules' devices.records deletes them. */
-export async function devicesDueForPurge(trx: Knex | Knex.Transaction, tenantId: number, now: Date, limit: number): Promise<number[]> {
+/** The records due for purge (out of management, retention_until passed), by id, after `afterId`: the
+ *  caller purges them at apple-edge before deleteDueDeviceRecords. `afterId` is the last id of the previous
+ *  slice of the same run: a record the caller postponed is not listed again before the next run. */
+export async function devicesDueForPurge(trx: Knex | Knex.Transaction, tenantId: number, now: Date, limit: number,
+  afterId = 0): Promise<number[]> {
   return (await trx('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' })
     .whereNotNull('retention_until').where('retention_until', '<=', now)
-    .orderBy('retention_until', 'asc').limit(limit).pluck('id') as number[]).map(Number);
+    .where('id', '>', afterId)
+    .orderBy('id', 'asc').limit(limit).pluck('id') as number[]).map(Number);
+}
+
+/** Deletes those of `ids` that are still due at `now` (same predicate as devicesDueForPurge: a record that
+ *  came back under management meanwhile is left alone). PRECONDITION: the caller purged every enrollment of
+ *  each record at apple-edge (integration §13.3); never call it with a record that was not. Cascades to the
+ *  satellite, episodes, inventory, statuses, effective state and artifacts. Returns the number deleted. */
+export async function deleteDueDeviceRecords(trx: Knex.Transaction, tenantId: number, now: Date, ids: readonly number[]): Promise<number> {
+  if (ids.length === 0) return 0;
+  return trx('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' })
+    .whereNotNull('retention_until').where('retention_until', '<=', now)
+    .whereIn('id', ids).del();
 }
 
 export const mdmRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
-  {
-    name: 'devices.records',
-    description: 'Records of devices out of management past their retention (after the purge at apple-edge)',
-    async purge(trx, tenantId, now, limit) {
-      const ids = await devicesDueForPurge(trx, tenantId, now, limit);
-      if (ids.length === 0) return 0;
-      return trx('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' }).whereIn('id', ids).del();
-    },
-  },
   {
     name: 'end_users.departed',
     description: `End users departed for ${DEPARTED_END_USER_DAYS} days`,

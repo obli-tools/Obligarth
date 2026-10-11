@@ -28,6 +28,7 @@ import { registerAuditModule } from './audit/module';
 import { registerGuardModule } from './guard/module';
 import { registerAppleModule } from './modules/apple';
 import { registerMdmModule } from './mdm';
+import { registerPrivacyModule } from './modules/privacy';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -98,6 +99,7 @@ async function main() {
   registerGuardModule();
   registerMdmModule();
   registerAppleModule();
+  registerPrivacyModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.

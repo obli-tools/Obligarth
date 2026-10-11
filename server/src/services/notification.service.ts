@@ -796,4 +796,21 @@ export const notificationService = {
       logger.warn({ err, channelId, eventType }, 'notification log write failed');
     }
   },
+
+  /**
+   * Retention of notification_log (job core.notification-log.purge): one
+   * slice of at most `limit` rows of the tenant created before `olderThan`,
+   * oldest first. Returns the rows deleted (the caller loops while a slice
+   * is full).
+   */
+  async purgeLogSlice(tenantId: number, olderThan: Date, limit: number): Promise<number> {
+    return db('notification_log')
+      .where({ tenant_id: tenantId })
+      .whereIn('id', db('notification_log').select('id')
+        .where({ tenant_id: tenantId })
+        .where('created_at', '<', olderThan)
+        .orderBy('created_at', 'asc')
+        .limit(limit))
+      .delete();
+  },
 };

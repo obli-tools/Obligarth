@@ -1,11 +1,13 @@
 import { z } from 'zod';
 import { isMasterTenant } from '@obligarth/shared';
+import { db } from '../db';
 import { asIdentity } from '../db/context';
 import { purgePlatformGrants } from '../db/platformAccess';
 import { forEachTenant } from '../db/tenantContext';
 import { AppError } from '../middleware/errorHandler';
 import { approvalService, refuse, registerApprovalExecutor, requirePlatformAdmin, withAuditAs } from '../services/approval.service';
 import { liveAlertService } from '../services/liveAlert.service';
+import { notificationService } from '../services/notification.service';
 import { tfaTrustService } from '../services/tfaTrust.service';
 import { createJobsAdmin } from './admin';
 import { performJobsOp, type JobsManageOp } from './admin.routes';
@@ -20,8 +22,10 @@ import type { JobContext, JobResult } from './types';
 // =============================================================================
 // The core's durable jobs (docs: file-durable §10.3 and annex B): the jobs
 // module's own (heartbeat, monitor, housekeeping), two-step approvals, phone
-// keys, second-factor trusts, live alerts, the journal of the cross-tenant
-// read grants; and the approval executor of the jobs administration.
+// keys, second-factor trusts, live alerts, the notification log, the dead
+// identity rows (reset tokens, step-up throttles), the journal of the
+// cross-tenant read grants; and the approval executor of the jobs
+// administration.
 // Schedules in UTC, off the hour; the daily ones between 02:00 and 05:00, five
 // minutes apart at least. index.ts calls registerCoreJobs() before the start.
 // =============================================================================
@@ -30,6 +34,10 @@ const empty = z.object({}).strict();
 
 /** Live alerts and resolved ones are kept 90 days once read or resolved. */
 const LIVE_ALERT_RETENTION_DAYS = 90;
+/** notification_log rows (one per send) are kept 30 days. */
+const NOTIFICATION_LOG_RETENTION_DAYS = 30;
+/** Rows per slice of the purges below (file-durable motif M8). */
+const PURGE_SLICE_ROWS = 500;
 /** job_status rows of a queue no longer registered: 30 days. */
 const RETIRED_STATUS_DAYS = 30;
 /** jobs.monitor: a scheduled job is stale after two periods and 10 min without success. */
@@ -45,6 +53,63 @@ async function eachTenant(ctx: JobContext<unknown>, step: (tenantId: number) => 
   });
   if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed, ${ok} done`);
   return { output: { tenants: ok, rows } };
+}
+
+/** Runs `slice` until it deletes fewer rows than PURGE_SLICE_ROWS (each
+ *  slice one statement: idempotent, the next one starts from the database). */
+async function drainSlices(ctx: JobContext<unknown>, slice: () => Promise<number>): Promise<number> {
+  let total = 0;
+  for (;;) {
+    ctx.throwIfAborted();
+    const n = await slice();
+    total += n;
+    if (n < PURGE_SLICE_ROWS) return total;
+  }
+}
+
+// ── Dead identity rows (identity context) ─────────────────────────────────
+
+/** password_reset_tokens used or expired more than a day ago (a token is
+ *  valid 1 h and single use: such a row can never be redeemed). */
+async function purgeResetTokensSlice(): Promise<number> {
+  const r = await db.raw(
+    `DELETE FROM password_reset_tokens WHERE id IN (
+       SELECT id FROM password_reset_tokens
+        WHERE (used_at IS NOT NULL AND used_at < now() - interval '1 day')
+           OR expires_at < now() - interval '1 day'
+        ORDER BY id LIMIT ?)`,
+    [PURGE_SLICE_ROWS],
+  ) as { rowCount: number | null };
+  return Number(r.rowCount ?? 0);
+}
+
+/** step_up_throttle rows whose every window ended more than a day ago and
+ *  that are not locked: deleting one is the same as the fresh row the next
+ *  failure would create (services/deviceKey/stepUpProof.ts: 15-min and 24-h
+ *  windows, 24-h enrolment lock, notice at most once per 24 h). A 'code' row
+ *  locked until a full sign-in is never deleted. The conditions are written
+ *  twice on purpose: the inner ones choose the slice, the outer ones are
+ *  checked again on the row as it is when the DELETE reaches it, so a failure
+ *  counted meanwhile (the row is live again) is never erased. */
+async function purgeStepUpThrottleSlice(): Promise<number> {
+  const r = await db.raw(
+    `DELETE FROM step_up_throttle
+      WHERE NOT locked
+        AND (locked_until IS NULL OR locked_until < now() - interval '1 day')
+        AND (window_start IS NULL OR window_start < now() - interval '1 day')
+        AND (day_start    IS NULL OR day_start    < now() - interval '2 days')
+        AND (notified_at  IS NULL OR notified_at  < now() - interval '2 days')
+        AND (user_id, kind) IN (
+          SELECT user_id, kind FROM step_up_throttle
+           WHERE NOT locked
+             AND (locked_until IS NULL OR locked_until < now() - interval '1 day')
+             AND (window_start IS NULL OR window_start < now() - interval '1 day')
+             AND (day_start    IS NULL OR day_start    < now() - interval '2 days')
+             AND (notified_at  IS NULL OR notified_at  < now() - interval '2 days')
+           ORDER BY user_id, kind LIMIT ?)`,
+    [PURGE_SLICE_ROWS],
+  ) as { rowCount: number | null };
+  return Number(r.rowCount ?? 0);
 }
 
 // ── jobs.monitor ──────────────────────────────────────────────────────────
@@ -235,6 +300,41 @@ export function registerCoreJobs(): void {
     schedule: { cron: '15 3 * * *' },
     timeoutSeconds: 300,
     handler: (ctx) => eachTenant(ctx, (tenantId) => liveAlertService.purgeOld(LIVE_ALERT_RETENTION_DAYS, tenantId)),
+  });
+
+  // ── Notification log: 30 days ─────────────────────────────────────────────
+  registerJob({
+    name: 'core.notification-log.purge',
+    scope: 'platform',
+    description: 'Delete the notification log rows older than 30 days',
+    payload: empty,
+    schedule: { cron: '10 3 * * *' },
+    timeoutSeconds: 600,
+    heartbeatSeconds: 60,
+    // A daily job: woken by NOTIFY (a run asked by hand starts at once), polled once a minute at rest.
+    notify: true,
+    pollSeconds: 60,
+    handler: (ctx) => eachTenant(ctx, (tenantId) => {
+      const olderThan = new Date(Date.now() - NOTIFICATION_LOG_RETENTION_DAYS * 86_400_000);
+      return drainSlices(ctx, () => notificationService.purgeLogSlice(tenantId, olderThan, PURGE_SLICE_ROWS));
+    }),
+  });
+
+  // ── Dead identity rows: reset tokens, step-up throttles (identity context)
+  registerJob({
+    name: 'core.identity-rows.purge',
+    scope: 'platform',
+    description: 'Delete the password reset tokens used or expired for a day, and the step-up throttles whose windows all ended',
+    payload: empty,
+    schedule: { cron: '25 3 * * *' },
+    timeoutSeconds: 300,
+    notify: true,
+    pollSeconds: 60,
+    handler: async (ctx) => asIdentity(ctx.dbActor, async () => {
+      const resetTokens = await drainSlices(ctx, purgeResetTokensSlice);
+      const stepUpThrottles = await drainSlices(ctx, purgeStepUpThrottleSlice);
+      return { output: { resetTokens, stepUpThrottles } };
+    }),
   });
 
   // ── Journal of the cross-tenant read grants (rls-tenant §6.2) ─────────────
