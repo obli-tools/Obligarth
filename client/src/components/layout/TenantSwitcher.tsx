@@ -104,11 +104,9 @@ export function TenantSwitcher() {
           switching && 'opacity-60 cursor-wait',
         )}
       >
-        {/* The "TENANT" caption is dropped below 1024 px to leave room for
-            the name (the aria-label keeps it for screen readers). */}
-        <span className="font-mono text-[11px] uppercase tracking-[0.06em] text-text-muted max-lg:hidden">
-          {t('tenant.label', 'Tenant')}
-        </span>
+        {/* The workspace icon (same as the sidebar's Workspace entry) stands
+            for the "Tenant" caption; the aria-label keeps the word. */}
+        <Building2 size={14} className="shrink-0 text-text-muted" aria-hidden="true" />
         <span className="min-w-0 max-w-[140px] truncate tracking-[0.04em]">{currentTenant?.name ?? '…'}</span>
         <ChevronDown size={12} className={cn('shrink-0 text-text-muted transition-transform', open && 'rotate-180')} />
       </button>
