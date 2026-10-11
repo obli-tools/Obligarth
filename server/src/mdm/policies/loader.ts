@@ -32,13 +32,19 @@ export interface DeviceSet {
 const CACHE_MAX = 1000;
 const contributionCache = new Map<string, Contribution[]>();
 
-function cachedContributions(key: string, compute: () => Contribution[]): Contribution[] {
+/** The contributions kept for a version (most recently used last), undefined when they are not known. */
+function knownContributions(key: string): Contribution[] | undefined {
   const hit = contributionCache.get(key);
   if (hit) {
     contributionCache.delete(key);
     contributionCache.set(key, hit);
-    return hit;
   }
+  return hit;
+}
+
+function cachedContributions(key: string, compute: () => Contribution[]): Contribution[] {
+  const hit = knownContributions(key);
+  if (hit) return hit;
   const value = compute();
   contributionCache.set(key, value);
   if (contributionCache.size > CACHE_MAX) contributionCache.delete(contributionCache.keys().next().value as string);
@@ -78,12 +84,35 @@ export async function loadResources(q: Knex | Knex.Transaction, tenantId: number
       .join('policy_versions as v', function joinVersion() { this.on('v.id', '=', 'p.current_version_id').andOn('v.tenant_id', '=', 'p.tenant_id'); })
       .whereIn(['p.tenant_id', 'p.id'], policyIds)
       .whereNot('p.state', 'archived')
-      .select('p.id', 'p.tenant_id', 'p.uuid', 'p.name', 'v.id as version_id', 'v.content', 'v.state as version_state') as
-      Array<{ id: number; tenant_id: number; uuid: string; name: string; version_id: number; content: unknown; version_state: string }>;
+      .select('p.id', 'p.tenant_id', 'p.uuid', 'p.name', 'v.id as version_id', 'v.state as version_state') as
+      Array<{ id: number; tenant_id: number; uuid: string; name: string; version_id: number; version_state: string }>;
+    // The content (up to 512 KiB a version) is read only for the versions whose contributions are not known yet:
+    // a published version is immutable, and the resolution of one device reads every policy of its tenant.
+    const cacheable = catalog === appleCatalog();
+    const known = new Map<number, Contribution[]>();
+    const unknown: typeof rows = [];
     for (const r of rows) {
-      const contributions = contributionsOf(Number(r.tenant_id), { id: Number(r.version_id), content: r.content, state: r.version_state }, r.uuid, catalog);
+      const hit = cacheable ? knownContributions(`${Number(r.tenant_id)}:${Number(r.version_id)}`) : undefined;
+      if (hit) known.set(Number(r.version_id), hit); else unknown.push(r);
+    }
+    const contents = new Map<number, unknown>();
+    for (let i = 0; i < unknown.length; i += 50) {
+      const slice = await q('policy_versions').whereIn(['tenant_id', 'id'], unknown.slice(i, i + 50).map((r) => [Number(r.tenant_id), Number(r.version_id)]))
+        .select('id', 'content') as Array<{ id: number; content: unknown }>;
+      for (const c of slice) contents.set(Number(c.id), c.content);
+    }
+    for (const r of rows) {
+      const versionId = Number(r.version_id);
+      let contributions = known.get(versionId);
+      if (!contributions) {
+        if (!contents.has(versionId)) continue;   // gone between the two reads (its tenant deleted): nothing to bring
+        const version = { id: versionId, content: contents.get(versionId), state: r.version_state };
+        contributions = cacheable
+          ? contributionsOf(Number(r.tenant_id), version, r.uuid, catalog)
+          : policyContributions(parseJson<PolicyContentV1>(version.content), catalog, r.uuid);
+      }
       resources.set(resourceKey('policy', Number(r.tenant_id), Number(r.id)), {
-        type: 'policy', id: Number(r.id), tenantId: Number(r.tenant_id), versionId: Number(r.version_id), name: r.name, contributions,
+        type: 'policy', id: Number(r.id), tenantId: Number(r.tenant_id), versionId, name: r.name, contributions,
       });
     }
   }

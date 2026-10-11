@@ -7,23 +7,48 @@ import { resolveDeviceJob, resolveTenantJob } from './jobs';
 // =============================================================================
 // Triggers of the resolution (docs: modele-donnees-mdm §7.12):
 //   - publication, change of assignments, archival, a group moved in the tree
-//     or deleted → the tenant (mdm.policies.resolve-tenant, grouped 30 s);
+//     or deleted → the tenant (mdm.policies.resolve-tenant);
 //   - enrollment (apple.device-onboard: resolveAtOnboarding), change of group,
 //     of ownership, of supervision, of OS, of platform, of serial number or
 //     model (inventory), of the assigned end user or of its profile
 //     (variables), of DDM client capabilities (status channel) → the device
-//     (mdm.policies.resolve-device, grouped 5 s; a large batch asks the
-//     tenant's instead).
+//     (mdm.policies.resolve-device; a large batch asks the tenant's instead).
 // In the caller's transaction when given (the job exists if and only if it
-// commits). A tenant without any assignment, whose devices have no effective
-// state, has nothing to resolve: no job. A process without the MDM module
-// requests nothing; outside a server that runs the job runtime (a CLI, a test
-// that does not start it), a request is logged and dropped: the next change
-// of the tenant resolves again.
+// commits). Requests are grouped by the queue itself (stately: one queued job
+// and one running job per key, the key being the tenant or the device): a
+// request while a job is queued is absorbed by it, a request while a job runs
+// queues the next one. Every job can start at once, so the workers are woken
+// by NOTIFY and nothing waits for a poll (no deferred job: a job dated in the
+// future is not announced). A tenant without any assignment, whose devices
+// have no effective state, has nothing to resolve: no job. A process without
+// the MDM module requests nothing; outside a server that runs the job runtime
+// (a CLI, a test that does not start it), a request is logged and dropped: the
+// next change of the tenant resolves again.
 // =============================================================================
 
 /** Beyond this many devices, one resolution of the tenant instead of one per device. */
 const DEVICE_BATCH_MAX = 50;
+
+/** The promise of the outermost transaction of `trx` (a nested transaction ends before its outer one commits). */
+function outermostExecution(trx: Knex.Transaction): Promise<unknown> | null {
+  type Nested = Knex.Transaction & { parentTransaction?: Knex.Transaction };
+  let t = trx as Nested;
+  for (let depth = 0; depth < 16 && t.parentTransaction; depth++) t = t.parentTransaction as Nested;
+  return t.executionPromise ?? null;
+}
+
+/**
+ * A request sent in a transaction and absorbed by a job already queued is sent again once the transaction is
+ * committed (never when it rolls back). The queued job may start, and read the tenant, before this transaction
+ * commits: its change would then stay unresolved until the next trigger. Sent again, the request is absorbed
+ * once more if that job has not started (it will then read the committed change), or queues a new job.
+ */
+function resendAfterCommit(trx: Knex.Transaction, send: () => Promise<unknown>, what: Record<string, unknown>): void {
+  const committed = outermostExecution(trx);
+  if (!committed) return;
+  void committed.then(() => send(), () => undefined)
+    .catch((err) => logger.warn({ ...what, err: { message: (err as Error)?.message } }, 'policy resolution not requested again after the commit'));
+}
 
 async function somethingToResolve(q: Knex | Knex.Transaction, tenantId: number, deviceIds: number[] | null): Promise<boolean> {
   const a = await q('assignments').where({ tenant_id: tenantId }).first('id');
@@ -41,8 +66,11 @@ export async function requestTenantResolution(trx: Knex.Transaction | null, tena
     logger.warn({ tenantId }, 'policy resolution not requested: the job runtime is not started');
     return null;
   }
-  const opts = { singletonKey: `t:${tenantId}`, tenantId, debounceSeconds: 30 };
-  return trx ? job.sendInTx(trx, { tenantId }, opts) : job.send({ tenantId }, opts);
+  const opts = { singletonKey: `t:${tenantId}`, tenantId };
+  if (!trx) return job.send({ tenantId }, opts);
+  const id = await job.sendInTx(trx, { tenantId }, opts);
+  if (id === null) resendAfterCommit(trx, () => job.send({ tenantId }, opts), { tenantId });
+  return id;
 }
 
 /** Requests the resolution of devices of the tenant (the tenant's beyond 50 devices). */
@@ -57,9 +85,10 @@ export async function requestDeviceResolution(trx: Knex.Transaction | null, tena
   if (ids.length > DEVICE_BATCH_MAX) return (await requestTenantResolution(trx, tenantId)) ? 1 : 0;
   let sent = 0;
   for (const deviceId of ids) {
-    const opts = { singletonKey: `t:${tenantId}:d:${deviceId}`, tenantId, debounceSeconds: 5 };
+    const opts = { singletonKey: `t:${tenantId}:d:${deviceId}`, tenantId };
     const id = trx ? await job.sendInTx(trx, { tenantId, deviceId }, opts) : await job.send({ tenantId, deviceId }, opts);
     if (id) sent++;
+    else if (trx) resendAfterCommit(trx, () => job.send({ tenantId, deviceId }, opts), { tenantId, deviceId });
   }
   return sent;
 }
