@@ -77,8 +77,11 @@ async function handleTokenActivated(ctx: Ctx<'ade.token_activated'>): Promise<vo
   }
   if (!newer(m, event.occurredAt)) return;                         // an older event consumed late, or a replay
   const notAfter = p.not_after ? new Date(p.not_after) : null;
+  // The name and the UUID of the server are Apple's answer (what the organisation typed in Apple Business): kept
+  // within their columns, never refused.
   await trx('tenant_apple_ade_tokens').where({ tenant_id: tenantId, id: m.id }).update({
-    state: 'active', state_at: event.occurredAt, server_name: p.server_name ?? m.server_name, server_uuid: p.server_uuid ?? null,
+    state: 'active', state_at: event.occurredAt, server_name: (p.server_name ?? m.server_name)?.slice(0, 200) ?? null,
+    server_uuid: p.server_uuid ? p.server_uuid.slice(0, 64) : null,
     not_after: notAfter, consecutive_errors: 0, last_error_code: null, updated_at: new Date(),
   });
   const serverName = (p.server_name || m.label || 'ADE').slice(0, 200);

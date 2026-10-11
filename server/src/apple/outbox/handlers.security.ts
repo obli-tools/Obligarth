@@ -46,6 +46,7 @@ import { P, type PayloadOf } from './schemas';
 type Ctx<K extends keyof typeof P> = OutboxHandlerContext<PayloadOf<K>>;
 
 const deviceTarget = (deviceId: number) => ({ type: 'device', id: String(deviceId), device: deviceId });
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function ignored(ctx: OutboxHandlerContext<unknown>, why: string): void {
   appleMetrics.eventIgnored(ctx.event.type);
@@ -156,7 +157,9 @@ async function handleIdentityMismatch(ctx: Ctx<'security.identity_mismatch'>): P
     ctx.audit({ tenantId, action: 'security.identity_mismatch', outcome: 'denied', details: { field: p.field, stage: 'apple-edge' } });
   }
   // The session of the refused enrollment: apple-edge names it in no field today (session_ref, read when it comes).
-  const ref = p.session_ref && /^[0-9a-f-]{36}$/i.test(p.session_ref) ? p.session_ref.toLowerCase() : null;
+  // A reference that is not a UUID designates no session (compared as a uuid, it would fail the event and take the
+  // alert and the journal's entry above with its savepoint).
+  const ref = p.session_ref && UUID_RE.test(p.session_ref) ? p.session_ref.toLowerCase() : null;
   if (!ref) return;
   const n = await trx('enrollment_sessions').where({ tenant_id: tenantId, id: ref }).whereNotIn('state', ['enrolled', 'failed'])
     .update({ state: 'failed', failure_code: 'identity_mismatch', state_at: event.occurredAt, updated_at: new Date() });

@@ -14,8 +14,10 @@ import { MDM_KEY_RE } from '../tenants/key';
 // set only on what apple-edge bounds itself (its identifiers, its own codes,
 // its pages); a value a device chooses and apple-edge copies as it is (the
 // topic and the serial number of a refused check-in) or that Apple writes (the
-// reason of an APNs refusal) has none, and the handler ignores or truncates
-// it: an oversized value must not hide a security event from the tenant.
+// reason of an APNs refusal; the name and the UUID of an ADE server, the serial
+// number of a device of Apple Business, the UUID of an ADE profile) has none,
+// and the handler ignores or truncates it: an oversized value must not hide a
+// security event from the tenant, nor a page of devices, nor an activation.
 // =============================================================================
 
 const iso = z.string().datetime({ offset: true });
@@ -26,7 +28,9 @@ const key = z.string().regex(MDM_KEY_RE);
 const nanoType = z.enum(['Device', 'User', 'User Enrollment (Device)', 'User Enrollment', 'Shared iPad']);
 /** A list Go may write as null. */
 const list = <T extends z.ZodTypeAny>(item: T, max: number) => z.array(item).max(max).nullable().transform((v) => v ?? []);
-const optionalText = (max: number) => z.string().max(max).nullable().optional();
+/** A text Apple writes (the name an organisation gave its server in Apple Business): of any length, the handler
+ *  keeps what its column holds. */
+const appleText = z.string().nullable().optional();
 /** Devices of one ade.devices event: a page of Apple holds 1 000 at most, but the devices gone from a server at the
  *  end of a complete fetch (op_type 'deleted') are written by apple-edge in one event, whatever their number
  *  (internal/ade/sync.go, commitPage); the handler applies the list in one statement. */
@@ -133,15 +137,16 @@ export const P = {
   // ── Apple Business (ADE) ──────────────────────────────────────────────────
   'ade.token_activated': z.object({
     token_id: uuid,
-    server_name: optionalText(200),
-    server_uuid: optionalText(64),
+    server_name: appleText,
+    server_uuid: appleText,
     not_after: iso.nullable().optional(),
   }),
   'ade.devices': z.object({
     token_id: uuid,
     phase: z.enum(['fetch', 'sync']),
     devices: list(z.object({
-      serial_number: z.string().min(1).max(64),
+      // Apple's inventory: one value out of form must not lose the page (the handler skips it).
+      serial_number: z.string().min(1),
       model: z.string().optional(),
       description: z.string().optional(),
       color: z.string().optional(),
@@ -165,7 +170,8 @@ export const P = {
   'ade.profile_assignment': z.object({
     token_id: uuid,
     usage: z.string().max(32),
-    profile_uuid: z.string().max(64),
+    // The UUID Apple gave the profile (the handler keeps 64 characters).
+    profile_uuid: z.string(),
     results: z.record(z.string()).nullable().transform((v) => v ?? {}),
   }),
   'ade.sync_error': z.object({ token_id: uuid, code: z.string().max(64) }),
