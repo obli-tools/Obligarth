@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import { requestEndUserResolution } from '../policies/triggers';
 
 // =============================================================================
 // Retention rules of the data model (docs: modele-donnees-mdm §5.5, EX-17,
@@ -8,7 +9,9 @@ import type { Knex } from 'knex';
 // call, in the caller's transaction and the tenant's context, and returns how
 // many it removed (the caller loops while a slice is full).
 //   - end_users.departed: an end user departed for 90 days (the device ↔
-//     employee link becomes NULL, composite keys ON DELETE SET NULL);
+//     employee link becomes NULL, composite keys ON DELETE SET NULL; the
+//     devices that lose their end user are resolved again: the variables
+//     {{user.…}} of their policies no longer have a value, §7.12);
 //   - device_status_history: 90 days;
 //   - lost_mode_locations: purge_at (62 days at most, by constraint).
 // The record of a device past its retention_until is NOT one of these rules:
@@ -65,7 +68,10 @@ export const mdmRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
       const cutoff = new Date(now.getTime() - days(DEPARTED_END_USER_DAYS));
       const ids = await trx('end_users').where({ tenant_id: tenantId, status: 'departed' }).where('departed_at', '<=', cutoff)
         .orderBy('departed_at', 'asc').limit(limit).pluck('id') as number[];
-      return ids.length ? trx('end_users').where({ tenant_id: tenantId }).whereIn('id', ids).del() : 0;
+      if (!ids.length) return 0;
+      // Before the link goes: the devices of these end users, resolved again by a job of this transaction.
+      await requestEndUserResolution(trx, tenantId, ids.map(Number));
+      return trx('end_users').where({ tenant_id: tenantId }).whereIn('id', ids).del();
     },
   },
   {

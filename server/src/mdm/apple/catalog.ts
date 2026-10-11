@@ -53,11 +53,17 @@ function descriptorOf(entry: SchemaEntry, overlay: TypeOverlay): MergeDescriptor
     : { kind: 'profile_payload', merge };
 }
 
+/** The entry of a table under a name the editor sends (a type, the path of a key): its own entries only, never a
+ *  member of Object.prototype ('constructor', 'toString'…). */
+function own<T>(table: Record<string, T> | undefined, name: string): T | undefined {
+  return table !== undefined && Object.prototype.hasOwnProperty.call(table, name) ? table[name] : undefined;
+}
+
 export function buildCatalogView(catalog: AppleSchemaCatalog, overlays: Record<string, TypeOverlay> = APPLE_OVERLAY): AppleCatalogView {
   const descriptors = new Map<string, MergeDescriptor>();
   const keys = new Map<string, Map<string, SchemaKey>>();
-  const entryOf = (type: string): SchemaEntry | undefined => (type === RAW_PROFILE_TYPE ? RAW_ENTRY : catalog.entries[type]);
-  const overlayOf = (type: string): TypeOverlay => overlays[type] ?? {};
+  const entryOf = (type: string): SchemaEntry | undefined => (type === RAW_PROFILE_TYPE ? RAW_ENTRY : own(catalog.entries, type));
+  const overlayOf = (type: string): TypeOverlay => own(overlays, type) ?? {};
   return {
     release: catalog.release,
     entry: entryOf,
@@ -72,11 +78,11 @@ export function buildCatalogView(catalog: AppleSchemaCatalog, overlays: Record<s
       return d;
     },
     enabled(type) {
-      if (type === RAW_PROFILE_TYPE || !catalog.entries[type] || overlayOf(type).disabled) return false;
+      if (type === RAW_PROFILE_TYPE || !own(catalog.entries, type) || overlayOf(type).disabled) return false;
       return MVP_TYPES.has(type) || type.startsWith(SETTING_TYPE_PREFIX);
     },
     secretPurpose(type, path) {
-      return overlayOf(type).secretKeys?.[path] ?? null;
+      return own(overlayOf(type).secretKeys, path) ?? null;
     },
     key(type, name) {
       let m = keys.get(type);
