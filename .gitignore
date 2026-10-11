@@ -66,3 +66,139 @@ Thumbs.db
 .env
 .env.*
 !/.env.example
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Durcissement avant recréation du dépôt (03/10/2026) : GitHub = de quoi BUILDER,
+# rien d'autre. Tout ce qui suit reste sur le poste et n'est jamais publié.
+# Toute exception se déclare en négation explicite, APRÈS ce bloc, avec sa raison.
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Fichiers et dossiers cachés du poste (caches, sessions d'outils, éditeurs,
+# brouillons, vérifications locales) : tous ignorés, sauf ceux du build, nommés
+# un par un avec leur chemin (jamais un nom seul, qui vaudrait à toute
+# profondeur) : règles du dépôt, contextes de build des images (racine pour le
+# serveur et le client, apple-edge pour le sien), modèle de configuration que
+# télécharge install.sh.
+.*
+!/.gitignore
+!/.gitattributes
+!/.dockerignore
+!/apple-edge/.dockerignore
+!/.env.example
+/AGENTS*
+/REPRISE*
+/HANDOFF*
+/NOTES*
+/TODO*
+/PLAN*
+*.jsonl
+
+# Documentation, notes, exports bureautiques (peuvent contenir des données client)
+docs/
+doc/
+docs-*/
+*.md
+*.markdown
+*.txt
+*.pdf
+*.doc
+*.docx
+*.xls
+*.xlsx
+*.ppt
+*.pptx
+*.csv
+*.tsv
+*.har
+*.pcap
+*.pcapng
+
+# Scripts d'outillage du poste (build, release, déploiement, bench)
+*.bat
+*.cmd
+*.ps1
+*.psm1
+*.py
+__pycache__/
+
+# Journaux, sauvegardes, restes d'édition
+*.log
+/logs/
+*.bak
+*.orig
+*.rej
+*.pre-*
+*.swp
+*~
+*.tmp
+
+# Bases et dumps locaux
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+*.backup
+
+# Secrets, clés et certificats
+.env
+.env.*
+!/.env.example
+*.pem
+*.key
+*.crt
+*.cer
+*.der
+*.csr
+*.jks
+*.keystore
+*.pfx
+*.p12
+*.p8
+*.ppk
+*.kdbx
+*.secret
+*.credentials
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.mobileprovision
+
+# Tests et données de test : restent sur le poste (non nécessaires au build)
+*.test.*
+*.spec.*
+*_test.go
+*.verify.ts
+*.selftest.ts
+__tests__/
+testdata/
+fixtures/
+golden/
+*.golden
+*.sample
+*.export
+**/testing/
+/server/test/
+/server/tests/
+/client/test/
+/client/tests/
+
+# Binaires et sorties de build (produits sur le poste, jamais versionnés)
+*.exe
+*.msi
+*.dll
+*.syso
+*.wixpdb
+*.wixobj
+*.dmg
+*.pkg
+*.zip
+*.7z
+*.tar.gz
+*.tgz
+
+# Données d'instance locales
+custom/
+
+# Données locales du poste : jamais versionnées ni dans un build
+.cache/

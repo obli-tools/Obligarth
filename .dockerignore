@@ -39,3 +39,6 @@
 **/__tests__
 **/testdata
 **/test-resolve.mjs
+
+# Données locales du poste : jamais versionnées ni dans un build
+.cache
