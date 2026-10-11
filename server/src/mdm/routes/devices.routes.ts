@@ -16,6 +16,7 @@ import { listEpisodes } from '../registry/episodes';
 import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership, moveToGroup } from '../registry/ownership';
 import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
+import { deviceConfiguration } from '../policies/configuration';
 
 // =============================================================================
 // Console API of the device registry (docs: modele-donnees-mdm §10.6, §11.1):
@@ -26,8 +27,8 @@ import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/vie
 // from it goes to the device's own tenant (asTargetTenant, one tenant per
 // request). A device out of reach answers like an unknown one (404).
 // The commands, the queue, the actions and the timeline of a device are the
-// integration's (/api/apple/…); the policies, assignments and apps come with
-// their lots (B5, C4).
+// integration's (/api/apple/…); the policies and assignments are in
+// policies.routes.ts (lot B5b), the apps come with their lot (C4).
 // =============================================================================
 
 const router = Router();
@@ -375,6 +376,15 @@ router.get('/devices/:id/profiles', globalViewScope('console.devices'), resolveD
 });
 router.get('/devices/:id/certificates', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
   try { res.json({ data: await deviceCertificates(req.mdmDevice!.tenantId, req.mdmDevice!.id) }); } catch (err) { next(err); }
+});
+
+// GET /api/mdm/devices/:id/configuration — the effective configuration: keys, values (never a secret), provenance,
+// availability with its reason, conflicts; the artifacts and their state (modele §10.6, criterion 9).
+router.get('/devices/:id/configuration', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
+  try {
+    const { id, tenantId } = req.mdmDevice!;
+    res.json({ data: await asTargetTenant(req, tenantId, () => deviceConfiguration(tenantId, id)) });
+  } catch (err) { next(err); }
 });
 
 /**

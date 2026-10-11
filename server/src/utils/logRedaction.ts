@@ -12,12 +12,16 @@ const SECRET_KEYS = [
   // the sealed columns of the vault's registry (core and modules)
   'totp_secret_enc', 'password_enc', 'secrets_enc', 'license_key_enc', 'sealed_payload_enc', 'value_enc',
   'pending_totp_secret_enc', 'pendingTotpSecretEnc', 'dek_wrapped',
+  // a secret typed in a policy (modele-donnees-mdm §7.2, DM17): replaced by a reference before any storage
+  '$secretValue',
 ] as const;
 
 export const LOG_REDACT_PATHS: string[] = [
   'err.detail', 'err.where', 'detail',
   ...SECRET_KEYS,
   ...SECRET_KEYS.map((k) => `*.${k}`),
+  // deeper in a policy's content (values of an item)
+  '*.*.$secretValue', '*.*.*.$secretValue',
 ];
 
 export const LOG_REDACT_CENSOR = '[redacted]';

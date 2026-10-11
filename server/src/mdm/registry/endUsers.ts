@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import type { EndUser, EndUserImportReport } from '@obligarth/shared';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
+import { requestDeviceResolution, requestEndUserResolution } from '../policies/triggers';
 
 // =============================================================================
 // End users: the employees of the client (docs: modele-donnees-mdm §4.8,
@@ -118,11 +119,16 @@ export const endUserService = {
     const n = normaliseEndUser(merged);
     if (!n.ok) throw new AppError(400, 'Invalid end user', 'invalidRequest', { field: n.field, code: n.code });
     try {
-      const [row] = await db('end_users').where({ tenant_id: tenantId, id }).update({
-        email: n.value.email, display_name: n.value.displayName, managed_apple_account: n.value.managedAppleAccount,
-        external_id: n.value.externalId, updated_at: new Date(),
-      }).returning('*');
-      return row ? rowToEndUser(row) : null;
+      // The profile and the resolution of the devices that read it ({{user.email}}…), together.
+      return await db.transaction(async (trx) => {
+        const [row] = await trx('end_users').where({ tenant_id: tenantId, id }).update({
+          email: n.value.email, display_name: n.value.displayName, managed_apple_account: n.value.managedAppleAccount,
+          external_id: n.value.externalId, updated_at: new Date(),
+        }).returning('*');
+        if (!row) return null;
+        await requestEndUserResolution(trx, tenantId, [id]);
+        return rowToEndUser(row);
+      });
     } catch (err) {
       throw conflictOf(err) ?? err;
     }
@@ -155,6 +161,7 @@ export const endUserService = {
     }
     if (lines.length - 1 > 5000) throw new AppError(413, 'Too many lines (5000 at most)', 'invalidRequest', { code: 'too_many_lines' });
     const report: EndUserImportReport = { created: 0, updated: 0, unchanged: 0, rejected: 0, lines: [] };
+    const updatedIds: number[] = [];
     await db.transaction(async (trx) => {
       for (let i = 1; i < lines.length; i++) {
         const cells = lines[i];
@@ -171,7 +178,10 @@ export const endUserService = {
         if (outcome.outcome === 'rejected') { report.rejected++; report.lines.push({ line: i + 1, outcome: 'rejected', code: outcome.code }); continue; }
         report[outcome.outcome]++;
         report.lines.push({ line: i + 1, outcome: outcome.outcome, id: outcome.id });
+        if (outcome.outcome === 'updated') updatedIds.push(outcome.id);
       }
+      // The devices of the end users whose profile changed read it through the variables: resolved again.
+      await requestEndUserResolution(trx, tenantId, updatedIds);
     });
     return report;
   },
@@ -258,6 +268,8 @@ export async function assignEndUser(trx: Knex.Transaction, tenantId: number, dev
   if (!n) return false;
   // The open episode follows the device's current end user.
   await trx('device_enrollments').where({ tenant_id: tenantId, device_id: deviceId }).whereNull('ended_at').update({ end_user_id: endUserId });
+  // The variables of the policies ({{user.email}}…) follow the end user: resolve the device again.
+  await requestDeviceResolution(trx, tenantId, [deviceId]);
   return true;
 }
 

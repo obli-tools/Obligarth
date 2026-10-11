@@ -242,6 +242,10 @@ export const groupService = {
         .where({ id })
         .update({ parent_id: newParentId, updated_at: new Date() })
         .returning('*');
+      // The ancestry of the subtree's devices changed: the inheritance of the policies follows
+      // (modele-donnees-mdm §7.6, §7.12), requested in this transaction.
+      const { requestTenantResolution } = await import('../mdm/policies/triggers');
+      await requestTenantResolution(trx, Number(group.tenant_id));
       return updated ?? null;
     });
 
@@ -249,8 +253,15 @@ export const groupService = {
   },
 
   async delete(id: number): Promise<boolean> {
+    const group = await db('device_groups').where({ id }).first('tenant_id') as { tenant_id: number } | undefined;
     // CASCADE in the DB handles closure table and child groups
     const count = await db('device_groups').where({ id }).del();
+    if (count > 0 && group) {
+      // Its assignments went with it (assignments_cleanup) and its devices left it: the policies follow
+      // (modele-donnees-mdm §7.5, §7.12).
+      const { requestTenantResolution } = await import('../mdm/policies/triggers');
+      await requestTenantResolution(null, Number(group.tenant_id));
+    }
     return count > 0;
   },
 

@@ -4,6 +4,7 @@ import type { NanoEnrollType, Ownership } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { raiseInTx } from '../../apple/alerts/service';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
+import { requestDeviceResolution } from '../policies/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 
 // =============================================================================
@@ -20,9 +21,11 @@ import { normalizeSerial, platformFromProductName, serialHolderOf } from '../reg
 //     columns, a changed serial number or UDID raises an alert, a serial
 //     number held by another record is never taken from it.
 // In the caller's transaction and the tenant's context (the outbox handler's
-// savepoint, or the job apple.command-result-ingest); no network. The return
-// values tell the caller what changed, for the resolution and the compliance
-// that follow (lot B5).
+// savepoint, or the job apple.command-result-ingest); no network. A change of
+// what the resolution of the policies reads (OS version, supervision,
+// platform, and the serial number and model of the variables) requests the
+// resolution of the device in the same transaction (§7.12); the return values
+// tell the caller what changed, for the compliance that follows (lot B5c).
 // =============================================================================
 
 export type IngestOutcome = 'applied' | 'stale' | 'no_device';
@@ -33,6 +36,8 @@ interface DeviceFacts {
   serial: string | null;
   supervised: boolean;
   osVersion: string | null;
+  platform: string;
+  modelName: string | null;
   lostModeState: string;
   udid: string | null;
   certSha256: string | null;
@@ -51,13 +56,14 @@ async function factsOf(trx: Knex.Transaction, tenantId: number, deviceId: number
     .where({ 'd.tenant_id': tenantId, 'd.id': deviceId })
     // The record's row (never the nullable side of the outer join): one ingestion of a device at a time.
     .forUpdate('d')
-    .first('d.ownership', 'd.management_mode', 'd.serial_number', 'd.supervised', 'd.os_version', 'd.lost_mode_state',
-      'a.udid', 'a.cert_sha256', 'a.last_device_info_at', 'a.last_security_info_at', 'a.last_apps_at', 'a.last_profiles_at',
-      'a.last_certificates_at') as Record<string, any> | undefined;
+    .first('d.ownership', 'd.management_mode', 'd.serial_number', 'd.supervised', 'd.os_version', 'd.platform', 'd.model_name',
+      'd.lost_mode_state', 'a.udid', 'a.cert_sha256', 'a.last_device_info_at', 'a.last_security_info_at', 'a.last_apps_at',
+      'a.last_profiles_at', 'a.last_certificates_at') as Record<string, any> | undefined;
   if (!r) return null;
   return {
     ownership: r.ownership, mode: r.management_mode, serial: r.serial_number ?? null, supervised: !!r.supervised,
-    osVersion: r.os_version ?? null, lostModeState: r.lost_mode_state, udid: r.udid ?? null,
+    osVersion: r.os_version ?? null, platform: r.platform, modelName: r.model_name ?? null,
+    lostModeState: r.lost_mode_state, udid: r.udid ?? null,
     certSha256: r.cert_sha256 ? String(r.cert_sha256).trim() : null,
     last: {
       device_info: r.last_device_info_at ?? null, security_info: r.last_security_info_at ?? null, apps: r.last_apps_at ?? null,
@@ -216,6 +222,13 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   sat.device_information = JSON.stringify(kept);
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(device);
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(sat);
+  // What the resolution of the policies reads changed (§7.8, §7.12): the OS version and the supervision, the
+  // platform, the serial number and the model of the variables. The device is resolved again (job of this transaction).
+  const resolutionFacts = effects.osChanged === true || effects.supervisionChanged === true
+    || (typeof device.platform === 'string' && device.platform !== f.platform)
+    || (typeof device.serial_number === 'string' && device.serial_number !== f.serial)
+    || (typeof device.model_name === 'string' && device.model_name !== f.modelName);
+  if (resolutionFacts) await requestDeviceResolution(trx, tenantId, [deviceId]);
   return effects;
 }
 

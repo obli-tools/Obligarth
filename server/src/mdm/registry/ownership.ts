@@ -4,6 +4,7 @@ import { audit, type AuditWriteContext } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import { privacyRulesFor } from '../../apple/devices/privacy';
 import { applyCollectionRules } from '../inventory/ingestors';
+import { requestDeviceResolution } from '../policies/triggers';
 
 // =============================================================================
 // Changes of the record an operator makes (docs: modele-donnees-mdm §4.3,
@@ -45,6 +46,8 @@ export async function changeOwnership(trx: Knex.Transaction, tenantId: number, d
     // Narrowing: the rules of the new ownership apply at once to what the inventory holds.
     ({ purgedApps } = await applyCollectionRules(trx, tenantId, deviceId, await privacyRulesFor(trx, tenantId, to, 'Device')));
   }
+  // The ownership decides the availability of settings (product rules of the overlay): resolve the device again.
+  await requestDeviceResolution(trx, tenantId, [deviceId]);
   await audit.appendInTx(trx, {
     tenantId, action: 'device.ownership_changed', target: { type: 'device', id: String(deviceId), device: deviceId },
     reason: why.slice(0, 500), ticket: ticket?.trim() ? ticket.trim().slice(0, 100) : undefined,
@@ -56,7 +59,8 @@ export async function changeOwnership(trx: Knex.Transaction, tenantId: number, d
 /**
  * Moves devices of `tenantId` into a group of the same tenant (or out of any group: null). Returns the ids
  * whose group actually changed. The caller checks the rights (devices.manage, write on the group) and the
- * restriction device.bulk_group_change; the resolution of the policies follows the move (lot B5).
+ * restriction device.bulk_group_change; the resolution of the policies follows the move (mdm.policies.resolve-device,
+ * or the tenant's beyond 50 devices), requested in the transaction.
  */
 export async function moveToGroup(trx: Knex.Transaction, tenantId: number, deviceIds: number[], groupId: number | null): Promise<number[]> {
   if (groupId !== null) {
@@ -70,6 +74,7 @@ export async function moveToGroup(trx: Knex.Transaction, tenantId: number, devic
   const changed = before.filter((d) => (d.group_id === null ? null : Number(d.group_id)) !== groupId).map((d) => Number(d.id));
   if (changed.length) {
     await trx('devices').whereIn('id', changed).where({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
+    await requestDeviceResolution(trx, tenantId, changed);
   }
   return changed;
 }
