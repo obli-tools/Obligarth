@@ -42,6 +42,16 @@ export const SocketEvents = {
   GUARD_ACTION_UPDATED:   'GUARD_ACTION_UPDATED',
   GUARD_STATE_CHANGED:    'GUARD_STATE_CHANGED',
 
+  // Apple integration (integration-apple-edge §12.4): identifiers only, the
+  // client reads the objects back through the REST routes (scopes applied).
+  // APPLE_DEVICE_CHANGED { deviceIds }, MDM_COMMAND_CHANGED { commandIds,
+  // deviceIds } to the tenant room; ENROLLMENT_SESSION_CHANGED { sessionIds }
+  // and INTEGRATION_CHANGED { kinds } to the tenant's admin room.
+  APPLE_DEVICE_CHANGED:        'APPLE_DEVICE_CHANGED',
+  MDM_COMMAND_CHANGED:         'MDM_COMMAND_CHANGED',
+  ENROLLMENT_SESSION_CHANGED:  'ENROLLMENT_SESSION_CHANGED',
+  INTEGRATION_CHANGED:         'INTEGRATION_CHANGED',
+
   // Client → Server
   DEVICE_SUBSCRIBE:       'DEVICE_SUBSCRIBE',
   DEVICE_UNSUBSCRIBE:     'DEVICE_UNSUBSCRIBE',
