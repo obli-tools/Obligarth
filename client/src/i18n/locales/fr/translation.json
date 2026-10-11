@@ -1268,7 +1268,25 @@
       "guard_approver_designated": "Approbateur désigné",
       "guard_approver_revoked": "Approbateur révoqué",
       "guard_anomaly_detected": "Anomalie détectée par les garde-fous",
-      "guard_approver_fallback": "Approbation par le MSP faute d'approbateur client"
+      "guard_approver_fallback": "Approbation par le MSP faute d'approbateur client",
+      "apple_tenant_provisioned": "Tenant créé au service des appareils",
+      "apple_tenant_state_changed": "Tenant suspendu ou repris au service des appareils",
+      "apple_tenant_ca_rotated": "Rotation de l'autorité des appareils du tenant",
+      "device_enrolled": "Appareil enrôlé",
+      "device_checked_out": "Appareil sorti de gestion",
+      "device_id_released": "Identifiant d'appareil libéré",
+      "device_transfer_completed": "Transfert d'appareil terminé",
+      "security_topic_mismatch": "Topic push non conforme",
+      "security_identity_expired": "Identité d'appareil expirée présentée",
+      "security_identity_revoked": "Identité d'appareil révoquée présentée",
+      "security_identity_mismatch": "Identité d'appareil non conforme",
+      "security_device_id_conflict": "Conflit d'identifiant d'appareil",
+      "security_foreign_certificate": "Certificat d'un autre tenant présenté",
+      "apns_push_refused": "Notification push refusée par Apple",
+      "integration_push_certificate_activated": "Certificat push activé",
+      "integration_ade_token_activated": "Serveur ADE activé",
+      "mdm_command_acknowledged": "Commande MDM acquittée",
+      "mdm_command_failed": "Commande MDM en échec"
     },
     "families": {
       "auth": "Authentification",
@@ -1290,7 +1308,13 @@
       "audit": "Journal",
       "jobs": "Tâches de fond",
       "approval": "Approbation",
-      "guard": "Garde-fous"
+      "guard": "Garde-fous",
+      "apple": "Intégration Apple",
+      "security": "Sécurité",
+      "apns": "Notifications push (APNs)",
+      "integration": "Intégrations Apple",
+      "mdm": "Commandes MDM",
+      "enrollment": "Enrôlement"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -2175,6 +2199,28 @@
       "appleEdgeValidationFailed": "Le service des appareils a refusé la demande",
       "appleEdgeNotFound": "Introuvable au service des appareils",
       "invalidState": "L'état doit être « active » ou « suspended »"
+    },
+    "timeline": {
+      "enrollment_started": "Enrôlement commencé",
+      "enrolled": "Enrôlé",
+      "awaiting_configuration": "En attente de sa configuration (assistant)",
+      "configured": "Configuration terminée",
+      "checked_out": "Profil de gestion retiré",
+      "released": "Identifiant d'appareil libéré",
+      "transferred": "Transféré à un autre tenant",
+      "identity_expired": "Identité expirée présentée",
+      "identity_revoked": "Identité révoquée présentée",
+      "id_conflict": "Identifiant revendiqué par un autre enrôlement",
+      "push_failed": "Notification push refusée par Apple",
+      "push_inactive": "Jeton push plus actif",
+      "setup_timeout": "Configuration non terminée à temps",
+      "command_requested": "Commande demandée",
+      "command_delivered": "Commande remise",
+      "command_acknowledged": "Commande exécutée",
+      "command_error": "Commande en échec",
+      "command_expired": "Commande expirée",
+      "command_cancelled": "Commande annulée",
+      "command_rejected": "Commande refusée"
     }
   }
 }

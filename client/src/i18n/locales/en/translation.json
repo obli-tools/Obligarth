@@ -1268,7 +1268,25 @@
       "guard_approver_designated": "Approver designated",
       "guard_approver_revoked": "Approver revoked",
       "guard_anomaly_detected": "Anomaly detected by the guards",
-      "guard_approver_fallback": "Approval by the MSP instead of a client approver"
+      "guard_approver_fallback": "Approval by the MSP instead of a client approver",
+      "apple_tenant_provisioned": "Tenant provisioned at the device service",
+      "apple_tenant_state_changed": "Tenant suspended or resumed at the device service",
+      "apple_tenant_ca_rotated": "Device CA of the tenant rotated",
+      "device_enrolled": "Device enrolled",
+      "device_checked_out": "Device left management",
+      "device_id_released": "Device identifier released",
+      "device_transfer_completed": "Device transfer completed",
+      "security_topic_mismatch": "Push topic mismatch",
+      "security_identity_expired": "Expired device identity presented",
+      "security_identity_revoked": "Revoked device identity presented",
+      "security_identity_mismatch": "Device identity mismatch",
+      "security_device_id_conflict": "Device identifier conflict",
+      "security_foreign_certificate": "Certificate of another tenant presented",
+      "apns_push_refused": "Push refused by Apple",
+      "integration_push_certificate_activated": "Push certificate activated",
+      "integration_ade_token_activated": "ADE server activated",
+      "mdm_command_acknowledged": "MDM command acknowledged",
+      "mdm_command_failed": "MDM command failed"
     },
     "families": {
       "auth": "Authentication",
@@ -1290,7 +1308,13 @@
       "audit": "Journal",
       "jobs": "Background jobs",
       "approval": "Approval",
-      "guard": "Guards"
+      "guard": "Guards",
+      "apple": "Apple integration",
+      "security": "Security",
+      "apns": "Push (APNs)",
+      "integration": "Apple integrations",
+      "mdm": "MDM commands",
+      "enrollment": "Enrollment"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -2175,6 +2199,28 @@
       "appleEdgeValidationFailed": "The device service refused the request",
       "appleEdgeNotFound": "Not found at the device service",
       "invalidState": "The state must be \"active\" or \"suspended\""
+    },
+    "timeline": {
+      "enrollment_started": "Enrollment started",
+      "enrolled": "Enrolled",
+      "awaiting_configuration": "Awaiting its configuration (setup assistant)",
+      "configured": "Configuration completed",
+      "checked_out": "Management profile removed",
+      "released": "Device identifier released",
+      "transferred": "Transferred to another tenant",
+      "identity_expired": "Expired identity presented",
+      "identity_revoked": "Revoked identity presented",
+      "id_conflict": "Identifier claimed by another enrollment",
+      "push_failed": "Push refused by Apple",
+      "push_inactive": "Push token no longer active",
+      "setup_timeout": "Setup not completed in time",
+      "command_requested": "Command requested",
+      "command_delivered": "Command delivered",
+      "command_acknowledged": "Command carried out",
+      "command_error": "Command failed",
+      "command_expired": "Command expired",
+      "command_cancelled": "Command cancelled",
+      "command_rejected": "Command refused"
     }
   }
 }
