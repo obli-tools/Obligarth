@@ -308,7 +308,8 @@ export function registerResultJobs(): void {
     retry: { limit: 3, delaySeconds: 30, backoff: true, maxDelaySeconds: 600 },
     timeoutSeconds: 120,
     notify: true,
-    pollSeconds: 60,                                   // woken by NOTIFY on send (file-durable L3)
+    // Woken by NOTIFY on send; the poll only picks up a retry that became due (file-durable L3: no one waits for a list).
+    pollSeconds: 300,
     handler: ingestDeferred,
   });
 }

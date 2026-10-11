@@ -205,6 +205,13 @@ async function cleanup(ctx: JobContext<DeviceJob>): Promise<JobResult> {
 
 let registered = false;
 
+/**
+ * Polling interval of a follow-up queue no one waits for (file-durable L3: 5 queries a second at most for the whole
+ * server at rest; a queue polled every minute costs about three queries a minute). These queues are woken by NOTIFY
+ * when a job is sent: the poll only picks up a retry that became due, at most this long after its delay.
+ */
+export const IDLE_POLL_SECONDS = 300;
+
 /** The follow-up jobs of the enrollment cycles (registerAppleModule). */
 export function registerDeviceJobs(): void {
   if (registered) return;
@@ -218,7 +225,7 @@ export function registerDeviceJobs(): void {
     retry: { limit: 5, delaySeconds: 30, backoff: true, maxDelaySeconds: 1800 },
     timeoutSeconds: 120,
     notify: true,
-    pollSeconds: 60,                                   // woken by NOTIFY on send (file-durable L3)
+    pollSeconds: IDLE_POLL_SECONDS,
     handler: onboard,
   });
   awaitJob = registerJob({
@@ -230,7 +237,7 @@ export function registerDeviceJobs(): void {
     retry: { limit: 3, delaySeconds: 15, backoff: true, maxDelaySeconds: 300 },
     timeoutSeconds: 120,
     notify: true,
-    pollSeconds: 60,                                   // woken by NOTIFY on send (file-durable L3)
+    pollSeconds: 60,                                   // a device waits in the setup assistant: its retries within the minute
     handler: awaitConfiguration,
   });
   cleanupJob = registerJob({
@@ -242,7 +249,7 @@ export function registerDeviceJobs(): void {
     retry: { limit: 5, delaySeconds: 30, backoff: true, maxDelaySeconds: 1800 },
     timeoutSeconds: 120,
     notify: true,
-    pollSeconds: 60,                                   // woken by NOTIFY on send (file-durable L3)
+    pollSeconds: IDLE_POLL_SECONDS,
     handler: cleanup,
   });
 }
