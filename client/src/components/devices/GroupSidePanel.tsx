@@ -636,7 +636,11 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
       try {
         const currentParent = getNodeParentId(tree, draggedId) ?? null;
         if (currentParent !== newParent) {
-          await groupsApi.move(draggedId, newParent);
+          // A move that changes what the devices inherit may wait for a second approver: nothing moved yet.
+          if ((await groupsApi.move(draggedId, newParent)) === null) {
+            toast.success(t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
+            return;
+          }
         }
         // Reorder is per-tenant and only respects same-parent rows, so
         // we always send the full target sibling list.
@@ -664,9 +668,11 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     if (currentParent === targetParentId) return;
 
     try {
-      await groupsApi.move(draggedId, targetParentId);
-      toast.success(t('groups.moved', 'Group moved'));
-      fetchTree();
+      const moved = await groupsApi.move(draggedId, targetParentId);
+      toast.success(moved
+        ? t('groups.moved', 'Group moved')
+        : t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
+      if (moved) fetchTree();
     } catch {
       toast.error(t('groups.failedMove', 'Failed to move group'));
     }
@@ -678,10 +684,12 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     if (currentParent === newParent) { setMoveTarget(null); return; }
     if (newParent !== null && (newParent === draggedId || isDescendantOf(tree, draggedId, newParent))) return;
     try {
-      await groupsApi.move(draggedId, newParent);
-      toast.success(t('groups.moved', 'Group moved'));
+      const moved = await groupsApi.move(draggedId, newParent);
+      toast.success(moved
+        ? t('groups.moved', 'Group moved')
+        : t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
       setMoveTarget(null);
-      fetchTree();
+      if (moved) fetchTree();
     } catch {
       toast.error(t('groups.failedMove', 'Failed to move group'));
     }

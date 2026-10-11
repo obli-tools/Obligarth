@@ -103,6 +103,8 @@ export function registerMdmModule(): void {
     { 'device.change_ownership': { level: 'sensitive' }, 'mdm.policy_publish': { level: 'sensitive' } },
   );
   registerApprovalExecutor('change_ownership', executeChangeOwnership);
+  // One request type for every change of the effective configuration that needs a second approver: a version to
+  // publish, a batch of assignment changes, a group moved in the tree or deleted (policies/groupTree.ts, S12).
   registerApprovalRequestType('mdm_policy_publish', executePolicyPublish, { onClosed: onPolicyPublishClosed });
 
   // ── Secret references of the documents (DM17; coffre-secrets §6.4): kept alive by the garbage collection of

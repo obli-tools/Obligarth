@@ -1,5 +1,8 @@
+import type { Knex } from 'knex';
 import { db } from '../db';
+import { audit, type AuditWriteContext } from '../audit';
 import { AppError } from '../middleware/errorHandler';
+import { lockTenantConfiguration } from '../mdm/policies/configLock';
 import { MDM_STALE_AFTER_DAYS_DEFAULT, isMasterTenant } from '@obligarth/shared';
 import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obligarth/shared';
 import type { TenantView } from './deviceScope.service';
@@ -10,6 +13,21 @@ import type { TenantView } from './deviceScope.service';
 // The master tenant's global view (every tenant) is an explicit flag of
 // the caller (platform administrators only, deviceScope.service
 // hasGlobalView), never inferred from the tenant id.
+//
+// The tree is part of the configuration of the devices: the policies are
+// inherited along the ancestry of the groups (modele-donnees-mdm §7.6). A
+// group moved or deleted is therefore written under the lock of the tenant's
+// configuration, like a publication (mdm/policies/configLock.ts), and
+// journaled in its transaction. The routes decide first whether the change
+// needs a second factor or a second approver (mdm/policies/groupTree.ts,
+// S12); move() and delete() below are what they call once it is decided.
+
+/** How a change of the tree is written: in the caller's transaction (which holds, or takes here, the lock of the
+ *  tenant's configuration), with its journal entry as the last statement (P1) when a context is given. */
+export interface GroupTreeWrite {
+  trx?: Knex.Transaction;
+  journal?: { ctx: AuditWriteContext; approvalId?: number; details?: Record<string, unknown> };
+}
 
 interface GroupRow {
   id: number;
@@ -190,11 +208,17 @@ export const groupService = {
    * Moves a group under `newParentId` (null: root). The new parent must be a
    * group of the moved group's tenant — another tenant's answers like an
    * unknown one (400) — and not one of its descendants. The closure is
-   * rewritten in one transaction.
+   * rewritten in one transaction, under the lock of the tenant's
+   * configuration; the entry group.moved is written in it when `o.journal`
+   * is given.
    */
-  async move(id: number, newParentId: number | null): Promise<DeviceGroup | null> {
-    const row = await db.transaction(async (trx) => {
+  async move(id: number, newParentId: number | null, o: GroupTreeWrite = {}): Promise<DeviceGroup | null> {
+    const write = async (trx: Knex.Transaction): Promise<GroupRow | null> => {
       // Get current group
+      const found = await trx<GroupRow>('device_groups').where({ id }).first('tenant_id');
+      if (!found) return null;
+      // One writer of the tenant's configuration at a time; the group is read again once the lock is held.
+      await lockTenantConfiguration(trx, Number(found.tenant_id));
       const group = await trx<GroupRow>('device_groups').where({ id }).first();
       if (!group) return null;
 
@@ -246,23 +270,51 @@ export const groupService = {
       // (modele-donnees-mdm §7.6, §7.12), requested in this transaction.
       const { requestTenantResolution } = await import('../mdm/policies/triggers');
       await requestTenantResolution(trx, Number(group.tenant_id));
+      if (updated && o.journal) {
+        await audit.appendInTx(trx, {
+          tenantId: Number(group.tenant_id), action: 'group.moved', target: { type: 'group', id: String(id) },
+          approvalIds: o.journal.approvalId ? [o.journal.approvalId] : undefined,
+          details: { fromParentId: group.parent_id ?? null, toParentId: newParentId, approvalId: o.journal.approvalId ?? null, ...(o.journal.details ?? {}) },
+        }, o.journal.ctx);
+      }
       return updated ?? null;
-    });
+    };
+    const row = o.trx ? await write(o.trx) : await db.transaction(write);
 
     return row ? rowToGroup(row) : null;
   },
 
-  async delete(id: number): Promise<boolean> {
-    const group = await db('device_groups').where({ id }).first('tenant_id') as { tenant_id: number } | undefined;
-    // CASCADE in the DB handles closure table and child groups
-    const count = await db('device_groups').where({ id }).del();
-    if (count > 0 && group) {
+  /**
+   * Deletes a group. The base does the rest: its closure rows and its assignments go with it
+   * (assignments_cleanup), its devices have no group any more and its subgroups no parent (SET NULL). In one
+   * transaction, under the lock of the tenant's configuration; the entry group.deleted is written in it when
+   * `o.journal` is given.
+   */
+  async delete(id: number, o: GroupTreeWrite = {}): Promise<boolean> {
+    const write = async (trx: Knex.Transaction): Promise<boolean> => {
+      const found = await trx('device_groups').where({ id }).first('tenant_id') as { tenant_id: number } | undefined;
+      if (!found) return false;
+      const tenantId = Number(found.tenant_id);
+      await lockTenantConfiguration(trx, tenantId);
+      const group = await trx('device_groups').where({ id, tenant_id: tenantId }).first('name', 'parent_id') as
+        { name: string; parent_id: number | null } | undefined;
+      if (!group) return false;
+      const count = await trx('device_groups').where({ id, tenant_id: tenantId }).del();
+      if (!count) return false;
       // Its assignments went with it (assignments_cleanup) and its devices left it: the policies follow
-      // (modele-donnees-mdm §7.5, §7.12).
+      // (modele-donnees-mdm §7.5, §7.12), requested in this transaction.
       const { requestTenantResolution } = await import('../mdm/policies/triggers');
-      await requestTenantResolution(null, Number(group.tenant_id));
-    }
-    return count > 0;
+      await requestTenantResolution(trx, tenantId);
+      if (o.journal) {
+        await audit.appendInTx(trx, {
+          tenantId, action: 'group.deleted', target: { type: 'group', id: String(id) },
+          approvalIds: o.journal.approvalId ? [o.journal.approvalId] : undefined,
+          details: { name: group.name, parentId: group.parent_id ?? null, approvalId: o.journal.approvalId ?? null, ...(o.journal.details ?? {}) },
+        }, o.journal.ctx);
+      }
+      return true;
+    };
+    return o.trx ? write(o.trx) : db.transaction(write);
   },
 
   // ── Tree queries using closure table ──

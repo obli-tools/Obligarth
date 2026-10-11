@@ -12,6 +12,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import { vault } from '../../vault';
 import { appleCatalog } from '../apple/catalog';
+import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
 import {
   contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, rawProfilesOf, validatePolicyContent, withSecretRefs, type SecretRefSite,
@@ -27,8 +28,10 @@ import {
 // tenant's database context (the request's). One open version at most per
 // policy (policy_versions_one_open); a submitted or published version is
 // immutable (policy_versions_guard). Writers lock the policy, then its
-// version. A version left 'pending_approval' by a request that is over is
-// settled before any change (settleOrphanedPending).
+// version; those that change the effective configuration (publication,
+// archival) take the lock of the tenant's configuration first
+// (configLock.ts). A version left 'pending_approval' by a request that is
+// over is settled before any change (settleOrphanedPending).
 // =============================================================================
 
 export interface PolicyActor { userId: number | null; auditCtx: AuditWriteContext }
@@ -419,11 +422,12 @@ export const policyService = {
   },
 
   /** Archives a policy: refused while it has assignments (removing them is a change published like any other) or
-   *  a version awaiting approval. */
+   *  a version awaiting approval. Under the lock of the tenant's configuration: a batch of assignments written at
+   *  the same time either sees the policy archived, or is seen here. */
   async archive(tenantId: number, policyId: number, actor: PolicyActor): Promise<Policy> {
     await policyRow(db, tenantId, policyId);
     await settleOrphanedPending(db, tenantId, policyId);
-    await db.transaction(async (trx) => {
+    await withConfigurationLock(tenantId, async (trx) => {
       const policy = await policyRow(trx, tenantId, policyId, { forUpdate: true });
       if (policy.state === 'archived') return;
       const n = await trx('assignments').where({ resource_type: 'policy', resource_tenant_id: tenantId, resource_id: policyId }).first('id');

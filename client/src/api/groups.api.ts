@@ -46,13 +46,20 @@ export const groupsApi = {
     return res.data.data!;
   },
 
-  async move(id: number, newParentId: number | null): Promise<DeviceGroup> {
+  /**
+   * Moves a group in the tree. A move that changes what the devices of the group inherit (policies) may need a
+   * second factor (asked by the client's interceptor) or a second approver: `null` then (202), the move waits for
+   * its approval and nothing has changed yet.
+   */
+  async move(id: number, newParentId: number | null): Promise<DeviceGroup | null> {
     const res = await apiClient.post<ApiResponse<DeviceGroup>>(`/groups/${id}/move`, { newParentId });
-    return res.data.data!;
+    return res.status === 202 ? null : res.data.data!;
   },
 
-  async delete(id: number): Promise<void> {
-    await apiClient.delete(`/groups/${id}`);
+  /** Deletes a group; `false` when the deletion waits for a second approver (202): nothing is deleted yet. */
+  async delete(id: number): Promise<boolean> {
+    const res = await apiClient.delete(`/groups/${id}`);
+    return res.status !== 202;
   },
 
   async reorder(items: { id: number; sortOrder: number }[]): Promise<void> {

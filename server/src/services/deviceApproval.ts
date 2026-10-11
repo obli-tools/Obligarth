@@ -23,8 +23,14 @@ export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
   const ids = [...new Set((payload.deviceIds ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   const prev = ids.length ? await db('devices').whereIn('id', ids).andWhere({ tenant_id: tenantId }).select('id', 'group_id') as Array<{ id: number; group_id: number | null }> : [];
   if (!prev.length) refuse('None of the devices of this request is still in the tenant');
-  await db('devices').whereIn('id', prev.map((d) => d.id)).andWhere({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
   const changed = prev.filter((d) => d.group_id !== groupId).map((d) => d.id);
+  // What the devices inherit follows their group: the resolution of their policies is requested with the move
+  // (modele-donnees-mdm §7.12), in its transaction, as the direct route does (moveToGroup).
+  await db.transaction(async (trx) => {
+    await trx('devices').whereIn('id', prev.map((d) => d.id)).andWhere({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
+    const { requestDeviceResolution } = await import('../mdm/policies/triggers');
+    await requestDeviceResolution(trx, tenantId, changed.map(Number));
+  });
   await auditAs(tenantId, requesterId, 'device.bulk_group_changed', {
     resourceType: 'device', resourcePath: prev.map((d) => d.id).join(','), details: { count: prev.length, changed: changed.length, toGroupId: groupId },
   });

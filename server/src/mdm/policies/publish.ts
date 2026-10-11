@@ -2,7 +2,7 @@ import type { Request } from 'express';
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
-  ASSIGNMENT_PRIORITY, POLICY_PUBLISH_ACTION, POLICY_PUBLISH_REQUEST_TYPE, SocketEvents,
+  ASSIGNMENT_PRIORITY, POLICY_PUBLISH_REQUEST_TYPE,
   type AssignmentChange, type PolicyConflict, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
 } from '@obligarth/shared';
 import { db } from '../../db';
@@ -10,16 +10,22 @@ import { userActor } from '../../db/context';
 import { audit, type AuditWriteContext } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import {
-  approvalService, refuse, requireTenantCapability, type ApprovalClosed, type ApprovalExecution,
+  approvalService, refuse, requireTenantCapability, type ApprovalClosed, type ApprovalExecution, type PendingApproval,
 } from '../../services/approval.service';
 import { permissionService } from '../../services/permission.service';
-import { restrictionService, restrictionFloor } from '../../services/restriction.service';
-import { getIO } from '../../socket';
 import { logger } from '../../utils/logger';
-import { computeImpact, impactGrew, impactSummary, type AssignmentDelta, type ProposedChange } from './impact';
+import { lockTenantConfiguration, withConfigurationLock } from './configLock';
+import { executeGroupTreeChange } from './groupTree';
+import {
+  approvalImpact, computeImpact, describeKeys, impactSummary, type AssignmentDelta, type ImpactResult, type ProposedChange,
+} from './impact';
 import { signImpactToken } from './impactToken';
 import { rowToAssignment } from './loader';
 import { policyService, rowToVersion, settleOrphanedPending, validateForSubmission, validationFailed } from './policyService';
+import {
+  approvedImpactOf, emitPolicyChanged, impactChanged, matrixLevel, refuseUnlessAsApproved, requiredLevel, stepUp, visibleDevices,
+  type RouteOutcome,
+} from './publishGuard';
 import type { ResolutionAssignment } from './resolver';
 import { requestTenantResolution } from './triggers';
 
@@ -35,22 +41,26 @@ import { requestTenantResolution } from './triggers';
 // batch in the request's payload), the request type mdm_policy_publish is
 // executed as the requester once approved, and its executor computes the
 // preview again: beyond 20 % more touched devices or removals than approved,
-// the execution is refused (impactChanged) and the version goes back to the
-// draft. A refused or expired request rejects the version.
-// The publication and the change of assignments are written in one
-// transaction with their critical entry (P1, last statement), and request
-// the resolution of the tenant (mdm.policies.resolve-tenant).
+// or with another content than the one approved, the execution is refused
+// (impactChanged, contentChanged) and the version goes back to the draft. A
+// refused or expired request rejects the version.
+// The decision is taken where the change is written (review of lot B5b,
+// MDM-B5b-C1): a first look, outside any transaction, tells what the request
+// must prove (a second factor) and answers a refusal early; then, in one
+// transaction that holds the lock of the tenant's configuration
+// (configLock.ts), the change is validated and previewed again on what is
+// committed, and that preview decides: written at once, or a request for
+// approval, in the same transaction as the check. Two changes of a tenant
+// made at the same time are thus decided one after the other, each on the
+// state the other left.
+// The publication and the change of assignments are written with their
+// critical entry (P1, last statement), and request the resolution of the
+// tenant (mdm.policies.resolve-tenant).
 // =============================================================================
 
-export type RouteOutcome = { status: number; body: unknown; headers?: Record<string, string> };
+export { emitPolicyChanged, type RouteOutcome };
 
 const POLICY_MANAGE = 'mdm.policies.manage' as const;
-
-/** POLICY_CHANGED to the tenant's room (identifiers only); never throws. */
-export function emitPolicyChanged(tenantId: number, policyIds: number[]): void {
-  if (!policyIds.length) return;
-  try { getIO().to(`tenant:${tenantId}`).emit(SocketEvents.POLICY_CHANGED, { policyIds }); } catch { /* no Socket.io in this process */ }
-}
 
 /** The preview as stored with a version, read by every member of the tenant and shown to the approver: its counters,
  *  keys and conflicts. The sample of devices and the token of their list are the requester's (their scopes, their
@@ -60,37 +70,6 @@ const storedImpact = (impact: PolicyImpact): string => JSON.stringify({ ...impac
 function conflictRefusal(conflicts: PolicyConflict[]): never {
   throw new AppError(422, 'The change would set a key to two values at the same priority', 'policyConflict',
     conflicts as unknown as Record<string, unknown>);
-}
-
-/** The level a change needs: the tenant's matrix (never below its floor), raised to 'restricted' beyond the
- *  thresholds. */
-async function requiredLevel(tenantId: number, impact: PolicyImpact): Promise<'none' | 'sensitive' | 'restricted'> {
-  const level = await restrictionService.getLevelFor({ tenantId, actionKey: POLICY_PUBLISH_ACTION });
-  return impact.approval.required ? 'restricted' : level;
-}
-
-async function matrixLevel(tenantId: number): Promise<'none' | 'sensitive' | 'restricted'> {
-  return restrictionService.getLevelFor({ tenantId, actionKey: POLICY_PUBLISH_ACTION });
-}
-
-/** The step-up of a change below the thresholds: null when proven, the refusal to send otherwise. */
-async function stepUp(req: Request): Promise<RouteOutcome | null> {
-  const { checkSecondFactor } = await import('../../services/deviceKey/stepUpProof');
-  const outcome = await checkSecondFactor(req, {
-    actionKey: POLICY_PUBLISH_ACTION, allowTrustedIp: restrictionFloor(POLICY_PUBLISH_ACTION)?.strictStepUp !== true, allowDevice: true,
-  });
-  if (outcome.ok) { req.stepUpVia = outcome.via; return null; }
-  return { status: outcome.status, body: outcome.body, headers: outcome.headers };
-}
-
-/** The caller's visible devices (the sample of a preview, S13). */
-async function visibleDevices(req: Request): Promise<number[] | 'all'> {
-  if (req.session.role === 'admin') return 'all';
-  const userId = req.session.userId!;
-  const tenantId = req.tenantId!;
-  const ut = await db('user_tenants').where({ user_id: userId, tenant_id: tenantId }).first('role') as { role: string } | undefined;
-  if (ut?.role === 'admin') return 'all';
-  return permissionService.getVisibleDeviceIds(userId, false);
 }
 
 /** A preview with its token of the full list of touched devices. */
@@ -112,12 +91,14 @@ export async function versionImpact(req: Request, tenantId: number, policyId: nu
 /**
  * Publication of a version in `trx`: the previous published version superseded, the version published (from a
  * draft, or from 'pending_approval' when an approval is executed), the envelope pointing to it, the resolution of
- * the tenant requested, then the critical entry policy.published (P1, last statement).
+ * the tenant requested, then the critical entry policy.published (P1, last statement). Under the lock of the
+ * tenant's configuration (taken here when the caller does not hold it yet).
  */
 export async function publishVersionInTx(trx: Knex.Transaction, tenantId: number, policyId: number, versionId: number,
   ctx: AuditWriteContext, o: { from: 'draft' | 'pending_approval'; approvalId?: number; impact: PolicyImpact; userId: number | null;
     /** The content validated and previewed: a draft saved meanwhile is not published (409 policyVersionChanged). */
     expectedSha?: string }): Promise<void> {
+  await lockTenantConfiguration(trx, tenantId);
   // The policy, then its version (the order of every writer of the versions); an archived policy publishes nothing.
   const policy = await trx('policies').where({ tenant_id: tenantId, id: policyId }).forUpdate().first('state') as { state: string } | undefined;
   if (!policy) throw new AppError(404, 'Policy not found');
@@ -152,10 +133,12 @@ const versionChanged = (): never => {
   throw new AppError(409, 'The draft changed while it was checked: submit it again', 'policyVersionChanged');
 };
 
-/** Checks a version for its publication: content, references, conflicts. Returns the preview and the hash of the
- *  content checked (unchanged from the validation to the end of the preview). */
+interface VersionCheck extends ImpactResult { issues: PolicyValidationIssue[]; contentSha256: string }
+
+/** Checks a version for its publication: content, references, conflicts. Returns the preview (with the digest of
+ *  its content) and the hash of the content checked (unchanged from the validation to the end of the preview). */
 async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policyId: number, versionId: number,
-  o: { visibleDeviceIds?: number[] | 'all' } = {}): Promise<{ impact: PolicyImpact; issues: PolicyValidationIssue[]; contentSha256: string }> {
+  o: { visibleDeviceIds?: number[] | 'all' } = {}): Promise<VersionCheck> {
   const policy = await q('policies').where({ tenant_id: tenantId, id: policyId }).first('uuid', 'state') as { uuid: string; state: string } | undefined;
   if (!policy) throw new AppError(404, 'Policy not found');
   if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
@@ -164,11 +147,11 @@ async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policy
   if (!row) throw new AppError(404, 'Policy version not found');
   const contentSha256 = String(row.content_sha256).trim();
   const { issues } = await validateForSubmission(q, tenantId, policy.uuid, typeof row.content === 'string' ? JSON.parse(row.content) : row.content);
-  const { impact } = await computeImpact(q, tenantId, { kind: 'version', policyId, versionId },
+  const result = await computeImpact(q, tenantId, { kind: 'version', policyId, versionId },
     { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: o.visibleDeviceIds ?? 'all' });
   const after = await q('policy_versions').where({ tenant_id: tenantId, id: versionId }).first('content_sha256') as { content_sha256: string } | undefined;
   if (!after || String(after.content_sha256).trim() !== contentSha256) versionChanged();
-  return { impact, issues, contentSha256 };
+  return { ...result, issues, contentSha256 };
 }
 
 /** POST /api/mdm/policies/:id/versions/:v/submit (section 7.12). */
@@ -178,58 +161,65 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
   const row = await policyService.versionRow(db, tenantId, policyId, version);
   if (row.state !== 'draft') throw new AppError(409, 'Only a draft is submitted', 'policyVersionNotDraft', { state: row.state });
   const versionId = Number(row.id);
-  const { impact, issues, contentSha256 } = await checkVersion(db, tenantId, policyId, versionId, { visibleDeviceIds: await visibleDevices(req) });
-  if (issues.length) validationFailed(issues);
-  if (impact.conflicts.length) conflictRefusal(impact.conflicts);
-  impact.devicesToken = signImpactToken(tenantId, req.session.userId!, { kind: 'version', policyId, versionId });
-  const level = await requiredLevel(tenantId, impact);
+  const visible = await visibleDevices(req);
   const userId = req.session.userId ?? null;
-  if (level === 'restricted') {
-    const ctx = await audit.fromRequest(req, tenantId);
-    const approval = await db.transaction(async (trx) => {
-      const policy = await trx('policies').where({ tenant_id: tenantId, id: policyId }).forUpdate().first('name', 'state') as
-        { name: string; state: string } | undefined;
-      if (!policy) throw new AppError(404, 'Policy not found');
-      if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
-      const locked = await trx('policy_versions').where({ tenant_id: tenantId, id: versionId }).forUpdate().first('state', 'content_sha256') as
-        { state: string; content_sha256: string } | undefined;
-      if (!locked) throw new AppError(404, 'Policy version not found');
-      if (locked.state !== 'draft') throw new AppError(409, 'Only a draft is submitted', 'policyVersionNotDraft', { state: locked.state });
-      if (String(locked.content_sha256).trim() !== contentSha256) versionChanged();
-      const a = await approvalService.createInTx(trx, {
+  // A first look, before anything is locked: an early refusal, and what the request must prove.
+  const first = await checkVersion(db, tenantId, policyId, versionId, { visibleDeviceIds: visible });
+  if (first.issues.length) validationFailed(first.issues);
+  if (first.impact.conflicts.length) conflictRefusal(first.impact.conflicts);
+  let proven = false;
+  if ((await requiredLevel(tenantId, first.impact)) === 'sensitive') {
+    const refused = await stepUp(req);
+    if (refused) return refused;
+    proven = true;
+  }
+  const ctx = await audit.fromRequest(req, tenantId);
+  // The decision, where the version is written: checked and previewed again under the lock of the configuration.
+  const done = await withConfigurationLock(tenantId, async (trx): Promise<{ impact: PolicyImpact; approval: PendingApproval | null }> => {
+    const policy = await trx('policies').where({ tenant_id: tenantId, id: policyId }).forUpdate().first('name', 'state') as
+      { name: string; state: string } | undefined;
+    if (!policy) throw new AppError(404, 'Policy not found');
+    if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
+    const locked = await trx('policy_versions').where({ tenant_id: tenantId, id: versionId, policy_id: policyId }).forUpdate().first('state') as
+      { state: string } | undefined;
+    if (!locked) throw new AppError(404, 'Policy version not found');
+    if (locked.state !== 'draft') throw new AppError(409, 'Only a draft is submitted', 'policyVersionNotDraft', { state: locked.state });
+    const check = await checkVersion(trx, tenantId, policyId, versionId, { visibleDeviceIds: visible });
+    if (check.issues.length) validationFailed(check.issues);
+    const { impact } = check;
+    if (impact.conflicts.length) conflictRefusal(impact.conflicts);
+    const level = await requiredLevel(tenantId, impact);
+    if (level === 'restricted') {
+      const approval = await approvalService.createInTx(trx, {
         tenantId, userId: Number(userId), requestType: POLICY_PUBLISH_REQUEST_TYPE,
         description: `Publish version ${version} of the policy "${policy.name}" — ${impact.devicesTouched} device(s) touched, `
-          + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')})`,
-        payload: { kind: 'version', policyId, versionId, version, impact: impactSummary(impact) },
+          + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`,
+        payload: { kind: 'version', policyId, versionId, version, impact: approvalImpact(check) },
         auditCtx: ctx,
       });
       await trx('policy_versions').where({ tenant_id: tenantId, id: versionId }).update({
-        state: 'pending_approval', approval_id: a.id, impact: storedImpact(impact), submitted_at: new Date(), submitted_by: userId,
+        state: 'pending_approval', approval_id: approval.id, impact: storedImpact(impact), submitted_at: new Date(), submitted_by: userId,
       });
-      return a;
-    });
-    approvalService.announceCreated(approval);
-    await audit.append({
-      tenantId, action: 'policy.submitted', target: { type: 'policy', id: String(policyId) }, approvalIds: [approval.id],
-      details: { version, devicesTouched: impact.devicesTouched, approvalRequired: true, reasons: impact.approval.reasons },
-    }, ctx);
-    emitPolicyChanged(tenantId, [policyId]);
-    const body: SubmitOutcome = { outcome: 'awaiting_approval', approvalId: approval.id, impact };
-    return { status: 202, body: { data: body } };
-  }
-  if (level === 'sensitive') {
-    const refused = await stepUp(req);
-    if (refused) return refused;
-  }
-  const ctx = await audit.fromRequest(req, tenantId);
-  await db.transaction((trx) => publishVersionInTx(trx, tenantId, policyId, versionId, ctx, { from: 'draft', impact, userId, expectedSha: contentSha256 }));
+      return { impact, approval };
+    }
+    if (level === 'sensitive' && !proven) impactChanged();
+    await publishVersionInTx(trx, tenantId, policyId, versionId, ctx, { from: 'draft', impact, userId, expectedSha: check.contentSha256 });
+    return { impact, approval: null };
+  });
+  const { impact, approval } = done;
+  impact.devicesToken = signImpactToken(tenantId, req.session.userId!, { kind: 'version', policyId, versionId });
+  if (approval) approvalService.announceCreated(approval);
   await audit.append({
-    tenantId, action: 'policy.submitted', target: { type: 'policy', id: String(policyId) },
-    details: { version, devicesTouched: impact.devicesTouched, approvalRequired: false },
+    tenantId, action: 'policy.submitted', target: { type: 'policy', id: String(policyId) }, approvalIds: approval ? [approval.id] : undefined,
+    details: approval
+      ? { version, devicesTouched: impact.devicesTouched, approvalRequired: true, reasons: impact.approval.reasons }
+      : { version, devicesTouched: impact.devicesTouched, approvalRequired: false },
   }, ctx);
   emitPolicyChanged(tenantId, [policyId]);
-  const body: SubmitOutcome = { outcome: 'published', versionId, impact };
-  return { status: 200, body: { data: body } };
+  const body: SubmitOutcome = approval
+    ? { outcome: 'awaiting_approval', approvalId: approval.id, impact }
+    : { outcome: 'published', versionId, impact };
+  return { status: approval ? 202 : 200, body: { data: body } };
 }
 
 // ── Assignments ────────────────────────────────────────────────────────────
@@ -329,9 +319,43 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
   return deltas;
 }
 
-/** Applies normalised changes in `trx`, requests the resolution, then the critical entry assignment.changed (P1). */
+/** A policy a batch of assignment changes names, as it stands: its published version (null: none yet). */
+export interface PolicyBase { tenantId: number; policyId: number; versionId: number | null; version: number | null; name: string }
+
+/** The policies a batch names, with the version each one has published (the content the batch would assign). */
+export async function policyBaseOf(q: Knex | Knex.Transaction, deltas: AssignmentDelta[]): Promise<PolicyBase[]> {
+  const pairs = new Map<string, [number, number]>();
+  for (const d of deltas) {
+    const a = (d.after ?? d.before)!;
+    if (a.resourceType === 'policy') pairs.set(`${a.resourceTenantId}:${a.resourceId}`, [a.resourceTenantId, a.resourceId]);
+  }
+  if (!pairs.size) return [];
+  const rows = await q('policies as p')
+    .leftJoin('policy_versions as v', function joinVersion() { this.on('v.id', '=', 'p.current_version_id').andOn('v.tenant_id', '=', 'p.tenant_id'); })
+    .whereIn(['p.tenant_id', 'p.id'], [...pairs.values()])
+    .orderBy([{ column: 'p.tenant_id' }, { column: 'p.id' }])
+    .select('p.tenant_id', 'p.id', 'p.name', 'p.current_version_id', 'v.version') as
+    Array<{ tenant_id: number; id: number; name: string; current_version_id: number | null; version: number | null }>;
+  return rows.map((r) => ({
+    tenantId: Number(r.tenant_id), policyId: Number(r.id), name: String(r.name),
+    versionId: r.current_version_id === null ? null : Number(r.current_version_id),
+    version: r.version === null || r.version === undefined ? null : Number(r.version),
+  }));
+}
+
+/** The policies of a batch in a few words, for the description of its request. */
+function describePolicies(base: PolicyBase[], max = 4): string {
+  const one = (b: PolicyBase): string => `"${b.name}" (${b.version === null ? 'not published' : `version ${b.version}`})`;
+  if (base.length === 1) return `the policy ${one(base[0])}`;
+  const shown = base.slice(0, max).map(one).join(', ');
+  return `${base.length} policies: ${base.length > max ? `${shown} (+${base.length - max} more)` : shown}`;
+}
+
+/** Applies normalised changes in `trx`, requests the resolution, then the critical entry assignment.changed (P1).
+ *  Under the lock of the tenant's configuration (taken here when the caller does not hold it yet). */
 export async function applyChangesInTx(trx: Knex.Transaction, tenantId: number, deltas: AssignmentDelta[], ctx: AuditWriteContext,
   o: { userId: number | null; approvalId?: number; impact: PolicyImpact }): Promise<{ created: number; updated: number; deleted: number }> {
+  await lockTenantConfiguration(trx, tenantId);
   const out = { created: 0, updated: 0, deleted: 0 };
   const now = new Date();
   for (const d of deltas) {
@@ -375,36 +399,62 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
   const requester: Requester = { userId: req.session.userId!, isPlatformAdmin: req.session.role === 'admin' };
   const changes = parsed.data.changes as AssignmentChange[];
-  const deltas = await normalizeChanges(db, tenantId, changes, requester);
-  const change: ProposedChange = { kind: 'assignments', changes: deltas };
-  const { impact } = await computeImpact(db, tenantId, change, { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: await visibleDevices(req) });
-  impact.devicesToken = signImpactToken(tenantId, requester.userId, change);
+  const visible = await visibleDevices(req);
+  /** The batch against the tenant as `q` reads it: its changes, their preview. */
+  const look = async (q: Knex | Knex.Transaction): Promise<ImpactResult & { deltas: AssignmentDelta[]; change: ProposedChange }> => {
+    const deltas = await normalizeChanges(q, tenantId, changes, requester);
+    const change: ProposedChange = { kind: 'assignments', changes: deltas };
+    const result = await computeImpact(q, tenantId, change, { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: visible });
+    return { ...result, deltas, change };
+  };
+  // A first look, before anything is locked: the preview asked for, an early refusal, what the request must prove.
+  const first = await look(db);
   if (dryRun) {
-    const body: SubmitOutcome = { outcome: 'preview', impact };
+    first.impact.devicesToken = signImpactToken(tenantId, requester.userId, first.change);
+    const body: SubmitOutcome = { outcome: 'preview', impact: first.impact };
     return { status: 200, body: { data: body } };
   }
-  if (impact.conflicts.length) conflictRefusal(impact.conflicts);
-  const level = await requiredLevel(tenantId, impact);
-  if (level === 'restricted') {
-    const ctx = await audit.fromRequest(req, tenantId);
-    const approval = await db.transaction((trx) => approvalService.createInTx(trx, {
-      tenantId, userId: requester.userId, requestType: POLICY_PUBLISH_REQUEST_TYPE,
-      description: `Change ${changes.length} assignment(s) — ${impact.devicesTouched} device(s) touched, `
-        + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')})`,
-      payload: { kind: 'assignments', changes, impact: impactSummary(impact) },
-      auditCtx: ctx,
-    }));
-    approvalService.announceCreated(approval);
-    const body: SubmitOutcome = { outcome: 'awaiting_approval', approvalId: approval.id, impact };
-    return { status: 202, body: { data: body } };
-  }
-  if (level === 'sensitive') {
+  if (first.impact.conflicts.length) conflictRefusal(first.impact.conflicts);
+  let proven = false;
+  if ((await requiredLevel(tenantId, first.impact)) === 'sensitive') {
     const refused = await stepUp(req);
     if (refused) return refused;
+    proven = true;
   }
   const ctx = await audit.fromRequest(req, tenantId);
-  await db.transaction((trx) => applyChangesInTx(trx, tenantId, deltas, ctx, { userId: requester.userId, impact }));
-  emitPolicyChanged(tenantId, [...new Set(deltas.map((d) => (d.after ?? d.before)!.resourceId))]);
+  // The decision, where the batch is written: normalised and previewed again under the lock of the configuration.
+  const done = await withConfigurationLock(tenantId, async (trx) => {
+    const now = await look(trx);
+    const { impact, deltas } = now;
+    if (impact.conflicts.length) conflictRefusal(impact.conflicts);
+    const level = await requiredLevel(tenantId, impact);
+    if (level === 'restricted') {
+      // The request names the version each policy has published: the approval is given on that content (DM10).
+      const base = await policyBaseOf(trx, deltas);
+      const approval = await approvalService.createInTx(trx, {
+        tenantId, userId: requester.userId, requestType: POLICY_PUBLISH_REQUEST_TYPE,
+        description: `Change ${changes.length} assignment(s) of ${describePolicies(base)} — ${impact.devicesTouched} device(s) touched, `
+          + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`,
+        payload: {
+          kind: 'assignments', changes, impact: approvalImpact(now),
+          base: base.map((b) => ({ tenantId: b.tenantId, policyId: b.policyId, versionId: b.versionId, version: b.version })),
+        },
+        auditCtx: ctx,
+      });
+      return { impact, change: now.change, approval, deltas };
+    }
+    if (level === 'sensitive' && !proven) impactChanged();
+    await applyChangesInTx(trx, tenantId, deltas, ctx, { userId: requester.userId, impact });
+    return { impact, change: now.change, approval: null, deltas };
+  });
+  const { impact } = done;
+  impact.devicesToken = signImpactToken(tenantId, requester.userId, done.change);
+  if (done.approval) {
+    approvalService.announceCreated(done.approval);
+    const body: SubmitOutcome = { outcome: 'awaiting_approval', approvalId: done.approval.id, impact };
+    return { status: 202, body: { data: body } };
+  }
+  emitPolicyChanged(tenantId, [...new Set(done.deltas.map((d) => (d.after ?? d.before)!.resourceId))]);
   const body: SubmitOutcome = { outcome: 'applied', impact };
   return { status: 200, body: { data: body } };
 }
@@ -412,19 +462,16 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
 // ── Approval of a publication or of a batch (request type mdm_policy_publish) ──
 
 interface PublishPayload {
-  kind: 'version' | 'assignments';
+  kind: 'version' | 'assignments' | 'group_move' | 'group_delete';
   policyId?: number;
   versionId?: number;
   version?: number;
   changes?: AssignmentChange[];
-  impact?: { devicesTouched: number; artifacts: PolicyImpact['artifacts'] };
+  /** The version each policy of a batch had published when the request was filed (policyBaseOf). */
+  base?: Array<{ tenantId: number; policyId: number; versionId: number | null }>;
+  /** What the request keeps of its preview (approvalImpact): counters, keys, digest of the content. */
+  impact?: unknown;
 }
-
-type ApprovedImpact = NonNullable<PublishPayload['impact']>;
-
-/** The preview a request was approved with (its counters); null when the payload carries none. */
-const approvedImpactOf = (p: PublishPayload): ApprovedImpact | null =>
-  (p.impact && typeof p.impact.devicesTouched === 'number' && p.impact.artifacts && typeof p.impact.artifacts.removals === 'number' ? p.impact : null);
 
 /** Back to the draft: a version whose approved request could not be executed goes back to its author, who submits
  *  it again (a request is executed once: left 'pending_approval', the version would block its policy). */
@@ -434,48 +481,73 @@ async function backToDraft(tenantId: number, versionId: number, approvalId: numb
     .update({ state: 'draft', approval_id: null });
 }
 
-/** The publication of an approved version: rights, content, conflicts and preview checked again, then published. */
+/** The publication of an approved version: rights, content, conflicts and preview checked again under the lock of
+ *  the configuration, then published in the same transaction. */
 async function executeVersionPublication(x: ApprovalExecution, p: PublishPayload, policyId: number, versionId: number): Promise<void> {
   await requireTenantCapability(x.requesterId, x.tenantId, POLICY_MANAGE);
   const approved = approvedImpactOf(p);
   if (!approved) refuse('Malformed publication request');
-  const v = await db('policy_versions').where({ tenant_id: x.tenantId, id: versionId, policy_id: policyId }).first('state', 'approval_id') as
-    { state: string; approval_id: number | null } | undefined;
-  if (!v || v.state !== 'pending_approval' || Number(v.approval_id) !== x.approvalId) refuse('This version no longer awaits this approval');
-  const check = await checkVersion(db, x.tenantId, policyId, versionId);
-  if (check.issues.length) refuse('The content of the version is no longer valid: submit it again');
-  if (check.impact.conflicts.length) refuse('policyConflict: the version now conflicts with another policy at the same priority; submit it again');
-  if (impactGrew(approved!, check.impact)) {
-    refuse(`impactChanged: ${check.impact.devicesTouched} device(s) touched and ${check.impact.artifacts.removals} removal(s) now, `
-      + `${approved!.devicesTouched} and ${approved!.artifacts.removals} approved; the version is back to the draft, submit it again`);
-  }
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
-  await db.transaction((trx) => publishVersionInTx(trx, x.tenantId, policyId, versionId, ctx,
-    { from: 'pending_approval', approvalId: x.approvalId, impact: check.impact, userId: x.requesterId, expectedSha: check.contentSha256 }));
+  await withConfigurationLock(x.tenantId, async (trx) => {
+    const v = await trx('policy_versions').where({ tenant_id: x.tenantId, id: versionId, policy_id: policyId }).first('state', 'approval_id') as
+      { state: string; approval_id: number | null } | undefined;
+    if (!v || v.state !== 'pending_approval' || Number(v.approval_id) !== x.approvalId) refuse('This version no longer awaits this approval');
+    const check = await checkVersion(trx, x.tenantId, policyId, versionId);
+    if (check.issues.length) refuse('The content of the version is no longer valid: submit it again');
+    if (check.impact.conflicts.length) refuse('policyConflict: the version now conflicts with another policy at the same priority; submit it again');
+    refuseUnlessAsApproved(approved!, check, 'the version is back to the draft, submit it again');
+    await publishVersionInTx(trx, x.tenantId, policyId, versionId, ctx,
+      { from: 'pending_approval', approvalId: x.approvalId, impact: check.impact, userId: x.requesterId, expectedSha: check.contentSha256 });
+  });
 }
 
-/** An approved batch of assignment changes: rights and targets checked again, previewed again, then applied. */
+/** The versions a batch was filed with, when the payload names them all in the expected form; null otherwise. */
+function approvedBaseOf(p: PublishPayload): Map<string, number | null> | null {
+  if (!Array.isArray(p.base)) return null;
+  const out = new Map<string, number | null>();
+  for (const b of p.base) {
+    const ok = b && Number.isSafeInteger(b.tenantId) && Number.isSafeInteger(b.policyId)
+      && (b.versionId === null || Number.isSafeInteger(b.versionId));
+    if (!ok) return null;
+    out.set(`${b.tenantId}:${b.policyId}`, b.versionId);
+  }
+  return out;
+}
+
+/**
+ * An approved batch of assignment changes: rights and targets checked again, previewed again under the lock of the
+ * configuration, then applied in the same transaction. The batch was approved for the version each of its policies
+ * had published: a policy published again since then is not assigned by this approval (DM10; MDM-B5b-C3).
+ */
 async function executeAssignmentChanges(x: ApprovalExecution, p: PublishPayload): Promise<void> {
   const r = await requireTenantCapability(x.requesterId, x.tenantId, POLICY_MANAGE);
   const approved = approvedImpactOf(p);
+  const approvedBase = approvedBaseOf(p);
   const changes = ChangesBody.safeParse({ changes: p.changes });
-  if (!approved || !changes.success) refuse('Malformed publication request');
+  if (!approved || !approvedBase || !changes.success) refuse('Malformed publication request');
   const stale = (err: unknown): never => {
     const e = err as { statusCode?: number; message?: string };
     if (e.statusCode && e.statusCode < 500) refuse(`The batch no longer applies: ${e.message}`);
     throw err;
   };
-  const deltas = await normalizeChanges(db, x.tenantId, changes.data!.changes as AssignmentChange[],
-    { userId: x.requesterId, isPlatformAdmin: r.isPlatformAdmin }).catch(stale);
-  const { impact } = await computeImpact(db, x.tenantId, { kind: 'assignments', changes: deltas },
-    { matrixLevel: await matrixLevel(x.tenantId) });
-  if (impact.conflicts.length) refuse('policyConflict: the batch now sets a key to two values at the same priority');
-  if (impactGrew(approved!, impact)) {
-    refuse(`impactChanged: ${impact.devicesTouched} device(s) touched and ${impact.artifacts.removals} removal(s) now, `
-      + `${approved!.devicesTouched} and ${approved!.artifacts.removals} approved; submit the batch again`);
-  }
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
-  await db.transaction((trx) => applyChangesInTx(trx, x.tenantId, deltas, ctx, { userId: x.requesterId, approvalId: x.approvalId, impact })).catch(stale);
+  const deltas = await withConfigurationLock(x.tenantId, async (trx) => {
+    const list = await normalizeChanges(trx, x.tenantId, changes.data!.changes as AssignmentChange[],
+      { userId: x.requesterId, isPlatformAdmin: r.isPlatformAdmin }).catch(stale);
+    const base = await policyBaseOf(trx, list);
+    for (const b of base) {
+      const key = `${b.tenantId}:${b.policyId}`;
+      if (!approvedBase!.has(key) || approvedBase!.get(key) !== b.versionId) {
+        refuse(`policyVersionChanged: the policy "${b.name}" was published again since the request `
+          + `(${b.version === null ? 'no published version' : `version ${b.version}`} now); submit the batch again`);
+      }
+    }
+    const now = await computeImpact(trx, x.tenantId, { kind: 'assignments', changes: list }, { matrixLevel: await matrixLevel(x.tenantId) });
+    if (now.impact.conflicts.length) refuse('policyConflict: the batch now sets a key to two values at the same priority');
+    refuseUnlessAsApproved(approved!, now, 'submit the batch again');
+    await applyChangesInTx(trx, x.tenantId, list, ctx, { userId: x.requesterId, approvalId: x.approvalId, impact: now.impact }).catch(stale);
+    return list;
+  });
   emitPolicyChanged(x.tenantId, [...new Set(deltas.map((d) => (d.after ?? d.before)!.resourceId))]);
 }
 
@@ -499,6 +571,8 @@ export async function executePolicyPublish(x: ApprovalExecution): Promise<string
     return;
   }
   if (p.kind === 'assignments') return executeAssignmentChanges(x, p);
+  // A group moved in the tree or deleted (groupTree.ts): the same request type, the same checks.
+  if (p.kind === 'group_move' || p.kind === 'group_delete') return executeGroupTreeChange(x);
   refuse('Malformed publication request');
 }
 

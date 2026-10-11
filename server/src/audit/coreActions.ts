@@ -59,6 +59,10 @@ export function registerCoreAuditActions(): void {
 
     // ── Configuration of the tenant (P3) ───────────────────────────────────
     { name: 'group.', criticality: 'standard', label: 'Device group' },
+    // The tree of groups carries the inheritance of the policies (modele-donnees-mdm §7.6, S12): a group moved or
+    // deleted changes the configuration of its subtree, written with its entry (P1 in its transaction).
+    { name: 'group.moved', criticality: 'critical', label: 'Device group moved in the tree' },
+    { name: 'group.deleted', criticality: 'critical', label: 'Device group deleted' },
     { name: 'settings.', criticality: 'standard', label: 'Settings' },
     { name: 'profile.', criticality: 'standard', label: 'Own profile' },
     { name: 'api_key.', criticality: 'standard', label: 'Enrolment key' },

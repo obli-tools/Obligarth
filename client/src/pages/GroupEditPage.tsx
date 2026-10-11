@@ -137,7 +137,12 @@ export function GroupEditPage() {
  if (pendingParentId === undefined) return;
  setMovingSaving(true);
  try {
- await groupsApi.move(groupId, pendingParentId);
+ // A move that changes what the devices inherit may wait for a second approver: nothing moved yet.
+ if ((await groupsApi.move(groupId, pendingParentId)) === null) {
+ toast.success(t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
+ setPendingParentId(undefined);
+ return;
+ }
  toast.success(t('groups.moved'));
  setGroup((g) => g ? { ...g, parentId: pendingParentId } : g);
  setPendingParentId(undefined);

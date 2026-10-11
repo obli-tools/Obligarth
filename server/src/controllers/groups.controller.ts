@@ -8,7 +8,17 @@ import { hasGlobalView } from '../services/deviceScope.service';
 import { AppError } from '../middleware/errorHandler';
 import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
 import { db } from '../db';
+import { changeGroupTree } from '../mdm/policies/groupTree';
+import type { RouteOutcome } from '../mdm/policies/publishGuard';
 import type { CreateGroupInput, UpdateGroupInput, MoveGroupInput } from '../validators/group.schema';
+
+const isDryRun = (req: Request): boolean => req.query.dryRun === 'true' || req.query.dryRun === '1';
+
+/** Sends the answer of a guarded change (200, 202, or the challenge of the step-up with its headers). */
+function send(res: Response, out: RouteOutcome): void {
+  for (const [k, v] of Object.entries(out.headers ?? {})) res.setHeader(k, v);
+  res.status(out.status).json(out.body);
+}
 
 /**
  * Tenant ownership gate of the /:id routes: a group of the session's
@@ -212,10 +222,12 @@ export const groupsController = {
         if (!canWriteTarget) throw new AppError(403, 'No write permission on target group');
       }
 
-      const group = await asTargetTenant(req, existing.tenantId, () => groupService.move(id, newParentId));
-      if (!group) throw new AppError(404, 'Group not found');
-
-      res.json({ success: true, data: group });
+      // The ancestry of the subtree carries the inheritance of the policies: previewed, guarded (a second factor,
+      // a second approver beyond the thresholds: 202) and journaled like a change of assignments (S12).
+      // ?dryRun=true: the preview only.
+      const out = await asTargetTenant(req, existing.tenantId,
+        () => changeGroupTree(req, existing, { kind: 'group_move', groupId: id, newParentId }, isDryRun(req)));
+      send(res, out);
     } catch (err: unknown) {
       if (err instanceof Error && err.message.includes('circular')) {
         next(new AppError(400, err.message));
@@ -232,19 +244,12 @@ export const groupsController = {
       // Same tenant gate as update.
       const current = await groupInReach(req, id);
 
-      groupNotificationService.removeGroup(id);
-
-      const deleted = await asTargetTenant(req, current.tenantId, () => groupService.delete(id));
-      if (!deleted) throw new AppError(404, 'Group not found');
-
-      try {
-        const { auditService } = await import('../services/audit.service');
-        await auditService.logReqAs(req, current.tenantId, 'group.deleted', {
-          resourceType: 'group', resourcePath: String(id),
-        });
-      } catch {}
-
-      res.json({ success: true, message: 'Group deleted' });
+      // Its assignments go with the group and its devices leave it: previewed, guarded and journaled (its entry
+      // group.deleted in the transaction of the deletion) like a change of assignments (S12).
+      // ?dryRun=true: the preview only.
+      const out = await asTargetTenant(req, current.tenantId,
+        () => changeGroupTree(req, current, { kind: 'group_delete', groupId: id }, isDryRun(req)));
+      send(res, out);
     } catch (err) {
       next(err);
     }

@@ -27,6 +27,9 @@ router.get('/:id', globalViewScope('console.groups'), groupsController.getById);
 router.post('/', requireCanCreate(), validate(createGroupSchema), groupsController.create);
 router.put('/:id', requireGroupWrite(), validate(updateGroupSchema), groupsController.update);
 router.post('/reorder', requireTenantCapability('groups.manage'), groupsController.reorder);
+// A group moved in the tree or deleted changes what its subtree inherits (policies): previewed (?dryRun=true),
+// then a second factor or a second approver (202) when it changes the configuration of devices
+// (mdm/policies/groupTree.ts; modele-donnees-mdm S12).
 router.post('/:id/move', requireGroupWrite(), validate(moveGroupSchema), groupsController.move);
 router.delete('/:id', requireGroupWrite(), groupsController.delete);
 

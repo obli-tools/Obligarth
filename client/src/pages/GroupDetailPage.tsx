@@ -63,7 +63,11 @@ export function GroupDetailPage() {
  const handleDelete = async () => {
  if (!(await confirm({ message: t('groups.confirmDelete', { name: group.name }), danger: true }))) return;
  try {
- await groupsApi.delete(groupId);
+ // A deletion that changes what devices inherit may wait for a second approver: nothing deleted yet.
+ if (!(await groupsApi.delete(groupId))) {
+ toast.success(t('groups.deleteAwaitingApproval') || 'Deletion sent for approval: it will apply once a second administrator approves it');
+ return;
+ }
  removeGroup(groupId);
  fetchGroups();
  fetchTree();
