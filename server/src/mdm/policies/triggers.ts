@@ -2,6 +2,9 @@ import type { Knex } from 'knex';
 import { db } from '../../db';
 import { logger } from '../../utils/logger';
 import { defaultRuntime } from '../../jobs';
+import { requestDdmRecompute } from '../../apple/ddm/engine';
+import { lockDeviceRows, rollupConfigState } from '../apple/artifacts';
+import { requestArtifactReconcile } from '../apple/requests';
 import { resolveDeviceJob, resolveTenantJob } from './jobs';
 
 // =============================================================================
@@ -104,10 +107,47 @@ export async function requestEndUserResolution(trx: Knex.Transaction | null, ten
 }
 
 /**
+ * A device that starts a new enrollment cycle (erased and enrolled again, or enrolled again after it left) holds
+ * nothing of what was delivered before: the artifacts settled before the Authenticate of its current cycle are to
+ * deliver again, those that were being removed are gone. Returns the number of artifacts reset. Idempotent: what
+ * was settled since the cycle began is left alone.
+ */
+export async function resetArtifactsOfNewCycle(trx: Knex.Transaction, tenantId: number, deviceId: number): Promise<number> {
+  const stale = await trx('device_artifacts as x')
+    .join('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'x.device_id').andOn('a.tenant_id', '=', 'x.tenant_id'); })
+    .where({ 'x.tenant_id': tenantId, 'x.device_id': deviceId }).whereNotNull('a.authenticated_at')
+    .whereRaw('x.state_at < a.authenticated_at').first('x.artifact_key');
+  if (!stale) return 0;
+  await lockDeviceRows(trx, tenantId, [deviceId]);
+  const gone = await trx.raw(`
+    DELETE FROM obligarth.device_artifacts x USING obligarth.apple_devices a
+     WHERE a.tenant_id = x.tenant_id AND a.device_id = x.device_id AND x.tenant_id = ? AND x.device_id = ?
+       AND x.desired_hash IS NULL AND x.state_at < a.authenticated_at`, [tenantId, deviceId]) as { rowCount?: number };
+  const again = await trx.raw(`
+    UPDATE obligarth.device_artifacts x
+       SET state = 'pending', state_reasons = '[]'::jsonb, delivered_hash = NULL, delivered_at = NULL, last_command_id = NULL,
+           desired_at = now(), state_at = now()
+      FROM obligarth.apple_devices a
+     WHERE a.tenant_id = x.tenant_id AND a.device_id = x.device_id AND x.tenant_id = ? AND x.device_id = ?
+       AND x.desired_hash IS NOT NULL AND x.state_at < a.authenticated_at
+       AND x.state IN ('delivering', 'applied', 'error', 'not_applicable')
+       AND NOT (x.state = 'error' AND (x.state_reasons->>0 LIKE 'compile:%' OR x.state_reasons->>0 LIKE 'render:%'))`, [tenantId, deviceId]) as { rowCount?: number };
+  const n = Number(gone.rowCount ?? 0) + Number(again.rowCount ?? 0);
+  if (n > 0) {
+    await rollupConfigState(trx, [deviceId]);
+    await requestDdmRecompute(trx, tenantId, { deviceIds: [deviceId] });
+    await requestArtifactReconcile(trx, tenantId, [deviceId]);
+  }
+  return n;
+}
+
+/**
  * The step of the onboarding of a device (apple.device-onboard, section 10.4): its first resolution, once its
- * identity certificate is known. In the tenant's context (the job's). Registered with the integration's onboarding
- * steps by registerMdmModule; idempotent (a retried job requests it again, the queue groups the requests).
+ * identity certificate is known; what a previous enrollment cycle left as delivered is to deliver again. In the
+ * tenant's context (the job's). Registered with the integration's onboarding steps by registerMdmModule; idempotent
+ * (a retried job requests it again, the queue groups the requests).
  */
 export async function resolveAtOnboarding(tenantId: number, deviceId: number): Promise<void> {
+  await db.transaction((trx) => resetArtifactsOfNewCycle(trx, tenantId, deviceId));
   await requestDeviceResolution(null, tenantId, [deviceId]);
 }

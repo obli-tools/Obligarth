@@ -27,6 +27,10 @@ export interface Contribution {
   /** Null for an app (its artifact depends on the device, section 8.3). */
   artifactKey: string | null;
   valueHash: string;
+  /** The value the key brings (keyed: the key's value; else the item's values), as the version stores it: secrets
+   *  as references, variables as templates. Absent for a tombstone. Read by the compilation only (section 7.9):
+   *  never stored with the effective state, never logged. */
+  value?: JsonValue;
   removed: boolean;
   /** Known variables of the value, resolved per device at rendering. */
   variables: PolicyVariable[];
@@ -72,6 +76,7 @@ export function policyContributions(content: PolicyContentV1, catalog: AppleCata
         instance: part.instance,
         artifactKey: `${art.channel}:${art.identifier}`,
         valueHash: part.remove ? REMOVED_HASH : valueHashOf(part.value),
+        ...(part.remove || part.value === undefined ? {} : { value: part.value }),
         removed: part.remove,
         variables: part.remove ? [] : variablesOf(part.value),
         requiresAsset: part.remove ? false : usesAsset(entry, part.key, part.value),
@@ -92,6 +97,7 @@ export function appContribution(app: { identifier: string; supportedPlatforms: s
     instance: app.identifier,
     artifactKey: null,
     valueHash: valueHashOf(options),
+    value: options,
     removed: false,
     variables: variablesOf(options.config ?? null),
     requiresAsset: false,

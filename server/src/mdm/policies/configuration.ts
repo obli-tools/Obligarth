@@ -5,6 +5,7 @@ import {
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { appleCatalog } from '../apple/catalog';
+import { redactRawProfileValues } from '../apple/plistRead';
 import { loadDevices, loadPolicyState } from './loader';
 import { indexAssignments, resolveDevice } from './resolver';
 
@@ -12,10 +13,10 @@ import { indexAssignments, resolveDevice } from './resolver';
 // The effective configuration of a device as the console shows it (docs:
 // modele-donnees-mdm §10.6, criterion 9): for each stored key, its value read
 // in the source version (never a secret: a reference shows as
-// {"$secret": true}), its provenance (policy, version, scope), its
-// availability with its reason, its conflicts; and the state of its artifacts
-// (device_artifacts, written from the compilation on: lot B5c). In the
-// device's tenant context.
+// {"$secret": true}; of a raw profile, its name and the types of its payloads
+// only), its provenance (policy, version, scope), its availability with its
+// reason, its conflicts; and the state of its artifacts (device_artifacts). In
+// the device's tenant context.
 // =============================================================================
 
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) as T : v as T);
@@ -91,7 +92,11 @@ export async function deviceConfiguration(tenantId: number, deviceId: number): P
         ...(live && live.status === 'not_applicable' && live.reason === reason && live.detail ? { detail: live.detail } : {}) };
     const v = r.source_version_id !== null ? versionOf.get(Number(r.source_version_id)) : undefined;
     const conflict = r.conflict ? parse<SettingConflictEntry[]>(r.conflict) : null;
-    const value = r.source_type === 'policy' && !r.removed ? maskSecretRefs(valueOf(v?.content, r.setting_key)) : undefined;
+    // A raw profile shows its name, its identifier and the types of its payloads, never their content (nothing
+    // guarantees the inventory of its secrets complete: review of lot B5b, MDM-B5b-C9).
+    const stored = r.source_type === 'policy' && !r.removed ? valueOf(v?.content, r.setting_key) : undefined;
+    const value = stored !== undefined && parsed?.kind === 'raw'
+      ? redactRawProfileValues(stored as Record<string, JsonValue>) : maskSecretRefs(stored);
     return {
       settingKey: r.setting_key,
       artifactKey: r.artifact_key ?? null,

@@ -87,6 +87,9 @@ export interface ResolvedSetting extends EffectiveSetting {
   kind: SettingKind;
   key: string | null;
   instance: string | null;
+  /** The winning value (secrets as references, variables as templates); absent for a tombstone. For the
+   *  compilation (section 7.9): never written with the effective state. */
+  value?: JsonValue;
 }
 
 export interface DeviceResolution { deviceId: number; settings: ResolvedSetting[] }
@@ -249,6 +252,7 @@ export function resolveDevice(input: ResolutionInput, d: ResolutionDevice, byTar
       kind: w.c.kind,
       key: w.c.key,
       instance: w.c.instance,
+      ...(w.c.value !== undefined && !w.c.removed ? { value: w.c.value } : {}),
     });
   }
   settings.sort((x, y) => (x.settingKey < y.settingKey ? -1 : x.settingKey > y.settingKey ? 1 : 0));

@@ -1,5 +1,8 @@
 import type { Knex } from 'knex';
 import { canonicalJson } from '../../audit/canonical';
+import { writeArtifacts, type DeliveryContext } from '../apple/artifacts';
+import { evaluateDevices } from '../compliance/evaluate';
+import { requestComplianceEvaluation } from '../apple/requests';
 import type { ResolutionOutput, ResolvedSetting } from './resolver';
 
 // =============================================================================
@@ -7,10 +10,11 @@ import type { ResolutionOutput, ResolvedSetting } from './resolver';
 // effective state of the devices of the output, in the caller's transaction
 // (one per slice of 200 devices, motif M8). A row is written only when one of
 // its columns changes (computed_at says when the effective value last
-// changed), the keys no longer retained are deleted. The compiled artifacts,
-// their desired state per device, the aggregate configuration state and the
-// delivery (steps 2 to 6) come with the compilation (lot B5c), from the same
-// output.
+// changed), the keys no longer retained are deleted. With the delivery
+// context of the resolution (its devices, the tenant, the catalog), the same
+// call compiles the artifacts, writes their desired state per device and the
+// aggregate configuration state, and requests their delivery (steps 2 to 6:
+// apple/artifacts.ts); the compliance of the devices that changed follows.
 // Concurrent writers of a device (a resolution of the tenant and one of the
 // device) are serialised by a transaction lock per device, taken in ascending
 // order before reading what is stored.
@@ -22,7 +26,13 @@ export interface WriteSummary {
   deleted: number;
   /** Devices whose effective state changed. */
   changedDeviceIds: number[];
+  /** Devices one of whose artifacts changed (empty without a delivery context). */
+  artifactDeviceIds: number[];
 }
+
+/** Beyond this many devices changed by one write, their compliance is evaluated in the transaction, in bulk,
+ *  instead of one job per device. */
+const COMPLIANCE_JOBS_MAX = 50;
 
 const COLUMNS = ['artifact_key', 'value_hash', 'removed', 'source_type', 'source_id', 'source_tenant_id', 'source_version_id',
   'source_assignment_id', 'source_scope', 'source_scope_id', 'source_rank', 'availability', 'unavailable_reason', 'conflict'] as const;
@@ -79,10 +89,13 @@ export async function lockDevices(trx: Knex.Transaction, deviceIds: number[]): P
                    FROM (SELECT d FROM unnest(?::integer[]) AS d ORDER BY d) AS s`, [RESOLVE_LOCK_SPACE, ids]);
 }
 
-/** writeResolution(trx, tenantId, out): the effective state of the output's devices (section 7.10, step 1). */
-export async function writeResolution(trx: Knex.Transaction, tenantId: number, out: ResolutionOutput): Promise<WriteSummary> {
+/**
+ * writeResolution(trx, tenantId, out, delivery): the effective state of the output's devices (section 7.10, step
+ * 1) and, with the delivery context, their artifacts and what delivers them (steps 2 to 6).
+ */
+export async function writeResolution(trx: Knex.Transaction, tenantId: number, out: ResolutionOutput, delivery?: DeliveryContext): Promise<WriteSummary> {
   const deviceIds = out.devices.map((d) => d.deviceId);
-  const summary: WriteSummary = { devices: deviceIds.length, upserted: 0, deleted: 0, changedDeviceIds: [] };
+  const summary: WriteSummary = { devices: deviceIds.length, upserted: 0, deleted: 0, changedDeviceIds: [], artifactDeviceIds: [] };
   if (!deviceIds.length) return summary;
   const stored = await trx('device_effective_settings').where({ tenant_id: tenantId }).whereIn('device_id', deviceIds)
     .select('device_id', 'setting_key', ...COLUMNS) as Array<Record<string, unknown> & { device_id: number; setting_key: string }>;
@@ -131,5 +144,12 @@ export async function writeResolution(trx: Knex.Transaction, tenantId: number, o
   summary.upserted = upserts.length;
   summary.deleted = deletes.length;
   summary.changedDeviceIds = [...changed].sort((a, b) => a - b);
+  if (delivery) {
+    summary.artifactDeviceIds = (await writeArtifacts(trx, tenantId, out, delivery)).changedDeviceIds;
+    // What applies to a device, or the state of its configuration, changed: its compliance is evaluated again.
+    const touched = [...new Set([...summary.changedDeviceIds, ...summary.artifactDeviceIds])];
+    if (touched.length > COMPLIANCE_JOBS_MAX) await evaluateDevices(trx, tenantId, touched);
+    else if (touched.length > 0) await requestComplianceEvaluation(trx, tenantId, touched);
+  }
   return summary;
 }

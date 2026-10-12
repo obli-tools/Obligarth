@@ -500,7 +500,7 @@ async function executeVersionPublication(x: ApprovalExecution, p: PublishPayload
     refuseUnlessAsApproved(approved!, check, 'the version is back to the draft, submit it again');
     await publishVersionInTx(trx, x.tenantId, policyId, versionId, ctx,
       { from: 'pending_approval', approvalId: x.approvalId, impact: check.impact, userId: x.requesterId, expectedSha: check.contentSha256 });
-  });
+  }, { unbounded: true });
 }
 
 /** The versions a batch was filed with, when the payload names them all in the expected form; null otherwise. */
@@ -549,7 +549,7 @@ async function executeAssignmentChanges(x: ApprovalExecution, p: PublishPayload)
     refuseUnlessAsApproved(approved!, now, 'submit the batch again');
     await applyChangesInTx(trx, x.tenantId, list, ctx, { userId: x.requesterId, approvalId: x.approvalId, impact: now.impact }).catch(stale);
     return list;
-  });
+  }, { unbounded: true });
   emitPolicyChanged(x.tenantId, [...new Set(deltas.map((d) => (d.after ?? d.before)!.resourceId))]);
 }
 

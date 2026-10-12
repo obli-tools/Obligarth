@@ -59,8 +59,16 @@ export function rawProfilesOf(content: PolicyContentV1 | null | undefined): Map<
 
 /** A secret typed in, to move to the vault: where it is, and the purpose of its key. */
 export interface SecretValueSite { itemId: string; path: Array<string | number>; purpose: string }
-/** A reference to a tenant secret, and where it is. */
-export interface SecretRefSite { itemId: string; path: string; id: string }
+/** A reference to a tenant secret, where it is, and the purpose its key gives a secret (the overlay's; the typed
+ *  values of a raw profile: policy.raw_secret). The secret referred to must have been stored for that purpose: the
+ *  rendering reads it accordingly (review of lot B5b, MDM-B5b-C8). */
+export interface SecretRefSite { itemId: string; path: string; id: string; purpose: string }
+
+/** The purpose of the secrets the import of a raw profile moves to the vault. */
+export const RAW_SECRET_PURPOSE = 'policy.raw_secret';
+/** Nesting of the payloads of a raw profile: with the six levels above them, a reference stays within the 32
+ *  levels the garbage collection of the vault reads (findSecretRefs; review of lot B5b, MDM-B5b-C9). */
+export const RAW_PROFILE_MAX_DEPTH = 24;
 
 export interface ValidationOutcome {
   issues: PolicyValidationIssue[];
@@ -154,7 +162,7 @@ function checkValue(x: ValueCtx, key: SchemaKey, value: unknown, path: Array<str
   if (purpose) {
     // A declaration never carries a secret at the MVP: assets come with step 3 of apple-edge.
     if (x.family === 'declaration') { x.c.add(x.itemId, at, 'secret_requires_asset'); return; }
-    if (isSecretRef(value)) { x.c.secretRefs.push({ itemId: x.itemId, path: at, id: value.$secret }); return; }
+    if (isSecretRef(value)) { x.c.secretRefs.push({ itemId: x.itemId, path: at, id: value.$secret, purpose }); return; }
     if (x.o.allowSecretValues && isSecretValue(value)) {
       if (value.$secretValue.length === 0 || value.$secretValue.length > POLICY_MAX_SECRET_VALUE_LENGTH) {
         x.c.add(x.itemId, at, 'out_of_range');
@@ -281,8 +289,8 @@ function checkRawProfile(x: ValueCtx, values: Record<string, unknown>): void {
     return;
   }
   const walk = (v: unknown, path: Array<string | number>, depth: number): void => {
-    if (depth > MAX_DEPTH) { x.c.add(x.itemId, pathText(path), 'invalid_item'); return; }
-    if (isSecretRef(v)) { x.c.secretRefs.push({ itemId: x.itemId, path: pathText(path), id: v.$secret }); return; }
+    if (depth > RAW_PROFILE_MAX_DEPTH) { x.c.add(x.itemId, pathText(path), 'invalid_item'); return; }
+    if (isSecretRef(v)) { x.c.secretRefs.push({ itemId: x.itemId, path: pathText(path), id: v.$secret, purpose: RAW_SECRET_PURPOSE }); return; }
     if (looksLikeSecretMarker(v)) { x.c.add(x.itemId, pathText(path), 'secret_not_allowed'); return; }
     if (typeof v === 'string') {
       const vars = variablesInString(v);

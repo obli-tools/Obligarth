@@ -72,9 +72,10 @@ export async function resolveTenant(ctx: Pick<JobContext<unknown>, 'inTenant' | 
     const s = await ctx.withTenant(async (trx) => {
       await lockDevices(trx, slice);
       const set = await loadDevices(trx, tenantId, slice);
-      return writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog: appleCatalog() }));
+      const catalog = appleCatalog();
+      return writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
     });
-    out.changed.push(...s.changedDeviceIds);
+    out.changed.push(...new Set([...s.changedDeviceIds, ...s.artifactDeviceIds]));
     out.upserted += s.upserted;
     out.deleted += s.deleted;
   }
@@ -89,9 +90,10 @@ export async function resolveDeviceInTx(trx: Knex.Transaction, tenantId: number,
   await lockDevices(trx, deviceIds);
   const state = await loadPolicyState(trx, tenantId);
   const set = await loadDevices(trx, tenantId, deviceIds);
-  const s = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog: appleCatalog() }));
+  const catalog = appleCatalog();
+  const s = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
   if (s.changedDeviceIds.length) await syncConflictAlerts(trx, tenantId, s.changedDeviceIds);
-  return { changed: s.changedDeviceIds, upserted: s.upserted, deleted: s.deleted };
+  return { changed: [...new Set([...s.changedDeviceIds, ...s.artifactDeviceIds])].sort((a, b) => a - b), upserted: s.upserted, deleted: s.deleted };
 }
 
 async function runTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): Promise<JobResult> {

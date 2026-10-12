@@ -10,6 +10,7 @@ import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type 
 import { vault } from '../vault';
 import { audit, type AuditWriteContext } from '../audit';
 import { appleTenants } from '../apple/tenants/registry';
+import { requestTenantResolution } from '../mdm/policies/triggers';
 import { logger } from '../utils/logger';
 
 // Database contexts (rls-tenant §6.6, §8.2): the registry is read in the
@@ -192,6 +193,9 @@ export const tenantService = {
           }
         }
         const [row] = await trx('tenants').where({ id }).update(patch).returning('*');
+        // The name of the tenant is written in the profiles of its policies (PayloadOrganization) and is one of their
+        // variables ({{tenant.name}}): its devices are resolved again.
+        if (row && changes.name) await requestTenantResolution(trx, id);
         if (row && Object.keys(changes).length) {
           await audit.appendInTx(trx, {
             tenantId: id, action: 'tenant.updated', onBehalfOf: id === MASTER_TENANT_ID ? undefined : id,

@@ -9,7 +9,21 @@ import {
 } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { findSecretRefs, registerSecretReferenceHolder } from '../vault';
+import { registerCommandResultIngestor, onTargetFinal } from '../apple/commands/results';
+import { registerProfileSource } from '../apple/commands/sensitive';
+import { registerSetupContributor } from '../apple/commands/setup';
+import { registerDeclarationProvider } from '../apple/ddm/engine';
+import { registerStatusHook } from '../apple/ddm/status';
 import { registerOnboardStep } from '../apple/devices/jobs';
+import { registerBootTask } from '../lifecycle';
+import { resolveOnCatalogChange } from './apple/catalogRelease';
+import { registerArtifactJobs } from './apple/jobs';
+import { onDeclarationStatus, policiesDeclarationProvider } from './apple/policiesProvider';
+import { policyProfileSource } from './apple/profileSource';
+import { ingestSettingsResult, onPolicyTargetFinal } from './apple/reconcile';
+import { requestComplianceEvaluation } from './apple/requests';
+import { policiesSetupContributor } from './apple/setupContributor';
+import { registerComplianceJobs } from './compliance/jobs';
 import { registerMdmJobs } from './jobs';
 import { registerPolicyJobs } from './policies/jobs';
 import { executePolicyPublish, onPolicyPublishClosed } from './policies/publish';
@@ -28,8 +42,16 @@ import policyRoutes from './routes/policies.routes';
 // actions, restriction and approval executor, the console API. Lot B5b: the
 // policies (envelope, versions, assignments), their resolution queues, the
 // restriction and the approval of their publication, the secret references
-// of their contents. The compilation and the delivery come with lot B5c.
+// of their contents. Lot B5c: the Apple compilation and the delivery of the
+// artifacts (the declaration provider 'policies' of the DDM engine, the
+// profile source 'policy' and the reconciliation by the command bus, the
+// contributor of the setup plan), the hooks of their ends (final state of a
+// target, declaration status), the minimal compliance, their queues, and the
+// resolution of every tenant when the catalog shipped with the server changes.
 // =============================================================================
+
+/** Status items of the DDM channel whose change may change the compliance of a device (section 5.4). */
+const COMPLIANCE_ITEM_RE = /^(passcode|softwareupdate)\./;
 
 let registered = false;
 
@@ -68,6 +90,29 @@ export function registerMdmModule(): void {
   // The onboarding of a device (apple.device-onboard, §10.4): once its identity certificate is known, its policies
   // are resolved (a step of the integration's job, in the tenant's context).
   registerOnboardStep('policies.resolve', ({ job, tenantId, deviceId }) => job.inTenant(() => resolveAtOnboarding(tenantId, deviceId)));
+  registerArtifactJobs();          // apple.artifacts.reconcile-device, mdm.artifacts.gc
+  registerComplianceJobs();        // mdm.compliance.evaluate-device, mdm.compliance.evaluate-all
+
+  // ── Delivery (§7.10): the extension points of the integration, and only them ─
+  // The 'ddm' artifacts of a device are its declarations obg.cfg.pol-…, with their activation.
+  registerDeclarationProvider(policiesDeclarationProvider);
+  // What the device reports of them is their state; a passcode or update status that changes, its compliance.
+  registerStatusHook({
+    name: 'mdm.policies',
+    onDeclarationStatus,
+    onItemsChanged: async (trx, tenantId, deviceId, items) => {
+      if (items.some((i) => COMPLIANCE_ITEM_RE.test(i))) await requestComplianceEvaluation(trx, tenantId, [deviceId]);
+    },
+  });
+  // The profiles of the policies, rendered per device when their command is written (secrets read then, never before).
+  registerProfileSource(policyProfileSource);
+  // The end of their commands, and the per-item status of a Settings command.
+  onTargetFinal('mdm.policies', onPolicyTargetFinal);
+  registerCommandResultIngestor({ requestType: 'Settings', mode: 'inline', apply: ingestSettingsResult });
+  // An ADE device leaves the setup assistant with its profiles and settings installed.
+  registerSetupContributor(policiesSetupContributor);
+  // A new catalog, overlay or compiler: every tenant is resolved again (after jobs.start(): the task enqueues).
+  registerBootTask('mdm.catalog-release', async () => { await resolveOnCatalogChange(); });
 
   // ── Audit (§10.7; audit-durci §3.4): critical P1 in the transaction of the effect,
   //    standard P3 after it, protective P4 never blocked. Details: identifiers and counters only.
@@ -85,6 +130,7 @@ export function registerMdmModule(): void {
     { name: 'policy.archived', criticality: 'standard', label: 'Policy archived' },
     { name: 'policy.updated', criticality: 'standard', label: 'Policy renamed or described' },
     { name: 'policy.draft_discarded', criticality: 'standard', label: 'Policy draft discarded' },
+    { name: 'policy.raw_profile_imported', criticality: 'standard', label: 'Configuration profile imported into a policy draft' },
     { name: 'policy.rejected', criticality: 'protective', label: 'Policy version rejected' },
     { name: 'app.created', criticality: 'standard', label: 'App added to the catalog' },
     { name: 'app.updated', criticality: 'standard', label: 'App of the catalog updated' },

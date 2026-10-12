@@ -193,6 +193,6 @@ export async function executeGroupTreeChange(x: ApprovalExecution): Promise<void
     refuseUnlessAsApproved(approved!, now, 'request the change again');
     const done = await write(trx, change, { ctx, approvalId: x.approvalId, impact: now.impact }).catch(stale);
     if (!done) refuse('The group of this request no longer exists');
-  });
+  }, { unbounded: true });
   if (change.kind === 'group_delete') groupNotificationService.removeGroup(groupId);
 }

@@ -17,6 +17,7 @@ import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership, moveToGroup } from '../registry/ownership';
 import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
 import { deviceConfiguration } from '../policies/configuration';
+import { requestDeviceResolution } from '../policies/triggers';
 
 // =============================================================================
 // Console API of the device registry (docs: modele-donnees-mdm §10.6, §11.1):
@@ -265,6 +266,8 @@ router.patch('/devices/:id', resolveDevice(true), async (req, res, next) => {
     const view = { globalView: hasGlobalView(req) };
     const device = await asTargetTenant(req, tenantId, () => deviceService.updateDevice(id, req.tenantId!, patch, view));
     if (!device) throw new AppError(404, 'Device not found');
+    // The name of the device is a variable of the policies ({{device.name}}): what is rendered with it follows.
+    if (patch.displayName !== undefined) await asTargetTenant(req, tenantId, () => requestDeviceResolution(null, tenantId, [id]));
     // Filed in the device's tenant (from the global view: the client's log, rls-tenant EX-08): the fields
     // changed, never their values.
     await asTargetTenant(req, tenantId, async () => audit.append({

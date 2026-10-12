@@ -28,9 +28,19 @@ export interface DeviceSet {
   groupAncestors: Map<number, Array<{ groupId: number; depth: number }>>;
 }
 
-// Contributions of the published versions, by tenant and version (immutable once published).
+// Contributions of the published versions, by tenant and version (immutable once published). They carry the values
+// of the version (the compilation reads them): the cache is bounded by their size as well as by their number.
 const CACHE_MAX = 1000;
-const contributionCache = new Map<string, Contribution[]>();
+const CACHE_MAX_BYTES = 64 * 1024 * 1024;
+const contributionCache = new Map<string, { list: Contribution[]; bytes: number }>();
+let cachedBytes = 0;
+
+/** An estimate of what the contributions of a version hold (the JSON of their values). */
+function sizeOf(list: Contribution[]): number {
+  let n = 0;
+  for (const c of list) n += 200 + (c.value === undefined ? 0 : JSON.stringify(c.value).length);
+  return n;
+}
 
 /** The contributions kept for a version (most recently used last), undefined when they are not known. */
 function knownContributions(key: string): Contribution[] | undefined {
@@ -39,21 +49,29 @@ function knownContributions(key: string): Contribution[] | undefined {
     contributionCache.delete(key);
     contributionCache.set(key, hit);
   }
-  return hit;
+  return hit?.list;
 }
 
 function cachedContributions(key: string, compute: () => Contribution[]): Contribution[] {
   const hit = knownContributions(key);
   if (hit) return hit;
-  const value = compute();
-  contributionCache.set(key, value);
-  if (contributionCache.size > CACHE_MAX) contributionCache.delete(contributionCache.keys().next().value as string);
-  return value;
+  const list = compute();
+  const bytes = sizeOf(list);
+  contributionCache.set(key, { list, bytes });
+  cachedBytes += bytes;
+  // The least recently used leave first; the entry just added always stays.
+  while (contributionCache.size > 1 && (contributionCache.size > CACHE_MAX || cachedBytes > CACHE_MAX_BYTES)) {
+    const oldest = contributionCache.keys().next().value as string;
+    cachedBytes -= contributionCache.get(oldest)?.bytes ?? 0;
+    contributionCache.delete(oldest);
+  }
+  return list;
 }
 
 /** For the tests: forget the cached contributions. */
 export function clearContributionCache(): void {
   contributionCache.clear();
+  cachedBytes = 0;
 }
 
 const parseJson = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) as T : v as T);

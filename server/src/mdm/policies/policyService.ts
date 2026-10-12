@@ -1,7 +1,7 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import {
-  emptyPolicyContent, POLICY_CATEGORY_RE,
+  emptyPolicyContent, POLICY_CATEGORY_RE, RAW_PROFILE_TYPE,
   type Policy, type PolicyContentV1, type PolicyImpact, type PolicyValidationIssue, type PolicyVersion, type PolicyVersionSummary,
   type PolicyVersionState,
 } from '@obligarth/shared';
@@ -12,10 +12,14 @@ import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import { vault } from '../../vault';
 import { appleCatalog } from '../apple/catalog';
+import {
+  RawProfileError, rawSecretSites, readRawProfile, redactRawProfileItem, redactRawProfileValues, withRawSecretRefs,
+} from '../apple/plistRead';
 import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
 import {
-  contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, rawProfilesOf, validatePolicyContent, withSecretRefs, type SecretRefSite,
+  contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, RAW_SECRET_PURPOSE, rawProfilesOf, validatePolicyContent, withSecretRefs,
+  type SecretRefSite,
 } from './validate';
 
 // =============================================================================
@@ -44,13 +48,43 @@ export function contentSha(content: unknown): string {
 const iso = (d: unknown): string | null => (d ? new Date(d as string).toISOString() : null);
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) as T : v as T);
 
+/** The content of a version as a reader sees it: a raw profile shows its name, its identifier and the types of its
+ *  payloads, never their content (review of lot B5b, MDM-B5b-C9). */
+export function contentForReaders(content: PolicyContentV1): PolicyContentV1 {
+  const items = content?.sections?.apple?.items;
+  if (!Array.isArray(items) || !items.some((i) => i?.type === RAW_PROFILE_TYPE)) return content;
+  return { ...content, sections: { ...content.sections, apple: { items: items.map((i) => redactRawProfileItem(i)) } } };
+}
+
+/**
+ * The raw profiles an editor sends back are those it was shown (contentForReaders): each one that is, value for
+ * value, the reduced form of the raw profile the stored draft holds under the same id takes the stored values back.
+ * Anything else is left as it came (the validation refuses a raw profile the draft does not hold).
+ */
+function withStoredRawProfiles(raw: unknown, stored: PolicyContentV1): unknown {
+  const items = (raw as PolicyContentV1 | null)?.sections?.apple?.items;
+  const kept = new Map((stored?.sections?.apple?.items ?? []).filter((i) => i.type === RAW_PROFILE_TYPE).map((i) => [i.id, i]));
+  if (!Array.isArray(items) || kept.size === 0) return raw;
+  const restored = items.map((i) => {
+    const mine = i && typeof i === 'object' && i.type === RAW_PROFILE_TYPE && typeof i.id === 'string' ? kept.get(i.id.toLowerCase()) : undefined;
+    if (!mine || !i.values) return i;
+    try {
+      return canonicalJson(i.values) === canonicalJson(redactRawProfileValues(mine.values)) ? { ...i, values: mine.values } : i;
+    } catch {
+      return i;
+    }
+  });
+  const r = raw as PolicyContentV1;
+  return { ...r, sections: { ...r.sections, apple: { ...r.sections.apple, items: restored } } };
+}
+
 export function rowToVersion(r: Record<string, any>, withContent = true): PolicyVersion {
   return {
     id: Number(r.id),
     policyId: Number(r.policy_id),
     version: Number(r.version),
     state: r.state as PolicyVersionState,
-    content: withContent ? parse<PolicyContentV1>(r.content) : emptyPolicyContent(),
+    content: withContent ? contentForReaders(parse<PolicyContentV1>(r.content)) : emptyPolicyContent(),
     contentSha256: String(r.content_sha256).trim(),
     schemaRelease: parse<Record<string, string>>(r.schema_release ?? {}) ?? {},
     summary: parse<PolicyVersionSummary>(r.summary ?? {}) ?? {},
@@ -135,16 +169,19 @@ async function versionRow(q: Knex | Knex.Transaction, tenantId: number, policyId
 const POLICY_SECRET_PURPOSE_PREFIX = 'policy.';
 
 /**
- * The references of a content that designate no secret of the policies of the tenant: unknown, of another tenant, or
- * of a purpose that is not a policy's (tenant_secrets holds the secrets of every document of the tenant: a policy
- * never delivers to devices a secret stored for something else). One answer for all: secret_not_found.
+ * The references of a content that designate no secret of the policies of the tenant stored for the key that refers
+ * to it: unknown, of another tenant, of a purpose that is not a policy's (tenant_secrets holds the secrets of every
+ * document of the tenant: a policy never delivers to devices a secret stored for something else), or of another
+ * purpose than its key's (the password of a Wi-Fi is not the identity of a PKCS #12, nor the typed value of a raw
+ * profile a password: the rendering reads a secret by the purpose of its key; MDM-B5b-C8). One answer for all:
+ * secret_not_found.
  */
 export async function missingSecrets(q: Knex | Knex.Transaction, tenantId: number, refs: SecretRefSite[]): Promise<PolicyValidationIssue[]> {
   if (!refs.length) return [];
   const ids = [...new Set(refs.map((r) => r.id))];
   const rows = await q('tenant_secrets').where({ tenant_id: tenantId }).whereIn('id', ids).select('id', 'purpose') as Array<{ id: string; purpose: string }>;
-  const found = new Set(rows.filter((r) => String(r.purpose).startsWith(POLICY_SECRET_PURPOSE_PREFIX)).map((r) => String(r.id)));
-  return refs.filter((r) => !found.has(r.id)).map((r) => ({ itemId: r.itemId, path: r.path, code: 'secret_not_found' as const }));
+  const purposes = new Map(rows.filter((r) => String(r.purpose).startsWith(POLICY_SECRET_PURPOSE_PREFIX)).map((r) => [String(r.id), String(r.purpose)]));
+  return refs.filter((r) => purposes.get(r.id) !== r.purpose).map((r) => ({ itemId: r.itemId, path: r.path, code: 'secret_not_found' as const }));
 }
 
 /** Minutes an approved request may take to execute before its version is held to be left behind. */
@@ -326,9 +363,11 @@ export const policyService = {
       if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
       const row = await versionRow(trx, tenantId, policyId, version, true);
       if (row.state !== 'draft') throw new AppError(409, 'Only a draft is edited', 'policyVersionNotDraft', { state: row.state });
-      // Validated against the draft as it is stored (locked): the raw profiles it holds are kept as they are.
-      const v = validatePolicyContent(rawContent, {
-        catalog: appleCatalog(), policyUuid: policy.uuid, allowSecretValues: true, keptRawProfiles: rawProfilesOf(parse<PolicyContentV1>(row.content)),
+      // Validated against the draft as it is stored (locked): the raw profiles it holds are kept as they are (the
+      // editor sends back what it was shown of them).
+      const stored = parse<PolicyContentV1>(row.content);
+      const v = validatePolicyContent(withStoredRawProfiles(rawContent, stored), {
+        catalog: appleCatalog(), policyUuid: policy.uuid, allowSecretValues: true, keptRawProfiles: rawProfilesOf(stored),
       });
       const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs))];
       if (issues.length || !v.content) validationFailed(issues);
@@ -440,6 +479,64 @@ export const policyService = {
     });
     await audit.append({ tenantId, action: 'policy.archived', target: { type: 'policy', id: String(policyId) } }, actor.auditCtx);
     return this.get(tenantId, policyId);
+  },
+
+  /**
+   * Imports a configuration profile (.mobileconfig, CFG-06) as a raw.profile item of the open draft of the policy:
+   * read by the strict reader (a signature removed, a binary or encrypted profile and the forbidden payloads
+   * refused), its secrets moved to the tenant's vault (purpose policy.raw_secret, the typed value as JSON) before
+   * anything is stored, in one transaction. Answers what a reader sees of the item, and the names of the keys moved
+   * (never a value). 422 rawProfileInvalid; 409 when the policy has no draft.
+   */
+  async importRawProfile(tenantId: number, policyId: number, bytes: Buffer, actor: PolicyActor):
+    Promise<{ version: PolicyVersion; itemId: string; movedSecrets: string[]; payloadTypes: string[]; signed: boolean }> {
+    await policyRow(db, tenantId, policyId);
+    await settleOrphanedPending(db, tenantId, policyId);
+    let profile: ReturnType<typeof readRawProfile>;
+    try {
+      profile = readRawProfile(bytes);
+    } catch (err) {
+      if (err instanceof RawProfileError) {
+        throw new AppError(422, 'The profile cannot be imported', 'rawProfileInvalid', { reason: err.code, ...(err.detail ? { at: err.detail } : {}) });
+      }
+      throw err;
+    }
+    const catalog = appleCatalog();
+    const sites = rawSecretSites(profile.payloads, (type, path) => catalog.secretPurpose(type, path) !== null);
+    const itemId = randomUUID();
+    const saved = await db.transaction(async (trx) => {
+      const policy = await policyRow(trx, tenantId, policyId, { forUpdate: true });
+      if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
+      const row = await trx('policy_versions').where({ tenant_id: tenantId, policy_id: policyId, state: 'draft' }).forUpdate().first() as
+        Record<string, any> | undefined;
+      if (!row) throw new AppError(409, 'The policy has no draft to import into', 'policyVersionNotDraft');
+      const ids: string[] = [];
+      for (const s of sites) ids.push(await vault.createTenantSecret(tenantId, RAW_SECRET_PURPOSE, JSON.stringify(s.value), { userId: actor.userId }, { trx }));
+      const stored = parse<PolicyContentV1>(row.content);
+      const item = { id: itemId, type: RAW_PROFILE_TYPE, values: {
+        displayName: profile.displayName, originalIdentifier: profile.originalIdentifier, payloads: withRawSecretRefs(profile.payloads, sites, ids),
+      } };
+      const next: PolicyContentV1 = { format: 1, sections: { ...stored.sections, apple: { items: [...(stored.sections?.apple?.items ?? []), item] } } };
+      const v = validatePolicyContent(next, { catalog, policyUuid: policy.uuid, allowSecretValues: false, allowRawProfiles: true });
+      const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs))];
+      if (issues.length || !v.content) validationFailed(issues);
+      if (hasSecretValue(v.content)) throw new Error('a secret value would be stored');
+      if (contentBytes(v.content) > POLICY_MAX_CONTENT_BYTES) validationFailed([{ itemId: null, path: '', code: 'content_too_large' }]);
+      const [updated] = await trx('policy_versions').where({ tenant_id: tenantId, id: row.id }).update({
+        content: JSON.stringify(v.content), content_sha256: contentSha(v.content), summary: JSON.stringify(v.summary),
+        schema_release: JSON.stringify({ apple: catalog.release.commit }), impact: null,
+      }).returning('*') as Array<Record<string, any>>;
+      await trx('policies').where({ tenant_id: tenantId, id: policyId }).update({ sections: ['apple'], updated_by: actor.userId, updated_at: new Date() });
+      return updated;
+    });
+    const payloadTypes = [...new Set(profile.payloads.map((p) => String(p.PayloadType)))].sort();
+    // Key names only: the last name of each path, never a value.
+    const movedSecrets = [...new Set(sites.map((s) => s.path.filter((p) => typeof p === 'string').join('.')))].sort();
+    await audit.append({
+      tenantId, action: 'policy.raw_profile_imported', target: { type: 'policy', id: String(policyId) },
+      details: { version: Number(saved.version), payloads: profile.payloads.length, payloadTypes: payloadTypes.slice(0, 20), movedToVault: sites.length, signed: profile.signed },
+    }, actor.auditCtx);
+    return { version: rowToVersion(saved), itemId, movedSecrets, payloadTypes, signed: profile.signed };
   },
 
   /** Validation and conflicts of a version, without effect (POST …/validate). */

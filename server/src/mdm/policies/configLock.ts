@@ -21,6 +21,11 @@ import { AppError } from '../../middleware/errorHandler';
 //     The writers of one process wait for each other in memory, without a
 //     connection: a burst of requests on one tenant never drains the pool that
 //     serves every tenant. The transaction lock then orders the processes.
+//     The line is bounded for the requests of the console; the execution of
+//     an approved request waits for its turn whatever its length (an approval
+//     is consumed once: refused for a full line, it would be lost; second
+//     review of lot B5b, MDM-B5b-C14). Such executions are as few as the
+//     approvals given.
 // Order of the locks, everywhere: this one, then the row of a policy, then the
 // row of its version.
 // =============================================================================
@@ -47,14 +52,15 @@ export async function lockTenantConfiguration(trx: Knex.Transaction, tenantId: n
  * context. Never called by a function that already runs under it for the same tenant (its transaction is passed
  * instead): a second transaction would wait for the first one for ever, so this is refused at once.
  */
-export async function withConfigurationLock<T>(tenantId: number, fn: (trx: Knex.Transaction) => Promise<T>): Promise<T> {
+export async function withConfigurationLock<T>(tenantId: number, fn: (trx: Knex.Transaction) => Promise<T>,
+  opts: { /** The execution of an approved request: never refused for a full line. */ unbounded?: boolean } = {}): Promise<T> {
   if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new Error('withConfigurationLock: invalid tenant');
   const outer = holding.getStore() ?? [];
   if (outer.some((h) => h.active && h.tenantId === tenantId)) {
     throw new Error('withConfigurationLock: already held for this tenant (pass the open transaction)');
   }
   const count = inLine.get(tenantId) ?? 0;
-  if (count >= MAX_IN_LINE) {
+  if (count >= MAX_IN_LINE && opts.unbounded !== true) {
     throw new AppError(429, 'Too many changes of the configuration of this tenant are waiting: try again', 'configurationBusy');
   }
   inLine.set(tenantId, count + 1);

@@ -1,4 +1,5 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
+import multer from 'multer';
 import { z } from 'zod';
 import { POLICY_STATES, type ImpactDevicesPage } from '@obligarth/shared';
 import { db } from '../../db';
@@ -26,6 +27,16 @@ import { changeAssignments, emitPolicyChanged, submitVersion, versionImpact, typ
 
 const router = Router();
 const manage = requireTenantCapability('mdm.policies.manage');
+/** A .mobileconfig, in memory: 1 MiB at most, one file. */
+const profileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024, files: 1, fields: 4, parts: 6 } }).single('file');
+const uploadProfile = (req: Request, res: Response, next: NextFunction): void => {
+  profileUpload(req, res, (err: unknown) => {
+    if (!err) { next(); return; }
+    const code = (err as { code?: string }).code;
+    next(new AppError(code === 'LIMIT_FILE_SIZE' ? 413 : 400, code === 'LIMIT_FILE_SIZE' ? 'The profile is larger than 1 MiB' : 'Invalid upload', 'rawProfileInvalid',
+      { reason: code === 'LIMIT_FILE_SIZE' ? 'too_large' : 'invalid_upload' }));
+  });
+};
 
 const CreateBody = z.object({
   name: z.string().max(200),
@@ -181,6 +192,24 @@ router.delete('/policies/:id/versions/:v', manage, async (req, res, next) => {
     await policyService.discardDraft(req.tenantId!, id, idParam(req.params.v, 'Policy version'), await actorOf(req));
     emitPolicyChanged(req.tenantId!, [id]);
     res.json({ data: { discarded: true } });
+  } catch (err) { next(err); }
+});
+
+// POST /api/mdm/policies/:id/raw-profiles — multipart, field "file": a .mobileconfig (1 MiB at most) imported as a
+// raw.profile item of the draft. Answers the draft as a reader sees it, the names of the keys moved to the vault.
+/** The policy of the route exists in the tenant of the session (404 before anything of the upload is read). */
+const knownPolicy = (req: Request, _res: Response, next: NextFunction): void => {
+  Promise.resolve().then(() => policyService.policyRow(db, req.tenantId!, idParam(req.params.id))).then(() => next(), next);
+};
+
+router.post('/policies/:id/raw-profiles', manage, knownPolicy, uploadProfile, async (req, res, next) => {
+  try {
+    const id = idParam(req.params.id);
+    const file = (req as Request & { file?: { buffer: Buffer } }).file;
+    if (!file || !Buffer.isBuffer(file.buffer) || file.buffer.length === 0) throw new AppError(400, 'A profile file is required', 'invalidRequest');
+    const out = await policyService.importRawProfile(req.tenantId!, id, file.buffer, await actorOf(req));
+    emitPolicyChanged(req.tenantId!, [id]);
+    res.status(201).json({ data: out });
   } catch (err) { next(err); }
 });
 

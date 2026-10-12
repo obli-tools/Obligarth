@@ -6,6 +6,7 @@ import { raiseInTx } from '../../apple/alerts/service';
 import { majorMinor } from '../../apple/ddm/baseline';
 import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
+import { requestArtifactReconcile, requestComplianceEvaluation } from '../apple/requests';
 import { requestDeviceResolution } from '../policies/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 
@@ -26,8 +27,11 @@ import { normalizeSerial, platformFromProductName, serialHolderOf } from '../reg
 // savepoint, or the job apple.command-result-ingest); no network. A change of
 // what the resolution of the policies reads (OS version, supervision,
 // platform, and the serial number and model of the variables) requests the
-// resolution of the device in the same transaction (§7.12); the return values
-// tell the caller what changed, for the compliance that follows (lot B5c).
+// resolution of the device in the same transaction (§7.12). An inventory
+// answer may change the compliance of the device (its first inventory, its OS
+// version, its supervision): its evaluation is requested with it (§4.4); a
+// ProfileList shows the drift of the profiles of the policies: the
+// reconciliation of the device is requested with it (§7.10).
 // =============================================================================
 
 export type IngestOutcome = 'applied' | 'stale' | 'no_device';
@@ -40,6 +44,7 @@ interface DeviceFacts {
   osVersion: string | null;
   platform: string;
   modelName: string | null;
+  deviceName: string | null;
   lostModeState: string;
   udid: string | null;
   certSha256: string | null;
@@ -59,12 +64,12 @@ async function factsOf(trx: Knex.Transaction, tenantId: number, deviceId: number
     // The record's row (never the nullable side of the outer join): one ingestion of a device at a time.
     .forUpdate('d')
     .first('d.ownership', 'd.management_mode', 'd.serial_number', 'd.supervised', 'd.os_version', 'd.platform', 'd.model_name',
-      'd.lost_mode_state', 'a.udid', 'a.cert_sha256', 'a.last_device_info_at', 'a.last_security_info_at', 'a.last_apps_at',
+      'd.device_name', 'd.lost_mode_state', 'a.udid', 'a.cert_sha256', 'a.last_device_info_at', 'a.last_security_info_at', 'a.last_apps_at',
       'a.last_profiles_at', 'a.last_certificates_at') as Record<string, any> | undefined;
   if (!r) return null;
   return {
     ownership: r.ownership, mode: r.management_mode, serial: r.serial_number ?? null, supervised: !!r.supervised,
-    osVersion: r.os_version ?? null, platform: r.platform, modelName: r.model_name ?? null,
+    osVersion: r.os_version ?? null, platform: r.platform, modelName: r.model_name ?? null, deviceName: r.device_name ?? null,
     lostModeState: r.lost_mode_state, udid: r.udid ?? null,
     certSha256: r.cert_sha256 ? String(r.cert_sha256).trim() : null,
     last: {
@@ -225,12 +230,18 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(device);
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(sat);
   // What the resolution of the policies reads changed (§7.8, §7.12): the OS version and the supervision, the
-  // platform, the serial number and the model of the variables. The device is resolved again (job of this transaction).
+  // platform, the serial number, the model and the name of the variables (the rendered artifacts follow their
+  // values). The device is resolved again (job of this transaction).
   const resolutionFacts = effects.osChanged === true || effects.supervisionChanged === true
     || (typeof device.platform === 'string' && device.platform !== f.platform)
     || (typeof device.serial_number === 'string' && device.serial_number !== f.serial)
-    || (typeof device.model_name === 'string' && device.model_name !== f.modelName);
+    || (typeof device.model_name === 'string' && device.model_name !== f.modelName)
+    || (typeof device.device_name === 'string' && device.device_name !== f.deviceName);
   if (resolutionFacts) await requestDeviceResolution(trx, tenantId, [deviceId]);
+  // The compliance reads the inventory (§4.4): a first answer, another OS version, another supervision.
+  if (f.last.device_info === null || effects.osChanged === true || effects.supervisionChanged === true) {
+    await requestComplianceEvaluation(trx, tenantId, [deviceId]);
+  }
   // The declaration set of the device follows its supervision and the major version of its OS (integration §9.4).
   const majorChanged = effects.osChanged === true && (majorMinor(osVersion)?.[0] ?? null) !== (majorMinor(f.osVersion)?.[0] ?? null);
   if (effects.supervisionChanged === true || majorChanged) await requestDdmRecompute(trx, tenantId, { deviceIds: [deviceId] });
@@ -361,6 +372,8 @@ export async function ingestProfileList(trx: Knex.Transaction, tenantId: number,
   if (seen.size) del.whereNotIn('payload_identifier', [...seen]);
   await del.del();
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_profiles_at: occurredAt, updated_at: new Date() });
+  // The drift of the profiles of the policies is read from this list (§7.10): the device is reconciled.
+  await requestArtifactReconcile(trx, tenantId, [deviceId]);
   return 'applied';
 }
 
