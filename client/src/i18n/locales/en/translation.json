@@ -1290,6 +1290,9 @@
       "apns_push_refused": "Push refused by Apple",
       "integration_push_certificate_activated": "Push certificate activated",
       "integration_ade_token_activated": "ADE server activated",
+      "mdm_command_requested": "MDM command requested",
+      "mdm_command_relaunched": "MDM command relaunched",
+      "mdm_command_cancelled": "MDM command cancelled",
       "mdm_command_acknowledged": "MDM command acknowledged",
       "mdm_command_failed": "MDM command failed"
     },
@@ -1907,7 +1910,125 @@
       "credentials": "Credentials of a privileged account changed by another account"
     }
   },
+  "capabilities": {
+    "device": {
+      "monitor": "Monitor",
+      "mdm_inventory": "MDM · Refresh the inventory",
+      "mdm_profiles": "MDM · Profiles and settings",
+      "mdm_apps": "MDM · Install and remove apps",
+      "mdm_restart": "MDM · Restart and shut down",
+      "mdm_lock": "MDM · Lock",
+      "mdm_lost_mode": "MDM · Lost mode",
+      "mdm_passcode": "MDM · Clear the passcode",
+      "mdm_wipe": "MDM · Erase",
+      "mdm_remove": "MDM · Remove from management"
+    }
+  },
   "apple": {
+    "commands": {
+      "title": "Commands",
+      "empty": "No command",
+      "requestedBy": "Requested by",
+      "reason": "Reason",
+      "expiresAt": "Expires",
+      "pushes": "Pushes",
+      "cancel": "Cancel",
+      "relaunch": "Push again",
+      "refreshInventory": "Refresh the inventory",
+      "held": "Waiting: {{reason}}",
+      "state": {
+        "pending": "To submit",
+        "queued": "Queued",
+        "sent": "Delivered",
+        "notnow": "Postponed by the device",
+        "expired": "Expired",
+        "cancelled": "Cancelled",
+        "rejected": "Refused",
+        "acknowledged": "Done",
+        "error": "Failed"
+      },
+      "submitState": {
+        "pending": "To submit",
+        "submitted": "Submitted",
+        "held": "Held",
+        "failed": "Failed",
+        "cancelled": "Cancelled"
+      },
+      "holdReason": {
+        "frozen": "the commands of this tenant are frozen",
+        "edge_unavailable": "the device service is unavailable"
+      },
+      "rejectCode": {
+        "not_enrolled": "The device is no longer enrolled",
+        "unenrolled": "The device left management",
+        "unlock_token_unavailable": "The token that clears the passcode is unavailable",
+        "invalid_command": "Refused by the device service",
+        "uuid_conflict": "Identifier conflict at the device service",
+        "tenant_not_live": "The tenant is being retired at the device service",
+        "cancelled_by_user": "Cancelled",
+        "cancel_after_delivery": "Cancelled after the device had received it",
+        "expired_before_submit": "Expired before it could be submitted",
+        "expired_at_edge": "Expired",
+        "setup_plan_cancelled": "Setup cancelled",
+        "missing_in_edge": "Unknown to the device service"
+      },
+      "origin": {
+        "console": "Console",
+        "bulk": "Bulk action",
+        "policy": "Policy",
+        "ddm": "Declarative management",
+        "inventory": "Inventory",
+        "enrollment": "Enrollment",
+        "setup": "Setup assistant",
+        "system": "System",
+        "approval": "Approved request",
+        "guard": "Guarded action"
+      },
+      "push": {
+        "sent": "Push sent",
+        "deferred": "Push deferred",
+        "disabled": "Push unavailable",
+        "error": "Push failed",
+        "not_requested": "No push"
+      },
+      "unavailable": {
+        "capabilityMissing": "Your team does not hold this capability",
+        "notApple": "Not an Apple device",
+        "notEnrolled": "Not enrolled",
+        "awaitingConfigurationOnly": "Only during the setup assistant",
+        "ownership": "Not allowed for this ownership",
+        "notSupervised": "Needs supervision",
+        "noUnlockToken": "No unlock token",
+        "alreadyOpen": "Already requested",
+        "identityUnavailable": "Identity not known yet",
+        "frozen": "Tenant frozen"
+      },
+      "types": {
+        "DeviceInformation": "Device information",
+        "SecurityInfo": "Security information",
+        "InstalledApplicationList": "Installed apps",
+        "ManagedApplicationList": "Managed apps",
+        "ProfileList": "Profiles",
+        "CertificateList": "Certificates",
+        "ActivationLockBypassCode": "Activation lock bypass code",
+        "DeclarativeManagement": "Declarative management synchronisation",
+        "DeviceConfigured": "End of the setup assistant",
+        "DeviceLock": "Lock",
+        "RestartDevice": "Restart",
+        "ShutDownDevice": "Shut down",
+        "EraseDevice": "Erase",
+        "ClearPasscode": "Clear the passcode",
+        "EnableLostMode": "Enable lost mode",
+        "DisableLostMode": "Disable lost mode",
+        "DeviceLocation": "Locate",
+        "PlayLostModeSound": "Play the lost mode sound",
+        "InstallProfile": "Install a profile",
+        "RemoveProfile": "Remove a profile",
+        "InstallApplication": "Install an app",
+        "RemoveApplication": "Remove an app",
+        "Settings": "Settings"
+      }
+    },
     "alerts": {
       "enrollment": {
         "unknown_session": {
@@ -2183,6 +2304,27 @@
       }
     },
     "errors": {
+      "unknownRequestType": "Unknown command type",
+      "invalidParams": "The parameters of the command are not valid",
+      "reasonRequired": "A reason of at least 10 characters is required for this command",
+      "guardedActionRequired": "This command goes through its guarded action",
+      "secretInCommand": "The command would carry a secret in clear and was refused",
+      "commandTooLarge": "The command is too large",
+      "capabilityMissing": "Your team does not hold the capability this command needs on this device",
+      "tooManyTargets": "Too many devices for one request of this command",
+      "notApple": "This device is not managed through Apple MDM",
+      "notEnrolled": "This device is not enrolled",
+      "awaitingConfigurationOnly": "This command is only for a device waiting in the setup assistant",
+      "ownership": "The ownership of this device does not allow this command",
+      "notSupervised": "This command needs a supervised device",
+      "noUnlockToken": "This device has not provided the token that clears its passcode",
+      "alreadyOpen": "The same command is already waiting for this device",
+      "identityUnavailable": "The identity certificate of this device is not known yet: try again shortly",
+      "inventoryRefreshTooSoon": "The inventory of this device was refreshed less than 5 minutes ago",
+      "unknownProfileSource": "Unknown profile source",
+      "idempotencyConflict": "This request is already being written",
+      "notGuardedCommand": "This command is not a guarded one",
+      "rateLimited": "Too many requests: wait a minute",
       "appleIntegrationDisabled": "The Apple integration is turned off on this instance",
       "appleEdgeUnavailable": "The device service (apple-edge) is unavailable",
       "appleEdgeIncompatible": "The device service (apple-edge) runs an incompatible version",

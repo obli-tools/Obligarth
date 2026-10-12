@@ -1290,6 +1290,9 @@
       "apns_push_refused": "Notification push refusée par Apple",
       "integration_push_certificate_activated": "Certificat push activé",
       "integration_ade_token_activated": "Serveur ADE activé",
+      "mdm_command_requested": "Commande MDM demandée",
+      "mdm_command_relaunched": "Commande MDM relancée",
+      "mdm_command_cancelled": "Commande MDM annulée",
       "mdm_command_acknowledged": "Commande MDM acquittée",
       "mdm_command_failed": "Commande MDM en échec"
     },
@@ -1907,7 +1910,125 @@
       "credentials": "Facteurs d'un compte privilégié changés par un autre compte"
     }
   },
+  "capabilities": {
+    "device": {
+      "monitor": "Supervision",
+      "mdm_inventory": "MDM · Actualiser l'inventaire",
+      "mdm_profiles": "MDM · Profils et réglages",
+      "mdm_apps": "MDM · Installer et supprimer des applications",
+      "mdm_restart": "MDM · Redémarrer et éteindre",
+      "mdm_lock": "MDM · Verrouiller",
+      "mdm_lost_mode": "MDM · Mode perdu",
+      "mdm_passcode": "MDM · Supprimer le code",
+      "mdm_wipe": "MDM · Effacer",
+      "mdm_remove": "MDM · Retirer de la gestion"
+    }
+  },
   "apple": {
+    "commands": {
+      "title": "Commandes",
+      "empty": "Aucune commande",
+      "requestedBy": "Demandée par",
+      "reason": "Motif",
+      "expiresAt": "Échéance",
+      "pushes": "Poussées",
+      "cancel": "Annuler",
+      "relaunch": "Relancer",
+      "refreshInventory": "Actualiser l'inventaire",
+      "held": "En attente : {{reason}}",
+      "state": {
+        "pending": "À soumettre",
+        "queued": "En file",
+        "sent": "Livrée",
+        "notnow": "Reportée par l'appareil",
+        "expired": "Expirée",
+        "cancelled": "Annulée",
+        "rejected": "Refusée",
+        "acknowledged": "Exécutée",
+        "error": "En échec"
+      },
+      "submitState": {
+        "pending": "À soumettre",
+        "submitted": "Soumise",
+        "held": "Retenue",
+        "failed": "En échec",
+        "cancelled": "Annulée"
+      },
+      "holdReason": {
+        "frozen": "les commandes de ce tenant sont gelées",
+        "edge_unavailable": "le service des appareils est indisponible"
+      },
+      "rejectCode": {
+        "not_enrolled": "L'appareil n'est plus enrôlé",
+        "unenrolled": "L'appareil est sorti de gestion",
+        "unlock_token_unavailable": "Le jeton de suppression du code est indisponible",
+        "invalid_command": "Refusée par le service des appareils",
+        "uuid_conflict": "Conflit d'identifiant au service des appareils",
+        "tenant_not_live": "Le tenant est en cours de retrait au service des appareils",
+        "cancelled_by_user": "Annulée",
+        "cancel_after_delivery": "Annulée alors que l'appareil l'avait déjà reçue",
+        "expired_before_submit": "Expirée avant d'avoir pu être soumise",
+        "expired_at_edge": "Expirée",
+        "setup_plan_cancelled": "Configuration annulée",
+        "missing_in_edge": "Inconnue du service des appareils"
+      },
+      "origin": {
+        "console": "Console",
+        "bulk": "Action par lot",
+        "policy": "Politique",
+        "ddm": "Gestion déclarative",
+        "inventory": "Inventaire",
+        "enrollment": "Enrôlement",
+        "setup": "Assistant de configuration",
+        "system": "Système",
+        "approval": "Demande approuvée",
+        "guard": "Action gardée"
+      },
+      "push": {
+        "sent": "Poussée envoyée",
+        "deferred": "Poussée différée",
+        "disabled": "Poussée indisponible",
+        "error": "Poussée en échec",
+        "not_requested": "Sans poussée"
+      },
+      "unavailable": {
+        "capabilityMissing": "Votre équipe n'a pas cette capacité",
+        "notApple": "Pas un appareil Apple",
+        "notEnrolled": "Non enrôlé",
+        "awaitingConfigurationOnly": "Seulement pendant l'assistant de configuration",
+        "ownership": "Non permis pour cette propriété",
+        "notSupervised": "Exige la supervision",
+        "noUnlockToken": "Aucun jeton de déverrouillage",
+        "alreadyOpen": "Déjà demandée",
+        "identityUnavailable": "Identité pas encore connue",
+        "frozen": "Tenant gelé"
+      },
+      "types": {
+        "DeviceInformation": "Informations de l'appareil",
+        "SecurityInfo": "Informations de sécurité",
+        "InstalledApplicationList": "Applications installées",
+        "ManagedApplicationList": "Applications gérées",
+        "ProfileList": "Profils",
+        "CertificateList": "Certificats",
+        "ActivationLockBypassCode": "Code de contournement du verrou d'activation",
+        "DeclarativeManagement": "Synchronisation de la gestion déclarative",
+        "DeviceConfigured": "Fin de l'assistant de configuration",
+        "DeviceLock": "Verrouiller",
+        "RestartDevice": "Redémarrer",
+        "ShutDownDevice": "Éteindre",
+        "EraseDevice": "Effacer",
+        "ClearPasscode": "Supprimer le code",
+        "EnableLostMode": "Activer le mode perdu",
+        "DisableLostMode": "Désactiver le mode perdu",
+        "DeviceLocation": "Localiser",
+        "PlayLostModeSound": "Faire sonner (mode perdu)",
+        "InstallProfile": "Installer un profil",
+        "RemoveProfile": "Retirer un profil",
+        "InstallApplication": "Installer une application",
+        "RemoveApplication": "Supprimer une application",
+        "Settings": "Réglages"
+      }
+    },
     "alerts": {
       "enrollment": {
         "unknown_session": {
@@ -2183,6 +2304,27 @@
       }
     },
     "errors": {
+      "unknownRequestType": "Type de commande inconnu",
+      "invalidParams": "Les paramètres de la commande ne sont pas valides",
+      "reasonRequired": "Un motif d'au moins 10 caractères est exigé pour cette commande",
+      "guardedActionRequired": "Cette commande passe par son action gardée",
+      "secretInCommand": "La commande aurait porté un secret en clair : elle a été refusée",
+      "commandTooLarge": "La commande est trop volumineuse",
+      "capabilityMissing": "Votre équipe n'a pas la capacité exigée par cette commande sur cet appareil",
+      "tooManyTargets": "Trop d'appareils pour une seule demande de cette commande",
+      "notApple": "Cet appareil n'est pas géré par le MDM Apple",
+      "notEnrolled": "Cet appareil n'est pas enrôlé",
+      "awaitingConfigurationOnly": "Cette commande ne vaut que pour un appareil en attente dans l'assistant de configuration",
+      "ownership": "La propriété de cet appareil n'autorise pas cette commande",
+      "notSupervised": "Cette commande exige un appareil supervisé",
+      "noUnlockToken": "Cet appareil n'a pas déposé le jeton qui permet de supprimer son code",
+      "alreadyOpen": "La même commande attend déjà cet appareil",
+      "identityUnavailable": "Le certificat d'identité de cet appareil n'est pas encore connu : réessayez dans un instant",
+      "inventoryRefreshTooSoon": "L'inventaire de cet appareil a été actualisé il y a moins de 5 minutes",
+      "unknownProfileSource": "Source de profil inconnue",
+      "idempotencyConflict": "Cette demande est déjà en cours d'écriture",
+      "notGuardedCommand": "Cette commande n'est pas une commande gardée",
+      "rateLimited": "Trop de demandes : patientez une minute",
       "appleIntegrationDisabled": "L'intégration Apple est désactivée sur cette instance",
       "appleEdgeUnavailable": "Le service des appareils (apple-edge) est indisponible",
       "appleEdgeIncompatible": "Le service des appareils (apple-edge) tourne dans une version incompatible",
