@@ -192,6 +192,46 @@ export function plistFromJson(v: unknown, depth = 0): PlistValue {
   throw new PlistError('invalid_value', 'null has no plist form');
 }
 
+const TYPED_DATE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/;
+
+/**
+ * A typed JSON value as a plist value: like plistFromJson, plus the markers of the plist types JSON lacks
+ * ({"$data": "<base64>"}, {"$date": "<RFC 3339>"}, {"$real": n}, {"$int": "<decimal>"}: the form the policies
+ * store their values in, modele-donnees-mdm §7.2). A malformed marker is refused, never written as a dictionary.
+ */
+export function plistFromTypedJson(v: unknown, depth = 0): PlistValue {
+  if (depth > MAX_DEPTH) throw new PlistError('invalid_value', 'the value is nested too deeply');
+  if (Array.isArray(v)) return v.map((e) => plistFromTypedJson(e, depth + 1));
+  if (isPlainObject(v)) {
+    const keys = Object.keys(v);
+    if (keys.length === 1 && keys[0].startsWith('$')) {
+      const x = (v as Record<string, unknown>)[keys[0]];
+      switch (keys[0]) {
+        case '$data':
+          if (typeof x !== 'string' || !/^[A-Za-z0-9+/]*={0,2}$/.test(x) || x.length % 4 !== 0) throw new PlistError('invalid_value', 'a malformed data value');
+          return new PlistData(Buffer.from(x, 'base64'));
+        case '$date': {
+          const t = typeof x === 'string' && TYPED_DATE_RE.test(x) ? Date.parse(x) : NaN;
+          if (!Number.isFinite(t)) throw new PlistError('invalid_value', 'a malformed date value');
+          return new PlistDate(new Date(t));
+        }
+        case '$real':
+          if (typeof x !== 'number' || !Number.isFinite(x)) throw new PlistError('invalid_value', 'a malformed real value');
+          return new PlistReal(x);
+        case '$int':
+          if (typeof x !== 'string' || !/^-?[0-9]{1,30}$/.test(x)) throw new PlistError('invalid_value', 'a malformed integer value');
+          return Number.isSafeInteger(Number(x)) ? Number(x) : BigInt(x);
+        default:
+          throw new PlistError('invalid_value', 'an unknown typed value');
+      }
+    }
+    const out: PlistDict = {};
+    for (const [k, e] of Object.entries(v)) out[k] = plistFromTypedJson(e, depth + 1);
+    return out;
+  }
+  return plistFromJson(v, depth);
+}
+
 // ── Reader ─────────────────────────────────────────────────────────────────────
 // XML property lists only (what the brain writes, and the profiles a command
 // carries as data); bounded like apple-edge's own examination (64 levels,

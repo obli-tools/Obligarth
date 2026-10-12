@@ -288,6 +288,12 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
   const expiresIn = req.expiresInSeconds ?? spec.expiresInSeconds;
   if (!Number.isInteger(expiresIn) || expiresIn < 60 || expiresIn > 90 * 86_400) invalid('expiresInSeconds: 60 seconds to 90 days');
 
+  // Parameters a spec reserves to the system origins (the items a policy compiles for Settings) never come from a
+  // user's request.
+  if (spec.systemOnly && USER_ORIGINS.has(req.origin) && [baseParams, ...perDeviceParams.values()].some((p) => spec.systemOnly!(p))) {
+    invalid(`${spec.requestType}: these parameters are reserved to the policies`);
+  }
+
   const guardKeys = new Set<string>();
   for (const p of [baseParams, ...perDeviceParams.values()]) {
     const k = guardedActionOf(spec, p);

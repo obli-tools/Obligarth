@@ -254,6 +254,22 @@ export type InstallPayload =
   | { ok: true; payload: PlistData; encrypted: boolean; identifier: string | null }
   | { ok: false; code: 'identity_unavailable' };
 
+/** Prefix of the identifier of the enrollment profile of a tenant (§10.2; commands/catalog.ts names it too). */
+const ENROLLMENT_PROFILE_PREFIX = 'tools.obli.obligarth.enroll.';
+
+/**
+ * What no profile source may hand to InstallProfile (review of lot B4): a profile under the identifier of the
+ * enrollment profile (installing over it would replace the management of the device), or one that carries an MDM
+ * payload (a second enrollment). Compared without case, like the guarded removal of the enrollment profile.
+ */
+export function reservedProfile(profile: PlistDict): 'enrollment_identifier' | 'mdm_payload' | null {
+  const identifier = typeof profile.PayloadIdentifier === 'string' ? profile.PayloadIdentifier.toLowerCase() : '';
+  if (identifier.startsWith(ENROLLMENT_PROFILE_PREFIX)) return 'enrollment_identifier';
+  const content = Array.isArray(profile.PayloadContent) ? profile.PayloadContent : [];
+  if (content.some((p) => isDict(p) && typeof p.PayloadType === 'string' && p.PayloadType.toLowerCase() === 'com.apple.mdm')) return 'mdm_payload';
+  return null;
+}
+
 /**
  * The Payload of an InstallProfile from a resolved profile: in clear when it carries no secret, else with its
  * PayloadContent encrypted for the device (the profile is not signed by the brain: its encrypted content is
@@ -264,6 +280,9 @@ export function installPayload(resolved: ResolvedProfile, device: { identityCert
   const profile = resolved.profile;
   if (!isDict(profile) || profile.PayloadType !== 'Configuration' || !Array.isArray(profile.PayloadContent)) {
     throw new PlistError('invalid_value', 'a profile source must hand a configuration profile with its PayloadContent');
+  }
+  if (reservedProfile(profile)) {
+    throw new PlistError('invalid_value', 'a profile source may hand neither the enrollment profile nor an MDM payload');
   }
   const identifier = typeof profile.PayloadIdentifier === 'string' ? profile.PayloadIdentifier : null;
   const secret = resolved.containsSecrets === true || profileCarriesSecret({ PayloadContent: profile.PayloadContent });

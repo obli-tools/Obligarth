@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { DeviceCapability, NanoEnrollType, Ownership } from '@obligarth/shared';
 import type { PrivacyRules } from '../devices/privacy';
-import { PlistData, plistFromJson, type PlistDict, type PlistValue } from './plist';
+import { PlistData, plistFromJson, plistFromTypedJson, type PlistDict, type PlistValue } from './plist';
 import { UNLOCK_PLACEHOLDER } from './sensitive';
 
 // =============================================================================
@@ -59,6 +59,9 @@ export interface CommandSpec<P extends z.ZodTypeAny = z.ZodTypeAny> {
   /** One open command of this type per device (inventory, DeclarativeManagement, DeviceConfigured): a device
    *  with one already open is set aside (already_open). */
   singleOpen?: boolean;
+  /** True when these parameters are reserved to the system origins (a policy, a setup plan…): the bus refuses
+   *  them from a user's request (console, bulk, approval). Absent: any origin. */
+  systemOnly?(params: z.infer<P>): boolean;
   /** The Command dictionary without RequestType (added by the bus). Pure: no I/O. */
   build(params: z.infer<P>, device: CommandDeviceContext): PlistDict;
   /** Non-personal summary of an Acknowledged result (≤ 4 KiB), e.g. { count: 42 }. */
@@ -142,6 +145,16 @@ const SettingsItem = z.discriminatedUnion('item', [
   z.object({ item: z.literal('TimeZone'), timeZone: z.string().trim().min(1).max(64).regex(/^[A-Za-z0-9_+\-/]+$/) }).strict(),
   z.object({ item: z.literal('MDMOptions'), activationLockAllowedWhileSupervised: z.boolean() }).strict(),
 ]);
+
+/** An item of the Settings command as a policy compiles it (modele-donnees-mdm §7.9, channel 'setting'): its
+ *  name and its values, validated against the Apple schema when the policy was saved, in typed JSON. Reserved to
+ *  the system origins (systemOnly): a console user asks for the three items above only. */
+const PolicySettingsItem = z.object({
+  item: z.string().regex(/^[A-Z][A-Za-z0-9]{0,63}$/),
+  values: z.record(z.string(), z.unknown()),
+}).strict();
+type PolicySettingsItemT = z.infer<typeof PolicySettingsItem>;
+const isPolicyItem = (i: unknown): i is PolicySettingsItemT => !!i && typeof i === 'object' && 'values' in (i as object);
 
 const InstallApplication = z.object({
   iTunesStoreID: z.number().int().positive().optional(),
@@ -308,9 +321,15 @@ export function registerMvpCommandSpecs(): void {
   registerCommandSpec({
     requestType: 'Settings', restrictionKey: 'mdm.settings', capability: 'mdm:profiles', supervised: 'required', ownership: E_C,
     enrollmentStates: BOTH, perDevice: false, maxTargets: 10_000, expiresInSeconds: 7 * DAY, guardedBy: null, reasonRequired: false,
-    params: z.object({ items: z.array(SettingsItem).min(1).max(10) }).strict(),
+    params: z.object({
+      items: z.array(z.union([SettingsItem, PolicySettingsItem])).min(1).max(10),
+      /** The artifact of a policy these items deliver ('<artifact key>@<hash>'): its reconciliation finds it again. */
+      policyRef: z.string().min(1).max(300).optional(),
+    }).strict(),
+    systemOnly: (p) => p.policyRef !== undefined || p.items.some(isPolicyItem),
     build: (p) => ({
       Settings: p.items.map((i): PlistDict => {
+        if (isPolicyItem(i)) return { ...(plistFromTypedJson(i.values) as PlistDict), Item: i.item };
         if (i.item === 'DeviceName') return { Item: 'DeviceName', DeviceName: i.deviceName };
         if (i.item === 'TimeZone') return { Item: 'TimeZone', TimeZone: i.timeZone };
         return { Item: 'MDMOptions', MDMOptions: { ActivationLockAllowedWhileSupervised: i.activationLockAllowedWhileSupervised } };
