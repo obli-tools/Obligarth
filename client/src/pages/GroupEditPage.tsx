@@ -17,6 +17,7 @@ import { cn } from '@/utils/cn';
 import { PageContainer } from '@/components/common/PageContainer';
 import { IconButton } from '@/components/common/IconButton';
 import toast from 'react-hot-toast';
+import { useGroupTreeChange } from '@/components/mdm/GroupTreeChange';
 
 function findNodeById(nodes: DeviceGroupTreeNode[], id: number): DeviceGroupTreeNode | null {
  for (const node of nodes) {
@@ -93,6 +94,19 @@ export function GroupEditPage() {
  }
  }, [groupId, group, t]);
 
+ // A move changes what the devices of the subtree inherit: its preview is shown before the confirmation when
+ // it changes something (components/mdm/GroupTreeChange); it may then wait for a second approver. Declared
+ // before the early returns below (a hook).
+ const treeChange = useGroupTreeChange((change, outcome) => {
+ if (outcome === 'failed' || change.kind !== 'move') return;
+ if (outcome === 'done') {
+ setGroup((g) => (g ? { ...g, parentId: change.newParentId } : g));
+ void fetchGroups();
+ void fetchTree();
+ }
+ setPendingParentId(undefined);
+ });
+
  if (loading) {
  return (
  <div className="flex h-full items-center justify-center">
@@ -134,25 +148,11 @@ export function GroupEditPage() {
  };
 
  const handleMove = async () => {
- if (pendingParentId === undefined) return;
+ if (pendingParentId === undefined || !group) return;
  setMovingSaving(true);
- try {
- // A move that changes what the devices inherit may wait for a second approver: nothing moved yet.
- if ((await groupsApi.move(groupId, pendingParentId)) === null) {
- toast.success(t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
- setPendingParentId(undefined);
- return;
- }
- toast.success(t('groups.moved'));
- setGroup((g) => g ? { ...g, parentId: pendingParentId } : g);
- setPendingParentId(undefined);
- await fetchGroups();
- await fetchTree();
- } catch {
- toast.error(t('groups.failedMove'));
- } finally {
+ await treeChange.request({ kind: 'move', groupId, groupName: group.name, newParentId: pendingParentId });
+ // The preview may be waiting for its confirmation: the button is free again meanwhile.
  setMovingSaving(false);
- }
  };
 
  const moveSibling = (index: number, direction: -1 | 1) => {
@@ -183,6 +183,7 @@ export function GroupEditPage() {
 
  return (
  <PageContainer>
+ {treeChange.dialog}
  <Link
  to={`/group/${groupId}`}
  className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary mb-4 max-w-full coarse:min-h-10"
@@ -360,20 +361,23 @@ export function GroupEditPage() {
  <SettingsPanel
  scope="group"
  scopeId={groupId}
- title={`Settings for "${group.name}"`}
+ title={t('groups.settingsFor', { name: group.name, defaultValue: 'Settings for "{{name}}"' })}
  />
  </div>
 
- {/* Group-scoped notification bindings — same rationale. */}
+ {/* Group-scoped notification bindings and maintenance windows: their routes are a platform administrator's
+ (requireRole('admin')). A member who writes on the group reaches this page too: the panels are not shown
+ to them (their loading would be refused). */}
+ {admin && (
+ <>
  <div className="mb-6">
  <NotificationBindingsPanel
  scope="group"
  scopeId={groupId}
- title={`Notifications for "${group.name}"`}
+ title={t('groups.notificationsFor', { name: group.name, defaultValue: 'Notifications for "{{name}}"' })}
  />
  </div>
 
- {/* Group-scoped maintenance windows. */}
  <div className="mb-6 rounded-lg bg-bg-secondary p-4">
  <MaintenanceWindowList
  scopeType="group"
@@ -382,9 +386,11 @@ export function GroupEditPage() {
  channels={[]}
  defaultScopeType="group"
  defaultScopeId={groupId}
- title={`Maintenance for "${group.name}"`}
+ title={t('groups.maintenanceFor', { name: group.name, defaultValue: 'Maintenance for "{{name}}"' })}
  />
  </div>
+ </>
+ )}
  </PageContainer>
  );
 }

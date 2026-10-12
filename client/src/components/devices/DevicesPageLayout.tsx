@@ -1,26 +1,18 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { GroupSidePanel } from './GroupSidePanel';
-import { DeviceTable } from './DeviceTable';
+import { DeviceTable, type InitialDeviceFilters } from './DeviceTable';
 import { Drawer } from '@/components/common/Drawer';
 import { useMediaQuery, useIsCoarsePointer, MEDIA } from '@/hooks/useMediaQuery';
 
 interface DevicesPageLayoutProps {
-  mode: 'monitoring' | 'admin';
-  initialStatusFilter?: string;
-  initialOsFilter?: string;
-  initialStaleHours?: number;
+  /** Filters a link lands on (dashboard cards, end users): see DeviceTable. */
+  initialFilters?: InitialDeviceFilters;
   initialGroupId?: number | null;
-  /** ApprovalStatus to land on (admin shortcut from the sidebar's
-   *  "Agents" entry which deep-links to the pending bucket). */
-  initialApprovalFilter?: string;
   onGroupChange?: (groupId: number | null) => void;
 }
 
-export function DevicesPageLayout({
-  mode, initialStatusFilter, initialOsFilter, initialStaleHours,
-  initialApprovalFilter, initialGroupId = null, onGroupChange,
-}: DevicesPageLayoutProps) {
+export function DevicesPageLayout({ initialFilters, initialGroupId = null, onGroupChange }: DevicesPageLayoutProps) {
   const { t } = useTranslation();
   const [groupId, setGroupId] = useState<number | null>(initialGroupId);
   // Below lg (phones, tablets) the groups column would eat most of the
@@ -78,11 +70,7 @@ export function DevicesPageLayout({
       )}
       <div className="flex-1 min-w-0 min-h-0 overflow-y-auto max-lg:overscroll-contain">
         <DeviceTable
-          mode={mode}
-          initialStatusFilter={initialStatusFilter}
-          initialOsFilter={initialOsFilter}
-          initialStaleHours={initialStaleHours}
-          initialApprovalFilter={initialApprovalFilter}
+          initialFilters={initialFilters}
           groupId={groupId}
           onGroupChange={handleGroupChange}
           onOpenGroups={inlineGroups ? undefined : () => setGroupsOpen(true)}

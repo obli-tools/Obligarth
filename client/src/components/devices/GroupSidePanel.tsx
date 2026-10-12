@@ -10,7 +10,8 @@ import {
   type DragEndEvent,
 } from '@dnd-kit/core';
 import { groupsApi } from '@/api/groups.api';
-import { deviceApi } from '@/api/device.api';
+import { mdmApi } from '@/api/mdm.api';
+import { useGroupTreeChange } from '@/components/mdm/GroupTreeChange';
 import type { DeviceGroupTreeNode } from '@obligarth/shared';
 import { SocketEvents, isMasterTenant, MASTER_TENANT_ID } from '@obligarth/shared';
 import { getSocket } from '@/socket/socketClient';
@@ -45,12 +46,34 @@ interface GroupSidePanelProps {
  *  touch screens so a finger can hit them. */
 const DraggingContext = createContext(false);
 
+/** Counters of the fleet under management (modele-donnees-mdm §11.3): the same four as each group of the tree. */
 interface FleetCounts {
-  online: number;
-  offline: number;
-  warning: number;
-  critical: number;
+  enrolled: number;
+  nonCompliant: number;
+  configErrors: number;
+  stale: number;
   total: number;
+}
+
+/** The MDM counters of a group and its subtree, as small coloured figures: shown only when they are not zero. */
+function GroupCounters({ node }: { node: Pick<DeviceGroupTreeNode, 'nonCompliantCount' | 'configErrorCount' | 'staleCount'> }) {
+  const { t } = useTranslation();
+  const items: Array<{ n: number; dot: string; label: string }> = [
+    { n: node.nonCompliantCount ?? 0, dot: 'bg-red-400', label: t('groupPanel.nonCompliant') || 'Non compliant' },
+    { n: node.configErrorCount ?? 0, dot: 'bg-orange-400', label: t('groupPanel.configErrors') || 'Configuration errors' },
+    { n: node.staleCount ?? 0, dot: 'bg-amber-400', label: t('groupPanel.stale') || 'No contact' },
+  ].filter((i) => i.n > 0);
+  if (items.length === 0) return null;
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {items.map((i) => (
+        <span key={i.label} className="flex items-center gap-0.5 text-[10px] text-text-muted" title={`${i.label}: ${i.n}`} aria-label={`${i.label}: ${i.n}`}>
+          <span className={clsx('inline-block h-1.5 w-1.5 rounded-full', i.dot)} />
+          {i.n}
+        </span>
+      ))}
+    </span>
+  );
 }
 
 const COLLAPSED_KEY = 'obligarth:groupPanelCollapsed';
@@ -285,7 +308,15 @@ function TreeNode({
             className={clsx('shrink-0', isSelected || isAncestor ? 'text-accent' : 'text-text-muted')}
           />
           <span className="truncate text-text-primary">{anonymize(node.name)}</span>
-          <span className="ml-auto shrink-0 text-xs text-text-muted">{count}</span>
+          <span className="ml-auto flex shrink-0 items-center gap-2">
+            <GroupCounters node={node} />
+            <span
+              className="text-xs text-text-muted"
+              title={`${t('groupPanel.enrolled') || 'Enrolled'}: ${node.enrolledCount ?? 0} / ${count}`}
+            >
+              {count}
+            </span>
+          </span>
         </button>
 
         {canHover ? (
@@ -493,7 +524,7 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
   const [collapsed, setCollapsed] = useState(getInitialCollapsed);
   const [width, setWidth] = useState<number>(getInitialWidth);
   const [tree, setTree] = useState<DeviceGroupTreeNode[]>([]);
-  const [fleet, setFleet] = useState<FleetCounts>({ online: 0, offline: 0, warning: 0, critical: 0, total: 0 });
+  const [fleet, setFleet] = useState<FleetCounts>({ enrolled: 0, nonCompliant: 0, configErrors: 0, stale: 0, total: 0 });
   const [search, setSearch] = useState('');
   const [expandedIds, setExpandedIds] = useState<Set<number>>(() => getInitialExpanded() ?? new Set());
   const [creating, setCreating] = useState(false);
@@ -538,8 +569,8 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
   }, []);
   const fetchSummary = useCallback(async () => {
     try {
-      const s = await deviceApi.getSummary();
-      setFleet({ online: s.online, offline: s.offline, warning: s.warning, critical: s.critical, total: s.total });
+      const s = await mdmApi.fleetSummary();
+      setFleet({ enrolled: s.enrolled, nonCompliant: s.nonCompliant, configErrors: s.configErrors, stale: s.stale, total: s.total });
     } catch { /* silent */ }
   }, []);
   useEffect(() => { fetchTree(); fetchSummary(); }, [fetchTree, fetchSummary]);
@@ -606,6 +637,13 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
   // Mouse (5px, as before) + touch (long-press) + keyboard — docs §5.3.
   const sensors = useDndSensors();
 
+  // A move changes what the devices of the subtree inherit: previewed, then confirmed when it changes something
+  // (components/mdm/GroupTreeChange).
+  const treeChange = useGroupTreeChange((_change, outcome) => {
+    if (outcome === 'done') { fetchTree(); fetchSummary(); }
+  });
+  const nameOf = (id: number | null): string | null => (id === null ? null : findNode(tree, id)?.name ?? null);
+
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
     if (!over) return;
@@ -633,18 +671,20 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
         : Math.max(0, ordered.indexOf(insertBeforeId));
       ordered.splice(insertIdx, 0, draggedId);
 
+      // Reorder is per-tenant and only respects same-parent rows, so
+      // we always send the full target sibling list.
+      const reorder = () => groupsApi.reorder(ordered.map((id, idx) => ({ id, sortOrder: idx })));
+      const currentParent = getNodeParentId(tree, draggedId) ?? null;
+      if (currentParent !== newParent) {
+        // Another parent: previewed; the order among the new siblings follows the move.
+        await treeChange.request({
+          kind: 'move', groupId: draggedId, groupName: nameOf(draggedId) ?? `#${draggedId}`,
+          newParentId: newParent, newParentName: nameOf(newParent), after: reorder,
+        });
+        return;
+      }
       try {
-        const currentParent = getNodeParentId(tree, draggedId) ?? null;
-        if (currentParent !== newParent) {
-          // A move that changes what the devices inherit may wait for a second approver: nothing moved yet.
-          if ((await groupsApi.move(draggedId, newParent)) === null) {
-            toast.success(t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
-            return;
-          }
-        }
-        // Reorder is per-tenant and only respects same-parent rows, so
-        // we always send the full target sibling list.
-        await groupsApi.reorder(ordered.map((id, idx) => ({ id, sortOrder: idx })));
+        await reorder();
         toast.success(t('groups.moved', 'Group moved'));
         fetchTree();
       } catch {
@@ -667,15 +707,10 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     const currentParent = getNodeParentId(tree, draggedId) ?? null;
     if (currentParent === targetParentId) return;
 
-    try {
-      const moved = await groupsApi.move(draggedId, targetParentId);
-      toast.success(moved
-        ? t('groups.moved', 'Group moved')
-        : t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
-      if (moved) fetchTree();
-    } catch {
-      toast.error(t('groups.failedMove', 'Failed to move group'));
-    }
+    await treeChange.request({
+      kind: 'move', groupId: draggedId, groupName: nameOf(draggedId) ?? `#${draggedId}`,
+      newParentId: targetParentId, newParentName: nameOf(targetParentId),
+    });
   };
 
   // Tap alternative to drag-and-drop ("Move to…" in the touch row menu).
@@ -683,16 +718,11 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     const currentParent = getNodeParentId(tree, draggedId) ?? null;
     if (currentParent === newParent) { setMoveTarget(null); return; }
     if (newParent !== null && (newParent === draggedId || isDescendantOf(tree, draggedId, newParent))) return;
-    try {
-      const moved = await groupsApi.move(draggedId, newParent);
-      toast.success(moved
-        ? t('groups.moved', 'Group moved')
-        : t('groups.moveAwaitingApproval') || 'Move sent for approval: it will apply once a second administrator approves it');
-      setMoveTarget(null);
-      if (moved) fetchTree();
-    } catch {
-      toast.error(t('groups.failedMove', 'Failed to move group'));
-    }
+    setMoveTarget(null);
+    await treeChange.request({
+      kind: 'move', groupId: draggedId, groupName: nameOf(draggedId) ?? `#${draggedId}`,
+      newParentId: newParent, newParentName: nameOf(newParent),
+    });
   };
 
   // ── Drop zone for "root" (dragging onto "All Devices" = make root) ──
@@ -841,30 +871,17 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
 
         {/* Fleet summary bar */}
         <div className="flex items-center gap-3 px-3 py-2">
-          {fleet.online > 0 && (
-            <span className="flex items-center gap-1 text-xs text-text-muted" aria-label={`${t('deviceStatus.online')}: ${fleet.online}`}>
-              <span className="inline-block h-2 w-2 rounded-full bg-green-500" />
-              {fleet.online}
+          {([
+            { n: fleet.enrolled, dot: 'bg-green-500', label: t('groupPanel.enrolled') || 'Enrolled' },
+            { n: fleet.nonCompliant, dot: 'bg-red-500', label: t('groupPanel.nonCompliant') || 'Non compliant' },
+            { n: fleet.configErrors, dot: 'bg-orange-400', label: t('groupPanel.configErrors') || 'Configuration errors' },
+            { n: fleet.stale, dot: 'bg-amber-400', label: t('groupPanel.stale') || 'No contact' },
+          ]).filter((c) => c.n > 0).map((c) => (
+            <span key={c.label} className="flex items-center gap-1 text-xs text-text-muted" title={c.label} aria-label={`${c.label}: ${c.n}`}>
+              <span className={clsx('inline-block h-2 w-2 rounded-full', c.dot)} />
+              {c.n}
             </span>
-          )}
-          {fleet.offline > 0 && (
-            <span className="flex items-center gap-1 text-xs text-text-muted" aria-label={`${t('deviceStatus.offline')}: ${fleet.offline}`}>
-              <span className="inline-block h-2 w-2 rounded-full bg-gray-400" />
-              {fleet.offline}
-            </span>
-          )}
-          {fleet.warning > 0 && (
-            <span className="flex items-center gap-1 text-xs text-text-muted" aria-label={`${t('deviceStatus.warning')}: ${fleet.warning}`}>
-              <span className="inline-block h-2 w-2 rounded-full bg-yellow-500" />
-              {fleet.warning}
-            </span>
-          )}
-          {fleet.critical > 0 && (
-            <span className="flex items-center gap-1 text-xs text-text-muted" aria-label={`${t('deviceStatus.critical')}: ${fleet.critical}`}>
-              <span className="inline-block h-2 w-2 rounded-full bg-red-500" />
-              {fleet.critical}
-            </span>
-          )}
+          ))}
         </div>
 
         {/* Search */}
@@ -990,6 +1007,7 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
         onClose={() => setMoveTarget(null)}
         onPick={(parentId) => { if (moveTarget) void moveGroupTo(moveTarget.id, parentId); }}
       />
+      {treeChange.dialog}
     </DndContext>
   );
 }

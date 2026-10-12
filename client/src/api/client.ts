@@ -328,7 +328,11 @@ apiClient.interceptors.response.use(
     if (shouldSurface) {
       // Lazy-load to avoid a circular import (client.ts is imported very early).
       Promise.all([import('react-hot-toast'), import('i18next')]).then(([{ default: toast }, { default: i18n }]) => {
-        toast.error(stepUpMsg ? i18n.t(stepUpMsg[0], stepUpMsg[1]) : body.error, { duration: 6000 });
+        // The server's sentence is English: a code the console translates (errors.<code>) is shown translated.
+        const code = typeof body.code === 'string' && /^[A-Za-z][A-Za-z0-9]*$/.test(body.code) ? body.code : null;
+        const codeKey = code ? ['errors', 'apple.errors', 'guard.errors'].map((ns) => `${ns}.${code}`).find((k) => i18n.exists(k)) : undefined;
+        const translated = codeKey ? i18n.t(codeKey) : body.error;
+        toast.error(stepUpMsg ? i18n.t(stepUpMsg[0], stepUpMsg[1]) : translated, { duration: 6000 });
       }).catch(() => {});
     }
 

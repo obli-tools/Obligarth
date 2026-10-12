@@ -18,7 +18,8 @@ import {
   Monitor,
   Laptop,
   ShieldCheck,
-  Key,
+  ScrollText,
+  Contact,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -250,14 +251,12 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // pages to non-admin users who have been granted a specific page-gate
   // capability:
   //   - supervision:read         → Supervision (Reports)
-  //   - agent_config:keys / agent_config:approval → Agent config (API keys)
+  //   - users.manage / devices.manage → End users (the people devices are assigned to)
   // Admins implicitly have all capabilities (the sidebar ORs role and
   // cap so the menu still appears for admins regardless of cap state).
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
   const hasSupervisionCap = tenantCaps.has('supervision:read');
-  const hasAgentConfigCap =
-    tenantCaps.has('agent_config:keys') ||
-    tenantCaps.has('agent_config:approval');
+  const hasEndUsersCap = tenantCaps.has('users.manage') || tenantCaps.has('devices.manage');
   //   - audit.read / approvals.review / devices.manage → Security (the
   //     journal; the approvals; the guarded actions)
   const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review') || tenantCaps.has('devices.manage');
@@ -476,10 +475,12 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const navItems: NavItem[] = [
     { label: t('nav.dashboard'),                  path: '/',           icon: <LayoutDashboard size={18} /> },
     { label: t('nav.devices'),                    path: '/devices',    icon: <Monitor size={18} /> },
-    // Policies only holds the admin-only Notifications tab for now: hidden
-    // for the other users, for whom the page would be empty.
-    ...(admin
-      ? [{ label: t('nav.policies'),              path: '/policies',   icon: <ShieldCheck size={18} /> } as NavItem]
+    // Policies: any member reads them (writing needs mdm.policies.manage); the Notifications tab of the page
+    // stays for administrators.
+    { label: t('nav.policies'),                   path: '/policies',   icon: <ScrollText size={18} /> },
+    // End users: the reader gate of the routes (users.manage or devices.manage).
+    ...(admin || hasEndUsersCap
+      ? [{ label: t('nav.endUsers', 'End users'), path: '/end-users',  icon: <Contact size={18} /> } as NavItem]
       : []),
   ];
 
@@ -497,11 +498,6 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // `supervision:read` tenant capability.
     ...(admin || hasSupervisionCap
       ? [{ label: t('nav.supervision'), path: '/admin/supervision', icon: <Laptop size={18} /> } as NavItem]
-      : []),
-    // Agent config — the API keys page, for admins and holders of
-    // agent_config:keys or agent_config:approval (same gate as the route).
-    ...(admin || hasAgentConfigCap
-      ? [{ label: t('nav.agentConfig', 'Agent config'), path: '/admin/devices', icon: <Key size={18} /> } as NavItem]
       : []),
     // Workspace + Settings — platform admin on master tenant only.
     // Master gate happens via component-level visibility (the items

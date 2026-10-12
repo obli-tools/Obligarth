@@ -13,6 +13,8 @@ import { IconButton } from '@/components/common/IconButton';
 import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
 import { isStepUpHandled } from '@/api/client';
 import { guardErrorMessage } from '@/components/guard/GuardedActionDialog';
+import { POLICY_PUBLISH_REQUEST_TYPE, PolicyPublishSummary } from '@/components/mdm/PolicyPublishRequest';
+import { translateErrorCode } from '@/utils/apiError';
 
 // 2-step approval review page. Shows pending destructive-command requests
 // waiting for a second admin's approval. Self-requests (current user is
@@ -152,9 +154,12 @@ function payloadRows(v: unknown, path = '', out: Array<[string, string]> = [], d
 
 const MAX_ROWS = 80;
 
-/** What the approved request will execute (its payload, read-only). */
-function PayloadTable({ payload }: { payload: unknown }) {
+/** What the approved request will execute (its payload, read-only). A publication, a batch of assignments or a
+ *  change of the tree of groups has its own rendering: the change and the counters of its preview first, its keys
+ *  last (MDM-B5b-C16: the generic table stops at 80 lines and listed the keys first). */
+function PayloadTable({ payload, requestType }: { payload: unknown; requestType?: string }) {
  const { t } = useTranslation();
+ if (requestType === POLICY_PUBLISH_REQUEST_TYPE) return <PolicyPublishSummary payload={payload} />;
  const rows = payloadRows(payload ?? {});
  const shown = rows.slice(0, MAX_ROWS);
  return (
@@ -180,7 +185,7 @@ function PayloadTable({ payload }: { payload: unknown }) {
 }
 
 /** "Show details" toggle under a request (the payload, for every status). */
-function RequestDetails({ payload, defaultOpen = false }: { payload: unknown; defaultOpen?: boolean }) {
+function RequestDetails({ payload, requestType, defaultOpen = false }: { payload: unknown; requestType?: string; defaultOpen?: boolean }) {
  const { t } = useTranslation();
  const [open, setOpen] = useState(defaultOpen);
  return (
@@ -193,7 +198,7 @@ function RequestDetails({ payload, defaultOpen = false }: { payload: unknown; de
  >
  {open ? t('approvals.hideDetails', 'Hide details') : t('approvals.showDetails', 'Show details')}
  </button>
- {open && <PayloadTable payload={payload} />}
+ {open && <PayloadTable payload={payload} requestType={requestType} />}
  </>
  );
 }
@@ -248,7 +253,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  const reason = await prompt({
  title: t('approvals.approveTitle', 'Approve this request?'),
  // The reviewer approves what will run: the description AND the payload.
- message: <div className="space-y-1"><span className="break-words">{a.description}</span><PayloadTable payload={a.payload} /></div>,
+ message: <div className="space-y-1"><span className="break-words">{a.description}</span><PayloadTable payload={a.payload} requestType={a.requestType} /></div>,
  placeholder: t('approvals.reasonOptional', 'Reason (optional)'),
  confirmLabel: t('approvals.approve', 'Approve'),
  // Single-line input: Enter confirms, like the old window.prompt.
@@ -277,7 +282,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  }
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -299,7 +304,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  toast(t('approvals.deniedToast', 'Denied'));
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -399,7 +404,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  </div>
  <RequestDescription text={a.description} />
  <GuardRequirement approval={a} />
- <RequestDetails payload={a.payload} />
+ <RequestDetails payload={a.payload} requestType={a.requestType} />
  <div className="flex items-center gap-3 mt-1 text-[11px] text-text-muted flex-wrap">
  <span>{t('approvals.by', 'By')} <strong className="text-text-secondary">{a.requestedByName || `#${a.requestedBy}`}</strong></span>
  <span>{new Date(a.createdAt).toLocaleString()}</span>

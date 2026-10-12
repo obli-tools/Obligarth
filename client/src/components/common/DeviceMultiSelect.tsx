@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { Search, Check, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
-import { deviceApi } from '@/api/device.api';
+import { listManagedDevices } from '@/api/mdm.api';
 import { anonymize } from '@/utils/anonymize';
 import { deviceMatchesSearch } from '@/utils/deviceSearch';
-import type { Device } from '@obligarth/shared';
+import type { DeviceSummary } from '@obligarth/shared';
 
 // Inline picker for selecting a list of specific devices — used by Schedule
 // and Scenario "by device" target. Mirrors the GroupTreeMultiSelect pattern
@@ -22,13 +22,14 @@ interface Props {
 
 export function DeviceMultiSelect({ selectedIds, onChange, maxDevices = 5000 }: Props) {
  const { t } = useTranslation();
- const [devices, setDevices] = useState<Device[]>([]);
+ const [devices, setDevices] = useState<DeviceSummary[]>([]);
  const [loading, setLoading] = useState(true);
  const [query, setQuery] = useState('');
 
  useEffect(() => {
- deviceApi.listPaginated({ pageSize: maxDevices, approvalStatus: 'approved' })
- .then(r => setDevices(r.items))
+ // The devices under management (every state but unenrolled).
+ listManagedDevices(maxDevices)
+ .then(setDevices)
  .catch(() => setDevices([]))
  .finally(() => setLoading(false));
  }, [maxDevices]);
@@ -87,7 +88,7 @@ export function DeviceMultiSelect({ selectedIds, onChange, maxDevices = 5000 }: 
  ) : (
  filtered.map(d => {
  const isSelected = selected.has(d.id);
- const label = anonymize(d.displayName || d.hostname);
+ const label = anonymize(d.label);
  return (
  <button
  key={d.id}

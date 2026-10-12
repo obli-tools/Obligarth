@@ -1,13 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Plus, FileText, Download, RefreshCw, Edit, Trash2, Play, Clock, CheckCircle, AlertCircle, Loader, ChevronDown, ChevronUp, Ban } from 'lucide-react';
 import { reportApi } from '@/api/report.api';
-import type { Report, ReportOutput, ReportType, ReportFormat, ReportSection, Device } from '@obligarth/shared';
+import type { Report, ReportOutput, ReportType, ReportFormat, ReportSection, DeviceSummary } from '@obligarth/shared';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import { cn } from '@/utils/cn';
 import { useTranslation } from 'react-i18next';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
-import { deviceApi } from '@/api/device.api';
+import { listManagedDevices } from '@/api/mdm.api';
 import { PageContainer } from '@/components/common/PageContainer';
 import { IconButton } from '@/components/common/IconButton';
 import { useConfirm } from '@/components/common/ConfirmDialog';
@@ -127,7 +127,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  const [generatingId, setGeneratingId] = useState<number | null>(null);
  const [expandedId, setExpandedId] = useState<number | null>(null);
  const [filterType, setFilterType] = useState<string>('');
- const [devices, setDevices] = useState<Device[]>([]);
+ const [devices, setDevices] = useState<DeviceSummary[]>([]);
  const { t } = useTranslation();
  const confirm = useConfirm();
  const coarse = useIsCoarsePointer();
@@ -150,7 +150,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
 
  useEffect(() => { load(); }, [load]);
  // Devices for the "Specific device" scope selector (approved only).
- useEffect(() => { deviceApi.list({ approvalStatus: 'approved' }).then(setDevices).catch(() => setDevices([])); }, []);
+ useEffect(() => { listManagedDevices().then(setDevices).catch(() => setDevices([])); }, []);
 
  const loadOutputs = async (reportId: number) => {
  try {
@@ -455,7 +455,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  >
  <option value="">{t('reports.selectDevice') || 'Select a device…'}</option>
  {devices.map((d) => (
- <option key={d.id} value={d.id}>{d.displayName || d.hostname}</option>
+ <option key={d.id} value={d.id}>{d.label}</option>
  ))}
  </select>
  )}

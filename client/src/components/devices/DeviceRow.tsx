@@ -1,47 +1,34 @@
-import { memo, type MouseEvent } from 'react';
-import { Eye, FolderOpen, User, MapPin, Wifi, Network, Calendar, ShieldCheck, History, Building2 } from 'lucide-react';
-import type { Device } from '@obligarth/shared';
-import { DeviceStatusBadge } from './DeviceStatusBadge';
-import { OsIcon } from './OsIcon';
+import { memo, type MouseEvent, type ReactNode } from 'react';
+import { Eye, FolderOpen, User, Building2, Briefcase, Hash, Clock } from 'lucide-react';
+import type { DeviceSummary } from '@obligarth/shared';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/authStore';
-import { anonymize, anonymizeIp } from '@/utils/anonymize';
-import { shortenOsName } from '@/utils/osLabel';
+import { anonymize } from '@/utils/anonymize';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
+import { DeviceStateBadges, complianceLabel } from '@/components/mdm/DeviceStateBadges';
+import { PlatformIcon, osLabel, ownershipLabel, shortAge } from '@/components/mdm/PlatformIcon';
 
 interface DeviceRowProps {
-  device: Device;
-  mode: 'monitoring' | 'admin';
+  device: DeviceSummary;
   isSelected: boolean;
   onSelect: (id: number) => void;
   onNavigate: (id: number) => void;
   onGroupClick?: (groupId: number) => void;
   /** When true, the entire row becomes a selection target (no navigation) and
-   *  a dark checkbox is always visible on the left. Enabled by the "Select"
+   *  a checkbox is always visible on the left. Enabled by the "Select"
    *  toggle in DeviceTable. */
   selectionMode?: boolean;
-  /** Lot D.1 — set of optional line-2 field keys that should be rendered.
-   *  When undefined, the catalog defaults are used (so existing call sites
-   *  not yet wired to the popover keep working). */
+  /** The optional line-2 fields to render (utils/deviceLine2Fields); the catalog's defaults when undefined. */
   visibleFields?: Set<string>;
 }
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+const DEFAULT_FIELDS = ['platform', 'model', 'ownership', 'group', 'endUser'];
 
-function formatLastSeen(lastSeenAt: string | null): { text: string; color: string } {
-  if (!lastSeenAt) return { text: '\u2014', color: 'text-text-muted' };
-
-  const diffMs = Date.now() - new Date(lastSeenAt).getTime();
-  const mins = Math.floor(diffMs / 60_000);
-  const hours = Math.floor(diffMs / 3_600_000);
-  const days = Math.floor(diffMs / 86_400_000);
-
-  if (mins < 5) return { text: `${Math.max(mins, 1)}m`, color: 'text-green-400' };
-  if (mins < 60) return { text: `${mins}m`, color: 'text-yellow-400' };
-  if (hours < 24) return { text: `${hours}h`, color: 'text-orange-400' };
-  return { text: `${days}d`, color: 'text-red-400' };
-}
+/** Colour of the last contact: recent, quiet, without contact (modele-donnees-mdm §4.4). */
+const CONTACT_COLOR: Record<DeviceSummary['contactState'], string> = {
+  recent: 'text-green-400', quiet: 'text-text-muted', stale: 'text-amber-400', never: 'text-text-muted',
+};
 
 // Stacked row = line 1 wraps into a "name" line and a "status" line. The
 // single line is kept only where there is room for it: desktop with a
@@ -51,11 +38,8 @@ function formatLastSeen(lastSeenAt: string | null): { text: string; color: strin
 // One shared MediaQueryList for every row (hooks/useMediaQuery).
 const STACKED_ROW_QUERY = '(max-width: 1023.98px), (pointer: coarse) and (max-width: 1279.98px)';
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 export const DeviceRow = memo(function DeviceRow({
   device,
-  mode,
   isSelected,
   onSelect,
   onNavigate,
@@ -66,65 +50,34 @@ export const DeviceRow = memo(function DeviceRow({
   const { t } = useTranslation();
   const { isAdmin } = useAuthStore();
   const stacked = useMediaQuery(STACKED_ROW_QUERY);
-  // When the parent doesn't pass a visibleFields set, fall back to "show
-  // everything that was visible before D.1 landed" so legacy callers keep
-  // their previous look.
-  const fieldOn = (key: string): boolean =>
-    visibleFields ? visibleFields.has(key) : ['ipLocal', 'os', 'group', 'lastUser'].includes(key);
+  const fieldOn = (key: string): boolean => (visibleFields ? visibleFields.has(key) : DEFAULT_FIELDS.includes(key));
 
-  const lastSeen = formatLastSeen(device.lastSeenAt);
-  const displayLabel = device.displayName || device.hostname;
   const tags = device.tags ?? [];
   const visibleTags = tags.slice(0, 2);
   const overflowCount = tags.length - 2;
+  const os = osLabel(device.platform, device.osVersion);
+  const model = device.modelName || device.model;
+  const endUser = device.endUser?.displayName || device.endUser?.email || null;
 
-  // Display: shortened OS label fits the narrow column ("Microsoft Windows 10
-  // IoT Enterprise LTSC 2021" → "MS Win 10 IoT Ent LTSC 21"). The original
-  // full name is preserved in osFullTextRaw and shown via tooltip.
-  const osFullText = [
-    shortenOsName(device.osName) || device.osType,
-    device.osVersion,
-    device.osArch,
-  ].filter(Boolean).join(' ');
-  const osFullTextRaw = [
-    device.osName || device.osType,
-    device.osVersion,
-    device.osArch,
-  ].filter(Boolean).join(' ');
-
-  // Checkbox shows whenever the user has bulk-action capability:
-  // explicit selection mode (any role can pick rows), or admin role
-  // (so they always get the persistent column for batch admin
-  // actions). `mode` is no longer used as a gate — both /devices and
-  // /admin/devices route through the same role-gated table.
+  // The checkbox column: explicit selection mode (any role), or an administrator (always, for the batch actions).
   const showCheckbox = selectionMode || isAdmin();
-  // Reference `mode` to keep the prop alive for future cosmetic
-  // tweaks without TypeScript complaining about an unused arg.
-  void mode;
   const line2Offset = showCheckbox ? 'pl-[68px]' : 'pl-[40px]';
 
   const handleCheckbox = (e: MouseEvent) => {
     e.stopPropagation();
     onSelect(device.id);
   };
-
   const handleEye = (e: MouseEvent) => {
     e.stopPropagation();
     onNavigate(device.id);
   };
-
   const handleGroupClick = (e: MouseEvent) => {
     e.stopPropagation();
-    if (device.groupId && onGroupClick) {
-      onGroupClick(device.groupId);
-    }
+    if (device.groupId && onGroupClick) onGroupClick(device.groupId);
   };
 
-  // Middle-click opens the device in a new tab. We have to preventDefault
-  // on mousedown too — otherwise Windows kicks the auto-scroll cursor up
-  // before our auxclick handler runs and the user sees a flash of
-  // pan-mode UI. Selection mode short-circuits the open (a multi-select
-  // session shouldn't surprise-spawn tabs).
+  // Middle-click opens the device in a new tab. preventDefault on mousedown
+  // too, or Windows starts its auto-scroll cursor before auxclick runs.
   const handleMouseDown = (e: MouseEvent) => {
     if (e.button === 1) e.preventDefault();
   };
@@ -137,16 +90,15 @@ export const DeviceRow = memo(function DeviceRow({
   return (
     <div
       className={clsx(
-        // Desktop with a mouse: the historic fixed 72px two-line row.
-        // Stacked (tablet / touch < xl / phone): the row grows with its
-        // content — line 1 wraps into a "name" line and a "status" line,
-        // and the line-2 fields wrap (docs/obli-mobile.md §4).
+        // Desktop with a mouse: a fixed 72px two-line row. Stacked (tablet /
+        // touch < xl / phone): the row grows with its content.
         'min-h-[72px] px-4 py-2 hover:bg-bg-tertiary cursor-pointer transition-colors flex flex-col justify-center max-md:px-3',
         !stacked && 'md:h-[72px]',
         isSelected && 'bg-accent/10',
         selectionMode && isSelected && 'bg-accent/15',
+        device.enrollmentState === 'unenrolled' && 'opacity-70',
       )}
-      onClick={() => selectionMode ? onSelect(device.id) : onNavigate(device.id)}
+      onClick={() => (selectionMode ? onSelect(device.id) : onNavigate(device.id))}
       onMouseDown={handleMouseDown}
       onAuxClick={handleAuxClick}
     >
@@ -159,11 +111,8 @@ export const DeviceRow = memo(function DeviceRow({
             aria-pressed={isSelected}
             className={clsx(
               'w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center transition-colors',
-              // Touch: invisible 40×40 hit area around the 16px box (no
-              // layout change) + a visible unchecked border, since there
-              // is no hover to reveal it (docs §5.4).
+              // Touch: invisible 40×40 hit area around the 16px box + a visible unchecked border.
               "relative coarse:after:absolute coarse:after:-inset-3 coarse:after:content-['']",
-              // Dark-theme checkbox when in selection mode (user-requested visual)
               selectionMode
                 ? (isSelected
                     ? 'bg-accent border-accent text-white'
@@ -181,17 +130,14 @@ export const DeviceRow = memo(function DeviceRow({
           </button>
         )}
 
-        <OsIcon osType={device.osType} className="w-4 h-4 text-text-muted flex-shrink-0" />
+        <PlatformIcon platform={device.platform} className="w-4 h-4 text-text-muted flex-shrink-0" />
 
-        <span className={clsx('text-sm font-semibold text-text-primary truncate', stacked ? 'flex-1 min-w-0' : 'max-w-[200px]')} title={anonymize(displayLabel)}>
-          {anonymize(displayLabel)}
+        <span className={clsx('text-sm font-semibold text-text-primary truncate', stacked ? 'flex-1 min-w-0' : 'max-w-[240px]')} title={anonymize(device.label)}>
+          {anonymize(device.label)}
         </span>
 
         {visibleTags.map((tag) => (
-          <span
-            key={tag}
-            className="text-[10px] px-1.5 rounded-full bg-accent/10 text-accent flex-shrink-0 max-md:hidden"
-          >
+          <span key={tag} className="text-[10px] px-1.5 rounded-full bg-accent/10 text-accent flex-shrink-0 max-md:hidden">
             {tag}
           </span>
         ))}
@@ -201,24 +147,22 @@ export const DeviceRow = memo(function DeviceRow({
           </span>
         )}
 
-        {/* Spacer on the single-line row; on the stacked row it becomes a
-            line break (full-width, zero-height item) between the name line
-            and the status line. */}
+        {/* Spacer on the single-line row; a line break on the stacked row. */}
         <div className={stacked ? 'order-2 flex-none w-full h-0' : 'flex-1'} />
 
-        {/* Stacked tablet row: the status line is indented like the line-2
-            fields (phone rows use the full width). */}
+        {/* The separate states: enrollment always, the others when they say something. */}
         <span className={clsx('flex', stacked && 'order-3', stacked && (showCheckbox ? 'md:ml-[68px]' : 'md:ml-[40px]'))}>
-          <DeviceStatusBadge status={device.status} approvalStatus={device.approvalStatus} size="sm" />
+          <DeviceStateBadges device={device} />
         </span>
 
-        <span className={clsx('text-xs flex-shrink-0 tabular-nums w-8 text-right max-md:w-auto', stacked && 'order-1', lastSeen.color)}>
-          {lastSeen.text}
+        <span
+          className={clsx('text-xs flex-shrink-0 tabular-nums w-12 text-right max-md:w-auto', stacked && 'order-1', CONTACT_COLOR[device.contactState])}
+          title={device.lastCheckinAt ? new Date(device.lastCheckinAt).toLocaleString() : (t('mdm.contactState.never') || 'Never seen')}
+        >
+          {shortAge(device.lastCheckinAt)}
         </span>
 
-        {/* Eye: redundant with the row tap, dropped on phone to give the
-            name room; on a tablet it keeps its size with a 40px hit area
-            and stays at the end of the name line (after last seen). */}
+        {/* Eye: redundant with the row tap, dropped on phone. */}
         <button
           onClick={handleEye}
           aria-label={t('devices.viewDevice')}
@@ -232,41 +176,28 @@ export const DeviceRow = memo(function DeviceRow({
         </button>
       </div>
 
-      {/* Line 2 — composed dynamically from the user's column toggles
-          (Lot D.1). A small helper builds the array of nodes and inserts
-          a middot between each, so empty/disabled entries don't leave a
-          stray separator behind. */}
-      <Line2Fields className={clsx('flex items-center gap-1.5 text-xs text-text-muted mt-0.5', line2Offset, stacked && 'flex-wrap gap-y-0.5', 'max-md:pl-0 max-md:mt-1')}
+      {/* Line 2: the fields the user toggled on; an absent value (not collected, unknown) leaves no separator. */}
+      <Line2Fields
+        className={clsx('flex items-center gap-1.5 text-xs text-text-muted mt-0.5', line2Offset, stacked && 'flex-wrap gap-y-0.5', 'max-md:pl-0 max-md:mt-1')}
         nodes={[
-          // Tenant chip — only meaningful when the row originates from
-          // the master/god view (otherwise tenantName is null and the
-          // whole node collapses out of the line). Off by default in
-          // the catalog so a single-tenant install never sees clutter.
+          // Meaningful from the master tenant's global view only (tenantName is absent otherwise).
           fieldOn('tenant') && device.tenantName && (
-            <span key="tenant" className="inline-flex items-center gap-1 text-accent" title={`Tenant: ${device.tenantName}`}>
+            <span key="tenant" className="inline-flex items-center gap-1 text-accent" title={device.tenantName}>
               <Building2 className="w-3 h-3" />
               <span className="truncate max-w-[100px]">{device.tenantName}</span>
             </span>
           ),
-          fieldOn('ipLocal') && (
-            <span key="ipLocal" className="font-mono truncate max-w-[120px]" title="IP LAN">
-              <Wifi className="w-3 h-3 inline mr-1 opacity-60" />
-              {anonymizeIp(device.ipLocal) || '\u2014'}
-            </span>
+          fieldOn('platform') && (
+            <span key="platform" className="truncate max-w-[140px]">{os}</span>
           ),
-          fieldOn('ipPublic') && (
-            <span key="ipPublic" className="font-mono truncate max-w-[120px]" title="IP WAN">
-              <Network className="w-3 h-3 inline mr-1 opacity-60" />
-              {anonymizeIp(device.ipPublic) || '\u2014'}
-            </span>
+          fieldOn('model') && model && (
+            <span key="model" className="truncate max-w-[160px]" title={device.model ?? undefined}>{model}</span>
           ),
-          fieldOn('macAddress') && (
-            <span key="mac" className="font-mono truncate max-w-[140px]" title="MAC">
-              {device.macAddress || '\u2014'}
+          fieldOn('ownership') && (
+            <span key="ownership" className="inline-flex items-center gap-1">
+              <Briefcase className="w-3 h-3" />
+              <span>{ownershipLabel(t, device.ownership)}</span>
             </span>
-          ),
-          fieldOn('os') && (
-            <span key="os" className="truncate max-w-[180px]" title={osFullTextRaw}>{osFullText || '\u2014'}</span>
           ),
           fieldOn('group') && (
             <span key="group" className="inline-flex items-center gap-1">
@@ -276,53 +207,40 @@ export const DeviceRow = memo(function DeviceRow({
                   {anonymize(device.groupName)}
                 </button>
               ) : (
-                <span>{'\u2014'}</span>
+                <span>{'—'}</span>
               )}
             </span>
           ),
-          fieldOn('lastUser') && (
-            <span key="lastUser" className="inline-flex items-center gap-1">
+          fieldOn('endUser') && endUser && (
+            <span key="endUser" className="inline-flex items-center gap-1">
               <User className="w-3 h-3" />
-              <span className="truncate max-w-[100px]">{anonymize(device.lastLoggedInUser) || '\u2014'}</span>
+              <span className="truncate max-w-[140px]">{anonymize(endUser)}</span>
             </span>
           ),
-          fieldOn('geoCity') && device.geoCity && (
-            <span key="geo" className="inline-flex items-center gap-1">
-              <MapPin className="w-3 h-3" />
-              <span className="truncate max-w-[120px]">{anonymize(device.geoCity)}{device.geoCountry ? `, ${anonymize(device.geoCountry)}` : ''}</span>
+          fieldOn('contact') && (
+            <span key="contact" className="inline-flex items-center gap-1">
+              <Clock className="w-3 h-3" />
+              <span>{device.lastCheckinAt ? new Date(device.lastCheckinAt).toLocaleString() : (t('mdm.contactState.never') || 'Never seen')}</span>
             </span>
           ),
-          fieldOn('lastReboot') && device.lastRebootAt && (
-            <span key="lastReboot" className="inline-flex items-center gap-1" title={t('devices.lastReboot', 'Dernier reboot')}>
-              <History className="w-3 h-3" />
-              <span>{formatRelative(device.lastRebootAt)}</span>
+          fieldOn('compliance') && device.enrollmentState !== 'unenrolled' && (
+            <span key="compliance" className={clsx(device.complianceState === 'non_compliant' && 'text-red-400')}>
+              {complianceLabel(t, device.complianceState)}
             </span>
           ),
-          fieldOn('lifecycle') && device.lifecycleStatus && device.lifecycleStatus !== 'unknown' && (
-            <span key="lifecycle" className="inline-flex items-center gap-1" title="Lifecycle">
-              <Calendar className="w-3 h-3" />
-              <span className="capitalize">{device.lifecycleStatus.replace(/_/g, ' ')}</span>
+          // Absent when the privacy rules of the device's ownership do not collect it.
+          fieldOn('serial') && device.serialNumber && (
+            <span key="serial" className="inline-flex items-center gap-1 font-mono">
+              <Hash className="w-3 h-3" />
+              <span>{anonymize(device.serialNumber)}</span>
             </span>
           ),
-          fieldOn('warranty') && device.warrantyStatus && device.warrantyStatus !== 'unknown' && (
-            <span key="warranty" className={clsx('inline-flex items-center gap-1', device.warrantyStatus === 'expired' && 'text-amber-400')} title="Garantie">
-              <ShieldCheck className="w-3 h-3" />
-              <span className="capitalize">{device.warrantyStatus}</span>
-            </span>
-          ),
-          // Tags — rendered as a row of small chips when the user has
-          // opted into the "Tags" column. Empty array → render nothing
-          // so the line2 separator pipeline doesn't drop a stray dot.
-          fieldOn('tags') && Array.isArray(device.tags) && device.tags.length > 0 && (
-            <span key="tags" className="inline-flex items-center gap-1 flex-wrap" title={`Tags: ${device.tags.join(', ')}`}>
-              {device.tags.slice(0, 5).map((t) => (
-                <span key={t} className="px-1.5 py-0 rounded-full bg-bg-tertiary text-text-muted text-[10px]">
-                  {t}
-                </span>
+          fieldOn('tags') && tags.length > 0 && (
+            <span key="tags" className="inline-flex items-center gap-1 flex-wrap" title={tags.join(', ')}>
+              {tags.slice(0, 5).map((tag) => (
+                <span key={tag} className="px-1.5 py-0 rounded-full bg-bg-tertiary text-text-muted text-[10px]">{tag}</span>
               ))}
-              {device.tags.length > 5 && (
-                <span className="text-[10px] text-text-muted/60">+{device.tags.length - 5}</span>
-              )}
+              {tags.length > 5 && <span className="text-[10px] text-text-muted/60">+{tags.length - 5}</span>}
             </span>
           ),
         ]}
@@ -331,12 +249,9 @@ export const DeviceRow = memo(function DeviceRow({
   );
 });
 
-// ── Helpers (kept colocated with DeviceRow since they are not used elsewhere) ─
-
-/** Render a list of nodes joined by middot separators, skipping any falsy
- *  entries so toggled-off Lot D.1 fields don't leave a stray "·" behind. */
-function Line2Fields({ nodes, className }: { nodes: Array<React.ReactNode | false>; className?: string }) {
-  const visible = nodes.filter(Boolean) as React.ReactNode[];
+/** A list of nodes joined by middots, skipping the falsy entries so that a toggled-off field leaves no stray "·". */
+function Line2Fields({ nodes, className }: { nodes: Array<ReactNode | false | null | undefined | ''>; className?: string }) {
+  const visible = nodes.filter(Boolean) as ReactNode[];
   return (
     <div className={className}>
       {visible.map((node, i) => (
@@ -347,15 +262,4 @@ function Line2Fields({ nodes, className }: { nodes: Array<React.ReactNode | fals
       ))}
     </div>
   );
-}
-
-function formatRelative(iso: string): string {
-  const diffMs = Date.now() - new Date(iso).getTime();
-  if (diffMs < 0) return 'soon';
-  const days = Math.floor(diffMs / 86_400_000);
-  if (days >= 1) return `${days}d`;
-  const hours = Math.floor(diffMs / 3_600_000);
-  if (hours >= 1) return `${hours}h`;
-  const mins = Math.max(1, Math.floor(diffMs / 60_000));
-  return `${mins}m`;
 }

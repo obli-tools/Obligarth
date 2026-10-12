@@ -5,10 +5,13 @@ import { groupsApi } from '../api/groups.api';
 import { registerSocketListener } from '../socket/socketListeners';
 import { onTenantChanged } from './tenantStore';
 
-interface DeviceGroupStats {
-  onlineCount: number;
-  offlineCount: number;
+/** MDM counters of a group and its subtree (modele-donnees-mdm §11.3): the devices under management. */
+export interface DeviceGroupStats {
   total: number;
+  enrolled: number;
+  nonCompliant: number;
+  configErrors: number;
+  stale: number;
 }
 
 interface GroupStore {
@@ -56,12 +59,12 @@ export const useGroupStore = create<GroupStore>((set, get) => ({
       const groupStats: Record<number, DeviceGroupStats> = {};
       function walkTree(nodes: DeviceGroupTreeNode[]) {
         for (const node of nodes) {
-          const onlineCount = (node as any).onlineCount ?? 0;
-          const offlineCount = (node as any).offlineCount ?? 0;
           groupStats[node.id] = {
-            onlineCount,
-            offlineCount,
-            total: onlineCount + offlineCount,
+            total: node.total ?? node.deviceCount ?? 0,
+            enrolled: node.enrolledCount ?? 0,
+            nonCompliant: node.nonCompliantCount ?? 0,
+            configErrors: node.configErrorCount ?? 0,
+            stale: node.staleCount ?? 0,
           };
           if (node.children?.length) walkTree(node.children);
         }

@@ -1,4 +1,4 @@
-import { useState, useEffect, type FormEvent } from 'react';
+import { createContext, useContext, useState, useEffect, type FormEvent } from 'react';
 import {
  Plus,
  Pencil,
@@ -26,15 +26,15 @@ import type {
  TeamPermission,
  DeviceCapability,
  DeviceGroupTreeNode,
- Device,
+ DeviceSummary,
  UserTenantAssignment,
 } from '@obligarth/shared';
-import { DEFAULT_DEVICE_CAPABILITIES, isMasterTenant } from '@obligarth/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, DEVICE_CAPABILITIES, DEVICE_CAPABILITY_LABELS, isMasterTenant } from '@obligarth/shared';
 import { usersApi, isPendingApproval } from '@/api/users.api';
 import { isStepUpHandled } from '@/api/client';
 import { teamsApi } from '@/api/teams.api';
 import { groupsApi } from '@/api/groups.api';
-import { deviceApi } from '@/api/device.api';
+import { listManagedDevices } from '@/api/mdm.api';
 import { restrictionApi, type RestrictionLevel, type RestrictionMap, type RestrictableAction, type ScopeMode } from '@/api/restriction.api';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
@@ -92,7 +92,7 @@ export function AdminUsersPage() {
  const [users, setUsers] = useState<User[]>([]);
  const [teams, setTeams] = useState<UserTeam[]>([]);
  const [tree, setTree] = useState<DeviceGroupTreeNode[]>([]);
- const [devices, setDevices] = useState<Device[]>([]);
+ const [devices, setDevices] = useState<DeviceSummary[]>([]);
 
  // User form
  const [userFormMode, setUserFormMode] = useState<UserFormMode>(null);
@@ -143,7 +143,7 @@ export function AdminUsersPage() {
  usersApi.list(),
  isGlobalView ? teamsApi.listAll() : teamsApi.list(),
  groupsApi.tree(),
- deviceApi.list(),
+ listManagedDevices(10000),
  ]);
  setUsers(u);
  setTeams(t);
@@ -504,6 +504,27 @@ export function AdminUsersPage() {
  await addPermission(perm.scope, perm.scopeId, newLevel);
  };
 
+ // The device capabilities of one row (the MDM actions of integration-apple-edge §8.11): every row is sent
+ // again with its own, the server writes the differences only. A destructive capability given to a team opens
+ // a cooldown for its members (told by the editor).
+ const setPermissionCapabilities = async (perm: TeamPermission, capabilities: DeviceCapability[]) => {
+ if (!selectedTeamId) return;
+ const defaultCaps: DeviceCapability[] = [...DEFAULT_DEVICE_CAPABILITIES];
+ try {
+ await teamsApi.setPermissions(selectedTeamId, {
+ permissions: teamPermissions.map((p) => ({
+ scope: p.scope, scopeId: p.scopeId, level: p.level,
+ capabilities: p.id === perm.id ? capabilities : (p.capabilities ?? defaultCaps),
+ })),
+ });
+ await loadTeamDetails(selectedTeamId);
+ } catch (err: any) {
+ if (isStepUpHandled(err)) return;
+ const msg = err?.response?.data?.error || err?.message;
+ toast.error(msg ? `${t('users.teams.failedUpdatePermission')}: ${msg}` : t('users.teams.failedUpdatePermission'));
+ }
+ };
+
  const selectedTeam = teams.find((t) => t.id === selectedTeamId);
  const teamDetailOpen = !!selectedTeam && tab === 'teams';
 
@@ -598,8 +619,8 @@ export function AdminUsersPage() {
  collectDescendants(tree, null);
 
  // Merge devices into tree nodes for display
- const devicesByGroup = new Map<number, Device[]>();
- const ungroupedDevices: Device[] = [];
+ const devicesByGroup = new Map<number, DeviceSummary[]>();
+ const ungroupedDevices: DeviceSummary[] = [];
  for (const device of devices) {
  if (device.groupId) {
  if (!devicesByGroup.has(device.groupId)) devicesByGroup.set(device.groupId, []);
@@ -1064,6 +1085,7 @@ export function AdminUsersPage() {
  {tree.length === 0 && ungroupedDevices.length === 0 ? (
  <p className="p-4 text-sm text-text-muted text-center">{t('users.teams.noResources')}</p>
  ) : (
+ <PermCapabilitiesContext.Provider value={setPermissionCapabilities}>
  <div className="py-1">
  {/* "Ungrouped" pseudo-group — toggling this grants the team
      access to every device whose group_id IS NULL AND whose
@@ -1110,6 +1132,7 @@ export function AdminUsersPage() {
  );
  })}
  </div>
+ </PermCapabilitiesContext.Provider>
  )}
  </div>
  )}
@@ -1238,7 +1261,7 @@ export function AdminUsersPage() {
 interface PermTreeNodeProps {
  node: DeviceGroupTreeNode;
  depth: number;
- devicesByGroup: Map<number, Device[]>;
+ devicesByGroup: Map<number, DeviceSummary[]>;
  getGroupPerm: (groupId: number) => TeamPermission | undefined;
  getDevicePerm: (deviceId: number) => TeamPermission | undefined;
  assignedGroupIds: Set<number>;
@@ -1247,6 +1270,81 @@ interface PermTreeNodeProps {
  addPermission: (scope: PermissionScope, scopeId: number, level: PermissionLevel) => Promise<void>;
  removePermission: (permId: number) => Promise<void>;
  togglePermissionLevel: (perm: TeamPermission) => Promise<void>;
+}
+
+/** Writes the device capabilities of a team permission row (provided by the page around its permission tree). */
+const PermCapabilitiesContext = createContext<((perm: TeamPermission, capabilities: DeviceCapability[]) => Promise<void>) | null>(null);
+
+/** The MDM capabilities whose grant to a team opens a cooldown for its members (server: guard_team_capabilities). */
+const DESTRUCTIVE_CAPABILITIES: readonly DeviceCapability[] = ['mdm:wipe', 'mdm:remove', 'mdm:lock', 'mdm:lost_mode'];
+const MDM_CAPABILITIES: DeviceCapability[] = DEVICE_CAPABILITIES.filter((c) => c !== 'monitor');
+
+/**
+ * The MDM actions a team may request on the devices of a row (integration-apple-edge §8.11): none by default, each
+ * one a decision of an administrator. They need write access: the button shows on RW rows only.
+ */
+function CapabilitiesButton({ perm }: { perm: TeamPermission }) {
+ const { t } = useTranslation();
+ const save = useContext(PermCapabilitiesContext);
+ const [open, setOpen] = useState(false);
+ const [draft, setDraft] = useState<DeviceCapability[]>([]);
+ const [busy, setBusy] = useState(false);
+ if (!save || perm.level !== 'rw') return null;
+ const held: DeviceCapability[] = (perm.capabilities ?? []).filter((c) => c !== 'monitor');
+ const added = draft.filter((c) => DESTRUCTIVE_CAPABILITIES.includes(c) && !held.includes(c));
+ return (
+ <>
+ <button
+ type="button"
+ onClick={() => { setDraft(held); setOpen(true); }}
+ className={`px-2 py-0.5 coarse:px-3 coarse:py-1.5 rounded text-[11px] font-medium transition-colors shrink-0 ${held.length > 0 ? 'bg-accent/10 text-accent hover:bg-accent/20' : 'bg-bg-tertiary text-text-muted hover:bg-bg-hover'}`}
+ title={t('users.teams.mdmCapabilitiesHint', 'MDM actions this team may request on these devices')}
+ >
+ {t('users.teams.mdmCapabilities', 'MDM')}{held.length > 0 ? ` ${held.length}` : ''}
+ </button>
+ <Modal
+ open={open}
+ onClose={() => { if (!busy) setOpen(false); }}
+ size="sm"
+ title={t('users.teams.mdmCapabilitiesTitle', 'MDM actions of this team')}
+ footer={(
+ <>
+ <Button variant="secondary" onClick={() => setOpen(false)} disabled={busy}>{t('common.cancel')}</Button>
+ <Button
+ loading={busy}
+ onClick={async () => {
+ setBusy(true);
+ try { await save(perm, ['monitor', ...draft]); setOpen(false); } finally { setBusy(false); }
+ }}
+ >
+ {t('common.save')}
+ </Button>
+ </>
+ )}
+ >
+ <div className="space-y-1.5 text-sm">
+ {MDM_CAPABILITIES.map((c) => (
+ <label key={c} className="flex items-center gap-2 coarse:min-h-10">
+ <input
+ type="checkbox"
+ className="accent-accent"
+ checked={draft.includes(c)}
+ onChange={() => setDraft((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))}
+ />
+ <span className={DESTRUCTIVE_CAPABILITIES.includes(c) ? 'text-red-400' : 'text-text-primary'}>
+ {t(`capabilities.device.${c.replace(':', '_')}`) || DEVICE_CAPABILITY_LABELS[c]}
+ </span>
+ </label>
+ ))}
+ {added.length > 0 && (
+ <p className="pt-2 text-xs text-amber-400">
+ {t('users.teams.mdmCapabilitiesCooldown', 'A destructive action given to a team opens a 72 h cooldown for its members who did not hold it, and raises an alert.')}
+ </p>
+ )}
+ </div>
+ </Modal>
+ </>
+ );
 }
 
 /**
@@ -1285,6 +1383,7 @@ function PermControls({
  >
  {perm.level === 'rw' ? <><Pencil size={10} className="inline mr-0.5" />{t('users.teams.rwLabel')}</> : <><Eye size={10} className="inline mr-0.5" />{t('users.teams.roLabel')}</>}
  </button>
+ <CapabilitiesButton perm={perm} />
  <IconButton
  label={t('users.teams.removePermission', 'Remove permission')}
  icon={<Trash2 size={11} />}
@@ -1414,7 +1513,7 @@ function PermTreeNode({
 }
 
 interface PermDeviceRowProps {
- device: Device;
+ device: DeviceSummary;
  depth: number;
  perm: TeamPermission | undefined;
  isCovered: boolean;
@@ -1479,7 +1578,7 @@ function PermDeviceRow({
  >
  <Monitor size={13} className={`shrink-0 ${perm ? 'text-accent' : isCovered ? 'text-accent/40' : 'text-text-muted'}`} />
  <span className={`flex-1 min-w-0 text-sm truncate ${perm ? 'text-text-primary font-medium' : isCovered ? 'text-text-muted' : 'text-text-primary'}`}>
- {device.displayName ?? device.hostname}
+ {device.label}
  </span>
 
  <PermControls
@@ -1727,13 +1826,12 @@ function RestrictionScopeModal({ actionKey, entry, onClose, onSave }: {
  const [deviceIds, setDeviceIds] = useState<number[]>(entry?.scope.deviceIds ?? []);
  const [groupIds, setGroupIds] = useState<number[]>(entry?.scope.groupIds ?? []);
  const [groupTree, setGroupTree] = useState<DeviceGroupTreeNode[]>([]);
- const [devices, setDevices] = useState<Device[]>([]);
+ const [devices, setDevices] = useState<DeviceSummary[]>([]);
 
  useEffect(() => {
  groupsApi.tree().then(setGroupTree).catch(() => {});
- deviceApi.listPaginated({ approvalStatus: 'approved', pageSize: 10000 })
- .then((r) => setDevices(r.items))
- .catch(() => {});
+ // The devices under management (every state but unenrolled).
+ listManagedDevices(10000).then(setDevices).catch(() => {});
  }, []);
 
  const toggle = (arr: number[], id: number): number[] =>
@@ -1753,7 +1851,7 @@ function RestrictionScopeModal({ actionKey, entry, onClose, onSave }: {
  if (!coarse) return devices;
  const q = deviceQuery.trim().toLowerCase();
  const list = q
- ? devices.filter((d) => (d.displayName || d.hostname || '').toLowerCase().includes(q))
+ ? devices.filter((d) => d.label.toLowerCase().includes(q))
  : [...devices.filter((d) => deviceIds.includes(d.id)), ...devices.filter((d) => !deviceIds.includes(d.id))];
  return list.slice(0, DEVICE_CAP);
  })();
@@ -1844,11 +1942,11 @@ function RestrictionScopeModal({ actionKey, entry, onClose, onSave }: {
  : 'border-transparent text-text-muted hover:text-text-primary'
  }`}
  >
- {d.displayName || d.hostname}
+ {d.label}
  </button>
  ))}
  </div>
- {coarse && shownDevices.length < (deviceQuery.trim() ? devices.filter((d) => (d.displayName || d.hostname || '').toLowerCase().includes(deviceQuery.trim().toLowerCase())).length : devices.length) && (
+ {coarse && shownDevices.length < (deviceQuery.trim() ? devices.filter((d) => d.label.toLowerCase().includes(deviceQuery.trim().toLowerCase())).length : devices.length) && (
  <p className="mt-1 text-[11px] text-text-muted">
  {t('users.restrictions.devicesTruncated', { defaultValue: 'Showing the first {{count}} devices — refine the search to find others.', count: DEVICE_CAP })}
  </p>

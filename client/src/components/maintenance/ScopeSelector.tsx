@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Globe, Server, Folder, RefreshCw, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { DeviceGroup, Device, MaintenanceScope } from '@obligarth/shared';
+import type { DeviceGroup, DeviceSummary, MaintenanceScope } from '@obligarth/shared';
 import { groupsApi } from '@/api/groups.api';
-import { deviceApi } from '@/api/device.api';
+import { listManagedDevices } from '@/api/mdm.api';
 import { cn } from '@/utils/cn';
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -47,7 +47,7 @@ function cloneSelection(s: Selection): Selection {
 
 function resolveTargets(
  sel: Selection,
- devicesByGroup: Map<number, Device[]>,
+ devicesByGroup: Map<number, DeviceSummary[]>,
 ): ScopeTarget[] {
  if (sel.global) return [{ scopeType: 'global', scopeId: null }];
 
@@ -81,8 +81,8 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
  const { t } = useTranslation();
  const [loading, setLoading] = useState(true);
  const [groups, setGroups] = useState<DeviceGroup[]>([]);
- const [devicesByGroup, setDevicesByGroup] = useState<Map<number, Device[]>>(new Map());
- const [ungroupedDevices, setUngroupedDevices] = useState<Device[]>([]);
+ const [devicesByGroup, setDevicesByGroup] = useState<Map<number, DeviceSummary[]>>(new Map());
+ const [ungroupedDevices, setUngroupedDevices] = useState<DeviceSummary[]>([]);
  const [sel, setSel] = useState<Selection>(emptySelection());
 
  // Ref for the scrollable column — used by auto-scroll on pre-selection
@@ -92,12 +92,12 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
 
  useEffect(() => {
  let mounted = true;
- Promise.all([groupsApi.list(), deviceApi.list({ approvalStatus: 'approved' })])
+ Promise.all([groupsApi.list(), listManagedDevices()])
  .then(([grps, devices]) => {
  if (!mounted) return;
 
- const dByGroup = new Map<number, Device[]>();
- const ungD: Device[] = [];
+ const dByGroup = new Map<number, DeviceSummary[]>();
+ const ungD: DeviceSummary[] = [];
  for (const d of devices) {
  if (d.groupId !== null) {
  if (!dByGroup.has(d.groupId)) dByGroup.set(d.groupId, []);
@@ -109,8 +109,8 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
 
  // Sort everything alphabetically
  grps.sort((a, b) => a.name.localeCompare(b.name));
- dByGroup.forEach((arr) => arr.sort((a, b) => (a.displayName ?? a.hostname).localeCompare(b.displayName ?? b.hostname)));
- ungD.sort((a, b) => (a.displayName ?? a.hostname).localeCompare(b.displayName ?? b.hostname));
+ dByGroup.forEach((arr) => arr.sort((a, b) => a.label.localeCompare(b.label)));
+ ungD.sort((a, b) => a.label.localeCompare(b.label));
 
  setGroups(grps);
  setDevicesByGroup(dByGroup);
@@ -258,13 +258,13 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
  return deselCount === 0 ? 'selected' : 'partial';
  }
 
- function isDeviceEffective(d: Device): boolean {
+ function isDeviceEffective(d: DeviceSummary): boolean {
  if (sel.global) return true;
  if (d.groupId !== null && sel.groupIds.has(d.groupId)) return !sel.deselectedDeviceIds.has(d.id);
  return sel.individualDeviceIds.has(d.id);
  }
 
- function isDeviceExcluded(d: Device): boolean {
+ function isDeviceExcluded(d: DeviceSummary): boolean {
  return d.groupId !== null && sel.groupIds.has(d.groupId) && sel.deselectedDeviceIds.has(d.id);
  }
 
@@ -376,7 +376,7 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
  )}
  >
  <Server size={10} className="shrink-0" />
- <span className="truncate">{d.displayName ?? d.hostname}</span>
+ <span className="truncate">{d.label}</span>
  </button>
  );
  })}
@@ -406,7 +406,7 @@ export function ScopeSelector({ defaultScopeType, defaultScopeId, onChange }: Pr
  )}
  >
  <Server size={10} className="shrink-0" />
- <span className="truncate">{d.displayName ?? d.hostname}</span>
+ <span className="truncate">{d.label}</span>
  </button>
  ))}
  </>

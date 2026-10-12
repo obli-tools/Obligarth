@@ -1,5 +1,5 @@
 import apiClient from './client';
-import type { DeviceGroup, DeviceGroupTreeNode } from '@obligarth/shared';
+import type { DeviceGroup, DeviceGroupTreeNode, PolicyImpact } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 
@@ -44,6 +44,18 @@ export const groupsApi = {
   async update(id: number, data: UpdateGroupRequest): Promise<DeviceGroup> {
     const res = await apiClient.put<ApiResponse<DeviceGroup>>(`/groups/${id}`, data);
     return res.data.data!;
+  },
+
+  /** What moving a group would change for its devices (the policies they inherit): nothing is written. */
+  async previewMove(id: number, newParentId: number | null): Promise<PolicyImpact> {
+    const res = await apiClient.post<ApiResponse<{ outcome: string; impact: PolicyImpact }>>(`/groups/${id}/move`, { newParentId }, { params: { dryRun: true } });
+    return res.data.data!.impact;
+  },
+
+  /** What deleting a group would change (its assignments go with it, its devices leave it): nothing is written. */
+  async previewDelete(id: number): Promise<PolicyImpact> {
+    const res = await apiClient.delete<ApiResponse<{ outcome: string; impact: PolicyImpact }>>(`/groups/${id}`, { params: { dryRun: true } });
+    return res.data.data!.impact;
   },
 
   /**

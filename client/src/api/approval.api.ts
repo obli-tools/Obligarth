@@ -8,7 +8,10 @@ export interface PendingApproval {
   requestedBy: number;
   requestedByName: string | null;
   requestType: 'batch_command' | 'device_uninstall' | 'setting_change' | 'vault_kek_rotation'
-    | 'guarded_action' | 'guard_resume' | 'guard_unfreeze' | 'guard_settings_change' | 'guard_approver_designate';
+    | 'guarded_action' | 'guard_resume' | 'guard_unfreeze' | 'guard_settings_change' | 'guard_approver_designate'
+    // A restricted MDM command (integration-apple-edge §8.11); a publication, a batch of assignments, a group moved
+    // or deleted (modele-donnees-mdm §7.12).
+    | 'apple_action' | 'mdm_policy_publish';
   description: string;
   payload: Record<string, any>;
   status: 'pending' | 'approved' | 'denied' | 'executed' | 'expired' | 'cancelled';

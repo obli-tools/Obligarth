@@ -1,16 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  RefreshCw, ArrowRight, Clock, FolderOpen,
-  AlertTriangle, AlertCircle, FolderTree, Wifi, WifiOff,
-  Building2,
+  RefreshCw, ArrowRight, Clock, FolderOpen, AlertTriangle, AlertCircle, FolderTree, Wifi, Building2, ShieldAlert, Smartphone,
 } from 'lucide-react';
-import { useDeviceStore } from '@/store/deviceStore';
-import { MASTER_TENANT_ID } from '@obligarth/shared';
-import {
-  deviceApi,
-  type GroupStats, type FleetTimeseriesPoint, type FleetHourlyPoint,
-} from '@/api/device.api';
+import { MASTER_TENANT_ID, SocketEvents } from '@obligarth/shared';
+import type { DeviceGroupTreeNode, MdmFleetPoint, MdmFleetSummary } from '@obligarth/shared';
+import { mdmApi } from '@/api/mdm.api';
+import { groupsApi } from '@/api/groups.api';
+import { useTenantStore } from '@/store/tenantStore';
+import { registerSocketListener } from '@/socket/socketListeners';
+import { ownershipLabel, platformLabel } from '@/components/mdm/PlatformIcon';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
 import { PageContainer } from '@/components/common/PageContainer';
@@ -193,13 +192,13 @@ function OsDonut({ slices, total }: { slices: DonutSlice[]; total: number }) {
   );
 }
 
-// ── Activity chart (online/offline lines, multi-tab) ─────────────────────────
+// ── Activity chart (enrolled and without contact, multi-tab) ─────────────────
 
 type ActivityRange = '24h' | '7j' | '14j' | '30j';
 
 // Unified shape so the chart can render both daily and hourly snapshots
 // without branching internally — the parent maps each input to this.
-interface ActivityPoint { label: string; online: number; offline: number; total: number }
+interface ActivityPoint { label: string; enrolled: number; stale: number; total: number }
 
 function ActivityChart({ data }: { data: ActivityPoint[] }) {
   const { t } = useTranslation();
@@ -224,12 +223,12 @@ function ActivityChart({ data }: { data: ActivityPoint[] }) {
   if (data.length < 2) {
     return (
       <div className="h-[240px] flex items-center justify-center text-text-muted text-sm">
-        {t('dashboard.notEnoughHistory', "Pas assez d'historique — données après 24h")}
+        {t('dashboard.notEnoughHistory', 'Not enough history — data after 24h')}
       </div>
     );
   }
-  const maxOnline = Math.max(...data.map(d => d.online), 1);
-  const maxOffline = Math.max(...data.map(d => d.offline), 1);
+  const maxOnline = Math.max(...data.map(d => d.enrolled), 1);
+  const maxOffline = Math.max(...data.map(d => d.stale), 1);
   const yMax = Math.max(maxOnline, maxOffline);
   const narrow = !isDesktop && measured > 0;
   const w = narrow ? Math.max(measured, 240) : 800;
@@ -239,8 +238,8 @@ function ActivityChart({ data }: { data: ActivityPoint[] }) {
   const ch = h - pad.t - pad.b;
   const xOf = (i: number) => pad.l + (i / (data.length - 1)) * cw;
   const yOf = (v: number) => pad.t + (1 - v / yMax) * ch;
-  const onlinePath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d.online).toFixed(1)}`).join(' ');
-  const offlinePath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d.offline).toFixed(1)}`).join(' ');
+  const onlinePath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d.enrolled).toFixed(1)}`).join(' ');
+  const offlinePath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${xOf(i).toFixed(1)},${yOf(d.stale).toFixed(1)}`).join(' ');
   const onlineArea = `${onlinePath} L${xOf(data.length - 1)},${pad.t + ch} L${xOf(0)},${pad.t + ch} Z`;
   const ticks = [0, 0.5, 1].map(t => yMax * t);
 
@@ -295,622 +294,345 @@ function MiniStat({ icon, label, value, sub, color = 'text-text-primary', to }: 
   return to ? <Link to={to} className="block hover:opacity-90 transition-opacity">{body}</Link> : body;
 }
 
-// ── Vue par groupe (recursive cards) ─────────────────────────────────────────
+// ── Group view (recursive cards) ─────────────────────────────────────────────
+// One card per group of the tree, with the MDM counters of its subtree (modele-donnees-mdm §11.3): devices under
+// management, enrolled, non compliant, in configuration error, without contact.
 
-function GroupCard({ group, children, depth = 0 }: { group: GroupStats; children?: React.ReactNode; depth?: number }) {
+function GroupCard({ group, children, depth = 0 }: { group: DeviceGroupTreeNode; children?: React.ReactNode; depth?: number }) {
   const { t } = useTranslation();
-  // "En ligne" = reachable = every device the agent is talking to, alert or
-  // not (online + warning + critical). The old card showed only status==='online'
-  // which actually meant "no alert" and hid warned/critical-but-reachable boxes.
-  const reachable = group.online + group.warning + group.critical;
-  const upPct = group.total > 0 ? Math.round((reachable / group.total) * 100) : 0;
-  const barColor = upPct >= 95 ? 'bg-green-400' : upPct >= 70 ? 'bg-amber-400' : 'bg-accent';
-  const onlineColor =
-    upPct >= 95 ? 'text-green-400' :
-    upPct >= 70 ? 'text-amber-400' :
-                  'text-accent';
-
-  // Click-through → the filtered /devices list (this group + a status). Each
-  // gauge is its OWN link, which is why the card can't be one wrapping <Link>
-  // anymore (nested anchors are invalid HTML).
-  const deviceLink = (status?: string) => {
-    const p = new URLSearchParams();
-    if (group.groupId != null) p.set('groupId', String(group.groupId));
-    if (status) p.set('status', status);
-    const qs = p.toString();
-    return `/devices${qs ? `?${qs}` : ''}`;
-  };
-
+  const total = group.total ?? group.deviceCount ?? 0;
+  const enrolled = group.enrolledCount ?? 0;
+  const nonCompliant = group.nonCompliantCount ?? 0;
+  const configErrors = group.configErrorCount ?? 0;
+  const stale = group.staleCount ?? 0;
+  const healthy = Math.max(0, enrolled - nonCompliant);
+  const pct = total > 0 ? Math.round((healthy / total) * 100) : 0;
+  const barColor = total === 0 ? 'rgba(255,255,255,0.10)' : nonCompliant > 0 ? '#f5a623' : '#1edd8a';
+  const counters: Array<{ n: number; cls: string; icon: React.ReactNode; label: string; to: string }> = [
+    { n: nonCompliant, cls: 'text-red-400', icon: <ShieldAlert size={13} />, label: t('groupPanel.nonCompliant') || 'Non compliant', to: `/devices?groupId=${group.id}&compliance=non_compliant` },
+    { n: configErrors, cls: 'text-orange-400', icon: <AlertTriangle size={13} />, label: t('groupPanel.configErrors') || 'Configuration errors', to: `/devices?groupId=${group.id}&config=error` },
+    { n: stale, cls: 'text-amber-400', icon: <Clock size={13} />, label: t('groupPanel.stale') || 'No contact', to: `/devices?groupId=${group.id}&contact=stale` },
+  ];
   return (
-    <div className={`rounded-lg px-4 py-3 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_4px_18px_-8px_rgba(0,0,0,0.45)] ${depth > 0 ? 'bg-bg-tertiary' : 'bg-bg-secondary'} max-sm:px-3`}>
-      {/* Phone: name + online/total on the first line, the indicator
-          cluster wraps to a second line and the progress bar is dropped
-          (the ~270px of indicators squeezed the name to nothing). */}
-      <div className="flex items-center gap-3 min-w-0 max-sm:flex-wrap max-sm:gap-y-2">
-        <Link
-          to={group.groupId ? `/group/${group.groupId}` : '/devices'}
-          className="flex items-center gap-2 min-w-0 group hover:opacity-90 max-sm:flex-1 coarse:min-h-10"
-        >
-          <FolderOpen size={depth > 0 ? 14 : 16} className="text-accent shrink-0" />
-          <span className="text-[14px] font-semibold text-text-primary truncate min-w-0">
-            {anonymize(group.groupName) || t('dashboard.ungrouped', 'Sans groupe')}
-          </span>
+    <div style={{ marginLeft: depth > 0 ? Math.min(depth, 4) * 14 : 0 }}>
+      <div className="flex items-center gap-3 rounded-lg bg-bg-secondary px-3.5 py-2.5 max-md:flex-wrap">
+        <Link to={`/devices?groupId=${group.id}`} className="flex min-w-0 flex-1 items-center gap-2 hover:text-accent transition-colors">
+          <FolderOpen size={15} className="shrink-0 text-accent" />
+          <span className="truncate text-[13px] font-medium text-text-primary">{anonymize(group.name)}</span>
         </Link>
-
-        {/* En ligne (joignables) / total */}
-        <Link
-          to={deviceLink('connected')}
-          className="flex items-center gap-1.5 ml-2 hover:opacity-80"
-          title={t('dashboard.tooltipReachable', '{{reachable}} en ligne · {{offline}} hors ligne · {{total}} total', { reachable, offline: group.offline, total: group.total })}
-        >
-          <Wifi size={13} className={onlineColor} />
-          <span className="font-mono text-[12px] text-text-secondary">
-            <span className={onlineColor}>{reachable}</span>
-            <span className="text-text-muted"> / {group.total}</span>
+        <Tip content={t('dashboard.tooltipEnrolled', { enrolled, total }) || `${enrolled} enrolled of ${total} under management`}>
+          <span className="flex items-center gap-2 text-[12px] font-mono text-text-muted">
+            <span className="text-green-400">{enrolled}</span>
+            <span>/ {total}</span>
           </span>
-        </Link>
-
-        <div className="flex-1 min-w-0 max-w-[300px] h-1.5 bg-white/[0.04] rounded overflow-hidden mx-2 max-sm:hidden">
-          <div className={`h-full ${barColor}`} style={{ width: `${upPct}%` }} />
+        </Tip>
+        <div className="h-1 w-24 shrink-0 rounded bg-white/[0.05] max-md:hidden" aria-hidden>
+          <div className="h-full rounded" style={{ width: `${pct}%`, background: barColor }} />
         </div>
-
-        <div className="flex items-center gap-3 ml-auto shrink-0 max-sm:ml-0 max-sm:w-full max-sm:flex-wrap">
-          {/* Hors ligne */}
-          {group.offline > 0 && (
-            <Link
-              to={deviceLink('disconnected')}
-              className="flex items-center gap-1 font-mono text-[12px] text-text-muted hover:text-text-secondary"
-              title={t('dashboard.tooltipOffline', '{{count}} hors ligne', { count: group.offline })}
-            >
-              <WifiOff size={13} /> {group.offline}
+        <div className="flex shrink-0 items-center gap-2.5">
+          {counters.filter((c) => c.n > 0).map((c) => (
+            <Link key={c.label} to={c.to} title={`${c.label}: ${c.n}`} aria-label={`${c.label}: ${c.n}`}
+              className={`flex items-center gap-1 text-[12px] font-mono ${c.cls} hover:opacity-80 coarse:min-h-9`}>
+              {c.icon} {c.n}
             </Link>
-          )}
-          {/* Warning */}
-          {group.warning > 0 && (
-            <Link
-              to={deviceLink('warning')}
-              className="flex items-center gap-1 font-mono text-[12px] text-amber-400 hover:text-amber-300"
-              title={t('dashboard.tooltipWarning', '{{count}} en warning', { count: group.warning })}
-            >
-              <AlertTriangle size={13} /> {group.warning}
-            </Link>
-          )}
-          {/* Critical */}
-          {group.critical > 0 && (
-            <Link
-              to={deviceLink('critical')}
-              className="flex items-center gap-1 font-mono text-[12px] text-red-400 hover:text-red-300"
-              title={t('dashboard.tooltipCritical', '{{count}} en critique', { count: group.critical })}
-            >
-              <AlertCircle size={13} /> {group.critical}
-            </Link>
-          )}
+          ))}
         </div>
       </div>
-      {children && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mt-3 pl-4">
-          {children}
-        </div>
-      )}
+      {children && <div className="mt-1.5 space-y-1.5">{children}</div>}
     </div>
   );
 }
 
-// ── Connectivity by OS (horizontal stacked bars) ─────────────────────────────
-
-function OsConnectivityCard({ data }: {
-  data: Record<'windows' | 'macos' | 'linux' | 'other', { online: number; total: number }> | undefined;
-}) {
-  const { t } = useTranslation();
-  const rows: { name: string; color: string; online: number; total: number; to: string }[] = [
-    { name: 'Windows',                              color: '#4f7bff', online: data?.windows.online ?? 0, total: data?.windows.total ?? 0, to: '/devices?os=windows' },
-    { name: 'Linux',                                color: '#f5a623', online: data?.linux.online   ?? 0, total: data?.linux.total   ?? 0, to: '/devices?os=linux' },
-    { name: 'macOS',                                color: '#1edd8a', online: data?.macos.online   ?? 0, total: data?.macos.total   ?? 0, to: '/devices?os=macos' },
-    { name: t('dashboard.osOther', 'Autres'),       color: 'rgba(255,255,255,0.20)', online: data?.other.online ?? 0, total: data?.other.total ?? 0, to: '/devices?os=other' },
-  ].filter(r => r.total > 0);
-
-  const max = Math.max(...rows.map(r => r.total), 1);
-
+function renderGroupNode(node: DeviceGroupTreeNode, depth: number): React.ReactNode {
+  // A branch without any device under management is noise on the dashboard.
+  if ((node.total ?? node.deviceCount ?? 0) === 0) return null;
+  const children = [...node.children].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name));
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-baseline justify-between">
-        <div className="text-[13px] font-semibold text-text-primary">{t('dashboard.osConnectivity', 'Connectivité par OS')}</div>
-        <div className="text-[10px] font-mono text-text-muted tracking-wider">online / total</div>
-      </div>
-      {rows.length === 0 ? (
-        <div className="text-text-muted text-[12px] py-2">{t('dashboard.noData', 'Aucune donnée')}</div>
-      ) : (
-        <div className="flex flex-col gap-2.5">
-          {rows.map(r => {
-            const offline = r.total - r.online;
-            const onlinePct  = (r.online / max) * 100;
-            const offlinePct = (offline  / max) * 100;
-            const upPct = r.total > 0 ? Math.round((r.online / r.total) * 100) : 0;
-            return (
-              <Link key={r.name} to={r.to}
-                className="flex items-center gap-3 -mx-1.5 px-1.5 py-0.5 rounded hover:bg-bg-hover transition-colors"
-                title={t('dashboard.tooltipOnline', '{{online}} en ligne sur {{total}} ({{pct}}%)', { online: r.online, total: r.total, pct: upPct })}>
-                <span className="flex items-center gap-1.5 w-20 shrink-0">
-                  <span className="w-2 h-2 rounded-sm" style={{ background: r.color }} />
-                  <span className="text-[12px] text-text-secondary truncate">{r.name}</span>
-                </span>
-                <div className="flex-1 h-2 bg-white/[0.04] rounded overflow-hidden flex">
-                  <div className="h-full" style={{ width: `${onlinePct}%`, background: '#1edd8a' }} />
-                  <div className="h-full" style={{ width: `${offlinePct}%`, background: 'rgba(255,255,255,0.18)' }} />
-                </div>
-                <span className="font-mono text-[11px] text-text-muted w-14 text-right shrink-0">
-                  <span className="text-green-400">{r.online}</span>
-                  <span className="text-text-muted">/{r.total}</span>
-                </span>
-              </Link>
-            );
-          })}
-        </div>
-      )}
-    </div>
+    <GroupCard key={node.id} group={node} depth={depth}>
+      {children.some((c) => (c.total ?? c.deviceCount ?? 0) > 0) ? children.map((c) => renderGroupNode(c, depth + 1)) : undefined}
+    </GroupCard>
   );
 }
 
-// ── Page ─────────────────────────────────────────────────────────────────────
-
-export function DashboardPage() {
-  const { t } = useTranslation();
-  const { summary, fetchSummary } = useDeviceStore();
-  const [isLoading, setIsLoading] = useState(true);
-  const [groupStats, setGroupStats] = useState<GroupStats[]>([]);
-  const [series, setSeries] = useState<FleetTimeseriesPoint[]>([]);
-  const [hourlySeries, setHourlySeries] = useState<FleetHourlyPoint[]>([]);
-  const [activityRange, setActivityRange] = useState<ActivityRange>('14j');
-
-  useEffect(() => {
-    const load = async () => {
-      setIsLoading(true);
-      await Promise.all([
-        fetchSummary(),
-        deviceApi.getGroupStats().then(setGroupStats).catch(() => {}),
-        deviceApi.getFleetTimeseries(30).then(setSeries).catch(() => {}),
-        deviceApi.getFleetHourly(24).then(setHourlySeries).catch(() => {}),
-      ]);
-      setIsLoading(false);
-    };
-    load();
-  }, [fetchSummary]);
-
-  // Derived KPIs
-  const total       = summary?.total ?? 0;
-  // `summary.online` counts ONLY the strict 'online' status. The
-  // dashboard hero used to pretend that "online + offline = total"
-  // which never matched the headline: warn/critical/updating/
-  // update_error agents are all REACHABLE (the agent is pushing) —
-  // they just carry a flag (metric alert, mid-update, update flow
-  // errored). We sum every "agent-reachable" status into the
-  // `connected` figure and expose the breakdowns as subStats. Without
-  // updating + update_error, child tenants with a recent agent
-  // version bump saw a 200+ device gap between total and
-  // online+offline (cf. a user report).
-  const onlineStrict = summary?.online ?? 0;
-  const warning     = summary?.warning ?? 0;
-  const critical    = summary?.critical ?? 0;
-  const updating    = (summary as any)?.updating ?? 0;
-  const updateError = (summary as any)?.updateError ?? 0;
-  // update_error devices stop pushing (the engine flips them out of
-  // 'updating' after 10 min without a version change), so the user
-  // observes them on /devices?status=offline. We bucket them with
-  // offline in the headline + sub-stat instead of with connected,
-  // even though the server keeps them in their own status enum.
-  const connected   = onlineStrict + warning + critical + updating;
-  const offlineRaw  = summary?.offline ?? 0;
-  const offline     = offlineRaw + updateError;
-  const pending     = summary?.pending ?? 0;
-  const stale       = summary?.staleDevices ?? 0;
-  const deltas      = summary?.deltas;
-
-  const onlinePct  = total > 0 ? Math.round((connected / total) * 100) : 0;
-  const offlinePct = total > 0 ? Math.round((offline / total) * 100) : 0;
-  const stalePct   = total > 0 ? Math.round((stale / total) * 100) : 0;
-
-  // OS donut data — each slice carries the /devices?os=<family> URL so the
-  // legend rows are clickable shortcuts to the filtered device list.
-  const os = summary?.osByType ?? { windows: 0, macos: 0, linux: 0, other: 0 };
-  const osSlices: DonutSlice[] = useMemo(() => [
-    { name: 'Windows', value: os.windows, color: '#4f7bff', to: '/devices?os=windows' },
-    { name: 'Linux',   value: os.linux,   color: '#f5a623', to: '/devices?os=linux' },
-    { name: 'macOS',   value: os.macos,   color: '#1edd8a', to: '/devices?os=macos' },
-    { name: t('dashboard.osOther', 'Autres'), value: os.other, color: 'rgba(255,255,255,0.20)', to: '/devices?os=other' },
-  ], [os, t]);
-
-  // Activity chart data — branches on the requested range:
-  //   24h → hourly snapshots (intra-day resolution)
-  //   7j/14j/30j → daily snapshots
-  // Both feed the unified ActivityPoint shape so ActivityChart stays simple.
-  const rangeDays = activityRange === '24h' ? 1 : activityRange === '7j' ? 7 : activityRange === '14j' ? 14 : 30;
-  const activityData: ActivityPoint[] = useMemo(() => {
-    if (activityRange === '24h') {
-      return hourlySeries.map((p) => {
-        const d = new Date(p.hour);
-        const hh = String(d.getHours()).padStart(2, '0');
-        return { label: `${hh}h`, online: p.online, offline: p.offline, total: p.total };
-      });
-    }
-    return series.slice(-rangeDays).map((p) => ({
-      label: p.day.slice(5),
-      online: p.online, offline: p.offline, total: p.total,
-    }));
-  }, [activityRange, series, hourlySeries, rangeDays]);
-
-  // Featured hero — last 4 days from timeseries (or pad with synth values)
-  const featuredDays = useMemo(() => {
-    const last4 = series.slice(-4);
-    const labels = ['LUN', 'MAR', 'MER', 'JEU', 'VEN', 'SAM', 'DIM'];
-    return last4.map(p => {
-      const d = new Date(p.day);
-      return { short: labels[(d.getDay() + 6) % 7], value: p.total };
-    });
-  }, [series]);
-  const featuredSeries = useMemo(() => series.slice(-7).map(p => p.total), [series]);
-
-  // Hierarchical group tree — group-stats now ships parent_id + sort_order so
-  // we can render Group1 → Sub1 → Sub2 with the admin-defined ordering and
-  // proper depth indentation, instead of a flat "biggest first" list.
-  type GroupNode = GroupStats & { children: GroupNode[] };
-  const groupTree = useMemo<GroupNode[]>(() => {
-    const nodes = new Map<number, GroupNode>();
-    for (const g of groupStats) {
-      if (g.groupId == null) continue;
-      nodes.set(g.groupId, { ...g, children: [] });
-    }
-    const roots: GroupNode[] = [];
-    for (const node of nodes.values()) {
-      if (node.parentId != null && nodes.has(node.parentId)) {
-        nodes.get(node.parentId)!.children.push(node);
-      } else {
-        roots.push(node);
-      }
-    }
-    // Sort siblings by sortOrder (server pre-sorted but a re-sort guarantees
-    // stability after concurrent edits to the group list).
-    const sortRec = (list: GroupNode[]) => {
-      list.sort((a, b) => a.sortOrder - b.sortOrder
-        || (a.groupName ?? '').localeCompare(b.groupName ?? ''));
-      for (const n of list) sortRec(n.children);
-    };
-    sortRec(roots);
-    return roots;
-  }, [groupStats]);
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <RefreshCw className="w-6 h-6 animate-spin text-text-muted" />
-      </div>
-    );
+/** Master tenant (global view): the roots bucketed by tenant, the master first. */
+function bucketGroupsByTenant(roots: DeviceGroupTreeNode[]): Array<{ tenantId: number; tenantName: string; roots: DeviceGroupTreeNode[] }> {
+  const byTenant = new Map<number, { tenantId: number; tenantName: string; roots: DeviceGroupTreeNode[] }>();
+  for (const r of roots) {
+    if (!byTenant.has(r.tenantId)) byTenant.set(r.tenantId, { tenantId: r.tenantId, tenantName: r.tenantName ?? `Tenant ${r.tenantId}`, roots: [] });
+    byTenant.get(r.tenantId)!.roots.push(r);
   }
-
-  return (
-    <PageContainer className="flex flex-col gap-5">
-
-      {/* Page header — wraps on narrow screens (actions go to a second line). */}
-      <div className="flex items-baseline gap-4 max-sm:flex-wrap max-sm:gap-y-2">
-        <h1 className="font-display text-2xl font-semibold tracking-wide text-text-primary">
-          {t('dashboard.title', 'Tableau de bord')}
-        </h1>
-        <span className="text-xs font-mono tracking-wider text-text-muted">
-          {total} {t('dashboard.devicesManaged', 'appareils gérés')}
-        </span>
-        <div className="ml-auto flex items-center gap-2 max-sm:flex-wrap">
-          <Link
-            to="/devices"
-            className="inline-flex items-center gap-2 h-9 px-3.5 rounded-md bg-accent/12 hover:bg-accent/20 text-[13px] font-medium text-accent transition-colors whitespace-nowrap coarse:h-10"
-          >
-            {t('dashboard.allDevices', 'Voir tous les appareils')}
-            <ArrowRight size={14} />
-          </Link>
-        </div>
-      </div>
-
-      {/* Hero row — featured Total + 3 KPIs with deltas. Each card is a Link
-          to the matching filtered /devices view so the user can drill into
-          the underlying agents in one click. */}
-      {/* `items-stretch` is grid's default but we add `h-full` on each
-          Link wrapper too: without it the inner card shrinks to its
-          content height and the row looks ragged when "Appareils
-          total" carries a sparkline + 4-day grid the others don't. */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5 items-stretch">
-        <Link to="/devices" className="h-full block hover:opacity-95 transition-opacity">
-          <HeroFeatured
-            label={t('dashboard.totalDevices', 'Appareils total')}
-            value={total}
-            color="text-accent"
-            series={featuredSeries.length > 1 ? featuredSeries : [total, total]}
-            days={featuredDays.length > 0 ? featuredDays : [{ short: 'NOW', value: total }]}
-          />
-        </Link>
-
-        {/* "En ligne" = every connected device (online + warning + critical).
-            Strictly online stays separate but is exposed under the bar
-            via subStats so the user sees the breakdown. The link uses
-            the server-side virtual status `connected` (see
-            device.service.ts) so /devices lands on the same union the
-            headline number describes. */}
-        <Link to="/devices?status=connected" className="h-full block hover:opacity-95 transition-opacity">
-          <HeroCard
-            label={t('dashboard.online', 'En ligne')}
-            value={connected}
-            color="text-green-400"
-            delta={deltas?.onlineVsYesterday ?? null}
-            deltaText={
-              deltas?.onlineVsYesterday == null ? `${onlinePct}% ${t('dashboard.ofFleet', 'du parc')}`
-                : deltas.onlineVsYesterday === 0 ? t('dashboard.stableVsYesterday', 'stable vs hier')
-                : `${Math.abs(deltas.onlineVsYesterday)} ${t('dashboard.vsYesterday', 'vs hier')}`
-            }
-            barPct={onlinePct}
-            barColor="#1edd8a"
-            subStatsHeader={t('dashboard.ofWhichHeader', 'Dont :')}
-            subStats={[
-              { label: t('dashboard.subStatWarning', 'en alerte'), value: warning, color: 'text-yellow-400' },
-              { label: t('dashboard.subStatCritical', 'critique'), value: critical, color: 'text-red-400' },
-              { label: t('dashboard.subStatUpdating', 'en MAJ'), value: updating, color: 'text-blue-400' },
-            ]}
-          />
-        </Link>
-
-        <Link to="/devices?status=disconnected" className="h-full block hover:opacity-95 transition-opacity">
-          <HeroCard
-            label={t('dashboard.offline', 'Hors ligne')}
-            value={offline}
-            color="text-text-secondary"
-            delta={deltas?.offlineVsYesterday == null ? null : -deltas.offlineVsYesterday}
-            deltaText={
-              deltas?.offlineVsYesterday == null ? `${offlinePct}% ${t('dashboard.ofFleet', 'du parc')}`
-                : deltas.offlineVsYesterday === 0 ? t('dashboard.stable', 'stable')
-                : `${Math.abs(deltas.offlineVsYesterday)} ${t('dashboard.vsYesterday', 'vs hier')}`
-            }
-            barPct={offlinePct}
-            barColor="rgb(var(--c-text-muted))"
-            subStatsHeader={updateError > 0 ? t('dashboard.ofWhichHeader', 'Dont :') : undefined}
-            subStats={updateError > 0 ? [
-              { label: t('dashboard.subStatUpdateError', 'en erreur MAJ'), value: updateError, color: 'text-orange-400' },
-            ] : undefined}
-          />
-        </Link>
-
-        <Link to="/devices?stale=72" className="h-full block hover:opacity-95 transition-opacity">
-          <HeroCard
-            label={t('dashboard.staleDevices', 'Injoignables 72h')}
-            value={stale}
-            color="text-accent"
-            delta={deltas?.staleVsYesterday == null ? null : -deltas.staleVsYesterday}
-            deltaText={
-              stale === 0 ? t('dashboard.allReachable', 'tout le parc joignable')
-                : deltas?.staleVsYesterday == null ? `${stalePct}% ${t('dashboard.unreachable', 'injoignables')}`
-                : deltas.staleVsYesterday === 0 ? `${stale} ${t('dashboard.stable', 'stable')}`
-                : deltas.staleVsYesterday > 0 ? `${deltas.staleVsYesterday} ${t('dashboard.newCount', 'nouveaux')}`
-                : `${Math.abs(deltas.staleVsYesterday)} ${t('dashboard.recovered', 'récupérés')}`
-            }
-            barPct={stalePct}
-            barColor="rgb(var(--c-accent))"
-          />
-        </Link>
-      </div>
-
-      {/* Two-col row: Activity chart (2/3) + OS donut (1/3) */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3.5">
-        <div className="lg:col-span-2 rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)]">
-          <div className="flex items-center gap-3 mb-3 max-sm:flex-wrap max-sm:gap-y-2">
-            <div className="min-w-0">
-              <div className="text-[15px] font-semibold text-text-primary">
-                {t('dashboard.fleetActivity', 'Activité du parc')}
-              </div>
-              {/* Subtitle surfaces how much history is actually available —
-                  daily snapshots for 7j/14j/30j, hourly for 24h — so
-                  identical curves on long ranges (when only N<14 daily
-                  snapshots exist) are immediately explainable. */}
-              <div className="text-[11px] font-mono text-text-muted tracking-wider">
-                {activityRange} · {t('dashboard.agentsOnlineOffline', 'agents en ligne / hors ligne')}
-                {' · '}
-                {activityRange === '24h'
-                  ? t('dashboard.historyAvailableHours', '{{count}} h disponibles', { count: hourlySeries.length })
-                  : t('dashboard.historyAvailable', '{{count}} j disponibles', { count: series.length })}
-              </div>
-            </div>
-            <div className="ml-auto flex items-center gap-1 bg-bg-hover rounded-md p-0.5">
-              {(['24h', '7j', '14j', '30j'] as ActivityRange[]).map(r => {
-                // Disable ranges we can't fill yet. 24h pulls from the hourly
-                // snapshot table (separate cron), the others from daily.
-                const need = r === '24h' ? 2 : r === '7j' ? 2 : r === '14j' ? 8 : 15;
-                const have = r === '24h' ? hourlySeries.length : series.length;
-                const enabled = have >= need;
-                const isActive = activityRange === r;
-                const btn = (
-                  <button
-                    key={r}
-                    onClick={() => enabled && setActivityRange(r)}
-                    disabled={!enabled}
-                    title={enabled ? r : undefined}
-                    className={`px-2.5 py-1 text-[11px] font-mono rounded transition-colors coarse:min-h-9 coarse:px-3 ${
-                      isActive
-                        ? 'bg-bg-active text-text-primary'
-                        : enabled
-                          ? 'text-text-muted hover:text-text-primary'
-                          : 'text-text-muted/40 cursor-not-allowed'
-                    }`}
-                  >{r}</button>
-                );
-                // A disabled range explains why in a <Tip> (hover, or tap on
-                // touch) — the reason used to be a title= only.
-                return enabled ? btn : (
-                  <Tip key={r} content={t('dashboard.notEnoughForRange', 'Historique insuffisant ({{have}}/{{need}})', { have, need })}>
-                    {btn}
-                  </Tip>
-                );
-              })}
-            </div>
-          </div>
-          <ActivityChart data={activityData} />
-          <div className="flex items-center gap-4 mt-2 text-[11px] font-mono text-text-muted">
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 bg-green-400" /> {t('dashboard.online', 'Online')}
-            </span>
-            <span className="flex items-center gap-1.5">
-              <span className="w-3 h-0.5 border-t border-dashed border-text-muted" /> {t('dashboard.offline', 'Offline')}
-            </span>
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)] flex flex-col gap-5">
-          <div>
-            <div className="mb-4">
-              <div className="text-[15px] font-semibold text-text-primary">
-                {t('dashboard.osBreakdown', 'Répartition OS')}
-              </div>
-              <div className="text-[11px] font-mono text-text-muted tracking-wider">
-                {t('dashboard.fleetTotal', 'parc total')}
-              </div>
-            </div>
-            <OsDonut slices={osSlices} total={total} />
-          </div>
-          {/* Sibling card — connectivité par OS (online/offline split for each
-              OS family). Complements the donut by showing which OS bucket is
-              most unhealthy at a glance. */}
-          <div>
-            <OsConnectivityCard data={summary?.osConnectivity} />
-          </div>
-        </div>
-      </div>
-
-      {/* Mini-stats row — Critical / Pending approval. Compact format. */}
-      <div className="grid grid-cols-2 gap-3">
-        <MiniStat
-          icon={<AlertCircle size={15} />}
-          label={t('dashboard.critical', 'Critical')}
-          value={critical}
-          color={critical > 0 ? 'text-accent' : 'text-text-primary'}
-          to="/devices?status=critical"
-        />
-        <MiniStat
-          icon={<Clock size={15} />}
-          label={t('dashboard.pendingApproval', 'À approuver')}
-          value={pending}
-          color={pending > 0 ? 'text-amber-400' : 'text-text-primary'}
-          to="/devices?status=pending"
-        />
-      </div>
-
-      {/* Vue par groupe — hierarchical, root → children indented by depth.
-          Sibling order respects each group's admin-defined sortOrder so the
-          dashboard reads exactly like the group tree elsewhere in the app. */}
-      <div className="rounded-xl bg-bg-secondary p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03),_0_6px_24px_-8px_rgba(0,0,0,0.45)]">
-        <div className="flex items-center gap-3 mb-4 max-sm:flex-wrap max-sm:gap-y-2">
-          <div className="flex items-center gap-2 min-w-0">
-            <FolderTree size={16} className="text-accent shrink-0" />
-            <div>
-              <div className="text-[15px] font-semibold text-text-primary">
-                {t('dashboard.groupView', 'Vue par groupe')}
-              </div>
-              <div className="text-[11px] font-mono text-text-muted tracking-wider">
-                {t('dashboard.groupViewStatusSub') || 'online · offline · alerts'}
-              </div>
-            </div>
-          </div>
-          <Link to="/admin/devices" className="ml-auto text-[12px] font-mono text-accent hover:opacity-80 transition-opacity coarse:py-2">
-            {t('dashboard.manageGroups', 'Gérer les groupes')} →
-          </Link>
-        </div>
-        {groupTree.length === 0 ? (
-          <div className="text-text-muted text-sm py-6 text-center">
-            {t('dashboard.noGroups', 'Aucun groupe configuré')}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2.5">
-            {/* Master tenant: bucket by tenant header before the group
-                tree. The sidebar already does this; replicating it
-                here keeps the dashboard legible when groups across
-                tenants share names (Serveurs / Postes / etc.) Each
-                tenant's master-fan-out groups are sorted alpha after
-                the master itself. */}
-            {(() => {
-              const buckets = bucketGroupsByTenant(groupTree);
-              if (!buckets) {
-                // Single-tenant view — render flat.
-                return groupTree.map(g => renderGroupNode(g, 0));
-              }
-              return buckets.map(([tenantId, { tenantName, roots }]) => (
-                <div key={`tenant-${tenantId}`} className="space-y-2">
-                  <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-accent pb-1">
-                    <Building2 size={11} />
-                    <span>{tenantName}</span>
-                    <span className="text-text-muted">·</span>
-                    <span className="text-text-muted">
-                      {roots.reduce((sum, g) => sum + g.total, 0)} {t('dashboard.devices', 'appareils')}
-                    </span>
-                  </div>
-                  {roots.map(g => renderGroupNode(g, 0))}
-                </div>
-              ));
-            })()}
-          </div>
-        )}
-      </div>
-
-    </PageContainer>
-  );
-}
-
-// Master-tenant grouping helper for the "Vue par groupe" panel.
-// Returns null on single-tenant view (caller falls back to flat
-// rendering). On master, returns one bucket per tenant:
-//   - master tenant first (id=1) — internal devices stay grouped
-//   - then alpha by tenant name
-// Each bucket carries the GROUP TREE ROOTS owned by that tenant.
-// Group rows without tenantId (legacy / "ungrouped" pseudo-row) fall
-// back into a "Sans tenant" pseudo-bucket at the tail.
-function bucketGroupsByTenant(
-  groupTree: Array<GroupStats & { children: any[] }>,
-): Array<[number, { tenantName: string; roots: Array<GroupStats & { children: any[] }> }]> | null {
-  // Detect master view by checking if any node carries tenantId — the
-  // server only populates it on master. On a child tenant view every
-  // row has tenantId=null and we skip bucketing.
-  const anyHasTenant = groupTree.some((g) => g.tenantId != null);
-  if (!anyHasTenant) return null;
-  const byTenant = new Map<number, { tenantName: string; roots: Array<GroupStats & { children: any[] }> }>();
-  for (const root of groupTree) {
-    const tid = root.tenantId ?? 0;
-    const tname = root.tenantName ?? (tid === 0 ? 'Sans tenant' : `Tenant ${tid}`);
-    if (!byTenant.has(tid)) byTenant.set(tid, { tenantName: tname, roots: [] });
-    byTenant.get(tid)!.roots.push(root);
-  }
-  return [...byTenant.entries()].sort(([aId, a], [bId, b]) => {
-    if (aId === MASTER_TENANT_ID) return -1;
-    if (bId === MASTER_TENANT_ID) return 1;
-    if (aId === 0) return 1; // pseudo bucket at the tail
-    if (bId === 0) return -1;
+  return [...byTenant.values()].sort((a, b) => {
+    if (a.tenantId === MASTER_TENANT_ID) return -1;
+    if (b.tenantId === MASTER_TENANT_ID) return 1;
     return a.tenantName.localeCompare(b.tenantName);
   });
 }
 
-// Recursively render a group node with its children, indented by depth so
-// the hierarchy reads at a glance. Children appear directly below their
-// parent in the same flat column (no nested cards) — keeps the visual
-// rhythm consistent across depths.
-function renderGroupNode(
-  node: GroupStats & { children: Array<GroupStats & { children: any[] }> },
-  depth: number,
-): React.ReactNode {
+// ── Dashboard ────────────────────────────────────────────────────────────────
+// Fleet overview of the MDM (modele-donnees-mdm §11.3, conception §8.2): devices under management, enrolled,
+// compliant, non compliant, being enrolled, without contact for mdmStaleAfterDays days; a ring by platform; the
+// activity curve (enrolled, without contact); the groups with their counters.
+
+const PLATFORM_COLORS: Record<string, string> = {
+  ios: '#4f7bff', ipados: '#1edd8a', macos: '#f5a623', tvos: '#b07cff', visionos: '#ff6b9d', android: '#3ddc84',
+};
+
+const RANGE_HOURS: Record<ActivityRange, number | null> = { '24h': 24, '7j': null, '14j': null, '30j': null };
+const RANGE_DAYS: Record<ActivityRange, number> = { '24h': 1, '7j': 7, '14j': 14, '30j': 30 };
+
+export function DashboardPage() {
+  const { t } = useTranslation();
+  const currentTenantId = useTenantStore((s) => s.currentTenantId);
+  const isMaster = currentTenantId === MASTER_TENANT_ID;
+  const [summary, setSummary] = useState<MdmFleetSummary | null>(null);
+  const [tree, setTree] = useState<DeviceGroupTreeNode[]>([]);
+  const [series, setSeries] = useState<MdmFleetPoint[]>([]);
+  const [hourly, setHourly] = useState<MdmFleetPoint[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [range, setRange] = useState<ActivityRange>('14j');
+
+  const load = useCallback(async () => {
+    try {
+      const [s] = await Promise.all([
+        mdmApi.fleetSummary(),
+        groupsApi.tree().then(setTree).catch(() => setTree([])),
+        mdmApi.fleetTimeseries(30).then(setSeries).catch(() => setSeries([])),
+        mdmApi.fleetHourly(24).then(setHourly).catch(() => setHourly([])),
+      ]);
+      setSummary(s);
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  // Runs again after a tenant change; refreshed every minute and on a change of the registry.
+  useEffect(() => {
+    setLoading(true);
+    void load();
+    const timer = setInterval(() => { void load(); }, 60_000);
+    return () => clearInterval(timer);
+  }, [load, currentTenantId]);
+  const reloadTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    const schedule = () => {
+      if (reloadTimer.current) return;
+      reloadTimer.current = setTimeout(() => { reloadTimer.current = undefined; void load(); }, 5000);
+    };
+    const offs = [SocketEvents.DEVICE_UPDATED, SocketEvents.DEVICE_DELETED, SocketEvents.DEVICE_CONFIG_CHANGED]
+      .map((ev) => registerSocketListener(ev, schedule));
+    return () => { offs.forEach((off) => off()); clearTimeout(reloadTimer.current); reloadTimer.current = undefined; };
+  }, [load]);
+
+  const total = summary?.total ?? 0;
+  const enrolled = summary?.enrolled ?? 0;
+  const enrolling = (summary?.enrolling ?? 0) + (summary?.awaitingConfiguration ?? 0);
+  const pctOf = (n: number): number => (total > 0 ? Math.round((n / total) * 100) : 0);
+  const deltas = summary?.deltas;
+  const deltaText = (d: number | null | undefined, fallback: string): string => (d == null ? fallback
+    : d === 0 ? (t('dashboard.stableVsYesterday', 'stable vs yesterday'))
+      : `${d > 0 ? '+' : '−'}${Math.abs(d)} ${t('dashboard.vsYesterday', 'vs yesterday')}`);
+
+  const activity: ActivityPoint[] = useMemo(() => {
+    if (RANGE_HOURS[range]) {
+      return hourly.map((p) => ({ label: `${new Date(p.at).getHours()}h`, enrolled: p.enrolled, stale: p.stale, total: p.total }));
+    }
+    return series.slice(-RANGE_DAYS[range]).map((p) => {
+      const d = new Date(p.at);
+      return { label: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`, enrolled: p.enrolled, stale: p.stale, total: p.total };
+    });
+  }, [range, series, hourly]);
+  const sparkTotals = useMemo(() => series.slice(-14).map((p) => p.total), [series]);
+  const lastDays = useMemo(() => series.slice(-4).map((p) => {
+    const d = new Date(p.at);
+    return { short: `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`, value: p.total };
+  }), [series]);
+
+  const platformSlices: DonutSlice[] = useMemo(() => Object.entries(summary?.byPlatform ?? {})
+    .filter(([, n]) => (n ?? 0) > 0)
+    .sort((a, b) => (b[1] ?? 0) - (a[1] ?? 0))
+    .map(([platform, n]) => ({ name: platformLabel(platform), value: n ?? 0, color: PLATFORM_COLORS[platform] ?? 'rgba(255,255,255,0.20)', to: `/devices?platform=${platform}` })),
+  [summary]);
+  const ownershipRows = useMemo(() => (['corporate', 'corporate_personal', 'personal'] as const)
+    .map((o) => ({ key: o, n: summary?.byOwnership?.[o] ?? 0 })).filter((r) => r.n > 0), [summary]);
+
+  const roots = useMemo(() => [...tree].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)), [tree]);
+  const buckets = useMemo(() => (isMaster ? bucketGroupsByTenant(roots) : null), [isMaster, roots]);
+  const groupedTotal = roots.reduce((n, r) => n + (r.total ?? r.deviceCount ?? 0), 0);
+  const staleDays = summary?.staleAfterDays ?? 7;
+
+  if (loading && !summary) {
+    return <div className="flex h-64 items-center justify-center"><RefreshCw className="w-6 h-6 animate-spin text-text-muted" /></div>;
+  }
+
   return (
-    <div
-      key={node.groupId}
-      className="pl-[var(--gi-sm)] sm:pl-[var(--gi)]"
-      style={{
-        ['--gi' as string]: `${Math.min(depth, 4) * 18}px`,
-        ['--gi-sm' as string]: `${Math.min(depth, 4) * 8}px`,
-      } as React.CSSProperties}
-    >
-      <GroupCard group={node} depth={depth} />
-      {node.children.length > 0 && (
-        <div className="flex flex-col gap-2.5 mt-2.5">
-          {node.children.map((c) => renderGroupNode(c, depth + 1))}
+    <PageContainer className="space-y-6">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-2xl font-bold text-text-primary">{t('dashboard.title')}</h1>
+        <button type="button" onClick={() => { void load(); }} aria-label={t('common.refresh') || 'Refresh'}
+          className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-tertiary coarse:min-h-10 coarse:min-w-10">
+          <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
+        </button>
+        <Link to="/devices" className="ml-auto inline-flex items-center gap-1 text-[12px] font-mono text-accent hover:opacity-80 coarse:py-2">
+          {t('dashboard.allDevices', 'All devices')} <ArrowRight size={12} />
+        </Link>
+      </div>
+      {failed && <p className="text-sm text-red-400">{t('common.error')}</p>}
+
+      {/* KPI */}
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        <Link to="/devices?state=managed" className="h-full block hover:opacity-95 transition-opacity xl:col-span-1">
+          <HeroFeatured label={t('dashboard.devicesManaged', 'devices managed')} value={total} color="text-text-primary" series={sparkTotals} days={lastDays} />
+        </Link>
+        <Link to="/devices?state=enrolled" className="h-full block hover:opacity-95 transition-opacity">
+          <HeroCard
+            label={t('dashboard.enrolled') || 'Enrolled'}
+            value={enrolled}
+            color="text-green-400"
+            delta={deltas?.enrolledVsYesterday ?? null}
+            deltaText={deltaText(deltas?.enrolledVsYesterday, `${pctOf(enrolled)}% ${t('dashboard.ofFleet', 'of fleet')}`)}
+            barPct={pctOf(enrolled)}
+            barColor="#1edd8a"
+            subStatsHeader={t('dashboard.ofWhichHeader', 'Of which:')}
+            subStats={[
+              { label: t('dashboard.subStatEnrolling') || 'being enrolled', value: enrolling, color: 'text-blue-400' },
+              { label: t('dashboard.subStatUnenrolling') || 'leaving', value: summary?.unenrolling ?? 0, color: 'text-amber-400' },
+            ]}
+          />
+        </Link>
+        <Link to="/devices?state=managed&compliance=compliant" className="h-full block hover:opacity-95 transition-opacity">
+          <HeroCard
+            label={t('dashboard.compliant') || 'Compliant'}
+            value={summary?.compliant ?? 0}
+            color="text-green-400"
+            deltaText={`${pctOf(summary?.compliant ?? 0)}% ${t('dashboard.ofFleet', 'of fleet')}`}
+            barPct={pctOf(summary?.compliant ?? 0)}
+            barColor="#1edd8a"
+            subStatsHeader={t('dashboard.ofWhichHeader', 'Of which:')}
+            subStats={[{ label: t('dashboard.subStatUnknown') || 'not evaluated yet', value: summary?.complianceUnknown ?? 0 }]}
+          />
+        </Link>
+        <Link to="/devices?state=managed&compliance=non_compliant" className="h-full block hover:opacity-95 transition-opacity">
+          <HeroCard
+            label={t('dashboard.nonCompliant') || 'Non compliant'}
+            value={summary?.nonCompliant ?? 0}
+            color={(summary?.nonCompliant ?? 0) > 0 ? 'text-red-400' : 'text-text-primary'}
+            delta={deltas?.nonCompliantVsYesterday == null ? null : -deltas.nonCompliantVsYesterday}
+            deltaText={deltaText(deltas?.nonCompliantVsYesterday, `${pctOf(summary?.nonCompliant ?? 0)}% ${t('dashboard.ofFleet', 'of fleet')}`)}
+            barPct={pctOf(summary?.nonCompliant ?? 0)}
+            barColor="#ff5d6c"
+          />
+        </Link>
+        <Link to="/devices?state=managed&contact=stale" className="h-full block hover:opacity-95 transition-opacity">
+          <HeroCard
+            label={t('dashboard.staleDays', { count: staleDays }) || `No contact for ${staleDays} days`}
+            value={summary?.stale ?? 0}
+            color={(summary?.stale ?? 0) > 0 ? 'text-amber-400' : 'text-text-primary'}
+            delta={deltas?.staleVsYesterday == null ? null : -deltas.staleVsYesterday}
+            deltaText={deltaText(deltas?.staleVsYesterday, (summary?.stale ?? 0) === 0 ? (t('dashboard.allInContact') || 'whole fleet in contact') : `${pctOf(summary?.stale ?? 0)}% ${t('dashboard.ofFleet', 'of fleet')}`)}
+            barPct={pctOf(summary?.stale ?? 0)}
+            barColor="#f5a623"
+          />
+        </Link>
+      </div>
+
+      {/* Secondary counters */}
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <MiniStat icon={<Smartphone size={15} />} label={t('dashboard.enrolling') || 'Being enrolled'} value={enrolling} to="/devices?state=enrolling"
+          sub={(summary?.awaitingConfiguration ?? 0) > 0 ? (t('dashboard.awaitingConfiguration', { count: summary?.awaitingConfiguration ?? 0 }) || `${summary?.awaitingConfiguration} in the setup assistant`) : undefined} />
+        <MiniStat icon={<AlertTriangle size={15} />} label={t('dashboard.configErrors') || 'Configuration errors'} value={summary?.configErrors ?? 0}
+          color={(summary?.configErrors ?? 0) > 0 ? 'text-orange-400' : 'text-text-primary'} to="/devices?state=managed&config=error"
+          sub={(summary?.configPending ?? 0) > 0 ? (t('dashboard.configPending', { count: summary?.configPending ?? 0 }) || `${summary?.configPending} pending`) : undefined} />
+        <MiniStat icon={<AlertCircle size={15} />} label={t('dashboard.lostMode') || 'Lost mode'} value={summary?.lostMode ?? 0}
+          color={(summary?.lostMode ?? 0) > 0 ? 'text-red-400' : 'text-text-primary'} />
+        <MiniStat icon={<Wifi size={15} />} label={t('dashboard.recentContact') || 'In contact within 24 h'} value={summary?.contact?.recent ?? 0}
+          to="/devices?state=managed&contact=recent" sub={(summary?.contact?.never ?? 0) > 0 ? (t('dashboard.neverSeen', { count: summary?.contact?.never ?? 0 }) || `${summary?.contact?.never} never seen`) : undefined} />
+      </div>
+
+      {/* Activity + platforms */}
+      <div className="grid gap-4 xl:grid-cols-3">
+        <div className="xl:col-span-2 rounded-xl bg-bg-secondary p-5">
+          <div className="flex flex-wrap items-center gap-3 mb-3">
+            <div className="text-[13px] font-semibold text-text-primary">{t('dashboard.fleetActivity', 'Fleet activity')}</div>
+            <div className="flex items-center gap-3 text-[11px] font-mono text-text-muted">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 bg-green-400" /> {t('dashboard.enrolled') || 'Enrolled'}</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-0.5 border-t border-dashed border-text-muted" /> {t('dashboard.staleShort') || 'No contact'}</span>
+            </div>
+            <div className="ml-auto flex gap-1">
+              {(['24h', '7j', '14j', '30j'] as ActivityRange[]).map((r) => (
+                <button key={r} type="button" onClick={() => setRange(r)}
+                  className={`px-2 py-1 text-[11px] font-mono rounded coarse:min-h-9 coarse:px-3 ${range === r ? 'bg-accent/15 text-accent' : 'text-text-muted hover:text-text-primary'}`}>
+                  {t(`dashboard.range.${r}`) || r}
+                </button>
+              ))}
+            </div>
+          </div>
+          <ActivityChart data={activity} />
         </div>
-      )}
-    </div>
+
+        <div className="rounded-xl bg-bg-secondary p-5 space-y-5">
+          <div>
+            <div className="text-[13px] font-semibold text-text-primary mb-3">{t('dashboard.byPlatform') || 'Platforms'}</div>
+            {platformSlices.length === 0
+              ? <p className="text-sm text-text-muted">{t('dashboard.noData', 'No data')}</p>
+              : <OsDonut slices={platformSlices} total={total} />}
+          </div>
+          {ownershipRows.length > 0 && (
+            <div>
+              <div className="text-[13px] font-semibold text-text-primary mb-2">{t('dashboard.byOwnership') || 'Ownership'}</div>
+              <div className="space-y-1.5">
+                {ownershipRows.map((r) => (
+                  <Link key={r.key} to={`/devices?ownership=${r.key}`} className="flex items-center gap-3 text-[13px] -mx-1.5 px-1.5 py-0.5 rounded hover:bg-bg-hover transition-colors">
+                    <span className="flex-1 text-text-primary">{ownershipLabel(t, r.key)}</span>
+                    <span className="font-mono text-[11px] text-text-muted">{r.n} · {pctOf(r.n)}%</span>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Groups */}
+      <div className="space-y-3">
+        <div className="flex items-center gap-2">
+          <FolderTree size={16} className="text-text-muted" />
+          <div className="text-[13px] font-semibold text-text-primary">{t('dashboard.groupView', 'Group view')}</div>
+          <span className="text-[11px] font-mono text-text-muted">{t('dashboard.groupViewCounters') || 'enrolled · non compliant · configuration errors · no contact'}</span>
+          <Link to="/devices" className="ml-auto text-[12px] font-mono text-accent hover:opacity-80 transition-opacity coarse:py-2">
+            {t('dashboard.manageGroups', 'Manage groups')}
+          </Link>
+        </div>
+        {groupedTotal === 0 ? (
+          <p className="rounded-lg bg-bg-secondary px-4 py-6 text-center text-sm text-text-muted">
+            {roots.length === 0 ? t('dashboard.noGroups', 'No groups configured yet') : (t('dashboard.noGroupedDevice') || 'No device under management in a group yet')}
+          </p>
+        ) : buckets ? (
+          buckets.map((b) => {
+            const nodes = b.roots.map((r) => renderGroupNode(r, 0)).filter(Boolean);
+            if (nodes.length === 0) return null;
+            return (
+              <div key={b.tenantId} className="space-y-1.5">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-accent">
+                  <Building2 size={12} /> {b.tenantName}
+                </div>
+                {nodes}
+              </div>
+            );
+          })
+        ) : (
+          <div className="space-y-1.5">{roots.map((r) => renderGroupNode(r, 0))}</div>
+        )}
+        {total - groupedTotal > 0 && (
+          <Link to="/devices?groupId=-1" className="flex items-center gap-2 rounded-lg bg-bg-secondary px-3.5 py-2.5 text-[13px] text-text-secondary hover:text-text-primary">
+            <FolderOpen size={15} className="text-text-muted" />
+            <span className="flex-1">{t('dashboard.ungrouped', 'Ungrouped')}</span>
+            <span className="font-mono text-[12px] text-text-muted">{total - groupedTotal}</span>
+          </Link>
+        )}
+      </div>
+    </PageContainer>
   );
 }

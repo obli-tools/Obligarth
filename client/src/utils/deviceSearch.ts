@@ -1,43 +1,24 @@
-import type { Device } from '@obligarth/shared';
+import type { DeviceSummary } from '@obligarth/shared';
 
-// Single source of truth for "does this device match the user's search
-// query?". Used by the sidebar search, the DeviceMultiSelect picker, and
-// any future ad-hoc filter UIs. The field set mirrors what the server's
-// /devices endpoint searches on (hostname, displayName, ipLocal, ipPublic,
-// macAddress, last_logged_in_user, os_name, os_version, agent_version,
-// geo_city, geo_country, description, uuid, tags) so the UX stays
-// consistent whether the filter is local (sidebar) or remote (/devices).
-export function deviceMatchesSearch(device: Device, rawQuery: string): boolean {
+// "Does this device match the search?" for the local filters (pickers, side lists). The fields are those the
+// server searches for GET /api/mdm/devices?q= (label, name, serial number, model, end user), plus the group and
+// the tags, so that a local filter and the inventory agree. A field the privacy rules do not collect is absent.
+export function deviceMatchesSearch(device: Pick<DeviceSummary, 'label'> & Partial<DeviceSummary>, rawQuery: string): boolean {
   const q = rawQuery.trim().toLowerCase();
   if (!q) return true;
-
   const fields: Array<string | null | undefined> = [
-    device.hostname,
+    device.label,
     device.displayName,
-    device.description,
-    device.ipLocal,
-    device.ipPublic,
-    device.macAddress,
-    device.lastLoggedInUser,
-    device.osName,
-    device.osVersion,
-    device.osBuild,
-    device.agentVersion,
-    device.geoCity,
-    device.geoCountry,
-    device.geoRegion,
-    device.uuid,
+    device.serialNumber,
+    device.model,
+    device.modelName,
+    device.endUser?.displayName,
+    device.endUser?.email,
     device.groupName,
+    device.uuid,
   ];
-
   for (const f of fields) {
     if (f && String(f).toLowerCase().includes(q)) return true;
   }
-  // Tags array — match if any tag substring matches
-  if (Array.isArray(device.tags)) {
-    for (const tag of device.tags) {
-      if (tag && tag.toLowerCase().includes(q)) return true;
-    }
-  }
-  return false;
+  return (device.tags ?? []).some((tag) => tag && tag.toLowerCase().includes(q));
 }

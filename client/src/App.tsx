@@ -13,12 +13,13 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { DeviceListPage } from '@/pages/DeviceListPage';
 import { DeviceSummaryPage } from '@/pages/DeviceSummaryPage';
 import { PoliciesPage } from '@/pages/PoliciesPage';
+import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
+import { EndUsersPage } from '@/pages/EndUsersPage';
 import { SupervisionPage } from '@/pages/SupervisionPage';
 import { GroupDetailPage } from '@/pages/GroupDetailPage';
 import { GroupEditPage } from '@/pages/GroupEditPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
-import { AdminDevicesPage } from '@/pages/AdminDevicesPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { AdminTenantsPage } from '@/pages/AdminTenantsPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
@@ -52,9 +53,11 @@ export default function App() {
  {/* Main */}
  <Route path="/" element={<DashboardPage />} />
  <Route path="/devices" element={<DeviceListPage />} />
- {/* Minimal device record (registry fields) until the MDM device page. */}
+ {/* The record of a device: overview, configuration, inventory, commands, history, actions. */}
  <Route path="/devices/:id" element={<DeviceSummaryPage />} />
+ {/* Policies: any member reads them; writing needs mdm.policies.manage (checked by the pages and the server). */}
  <Route path="/policies" element={<PoliciesPage />} />
+ <Route path="/policies/:id" element={<PolicyEditorPage />} />
  {/* Groups */}
  <Route path="/group/:id" element={<GroupDetailPage />} />
  <Route path="/group/:id/edit" element={<GroupEditPage />} />
@@ -88,14 +91,14 @@ export default function App() {
  <Route path="/admin/supervision" element={<SupervisionPage />} />
  </Route>
 
- {/* Agent config — admin OR users with the agent_config:keys or
-     agent_config:approval capability (the same pair the server
-     accepts for the enrolment keys). */}
- <Route element={<ProtectedRoute requiredCapabilities={[
- 'agent_config:keys',
- 'agent_config:approval',
- ]} />}>
- <Route path="/admin/devices" element={<AdminDevicesPage />} />
+ {/* End users — the reader gate of /api/mdm/end-users (users.manage or devices.manage). */}
+ <Route element={<ProtectedRoute requiredCapabilities={['users.manage', 'devices.manage']} />}>
+ <Route path="/end-users" element={<EndUsersPage />} />
+ </Route>
+
+ {/* The approval queue on its own (the Security page embeds it): its reviewers, and the members who
+     may request a restricted action. */}
+ <Route element={<ProtectedRoute requiredCapabilities={['approvals.review', 'devices.manage', 'mdm.policies.manage']} />}>
  <Route path="/admin/approvals" element={<ApprovalsPage />} />
  </Route>
  </Route>

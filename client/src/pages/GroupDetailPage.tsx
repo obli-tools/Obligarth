@@ -11,9 +11,9 @@ import { DeviceTable } from '@/components/devices/DeviceTable';
 import { TenantBadge } from '@/components/common/TenantBadge';
 import { Button } from '@/components/common/Button';
 import { LoadingSpinner } from '@/components/common/LoadingSpinner';
-import toast from 'react-hot-toast';
 import { PageContainer } from '@/components/common/PageContainer';
-import { useConfirm } from '@/components/common/ConfirmDialog';
+import { useGroupTreeChange } from '@/components/mdm/GroupTreeChange';
+import { AssignmentsPanel } from '@/components/mdm/Assignments';
 
 export function GroupDetailPage() {
  const { id } = useParams<{ id: string }>();
@@ -21,8 +21,18 @@ export function GroupDetailPage() {
  const { t } = useTranslation();
  const { isAdmin, canWriteGroup } = useAuthStore();
  const { removeGroup, fetchGroups, fetchTree } = useGroupStore();
- // Shared dialog (window.confirm is a no-op in the Android WebView — docs §5.6).
- const confirm = useConfirm();
+ // Deleting a group changes what its devices inherit: its preview is shown before the confirmation
+ // (components/mdm/GroupTreeChange).
+ const treeChange = useGroupTreeChange((change, outcome) => {
+ if (change.kind !== 'delete' || outcome !== 'done') return;
+ removeGroup(change.groupId);
+ fetchGroups();
+ fetchTree();
+ navigate('/devices');
+ });
+ const caps = useAuthStore((s) => s.permissions?.tenantCapabilities ?? []);
+ const canManagePolicies = isAdmin() || caps.includes('mdm.policies.manage');
+ const tree = useGroupStore((s) => s.tree);
 
  const groupId = parseInt(id!, 10);
  const canWrite = canWriteGroup(groupId);
@@ -60,23 +70,18 @@ export function GroupDetailPage() {
  );
  }
 
- const handleDelete = async () => {
- if (!(await confirm({ message: t('groups.confirmDelete', { name: group.name }), danger: true }))) return;
- try {
- // A deletion that changes what devices inherit may wait for a second approver: nothing deleted yet.
- if (!(await groupsApi.delete(groupId))) {
- toast.success(t('groups.deleteAwaitingApproval') || 'Deletion sent for approval: it will apply once a second administrator approves it');
- return;
+ const hasSubgroups = (() => {
+ const find = (nodes: typeof tree): boolean | null => {
+ for (const n of nodes) {
+ if (n.id === groupId) return n.children.length > 0;
+ const f = find(n.children);
+ if (f !== null) return f;
  }
- removeGroup(groupId);
- fetchGroups();
- fetchTree();
- toast.success(t('groups.deleted'));
- navigate('/');
- } catch {
- toast.error(t('groups.failedDelete'));
- }
+ return null;
  };
+ return find(tree) ?? false;
+ })();
+ const handleDelete = () => { void treeChange.request({ kind: 'delete', groupId, groupName: group.name, hasSubgroups }); };
 
  return (
  <PageContainer>
@@ -128,7 +133,13 @@ export function GroupDetailPage() {
  {/* Device grid — same UX as /devices, pre-filtered on this group (+ descendants).
  `embedded`: this page already pads the content, so the table drops
  its own padding below lg (desktop keeps the historic double p-6). */}
- <DeviceTable mode="monitoring" groupId={groupId} embedded />
+ {/* The policies assigned to this group: its devices and those of its subgroups inherit them. */}
+ <div className="mb-6">
+ <AssignmentsPanel target={{ scope: 'group', id: groupId, name: group.name }} canManage={canManagePolicies && canWrite} />
+ </div>
+
+ <DeviceTable groupId={groupId} embedded />
+ {treeChange.dialog}
  </PageContainer>
  );
 }

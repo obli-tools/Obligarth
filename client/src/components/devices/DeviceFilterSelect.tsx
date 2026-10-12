@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react';
 import { ChevronDown, Monitor, Search } from 'lucide-react';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
-import type { Device } from '@obligarth/shared';
+import type { DeviceSummary } from '@obligarth/shared';
 import { Modal } from '@/components/common/Modal';
 import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { deviceMatchesSearch } from '@/utils/deviceSearch';
@@ -17,7 +17,7 @@ const DEVICE_FILTER_LIMIT = 200;
 export function DeviceFilterSelect({
   devices, value, onChange, allLabel, touchTriggerClassName,
 }: {
-  devices: Device[];
+  devices: DeviceSummary[];
   value: number | '';
   onChange: (value: number | '') => void;
   allLabel: string;
@@ -28,7 +28,7 @@ export function DeviceFilterSelect({
   const coarse = useIsCoarsePointer();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
-  const name = (d: Device) => d.displayName || d.hostname;
+  const name = (d: DeviceSummary) => d.label;
   const selected = value === '' ? null : devices.find(d => d.id === value) ?? null;
   const filtered = useMemo(
     () => (open ? devices.filter(d => deviceMatchesSearch(d, query)) : []),
@@ -97,7 +97,7 @@ export function DeviceFilterSelect({
           {filtered.slice(0, DEVICE_FILTER_LIMIT).map(d => (
             <button key={d.id} type="button" onClick={() => pick(d.id)} className={rowCls(value === d.id)}>
               <span className="flex-1 min-w-0 truncate">{name(d)}</span>
-              {d.ipLocal && <span className="shrink-0 text-xs font-mono text-text-muted">{d.ipLocal}</span>}
+              {d.groupName && <span className="shrink-0 text-xs text-text-muted">{d.groupName}</span>}
             </button>
           ))}
           {filtered.length === 0 && (
