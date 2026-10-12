@@ -131,12 +131,21 @@ export interface SendJobOptions {
   throttleSeconds?: number;
 }
 
+/** What a grouped send accepts for each job (sendManyInTx). */
+export type SendManyOptions = Pick<SendJobOptions, 'singletonKey' | 'tenantId'>;
+
 export interface JobHandle<P> {
   readonly name: string;
   /** Returns the job id, or null when deduplicated (id, policy, singletonKey). */
   send(payload: P, opts?: SendJobOptions): Promise<string | null>;
   /** Same, inside the caller's Knex transaction: the job exists if and only if trx commits. */
   sendInTx(trx: Knex.Transaction, payload: P, opts?: SendJobOptions): Promise<string | null>;
+  /**
+   * Several jobs of this queue in one statement per thousand, inside the caller's Knex transaction (a tenant-wide
+   * pass that asks one job per device). Each entry answers like sendInTx, in the order given: the job id, or null
+   * when deduplicated (policy, singletonKey, a key given twice in the list). Options: singletonKey and tenantId only.
+   */
+  sendManyInTx(trx: Knex.Transaction, items: ReadonlyArray<{ payload: P; opts?: SendManyOptions }>): Promise<Array<string | null>>;
   /** Cancels a job not yet finished (no effect on a finished one). */
   cancel(jobId: string): Promise<void>;
 }

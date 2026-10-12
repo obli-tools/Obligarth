@@ -108,6 +108,9 @@ async function staleDays(trx: Knex.Transaction, tenantId: number): Promise<numbe
 
 export interface EvaluationSummary { evaluated: number; changed: number[] }
 
+/** Devices written by one UPDATE. */
+const WRITE_BATCH = 500;
+
 /**
  * Evaluates the compliance of devices of the tenant and writes the state and the reasons of those that changed
  * (compliance_evaluated_at dates the last change). In the caller's transaction and the tenant's context. A device
@@ -146,6 +149,9 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
   }
   const statusOf = new Map<string, unknown>(status.map((s) => [`${Number(s.device_id)}|${s.item}`, parse<unknown>(s.value, null)]));
   const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+  // The verdicts that changed, written in one statement at the end: a resolution of a tenant evaluates its
+  // devices by slices of 200, and one UPDATE per device was a quarter of its time (essai 139, lot B6).
+  const changes: Array<{ id: number; state: string; reasons: string }> = [];
   for (const d of devices) {
     const id = Number(d.id);
     out.evaluated++;
@@ -168,10 +174,18 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
     }, now);
     const before = canonicalJson(parse<unknown>(d.compliance_reasons, []) ?? []);
     if (d.compliance_state === verdict.state && before === canonicalJson(verdict.reasons)) continue;
-    await trx('devices').where({ tenant_id: tenantId, id }).whereNot('compliance_state', 'exempt').update({
-      compliance_state: verdict.state, compliance_reasons: JSON.stringify(verdict.reasons), compliance_evaluated_at: now, updated_at: new Date(),
-    });
+    changes.push({ id, state: verdict.state, reasons: JSON.stringify(verdict.reasons) });
     out.changed.push(id);
+  }
+  for (let i = 0; i < changes.length; i += WRITE_BATCH) {
+    const s = changes.slice(i, i + WRITE_BATCH);
+    // A device exempted since it was read keeps its exemption (as each single UPDATE did).
+    await trx.raw(`
+      UPDATE obligarth.devices d
+         SET compliance_state = u.state, compliance_reasons = u.reasons::jsonb, compliance_evaluated_at = ?, updated_at = ?
+        FROM unnest(?::integer[], ?::text[], ?::text[]) AS u(id, state, reasons)
+       WHERE d.tenant_id = ? AND d.id = u.id AND d.compliance_state <> 'exempt'`,
+    [now, new Date(), s.map((x) => x.id), s.map((x) => x.state), s.map((x) => x.reasons), tenantId]);
   }
   return out;
 }

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import type { Knex } from 'knex';
 import type { z } from 'zod';
@@ -13,7 +14,7 @@ import { DEAD_LETTER_QUEUE, JobRegistry, QUEUE_NAME_RE, SINGLETON_KEY_RE } from 
 import { jobMetrics, type JobsMetricsSnapshot } from './metrics';
 import { jobStatus } from './status';
 import { runJobs } from './wrapper';
-import type { JobDefinition, JobHandle, JobsMode, RegisteredJob, SendJobOptions } from './types';
+import type { JobDefinition, JobHandle, JobsMode, RegisteredJob, SendJobOptions, SendManyOptions } from './types';
 
 // =============================================================================
 // Runtime of the jobs: the pg-boss instance and its life (start, workers,
@@ -56,6 +57,8 @@ const DEAD_LETTER_RETENTION_SECONDS = 30 * 86_400;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 /** Cache of the oldest-ready reading (metrics). */
 const OLDEST_READY_CACHE_MS = 30_000;
+/** Jobs written by one statement of a grouped send (sendManyInTx). */
+const SEND_MANY_BATCH = 1000;
 
 type QueueOptionsWanted = {
   policy: string;
@@ -132,6 +135,7 @@ export class JobsRuntime {
       name: job.name,
       send: (payload, opts) => this.sendJob(job, payload, opts ?? {}, null),
       sendInTx: (trx, payload, opts) => this.sendJob(job, payload, opts ?? {}, trx),
+      sendManyInTx: (trx, items) => this.sendJobs(job, items, trx),
       cancel: async (jobId) => { await this.bossOrThrow().cancel(job.name, jobId); },
     };
   }
@@ -372,6 +376,49 @@ export class JobsRuntime {
         : boss.sendThrottled(def.name, data, sendOptions, seconds, key);
     }
     return boss.send(def.name, data, options);
+  }
+
+  /**
+   * Several jobs of one queue in the caller's transaction, a thousand per statement (pg-boss insert: the statement
+   * of send, which takes the retries, the expiry, the retention and the policy from the queue, and ends in ON
+   * CONFLICT DO NOTHING). Same controls as sendJob on each payload; the options of a grouped send are the
+   * singletonKey and the tenant. Answers one entry per job, in order: its id, or null when the queue's policy (or
+   * a key given twice) absorbed it.
+   */
+  async sendJobs(def: RegisteredJob, items: ReadonlyArray<{ payload: unknown; opts?: SendManyOptions }>, trx: Knex.Transaction): Promise<Array<string | null>> {
+    const boss = this.bossOrThrow();
+    const bad = (message: string): never => { throw new JobError('invalid_send_options', `${def.name}: ${message}`, false); };
+    const jobs: Array<{ id: string; data: Record<string, unknown>; singletonKey?: string; group?: { id: string } }> = [];
+    for (const item of items) {
+      const parsed = def.payload.safeParse(item.payload);
+      if (!parsed.success) throw new JobError('invalid_payload', `payload of ${def.name} refused by its schema`, false);
+      const data = parsed.data as Record<string, unknown>;
+      if (Buffer.byteLength(JSON.stringify(data), 'utf8') > MAX_PAYLOAD_BYTES) {
+        throw new JobError('payload_too_large', `payload of ${def.name} over ${MAX_PAYLOAD_BYTES} bytes`, false);
+      }
+      const opts = item.opts ?? {};
+      const job: (typeof jobs)[number] = { id: randomUUID(), data };
+      if (opts.singletonKey !== undefined) {
+        if (typeof opts.singletonKey !== 'string' || !SINGLETON_KEY_RE.test(opts.singletonKey)) bad('invalid singletonKey');
+        job.singletonKey = opts.singletonKey;
+      }
+      const payloadTenant = typeof data.tenantId === 'number' ? data.tenantId : null;
+      if (opts.tenantId !== undefined) {
+        if (!Number.isSafeInteger(opts.tenantId) || opts.tenantId <= 0) bad('tenantId must be a positive integer');
+        if (payloadTenant !== null && payloadTenant !== opts.tenantId) bad('tenantId differs from payload.tenantId');
+      }
+      const groupTenant = opts.tenantId ?? payloadTenant;
+      if (groupTenant !== null && def.concurrency.perTenant !== null) job.group = { id: `t:${groupTenant}` };
+      jobs.push(job);
+    }
+    const out: Array<string | null> = [];
+    const database = knexDb(trx);
+    for (let i = 0; i < jobs.length; i += SEND_MANY_BATCH) {
+      const slice = jobs.slice(i, i + SEND_MANY_BATCH);
+      const inserted = new Set(await boss.insert(def.name, slice, { db: database, returnId: true }) ?? []);
+      for (const job of slice) out.push(inserted.has(job.id) ? job.id : null);
+    }
+    return out;
   }
 
   // ── Observability ──────────────────────────────────────────────────────────

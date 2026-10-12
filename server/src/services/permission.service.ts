@@ -1,6 +1,6 @@
 import { db } from '../db';
 import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obligarth/shared';
-import { knownDeviceCapabilities, knownTenantCapabilities } from '@obligarth/shared';
+import { knownDeviceCapabilities, knownTenantCapabilities, TENANT_CAPABILITIES } from '@obligarth/shared';
 import { normaliseTenantRole } from './userScope.service';
 
 export const permissionService = {
@@ -118,9 +118,12 @@ export const permissionService = {
   /**
    * Bulk variant — returns every capability granted to the user on a
    * given tenant via their permission_set. Used by /auth/me so the
-   * client can render gates without round-trips. Tenant admins get
-   * the union of the capabilities of every set. Only the shared
-   * vocabulary's capabilities are returned.
+   * client can render gates without round-trips. A tenant administrator
+   * gets the whole vocabulary: userHasTenantCapability above grants them
+   * every capability by their role, and what is announced must be what is
+   * enforced (a capability held by no stored set, like mdm.policies.manage,
+   * was missing from the union of the sets: modele-donnees-mdm, lot B6).
+   * Only the shared vocabulary's capabilities are returned.
    */
   async listUserTenantCapabilities(userId: number, tenantId: number): Promise<TenantCapability[]> {
     const ut = await db('user_tenants')
@@ -128,16 +131,7 @@ export const permissionService = {
       .first() as { role: string } | undefined;
     if (!ut) return [];
     const role = normaliseTenantRole(ut.role);
-    if (role === 'admin') {
-      // Union of the capabilities of every set, so the client renders
-      // their gates as open.
-      const all = await db('permission_sets').select('capabilities') as Array<{ capabilities: unknown }>;
-      const set = new Set<TenantCapability>();
-      for (const row of all) {
-        for (const c of knownTenantCapabilities(row.capabilities)) set.add(c);
-      }
-      return [...set];
-    }
+    if (role === 'admin') return [...TENANT_CAPABILITIES];
     const set = await db('permission_sets').where({ slug: role }).first() as { capabilities: unknown } | undefined;
     if (!set) return [];
     return knownTenantCapabilities(set.capabilities);

@@ -30,8 +30,8 @@ router.use(requireAuth);
 // into the same 404 to avoid leaking the existence of devices the caller
 // can't see.
 //
-// Returns: { deviceId, label, hostname (= label), displayName, tenantId, tenantName,
-//            tenantSlug, currentTenantId } on success.
+// Returns: { deviceId, label, displayName, tenantId, tenantName, tenantSlug,
+//            currentTenantId } on success.
 router.get('/locate-device/:id', async (req, res, next) => {
   try {
     const deviceId = parseInt(req.params.id);
@@ -78,8 +78,6 @@ router.get('/locate-device/:id', async (req, res, next) => {
       data: {
         deviceId: row.id,
         label: row.label,
-        // The console of the agent era reads hostname: the label until it moves to the MDM views (lot B6).
-        hostname: row.label,
         displayName: row.displayName,
         tenantId: row.tenantId,
         tenantName: row.tenantName,

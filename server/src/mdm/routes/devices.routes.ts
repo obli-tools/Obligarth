@@ -431,6 +431,12 @@ async function guardedDeletion(req: Request, res: Response, next: NextFunction, 
 
 // ── Export (INV-04, RPT-01): CSV, XLSX, PDF of the collected columns ─────────
 
+/** A CSV cell that starts like a formula (=, +, -, @, tab, carriage return) is prefixed by an apostrophe: a
+ *  spreadsheet then shows the text instead of evaluating it. */
+export function csvText(v: string): string {
+  return /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+}
+
 async function sendExport(res: Response, fmt: 'csv' | 'xlsx' | 'pdf', devices: DeviceSummary[]): Promise<void> {
   const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
   const baseName = `obligarth-devices-${ts}`;
@@ -466,7 +472,12 @@ async function sendExport(res: Response, fmt: 'csv' | 'xlsx' | 'pdf', devices: D
     wb.creator = 'Obligarth';
     const ws = wb.addWorksheet('Devices');
     ws.columns = columns;
-    rows.forEach((r) => ws.addRow(r));
+    // CSV: a text a spreadsheet would read as a formula is neutralised (MDM-B2-R10). The label, the model, the
+    // tags and the name of the end user come from the device or from an import; an XLSX cell written as a string
+    // is never evaluated.
+    rows.forEach((r) => ws.addRow(fmt === 'csv'
+      ? Object.fromEntries(Object.entries(r).map(([k, v]) => [k, typeof v === 'string' ? csvText(v) : v]))
+      : r));
     if (fmt === 'csv') {
       const buffer = await wb.csv.writeBuffer();
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');

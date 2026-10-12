@@ -42,6 +42,8 @@ const asObject = (v: unknown): Record<string, unknown> => {
   if (typeof v === 'string') { try { const p = JSON.parse(v); return p && typeof p === 'object' && !Array.isArray(p) ? p : {}; } catch { return {}; } }
   return {};
 };
+/** A list of ids as one PostgreSQL array literal ('{1,2,3}'): a single binding whatever the number of ids. */
+const pgIntArray = (ids: readonly number[]): string => `{${ids.map(Number).filter((n) => Number.isSafeInteger(n)).join(',')}}`;
 
 /** Filters of GET /api/mdm/devices (§10.6). */
 export interface DeviceListFilters {
@@ -197,7 +199,9 @@ class DeviceService {
     if (scope !== 'all') q.whereIn('devices.tenant_id', scope);
     if (f.visibleIds !== undefined && f.visibleIds !== 'all') {
       if (f.visibleIds.length === 0) q.whereRaw('false');
-      else q.whereIn('devices.id', f.visibleIds);
+      // One array binding, not one placeholder per device: a member whose teams reach thousands of devices would
+      // send as many bindings (65 535 at most in the protocol), and the statement would cost its own parsing.
+      else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(f.visibleIds)]);
     }
     const inList = (col: string, values: string[] | undefined) => {
       if (Array.isArray(values) && values.length > 0) q.whereIn(col, values);
@@ -303,7 +307,7 @@ class DeviceService {
       if (!isGlobalView(tenantId, view)) q.where('devices.tenant_id', tenantId);
       if (visibleIds !== undefined && visibleIds !== 'all') {
         if (visibleIds.length === 0) q.whereRaw('false');
-        else q.whereIn('devices.id', visibleIds);
+        else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(visibleIds)]);
       }
       return q;
     };
