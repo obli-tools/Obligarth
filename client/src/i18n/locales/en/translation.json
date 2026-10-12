@@ -2294,6 +2294,10 @@
         "secret_in_declaration": {
           "title": "Secret in a declaration",
           "message": "A declaration of {{provider}} carried a secret and was refused."
+        },
+        "declaration_conflict": {
+          "title": "Declarations in conflict",
+          "message": "Two declarations of {{provider}} share the identifier {{identifier}}: neither is served."
         }
       },
       "signing": {
@@ -2326,6 +2330,8 @@
       "notGuardedCommand": "This command is not a guarded one",
       "rateLimited": "Too many requests: wait a minute",
       "appleIntegrationDisabled": "The Apple integration is turned off on this instance",
+      "jobsUnavailable": "Background jobs are not running: try again shortly",
+      "deviceNotManaged": "This device is not under management",
       "appleEdgeUnavailable": "The device service (apple-edge) is unavailable",
       "appleEdgeIncompatible": "The device service (apple-edge) runs an incompatible version",
       "appleEdgeProtocol": "The device service (apple-edge) gave an answer that cannot be read",
@@ -2369,6 +2375,46 @@
       "command_expired": "Command expired",
       "command_cancelled": "Command cancelled",
       "command_rejected": "Command refused"
+    },
+    "status": {
+      "app": {
+        "managed": {
+          "list": "Managed apps"
+        }
+      },
+      "device": {
+        "model": {
+          "family": "Device family",
+          "identifier": "Model identifier",
+          "marketing-name": "Model"
+        },
+        "operating-system": {
+          "build-version": "OS build",
+          "family": "OS family",
+          "marketing-name": "OS name",
+          "supplemental": {
+            "build-version": "Rapid security response build",
+            "extra-version": "Rapid security response version"
+          },
+          "version": "OS version"
+        }
+      },
+      "passcode": {
+        "is-compliant": "Passcode compliant",
+        "is-present": "Passcode set"
+      },
+      "security": {
+        "certificate": {
+          "list": "Certificates"
+        }
+      },
+      "softwareupdate": {
+        "beta-enrollment": "Beta program",
+        "failure-reason": "Software update failure",
+        "install-reason": "Software update reason",
+        "install-state": "Software update state",
+        "pending-version": "Pending software update"
+      }
     }
   }
 }

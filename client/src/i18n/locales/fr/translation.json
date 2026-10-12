@@ -2294,6 +2294,10 @@
         "secret_in_declaration": {
           "title": "Secret dans une déclaration",
           "message": "Une déclaration de {{provider}} portait un secret et a été refusée."
+        },
+        "declaration_conflict": {
+          "title": "Déclarations en conflit",
+          "message": "Deux déclarations de {{provider}} portent l'identifiant {{identifier}} : aucune n'est servie."
         }
       },
       "signing": {
@@ -2326,6 +2330,8 @@
       "notGuardedCommand": "Cette commande n'est pas une commande gardée",
       "rateLimited": "Trop de demandes : patientez une minute",
       "appleIntegrationDisabled": "L'intégration Apple est désactivée sur cette instance",
+      "jobsUnavailable": "Les tâches de fond ne tournent pas : réessayez dans un instant",
+      "deviceNotManaged": "Cet appareil n'est pas géré",
       "appleEdgeUnavailable": "Le service des appareils (apple-edge) est indisponible",
       "appleEdgeIncompatible": "Le service des appareils (apple-edge) tourne dans une version incompatible",
       "appleEdgeProtocol": "Le service des appareils (apple-edge) a donné une réponse illisible",
@@ -2369,6 +2375,46 @@
       "command_expired": "Commande expirée",
       "command_cancelled": "Commande annulée",
       "command_rejected": "Commande refusée"
+    },
+    "status": {
+      "app": {
+        "managed": {
+          "list": "Applications gérées"
+        }
+      },
+      "device": {
+        "model": {
+          "family": "Famille d'appareil",
+          "identifier": "Identifiant du modèle",
+          "marketing-name": "Modèle"
+        },
+        "operating-system": {
+          "build-version": "Build du système",
+          "family": "Famille du système",
+          "marketing-name": "Nom du système",
+          "supplemental": {
+            "build-version": "Build de la réponse de sécurité urgente",
+            "extra-version": "Version de la réponse de sécurité urgente"
+          },
+          "version": "Version du système"
+        }
+      },
+      "passcode": {
+        "is-compliant": "Code conforme",
+        "is-present": "Code défini"
+      },
+      "security": {
+        "certificate": {
+          "list": "Certificats"
+        }
+      },
+      "softwareupdate": {
+        "beta-enrollment": "Programme bêta",
+        "failure-reason": "Échec de la mise à jour",
+        "install-reason": "Motif de la mise à jour",
+        "install-state": "État de la mise à jour",
+        "pending-version": "Mise à jour en attente"
+      }
     }
   }
 }
