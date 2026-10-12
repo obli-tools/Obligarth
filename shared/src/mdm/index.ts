@@ -11,3 +11,5 @@ export * from './impact';
 export * from './apple/catalog';
 export * from './apple/availability';
 export * from './apple/keys';
+// Command queue (lot B4, integration-apple-edge §8): states, views, outcomes.
+export * from './commands';

@@ -53,11 +53,39 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row
- *  holds (the row's RO / RW level decides read or write access); the device
- *  actions to come add theirs here. */
-export const DEVICE_CAPABILITIES = ['monitor'] as const;
+ *  holds (the row's RO / RW level decides read or write access; it covers the
+ *  record, the command queue and the timeline of a device). The MDM actions
+ *  (integration-apple-edge §8.11) each need their own, on a row with write
+ *  access: none is part of the defaults, so a team gets no MDM action
+ *  without a decision of an administrator. */
+export const DEVICE_CAPABILITIES = [
+  'monitor',
+  'mdm:inventory',
+  'mdm:profiles',
+  'mdm:apps',
+  'mdm:restart',
+  'mdm:lock',
+  'mdm:lost_mode',
+  'mdm:passcode',
+  'mdm:wipe',
+  'mdm:remove',
+] as const;
 
 export type DeviceCapability = typeof DEVICE_CAPABILITIES[number];
+
+/** English labels of the team permission editor (the client translates them: capabilities.device.<key>). */
+export const DEVICE_CAPABILITY_LABELS: Record<DeviceCapability, string> = {
+  'monitor':       'Monitor',
+  'mdm:inventory': 'MDM · Refresh the inventory',
+  'mdm:profiles':  'MDM · Profiles and settings',
+  'mdm:apps':      'MDM · Install and remove apps',
+  'mdm:restart':   'MDM · Restart and shut down',
+  'mdm:lock':      'MDM · Lock',
+  'mdm:lost_mode': 'MDM · Lost mode',
+  'mdm:passcode':  'MDM · Clear the passcode',
+  'mdm:wipe':      'MDM · Erase',
+  'mdm:remove':    'MDM · Remove from management',
+};
 
 /** Capabilities of a new team permission row, and of a row stored without any. */
 export const DEFAULT_DEVICE_CAPABILITIES: readonly DeviceCapability[] = ['monitor'];
