@@ -5,11 +5,8 @@
 // Server → Client events
 export const SocketEvents = {
   // Device events
-  DEVICE_UPDATED:         'DEVICE_UPDATED',         // device status or metadata changed
-  DEVICE_APPROVED:        'DEVICE_APPROVED',         // device was approved
+  DEVICE_UPDATED:         'DEVICE_UPDATED',         // a record of the registry changed ({ deviceId, tenantId })
   DEVICE_DELETED:         'DEVICE_DELETED',          // device was removed
-  DEVICE_ONLINE:          'DEVICE_ONLINE',            // device came online
-  DEVICE_OFFLINE:         'DEVICE_OFFLINE',           // device went offline
 
   // Command events
   COMMAND_UPDATED:        'COMMAND_UPDATED',          // command status changed
