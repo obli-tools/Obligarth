@@ -33,7 +33,7 @@ import { ddmJobs } from './jobs';
 const router = Router();
 
 /** The capability a team needs to force a synchronisation (§8.11: profiles, settings, forced DDM synchronisation). */
-const SYNC_CAPABILITY = 'mdm:profiles' as DeviceCapability;
+const SYNC_CAPABILITY: DeviceCapability = 'mdm:profiles';
 const ITEM_RE = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v ? new Date(String(v)).toISOString() : null);
 
