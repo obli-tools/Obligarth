@@ -30,6 +30,8 @@ export async function executeChangeGroup(x: ApprovalExecution): Promise<void> {
     await trx('devices').whereIn('id', prev.map((d) => d.id)).andWhere({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
     const { requestDeviceResolution } = await import('../mdm/policies/triggers');
     await requestDeviceResolution(trx, tenantId, changed.map(Number));
+    const { requestDdmRecompute } = await import('../apple/ddm/engine');
+    await requestDdmRecompute(trx, tenantId, { deviceIds: changed.map(Number) });
   });
   await auditAs(tenantId, requesterId, 'device.bulk_group_changed', {
     resourceType: 'device', resourcePath: prev.map((d) => d.id).join(','), details: { count: prev.length, changed: changed.length, toGroupId: groupId },

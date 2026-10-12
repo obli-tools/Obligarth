@@ -23,6 +23,7 @@ import { sessionUserGuard } from './middleware/sessionUserGuard';
 import { deviceKeySession } from './middleware/deviceKeySession';
 import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
+import { createDdmRelayRouter } from './apple/ddm/relay';
 import { jobs } from './jobs';
 import { logger } from './utils/logger';
 
@@ -48,6 +49,12 @@ export function createApp() {
   // TRUSTED_PROXIES — a walk a client can steer when it reaches the client
   // container from a trusted range, so it must never key a rate limit.
   app.set('trust proxy', 1);
+
+  // DDM relay of apple-edge (POST /internal/apple-edge/ddm, HMAC-signed both ways), before the whole chain of
+  // the console: its own raw body parser (the signature covers the bytes), no session, no cookie, no limiter of
+  // the API. Nothing else is served under /internal. Reachable from the internal networks only: the console's
+  // nginx and the edge proxy do not relay this path.
+  app.use(createDdmRelayRouter());
 
   // Security headers
   app.use(

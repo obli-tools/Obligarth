@@ -7,9 +7,11 @@ import { registerSecretColumn, setEdgeKekIdSource } from '../vault';
 import { registerAppleEdgeAdmin } from '../apple/admin.routes';
 import { registerAppleAlertJobs } from '../apple/alerts/service';
 import { registerAppleAuditActions } from '../apple/audit';
-import { registerAppleCommands } from '../apple/commands';
+import { registerAppleCommands, sendDdmSyncCommand } from '../apple/commands';
 import { registerMvpResultIngestors, registerResultJobs } from '../apple/commands/results';
 import { requestResubmitAll, requestResubmitHeld } from '../apple/commands/submit';
+import { registerAppleDdm } from '../apple/ddm';
+import { registerDdmSyncSender } from '../apple/ddm/sync';
 import { registerDeviceJobs } from '../apple/devices/jobs';
 import { checkEdgeAtStart, edgeKekId, onEdgeRecovered } from '../apple/edge/health';
 import { registerAppleOutboxHandlers } from '../apple/outbox';
@@ -70,6 +72,8 @@ export function registerAppleModule(): void {
   // commands, initial and periodic inventory (apple.inventory.*), setup plan (apple.setup-timeout)
   registerAppleCommands();
   registerAppleOutboxHandlers();  // the 34 handlers of §7.4
+  registerAppleDdm();             // §9: core provider, apple.ddm.* queues, DeclarativeManagement ingestor, onboarding step
+  registerDdmSyncSender(sendDdmSyncCommand);   // §9.4: the DDM engine announces a set through the command queue
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
   registerAppleAuditActions();

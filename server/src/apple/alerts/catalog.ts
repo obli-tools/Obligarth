@@ -91,6 +91,7 @@ export const APPLE_ALERTS = {
   'mdm.command_invalid': { scope: 'master', severity: 'critical', title: 'Command refused by the device service', message: 'apple-edge refused a {requestType} command ({code}).' },
   'ddm.relay_auth_failed': { scope: 'master', severity: 'critical', title: 'DDM relay signatures refused', message: '{count} request(s) of the DDM relay failed their signature.' },
   'ddm.secret_in_declaration': { scope: 'master', severity: 'critical', title: 'Secret in a declaration', message: 'A declaration of {provider} carried a secret and was refused.' },
+  'ddm.declaration_conflict': { scope: 'master', severity: 'critical', title: 'Declarations in conflict', message: 'Two declarations of {provider} share the identifier {identifier}: neither is served.' },
   'signing.identity_missing': { scope: 'master', severity: 'warning', title: 'Enrollment profiles not signed', message: 'No profile signing identity is imported: enrollment profiles are served unsigned.' },
 } as const satisfies Record<string, AppleAlertDef>;
 

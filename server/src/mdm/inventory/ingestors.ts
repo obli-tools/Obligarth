@@ -3,6 +3,8 @@ import type { Knex } from 'knex';
 import type { NanoEnrollType, Ownership } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { raiseInTx } from '../../apple/alerts/service';
+import { majorMinor } from '../../apple/ddm/baseline';
+import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
 import { requestDeviceResolution } from '../policies/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
@@ -229,6 +231,9 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
     || (typeof device.serial_number === 'string' && device.serial_number !== f.serial)
     || (typeof device.model_name === 'string' && device.model_name !== f.modelName);
   if (resolutionFacts) await requestDeviceResolution(trx, tenantId, [deviceId]);
+  // The declaration set of the device follows its supervision and the major version of its OS (integration §9.4).
+  const majorChanged = effects.osChanged === true && (majorMinor(osVersion)?.[0] ?? null) !== (majorMinor(f.osVersion)?.[0] ?? null);
+  if (effects.supervisionChanged === true || majorChanged) await requestDdmRecompute(trx, tenantId, { deviceIds: [deviceId] });
   return effects;
 }
 
@@ -414,10 +419,15 @@ export interface StatusItemsEffects {
   changed: string[];
 }
 
+/** An item whose value did not change is written again (its observed_at only) once this old (integration §9.6). */
+const STATUS_REFRESH_MS = 3_600_000;
+
 /**
  * The status items of a DDM status report (§5.4): the last value of each item the rules keep, its
  * fingerprint (change detection), the error of the item; the history of the whitelisted items at the
- * changes. An item older than the stored one is set aside.
+ * changes. An item older than the stored one is set aside; an item whose value and error did not change is
+ * written only when the stored observation is more than an hour old (a device reports often, a row per report
+ * would be written for nothing). One read and one write for the whole report.
  */
 export async function ingestStatusItems(trx: Knex.Transaction, tenantId: number, deviceId: number,
   items: Array<{ item: string; value?: unknown; error?: unknown }>, observedAt: Date): Promise<StatusItemsEffects> {
@@ -425,25 +435,45 @@ export async function ingestStatusItems(trx: Knex.Transaction, tenantId: number,
   if (!f) return { outcome: 'no_device', changed: [] };
   const rules = await rulesOf(trx, tenantId, f);
   const allowed = new Set(rules.statusItems);
-  const changed: string[] = [];
+  // The last occurrence of an item in the report wins.
+  const wanted = new Map<string, { value: unknown; error: string | null }>();
   for (const it of Array.isArray(items) ? items : []) {
     if (!it || typeof it.item !== 'string' || !allowed.has(it.item) || !/^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/.test(it.item)) continue;
-    const value = it.value === undefined ? null : it.value;
-    const sha = value === null ? null : createHash('sha256').update(canonicalJson(value)).digest('hex');
-    const current = await trx('device_status_items').where({ tenant_id: tenantId, device_id: deviceId, item: it.item })
-      .first('value_sha256', 'observed_at') as { value_sha256: string | null; observed_at: Date } | undefined;
-    if (current && !after(observedAt, current.observed_at)) continue;
-    const differs = !current || (current.value_sha256 ? String(current.value_sha256).trim() : null) !== sha;
-    await trx('device_status_items').insert({
-      tenant_id: tenantId, device_id: deviceId, item: it.item, value: JSON.stringify(value), value_sha256: sha,
-      error: it.error === undefined || it.error === null ? null : JSON.stringify(it.error), observed_at: observedAt, updated_at: new Date(),
-    }).onConflict(['tenant_id', 'device_id', 'item']).merge(['value', 'value_sha256', 'error', 'observed_at', 'updated_at']);
+    wanted.set(it.item, {
+      value: it.value === undefined ? null : it.value,
+      error: it.error === undefined || it.error === null ? null : canonicalJson(it.error),
+    });
+  }
+  if (wanted.size === 0) return { outcome: 'applied', changed: [] };
+  const stored = await trx('device_status_items').where({ tenant_id: tenantId, device_id: deviceId }).whereIn('item', [...wanted.keys()])
+    .select('item', 'value_sha256', 'error', 'observed_at') as Array<{ item: string; value_sha256: string | null; error: unknown; observed_at: Date }>;
+  const current = new Map(stored.map((r) => [r.item, r]));
+  const rows: Array<Record<string, unknown>> = [];
+  const history: Array<Record<string, unknown>> = [];
+  const changed: string[] = [];
+  const now = new Date();
+  for (const [item, it] of wanted) {
+    const cur = current.get(item);
+    if (cur && !after(observedAt, cur.observed_at)) continue;
+    const sha = it.value === null ? null : createHash('sha256').update(canonicalJson(it.value)).digest('hex');
+    const differs = !cur || (cur.value_sha256 ? String(cur.value_sha256).trim() : null) !== sha;
+    const curError = cur?.error === undefined || cur?.error === null ? null : canonicalJson(cur.error);
+    if (cur && !differs && curError === it.error && observedAt.getTime() - new Date(cur.observed_at).getTime() < STATUS_REFRESH_MS) continue;
+    rows.push({
+      tenant_id: tenantId, device_id: deviceId, item, value: JSON.stringify(it.value), value_sha256: sha, error: it.error,
+      observed_at: observedAt, updated_at: now,
+    });
     if (differs) {
-      changed.push(it.item);
-      if (STATUS_HISTORY_ITEMS.has(it.item)) {
-        await trx('device_status_history').insert({ tenant_id: tenantId, device_id: deviceId, item: it.item, value: JSON.stringify(value), observed_at: observedAt });
+      changed.push(item);
+      if (STATUS_HISTORY_ITEMS.has(item)) {
+        history.push({ tenant_id: tenantId, device_id: deviceId, item, value: JSON.stringify(it.value), observed_at: observedAt });
       }
     }
   }
+  if (rows.length) {
+    await trx('device_status_items').insert(rows).onConflict(['tenant_id', 'device_id', 'item'])
+      .merge(['value', 'value_sha256', 'error', 'observed_at', 'updated_at']);
+  }
+  if (history.length) await trx('device_status_history').insert(history);
   return { outcome: 'applied', changed };
 }

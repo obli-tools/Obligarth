@@ -40,6 +40,7 @@ import { createVaultAdminRouter } from '../vault/admin.routes';
 import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
+import { createAppleDdmRouter } from '../apple/ddm/routes';
 import { createMdmRouter } from '../mdm';
 
 const router = Router();
@@ -105,6 +106,9 @@ tenantRouter.use('/admin/outbox', createOutboxAdminRouter());
 // apple-edge: its state and the tenant registry (master tenant, platform
 // administrators; apple/admin.routes.ts).
 tenantRouter.use('/admin/apple-edge', createAppleEdgeAdminRouter());
+// The DDM engine seen from the console: declaration set, status items, forced synchronisation of a device
+// (apple/ddm/routes.ts).
+tenantRouter.use('/apple', createAppleDdmRouter());
 // The vault of secrets: state, escrow events, key rotations (master tenant,
 // platform administrators; vault/admin.routes.ts).
 tenantRouter.use('/admin/vault', createVaultAdminRouter());
