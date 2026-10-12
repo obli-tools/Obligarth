@@ -107,6 +107,18 @@ async function setFailed(trx: Knex.Transaction, tenantId: number, commandId: str
   return finalizeTargets(trx, { tenantId, commandId, deviceIds: null, from: ['pending'], to: 'rejected', rejectCode, at: new Date() });
 }
 
+/** The targets of the submitted set closed on the brain's side (cancelled, refused, expired): apple-edge is asked to
+ *  drop them (mdm.commands.cancel). It answers 404 when it never took the command: nothing to drop then. */
+async function withdrawClosedTargets(trx: Knex.Transaction, tenantId: number, commandId: string, now: Date): Promise<void> {
+  const stray = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: commandId }).whereNotNull('queued_at')
+    .whereIn('state', LOCAL_FINAL_WITHOUT_RESULT).pluck('device_id') as number[];
+  if (stray.length === 0) return;
+  await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: commandId }).whereRaw('device_id = ANY (?::int[])', [stray.map(Number)])
+    .update({ cancel_requested_at: now });
+  await (cancelJob as JobHandle<Cancel>).sendInTx(trx, { tenantId, commandId, requestedAt: now.toISOString() },
+    { id: jobIdFor(CANCEL_QUEUE, `${commandId}:${now.toISOString()}`), tenantId });
+}
+
 /** Step 1 (§8.6): the command locked, what stops a submission checked, the set of targets fixed, one attempt counted. */
 async function prepare(trx: Knex.Transaction, ctx: JobContext<Submit>): Promise<Prepared> {
   const tenantId = ctx.tenantId as number;
@@ -114,7 +126,14 @@ async function prepare(trx: Knex.Transaction, ctx: JobContext<Submit>): Promise<
   const cmd = await trx('mdm_commands').where({ tenant_id: tenantId, id: commandId }).forUpdate()
     .first('id', 'request_type', 'plist', 'plist_enc', 'push', 'not_before', 'expires_at', 'submit_state', 'submit_attempts') as CommandRow | undefined;
   if (!cmd) return { kind: 'skip', why: 'not_found' };
-  if (cmd.submit_state !== 'pending' && cmd.submit_state !== 'held') return { kind: 'skip', why: cmd.submit_state };
+  if (cmd.submit_state !== 'pending' && cmd.submit_state !== 'held') {
+    // Cancelled while an attempt was in flight: the cancellation asked apple-edge at once, perhaps before the request
+    // of that attempt reached it (it found nothing to drop then, and the answer of the attempt was lost). No attempt
+    // is running any more: apple-edge is asked again, so that it never keeps active a command the console shows
+    // cancelled (review of lot B4).
+    if (cmd.submit_state === 'cancelled' && Number(cmd.submit_attempts) > 0) await withdrawClosedTargets(trx, tenantId, commandId, new Date());
+    return { kind: 'skip', why: cmd.submit_state };
+  }
   const now = Date.now();
   if (cmd.not_before && new Date(cmd.not_before).getTime() > now + 1000) {
     // Started too early (a manual run, a redrive): back to its time.
@@ -191,14 +210,7 @@ async function applyAccepted(trx: Knex.Transaction, tenantId: number, commandId:
   // Closed on the brain's side while the submission was in flight (cancelled, device gone): apple-edge now holds
   // them, it is asked to drop them. Also when a cancellation already asked: it may have run before apple-edge took
   // the command (an attempt that never arrived), and found nothing to drop then.
-  const stray = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: commandId }).whereNotNull('queued_at')
-    .whereIn('state', LOCAL_FINAL_WITHOUT_RESULT).pluck('device_id') as number[];
-  if (stray.length > 0) {
-    await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: commandId }).whereRaw('device_id = ANY (?::int[])', [stray.map(Number)])
-      .update({ cancel_requested_at: now });
-    await (cancelJob as JobHandle<Cancel>).sendInTx(trx, { tenantId, commandId, requestedAt: now.toISOString() },
-      { id: jobIdFor(CANCEL_QUEUE, `${commandId}:${now.toISOString()}`), tenantId });
-  }
+  await withdrawClosedTargets(trx, tenantId, commandId, now);
   return res.rows.map((r) => Number(r.device_id));
 }
 
@@ -315,11 +327,14 @@ async function submit(ctx: JobContext<Submit>): Promise<JobResult> {
           appleMetrics.commandSubmission('held');
           return { output: { held: 'frozen' } };
         }
-        if (e.status !== null && e.status >= 400 && e.status < 500 && !e.retryable) {
-          // validation_failed, secret_in_command, 413, 400: a defect of the brain.
+        if (e.status === 400 || e.status === 413 || e.status === 422) {
+          // invalid_request, payload_too_large, validation_failed, secret_in_command: a defect of the brain (§8.6).
           return fail(String(e.code).slice(0, 64), 'invalid_command', String(e.code).slice(0, 64));
         }
-        // 5xx, transport, timeout, circuit open, incompatible, disabled: later.
+        // 5xx, transport, timeout, circuit open, incompatible, disabled: later. So is any other refusal, which says
+        // nothing against the command itself: 401 (the token of the brain is misconfigured, §5.4: the probe raises
+        // edge.auth_failed), 403, 429, an unknown 404 or 409 (review of lot B4: such an answer closed every command
+        // submitted meanwhile as 'failed', its targets 'rejected').
         if (!ctx.isLastAttempt) {
           appleMetrics.commandSubmission('retried');
           throw new JobError('edge_unavailable', 'apple-edge did not take the command');

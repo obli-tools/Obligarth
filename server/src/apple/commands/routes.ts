@@ -23,6 +23,8 @@ import { rethrowForConsole } from '../edge/appError';
 import { mdmCommands, refusalOf, type EnqueueOutcome } from './bus';
 import { commandSpecList, commandSpecOrNull, guardedActionOf, REMOVE_MANAGEMENT_ACTION, type CommandSpec } from './catalog';
 import { refreshInventoryNow } from './inventory';
+import { PlistError, plistFromJson, type PlistDict } from './plist';
+import { findSecrets, type SecretFinding } from './sensitive';
 
 // =============================================================================
 // Console API of the command queue (docs: integration-apple-edge §8.12),
@@ -144,6 +146,19 @@ function consoleSpec(requestType: string, params: Record<string, unknown> | unde
   if (!parsed.success) throw new AppError(422, `${requestType}: ${parsed.error.issues[0]?.message ?? 'invalid parameters'}`, 'invalidParams');
   if (guardedActionOf(spec, parsed.data as Record<string, unknown>)) {
     throw new AppError(409, 'This command goes through its guarded action', 'guardedActionRequired', { actionKey: guardedActionOf(spec, parsed.data as Record<string, unknown>) });
+  }
+  // No secret in clear among the parameters (§8.8), told at once: the bus refuses the command anyway, but only once
+  // a step-up or a second approver was asked, and a request for approval would keep the value in its payload
+  // meanwhile (review of lot B4). The same rules as the bus, on what the caller typed; key names only in the answer.
+  let secrets: SecretFinding[];
+  try {
+    secrets = findSecrets('', plistFromJson(parsed.data) as PlistDict);
+  } catch (err) {
+    if (err instanceof PlistError) throw new AppError(422, `${requestType}: ${err.message}`, 'invalidParams');
+    throw err;
+  }
+  if (secrets.length > 0) {
+    throw new AppError(422, 'The command would carry a secret in clear', 'secretInCommand', { where: secrets.slice(0, 5).map((s) => s.path.replace(/^Command\./, 'params.')) });
   }
   return { spec, params: params ?? {} };
 }

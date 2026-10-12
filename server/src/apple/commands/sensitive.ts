@@ -54,6 +54,8 @@ export interface SecretFinding {
 
 /** A profile inside a profile inside a command, as apple-edge. */
 const MAX_PROFILE_NESTING = 2;
+/** What apple-edge trims before it looks for a property list: the bytes of a UTF-8 BOM, space, tab, CR, LF. */
+const LEADING_BYTES: ReadonlySet<number> = new Set([0xef, 0xbb, 0xbf, 0x20, 0x09, 0x0d, 0x0a]);
 const MAX_DEPTH = 64;
 const MAX_FINDINGS = 20;
 
@@ -88,9 +90,13 @@ function profileOf(bytes: Buffer): PlistDict | 'unreadable' | undefined {
       throw err;
     }
   }
+  // Like apple-edge (sensitive.go, profileOf), the bytes of a BOM and white space before the property list are
+  // skipped first: what it would examine is never passed unread here (review of lot B4).
+  let start = 0;
+  while (start < content.length && LEADING_BYTES.has(content[start])) start++;
   // A binary property list: apple-edge reads it, the brain does not (it never writes one): refused unread.
-  if (content.subarray(0, 8).toString('latin1') === 'bplist00') return 'unreadable';
-  const text = content.toString('utf8');
+  if (content.subarray(start, start + 8).toString('latin1') === 'bplist00') return 'unreadable';
+  const text = content.subarray(start).toString('utf8');
   if (!looksLikeXmlPlist(text)) return undefined;
   let root: PlistValue;
   try {
