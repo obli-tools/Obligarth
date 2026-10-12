@@ -66,7 +66,8 @@
     "expandNav": "Expand navigation",
     "collapseAdmin": "Collapse administration",
     "expandAdmin": "Expand administration",
-    "administration": "Administration"
+    "administration": "Administration",
+    "endUsers": "End users"
   },
   "login": {
     "title": "Sign in to your account",
@@ -224,7 +225,7 @@
     "notEnoughHistory": "Not enough history — data after 24h",
     "agentsOnlineOffline": "agents online / offline",
     "groupViewStatusSub": "online · offline · alerts",
-    "devicesManaged": "devices managed",
+    "devicesManaged": "Devices under management",
     "allDevices": "All devices",
     "osConnectivity": "Connectivity by OS",
     "noData": "No data",
@@ -237,7 +238,35 @@
     "historyAvailableHours_other": "{{count}} h available",
     "historyAvailable_one": "{{count}} day available",
     "historyAvailable_other": "{{count}} days available",
-    "notEnoughForRange": "Not enough history ({{have}}/{{need}})"
+    "notEnoughForRange": "Not enough history ({{have}}/{{need}})",
+    "enrolled": "Enrolled",
+    "compliant": "Compliant",
+    "nonCompliant": "Non compliant",
+    "enrolling": "Being enrolled",
+    "staleDays_one": "No contact for {{count}} day",
+    "staleDays_other": "No contact for {{count}} days",
+    "staleShort": "No contact",
+    "allInContact": "whole fleet in contact",
+    "subStatEnrolling": "being enrolled",
+    "subStatUnenrolling": "leaving",
+    "subStatUnknown": "not evaluated yet",
+    "awaitingConfiguration": "{{count}} in the setup assistant",
+    "configErrors": "Configuration errors",
+    "configPending": "{{count}} pending",
+    "lostMode": "Lost mode",
+    "recentContact": "In contact within 24 h",
+    "neverSeen": "{{count}} never seen",
+    "byPlatform": "Platforms",
+    "byOwnership": "Ownership",
+    "groupViewCounters": "enrolled · non compliant · configuration errors · no contact",
+    "noGroupedDevice": "No device under management in a group yet",
+    "tooltipEnrolled": "{{enrolled}} enrolled of {{total}} under management",
+    "range": {
+      "24h": "24 h",
+      "7j": "7 d",
+      "14j": "14 d",
+      "30j": "30 d"
+    }
   },
   "groups": {
     "new": "New Group",
@@ -260,7 +289,7 @@
     "failedDelete": "Failed to delete group",
     "failedMove": "Failed to move group",
     "failedOrder": "Failed to save order",
-    "confirmDelete": "Delete group \"{{name}}\" and all its sub-groups? Monitors will become ungrouped.",
+    "confirmDelete": "Delete the group \"{{name}}\"? Its devices will become ungrouped.",
     "form": {
       "sectionGeneral": "General",
       "name": "Name",
@@ -280,7 +309,15 @@
     "searchPlaceholder": "Search groups...",
     "notFoundOrDenied": "Group not found or access denied",
     "position": "Position",
-    "deviceGroup": "Device Group"
+    "deviceGroup": "Device Group",
+    "movePreviewTitle": "Move the group \"{{name}}\"",
+    "movePreviewIntro": "The devices of this group and of its subgroups stop inheriting the policies of the groups it leaves, and inherit those of its new parent ({{parent}}).",
+    "deletePreviewTitle": "Delete the group \"{{name}}\"",
+    "deletePreviewIntro": "The assignments of this group are removed with it and its devices become ungrouped: they lose what they inherited from it.",
+    "deleteSubgroupsNote": "Its subgroups are not deleted: they are detached and shown at the root.",
+    "settingsFor": "Settings for \"{{name}}\"",
+    "notificationsFor": "Notifications for \"{{name}}\"",
+    "maintenanceFor": "Maintenance for \"{{name}}\""
   },
   "notifications": {
     "title": "Notifications",
@@ -566,7 +603,11 @@
       "readOnly": "Read Only",
       "readWrite": "Read/Write",
       "collapse": "Collapse",
-      "expand": "Expand"
+      "expand": "Expand",
+      "mdmCapabilities": "MDM",
+      "mdmCapabilitiesHint": "MDM actions this team may request on these devices",
+      "mdmCapabilitiesTitle": "MDM actions of this team",
+      "mdmCapabilitiesCooldown": "A destructive action given to a team opens a 72 h cooldown for its members who did not hold it, and raises an alert."
     },
     "resetMfa": "Reset MFA",
     "confirmResetMfa": "Disable all 2FA methods for \"{{username}}\"? They will be able to log in without a second factor.",
@@ -781,7 +822,7 @@
       "refused": "Refused",
       "suspended": "Suspended",
       "search": "Search devices...",
-      "searchHint": "Searches hostname, display name, IP, MAC, last user, OS, agent version, location, tags, notes, UUID",
+      "searchHint": "Searches the label, the name, the serial number, the model, the end user, the tags and the UUID",
       "allGroups": "All groups",
       "button": "Filters",
       "clearAll": "Clear filters",
@@ -802,7 +843,13 @@
       "osNamesTitle": "Versions",
       "buildsTitle": "Builds",
       "tagsTitle": "Applied tags",
-      "noTags": "No tags in the fleet"
+      "noTags": "No tags in the fleet",
+      "supervised": "Supervised",
+      "osBelow": "OS below…",
+      "osBelowValue": "OS below {{version}}",
+      "osBelowHint": "Devices whose operating system is older than a version",
+      "osBelowTitle": "Operating system older than",
+      "endUser": "One end user"
     },
     "pagination": {
       "treeCapped": "Showing first {{shown}} of {{total}} — use search or pick a sub-group to narrow.",
@@ -825,7 +872,15 @@
       "changeGroupTitle_one": "Change group for {{count}} device",
       "changeGroupTitle_other": "Change group for {{count}} devices",
       "moveHere": "Move",
-      "changeGroupHint": "Pick a target group, or leave blank to move to \"Ungrouped\"."
+      "changeGroupHint": "Pick a target group, or leave blank to move to \"Ungrouped\".",
+      "assignPolicy": "Assign a policy",
+      "assignTooMany": "A policy is assigned to 100 devices at most at a time: assign it to their group instead.",
+      "changeGroupPolicies": "The devices then receive the policies assigned to their new group, and lose those of the group they leave.",
+      "command": "Send a command",
+      "commandTitle_one": "Send a command to {{count}} device",
+      "commandTitle_other": "Send a command to {{count}} devices",
+      "commandHint": "The devices that cannot take the command (not enrolled, not supervised, ownership) are set aside. The destructive actions (erase, lock, lost mode, removal from management) are requested from the page of a device.",
+      "deleteRecords": "Delete the records"
     },
     "export": {
       "csv": "Export CSV",
@@ -849,7 +904,17 @@
     "lastReboot": "Last reboot",
     "columns": {
       "title": "Visible columns",
-      "button": "Columns"
+      "button": "Columns",
+      "tenant": "Tenant",
+      "platform": "Platform and OS",
+      "model": "Model",
+      "ownership": "Ownership",
+      "group": "Group",
+      "endUser": "End user",
+      "contact": "Last contact",
+      "compliance": "Compliance",
+      "serial": "Serial number",
+      "tags": "Tags"
     },
     "selection": {
       "exit": "Exit selection mode",
@@ -857,6 +922,11 @@
       "active": "Selecting",
       "select": "Select",
       "modeLabel": "Selection mode"
+    },
+    "noDevicesFiltered": "No device matches these filters.",
+    "state": {
+      "managed": "Under management",
+      "enrolling": "Enrolling"
     }
   },
   "deviceSummary": {
@@ -868,7 +938,89 @@
     "ungrouped": "Ungrouped",
     "status": "Status",
     "lastSeen": "Last seen",
-    "tenant": "Tenant"
+    "tenant": "Tenant",
+    "tabs": {
+      "label": "Sections of the device",
+      "overview": "Overview",
+      "configuration": "Configuration",
+      "apps": "Applications",
+      "profiles": "Profiles",
+      "certificates": "Certificates",
+      "commands": "Commands",
+      "history": "History",
+      "actions": "Actions"
+    },
+    "cards": {
+      "management": "Management",
+      "ownership": "Ownership and privacy",
+      "hardware": "Hardware",
+      "identity": "Identity and push",
+      "ddm": "Declarative management"
+    },
+    "change": "Change",
+    "enrollmentMethod": "Enrollment",
+    "managementMode": "Management mode",
+    "supervised": "supervised",
+    "enrolledAt": "Enrolled",
+    "lastCheckin": "Last contact",
+    "unenrolledAt": "Left management",
+    "complianceReasons": "Non compliant because",
+    "ownership": "Ownership",
+    "collected": "Collected on this device",
+    "collectedHint": "What is struck through is never collected for this ownership: it is absent, not empty.",
+    "endUser": "End user",
+    "model": "Model",
+    "serial": "Serial number",
+    "deviceName": "Name on the device",
+    "storage": "Storage",
+    "storageFree": "free of",
+    "warranty": "Warranty",
+    "identity": "Management identity",
+    "validUntil": "until {{date}}",
+    "push": "Push",
+    "activationLock": "Activation lock",
+    "bypassEscrowed": "bypass code kept",
+    "unlockToken": "Unlock token",
+    "present": "Present",
+    "absent": "Absent",
+    "lastInventory": "Last inventory",
+    "ddm": {
+      "enabled": "Enabled",
+      "disabled": "Not enabled",
+      "inSync": "In sync",
+      "syncing": "Synchronising",
+      "outOfSync": "Not fetched yet",
+      "sync": "Synchronise",
+      "syncRequested": "Synchronisation requested",
+      "syncAlready": "A synchronisation was already requested within the minute",
+      "declarations": "Declarations",
+      "invalid": "{{count}} invalid",
+      "fetchedAt": "fetched {{at}}",
+      "notReported": "not reported yet",
+      "invalidOne": "invalid",
+      "active": "active",
+      "inactive": "inactive",
+      "statusItems": "Status items"
+    },
+    "edit": {
+      "title": "Edit the record",
+      "displayName": "Display name (replaces the name reported by the device)",
+      "tags": "Tags (comma-separated)"
+    },
+    "groupDialog": {
+      "title": "Change the group"
+    },
+    "endUserDialog": {
+      "title": "End user of the device",
+      "unassign": "Unassign"
+    },
+    "ownershipDialog": {
+      "title": "Change the ownership",
+      "done": "Ownership changed",
+      "ticketRequired": "Ticket number (required)",
+      "widen": "More data will be collected on this device (every application, the phone number…): a ticket is required.",
+      "narrow": "Less data will be collected: what is no longer collected is erased from the record."
+    }
   },
   "apiKeys": {
     "defaultGroup": "Default group",
@@ -897,7 +1049,99 @@
   },
   "policies": {
     "title": "Policies",
-    "tabNotifications": "Notifications"
+    "tabNotifications": "Notifications",
+    "tabPolicies": "Policies",
+    "search": "Search a policy…",
+    "new": "New policy",
+    "empty": "No policy yet",
+    "emptyHint": "A policy groups settings, publishes them as immutable versions and applies them to the tenant, to groups or to devices.",
+    "name": "Name",
+    "categoryLabel": "Category",
+    "version": "Version",
+    "assignments": "Assignments",
+    "updated": "Updated",
+    "shared": "library",
+    "created": "Policy created",
+    "copyFrom": "Start from a copy of (optional)",
+    "copyFromNone": "An empty policy",
+    "notFound": "Policy not found",
+    "back": "Back to the policies",
+    "state": {
+      "draft": "Draft",
+      "published": "Published",
+      "archived": "Archived"
+    },
+    "versionState": {
+      "draft": "Draft",
+      "pending_approval": "Awaiting approval",
+      "published": "Published",
+      "superseded": "Superseded",
+      "rejected": "Rejected"
+    },
+    "category": {
+      "configuration": "Configuration",
+      "restrictions": "Restrictions",
+      "network": "Network",
+      "security": "Security",
+      "updates": "Updates",
+      "kiosk": "Kiosk",
+      "certificates": "Certificates"
+    },
+    "family": {
+      "declaration": "declaration",
+      "profile_payload": "profile",
+      "command": "setting"
+    },
+    "editor": {
+      "publishedVersion": "published: v{{version}}",
+      "archive": "Archive",
+      "archived": "Policy archived",
+      "confirmArchive": "Archive the policy \"{{name}}\"? It can no longer be assigned.",
+      "versions": "Versions",
+      "newVersion": "New version",
+      "publishedAt": "published {{at}}",
+      "submittedAt": "submitted {{at}}",
+      "createdAt": "created {{at}}",
+      "seeApproval": "See the approval request",
+      "readOnly": "Read only: you cannot edit the policies.",
+      "importProfile": "Import a profile",
+      "addItem": "Add an item",
+      "validate": "Validate",
+      "valid": "The content is valid",
+      "publish": "Publish…",
+      "publishNow": "Publish",
+      "publishTitle": "Publish \"{{name}}\" v{{version}}",
+      "publishIntro": "A published version is immutable: it replaces the previous one on every device the policy is assigned to.",
+      "takeUpAgain": "Take it up again as a draft",
+      "discard": "Discard",
+      "discarded": "Version discarded",
+      "confirmDiscard": "Discard version {{version}}? Its content is lost.",
+      "confirmLeave": "The draft has unsaved changes: leave it anyway?",
+      "changeNote": "Note of this version (what changes, for the approver and the history)",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items",
+      "noItem": "This version has no item yet.",
+      "saved": "Draft saved",
+      "invalidJson": "An item is not valid JSON: fix it before saving.",
+      "valuesObject": "The values are a JSON object",
+      "typeDisabled": "not offered",
+      "tombstone": "removes the inherited one",
+      "instance": "Instance",
+      "removeInherited": "Remove the inherited instance instead of setting values",
+      "rawProfile": "Imported profile: delivered as it is, encrypted for each device. Its content is not edited here (delete the item and import the file again to replace it).",
+      "showKeys": "Keys of this type ({{count}})",
+      "hideKeys": "Hide the keys of this type",
+      "keysHint": "* required · (secret): write {{secret}}; it is moved to the vault when the draft is saved and never shown again. Variables: {{variables}}…",
+      "note": "Comment (never sent to a device)",
+      "noType": "No type matches.",
+      "envelopeTitle": "Edit the policy",
+      "importedTitle": "Profile imported",
+      "importedPayloads": "Payloads",
+      "importedSecrets_one": "{{count}} secret moved to the vault",
+      "importedSecrets_other": "{{count}} secrets moved to the vault",
+      "importedSigned": "The file was signed: its signature was removed and was not verified. The profile is delivered by this server, encrypted for each device.",
+      "importedHint": "Check the payloads before publishing: a raw profile is delivered as it is."
+    }
   },
   "supervision": {
     "title": "Supervision",
@@ -934,14 +1178,25 @@
     "settings": "Group settings",
     "ungrouped": "Ungrouped",
     "ungroupedHint": "Devices that don't belong to any group yet",
-    "tenantEmpty": "No groups yet"
+    "tenantEmpty": "No groups yet",
+    "enrolled": "Enrolled",
+    "nonCompliant": "Non compliant",
+    "configErrors": "Configuration errors",
+    "stale": "No contact"
   },
   "sort": {
     "name": "Name",
     "status": "Status",
     "lastSeen": "Last seen",
     "os": "OS",
-    "group": "Group"
+    "group": "Group",
+    "state": "Enrollment",
+    "lastCheckin": "Last contact",
+    "compliance": "Compliance",
+    "platform": "Platform",
+    "model": "Model",
+    "ownership": "Ownership",
+    "enrolledAt": "Enrolled"
   },
   "fanOut": {
     "label": "Share to (read-only on target tenants)",
@@ -1474,7 +1729,26 @@
     },
     "subtitle": "Destructive actions waiting for a second admin.",
     "title": "Approvals",
-    "yourRequest": "your request"
+    "yourRequest": "your request",
+    "publish": {
+      "version": "Publication of version {{version}} of the policy",
+      "groupMove": "Move of the group",
+      "groupDelete": "Deletion of the group",
+      "assignments_one": "{{count}} change of assignments",
+      "assignments_other": "{{count}} changes of assignments",
+      "assignment": "assignment",
+      "base": "Versions the request was filed with",
+      "conflicts": "Conflicts",
+      "why": "A second approver is required because",
+      "recheck": "At the approval, the preview is computed again: the request is refused if its content or its reach changed.",
+      "keys_one": "{{count}} setting touched",
+      "keys_other": "{{count}} settings touched",
+      "op": {
+        "create": "assign",
+        "update": "change",
+        "delete": "remove"
+      }
+    }
   },
   "os": {
     "other": "Other"
@@ -1801,7 +2075,20 @@
       "crossTenantBatch": "One request acts on one tenant only.",
       "approverSideRequired": "This request needs an approver of the other side (a client approver by default).",
       "selfApproval": "The requester cannot review this request.",
-      "approverFallbackHeld": "No client approver: one was removed recently, and the fallback on an MSP approver stays closed until {{until}}. Designate a client approver (approved by the client), or wait."
+      "approverFallbackHeld": "No client approver: one was removed recently, and the fallback on an MSP approver stays closed until {{until}}. Designate a client approver (approved by the client), or wait.",
+      "unknownGuardedAction": "This guarded action does not exist.",
+      "notFound": "This guarded action no longer exists.",
+      "actionClosed": "This action is closed: nothing can be changed any more.",
+      "actionExecuting": "This action is running and can no longer be cancelled.",
+      "notAllowed": "You are not allowed to do this on this action or this tenant.",
+      "actionNotPaused": "This action is not paused: there is nothing to resume.",
+      "invalidTenant": "This tenant is not valid.",
+      "notFrozen": "The tenant is not frozen.",
+      "invalidSettings": "These guard settings are not valid.",
+      "invalidApprover": "This account cannot be designated as an approver.",
+      "alreadyDesignated": "This account is already a designated approver of the tenant.",
+      "invalidSelection": "The selection of devices is not valid.",
+      "invalidTicket": "A ticket number has 64 characters at most."
     },
     "delay": {
       "none": "no delay",
@@ -2033,7 +2320,27 @@
         "InstallApplication": "Install an app",
         "RemoveApplication": "Remove an app",
         "Settings": "Settings"
-      }
+      },
+      "command": "Command",
+      "send": "Send",
+      "reasonOptional": "Reason (optional)",
+      "reasonRequired": "Reason (10 characters at least): it is written to the audit log",
+      "queued_one": "Command queued for {{count}} device",
+      "queued_other": "Command queued for {{count}} devices",
+      "queuedOne": "Command queued: it reaches the device at its next contact.",
+      "refusedSome_one": "{{count}} device set aside (not enrolled, not supervised, ownership…)",
+      "refusedSome_other": "{{count}} devices set aside (not enrolled, not supervised, ownership…)",
+      "filterOpen": "Waiting",
+      "filterFinal": "Ended",
+      "deliveredAt": "Delivered",
+      "completedAt": "Ended",
+      "cancelled": "Command cancelled",
+      "cancelRequested": "Cancellation requested: the device may already have received the command.",
+      "notCancellable": "This command can no longer be cancelled.",
+      "cancelThroughGuard": "This command belongs to a guarded action: withdraw it from the action.",
+      "withdraw": "Withdraw…",
+      "pushed": "Push sent",
+      "pushSkippedGeneric": "No push was sent for this device."
     },
     "alerts": {
       "enrollment": {
@@ -2423,6 +2730,407 @@
         "install-state": "Software update state",
         "pending-version": "Pending software update"
       }
+    },
+    "actions": {
+      "run": "Request",
+      "guarded": "guarded",
+      "readOnly": "You can read this device but not act on it.",
+      "removeManagementHint": "Removes the enrollment profile: the device leaves management and loses everything management installed.",
+      "messageOrPhone": "A message or a phone number is required: it is shown on the locked screen.",
+      "group": {
+        "inventory": "Inventory",
+        "power": "Power",
+        "security": "Security",
+        "destructive": "Destructive actions",
+        "management": "Management"
+      },
+      "param": {
+        "message": "Message shown on the screen",
+        "phoneNumber": "Phone number shown on the screen",
+        "footnote": "Footnote",
+        "preserveDataPlan": "Keep the cellular plan (eSIM)",
+        "disallowProximitySetup": "Disallow the quick start by proximity after the erase"
+      }
     }
+  },
+  "endUsers": {
+    "title": "End users",
+    "subtitle": "The people the devices are assigned to. They have no account in this console.",
+    "search": "Name, e-mail, identifier…",
+    "active": "Active",
+    "departedLabel": "Departed",
+    "import": "Import a CSV",
+    "new": "New end user",
+    "edit": "Edit the end user",
+    "importHint": "CSV columns: email, display_name, managed_apple_account, external_id (a header line; an existing line is updated by its external_id, then by its e-mail).",
+    "none": "No end user.",
+    "name": "Name",
+    "email": "E-mail",
+    "managedAppleAccount": "Managed Apple Account",
+    "externalId": "Directory identifier",
+    "devices": "Devices",
+    "depart": "Mark as departed",
+    "departed": "Marked as departed",
+    "confirmDepart": "Mark {{name}} as departed? Their devices stay assigned for 90 days, then the record is erased.",
+    "importTooLarge": "The file is larger than 1 MiB.",
+    "importReport": "Import report",
+    "variablesHint": "These values fill the variables of the policies ({{variables}}…) on the devices assigned to this person.",
+    "source": {
+      "manual": "manual",
+      "csv": "CSV import",
+      "directory": "directory",
+      "enrollment": "enrollment"
+    },
+    "report": {
+      "created": "Created",
+      "updated": "Updated",
+      "unchanged": "Unchanged",
+      "rejected": "Rejected",
+      "line": "Line {{line}}",
+      "code": {
+        "invalid_email": "invalid e-mail",
+        "invalid_managed_apple_account": "invalid Managed Apple Account",
+        "invalid_external_id": "invalid directory identifier",
+        "invalid_display_name": "invalid name",
+        "identity_required": "an e-mail, a Managed Apple Account or a directory identifier is required",
+        "identity_conflict": "its identifiers match two different end users"
+      }
+    }
+  },
+  "mdm": {
+    "enrollmentState": {
+      "enrolling": "Enrolling",
+      "awaiting_configuration": "Awaiting configuration",
+      "enrolled": "Enrolled",
+      "unenrolling": "Leaving management",
+      "unenrolled": "Unenrolled"
+    },
+    "contactState": {
+      "recent": "Recent contact",
+      "quiet": "Quiet",
+      "stale": "No contact",
+      "never": "Never seen"
+    },
+    "complianceState": {
+      "compliant": "Compliant",
+      "non_compliant": "Non compliant",
+      "unknown": "Compliance unknown",
+      "exempt": "Exempt"
+    },
+    "configState": {
+      "applied": "Configuration applied",
+      "pending": "Configuration pending",
+      "error": "Configuration error",
+      "unknown": "Configuration unknown"
+    },
+    "lostModeState": {
+      "off": "Off",
+      "enabling": "Lost mode: enabling",
+      "on": "Lost mode",
+      "disabling": "Lost mode: disabling"
+    },
+    "complianceReason": {
+      "config_error": "A configuration could not be applied",
+      "passcode": "The passcode does not meet the policy",
+      "os_update_overdue": "An operating system update is overdue",
+      "stale": "No contact for too long",
+      "supervision_required": "Supervision is required"
+    },
+    "ownership": {
+      "corporate": "Corporate",
+      "corporate_personal": "Corporate, personally enabled",
+      "personal": "Personal"
+    },
+    "enrollmentMethod": {
+      "ade": "Automated Device Enrollment",
+      "ota": "Enrollment link",
+      "byod_account": "Account-driven User Enrollment",
+      "configurator": "Apple Configurator",
+      "account_device": "Account-driven Device Enrollment",
+      "migration": "Migration"
+    },
+    "managementMode": {
+      "device": "Device",
+      "user_enrollment": "User Enrollment",
+      "fully_managed": "Fully managed",
+      "dedicated": "Dedicated",
+      "work_profile_corporate": "Work profile (corporate)",
+      "work_profile_personal": "Work profile (personal)"
+    },
+    "unenrollReason": {
+      "checkout": "management profile removed on the device",
+      "retired": "retired",
+      "transfer": "transferred to another tenant",
+      "superseded_by_proof": "replaced by a verified enrollment",
+      "superseded": "replaced by a newer enrollment",
+      "apns_inactive": "push token no longer active",
+      "purged": "purged",
+      "disabled_in_edge": "disabled at the device service",
+      "removed_by_command": "removed from management by a command",
+      "wiped": "erased",
+      "replaced": "replaced by a newer cycle"
+    },
+    "identityState": {
+      "valid": "Valid",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "pushState": {
+      "unknown": "Unknown",
+      "ready": "Ready",
+      "invalid_token": "Invalid token",
+      "inactive": "Inactive",
+      "topic_error": "Topic refused",
+      "disabled": "Disabled"
+    },
+    "collected": {
+      "serialNumber": "Serial number",
+      "hardwareIds": "Hardware identifiers",
+      "deviceName": "Device name",
+      "phoneNumber": "Phone number",
+      "network": "Network information",
+      "allApps": "Every application",
+      "allCertificates": "Every certificate"
+    },
+    "unavailable": {
+      "schema_unknown": "Unknown to the current schema",
+      "platform_unsupported": "Not supported on this platform",
+      "enrollment_type_unsupported": "Not supported by this type of enrollment",
+      "supervision_required": "Needs a supervised device",
+      "os_removed": "Removed from this version of the operating system",
+      "os_too_old": "Needs a newer operating system",
+      "ownership_forbidden": "Not allowed for this ownership",
+      "client_unsupported": "Not supported by the device",
+      "asset_not_supported": "Needs an asset the device cannot receive yet",
+      "variable_unresolved": "A variable has no value for this device",
+      "license_unavailable": "No license available"
+    },
+    "artifactState": {
+      "pending": "Pending",
+      "delivering": "Being delivered",
+      "applied": "Applied",
+      "error": "Error",
+      "not_applicable": "Not applicable",
+      "removing": "Being removed",
+      "removed": "Removed"
+    },
+    "artifactReason": {
+      "attempts_exhausted": "Every delivery attempt failed",
+      "drift": "The device no longer holds the expected version: delivered again",
+      "drift_absent": "Missing on the device: delivered again",
+      "not_reported": "The device did not report it yet",
+      "compile_identifier": "Its identifier is too long to be delivered",
+      "compile_raw_profile": "The imported profile cannot be delivered",
+      "compile_secret_in_declaration": "A declaration cannot carry a secret",
+      "compile_required": "Required key missing: {{key}}",
+      "render_variable_unresolved": "A variable has no value for this device",
+      "render_secret_unavailable": "A secret of the policy is unavailable"
+    },
+    "channel": {
+      "ddm": "Declaration",
+      "profile": "Profile",
+      "setting": "Setting",
+      "app": "App"
+    },
+    "provenance": {
+      "device": "Set on the device",
+      "group": "Inherited from a group",
+      "ownGroup": "The device's group",
+      "tenant": "Whole tenant",
+      "library": "Library"
+    },
+    "config": {
+      "counts": "{{settings}} setting(s), {{artifacts}} artifact(s)",
+      "settingsTitle": "Effective settings",
+      "noSettings": "No policy applies to this device.",
+      "key": "Setting",
+      "value": "Value",
+      "provenance": "Provenance",
+      "availability": "Availability",
+      "available": "Applies",
+      "conflict": "Conflict with",
+      "removed": "removed",
+      "secret": "Secret: kept in the vault, never shown",
+      "artifactsTitle": "Delivered artifacts",
+      "noArtifacts": "Nothing is delivered to this device by a policy.",
+      "artifact": "Artifact",
+      "channel": "Channel",
+      "delivered": "Delivered"
+    },
+    "inventory": {
+      "lastCollected": "collected: {{at}}",
+      "noApps": "No application reported.",
+      "noProfiles": "No profile reported.",
+      "noCertificates": "No certificate reported.",
+      "managedAppsOnly": "Managed applications only: the other applications of this device are not collected (privacy rules of its ownership).",
+      "managedCertificatesOnly": "Only the certificates of the management are collected on this device (privacy rules of its ownership).",
+      "app": "Application",
+      "version": "Version",
+      "management": "Management",
+      "size": "Size",
+      "lastSeen": "Last seen",
+      "managed": "Managed",
+      "unmanaged": "Not managed",
+      "profile": "Profile",
+      "payloads": "Payloads",
+      "origin": "Origin",
+      "fromPolicy": "Policy",
+      "installedByUser": "Installed outside management",
+      "removalDisallowed": "The user cannot remove it",
+      "encrypted": "encrypted",
+      "certificate": "Certificate",
+      "issuer": "Issuer",
+      "validUntil": "Valid until",
+      "mdmIdentity": "Management identity",
+      "identity": "Identity"
+    },
+    "history": {
+      "episodes": "Enrollment episodes",
+      "noEpisode": "No enrollment recorded.",
+      "current": "current",
+      "started": "Started",
+      "enrolled": "Enrolled",
+      "ended": "Ended",
+      "timeline": "Timeline",
+      "noEvent": "Nothing happened yet."
+    },
+    "assignments": {
+      "title": "Assignments",
+      "add": "Assign",
+      "addTitle": "Assign a policy",
+      "none": "No assignment.",
+      "publishFirst": "A policy is assigned once it has a published version.",
+      "policy": "Policy",
+      "pickPolicy": "Pick a published policy…",
+      "noPublishedPolicy": "No published policy yet.",
+      "target": "Target",
+      "targetsCount_one": "{{count}} target",
+      "targetsCount_other": "{{count}} targets",
+      "wholeTenant": "Whole tenant",
+      "searchDevice": "Search a device…",
+      "mode": "Mode",
+      "include": "Include",
+      "exclude": "Exclude",
+      "priority": "Priority",
+      "priorityHint": "Priority: 0 to 1000, smaller is stronger; it only breaks ties between policies assigned at the same level.",
+      "noTenantExclude": "A policy cannot be excluded from the whole tenant: remove its assignment instead.",
+      "preview": "Preview the impact",
+      "previewTitle": "Impact of the assignment",
+      "remove": "Remove the assignment",
+      "removeTitle": "Remove the assignment",
+      "scope": {
+        "tenant": "Tenant",
+        "group": "Group",
+        "device": "Device"
+      }
+    },
+    "impact": {
+      "devicesTouched": "Devices touched",
+      "devicesInScope": "Devices in scope",
+      "devicesAdded": "Start receiving it",
+      "devicesRemoved": "Stop receiving it",
+      "installs": "Installations",
+      "removals": "Removals",
+      "kioskLockChanges": "Kiosk lock changes",
+      "fleetSize": "Enrolled fleet",
+      "approvalRequired": "A second approver is required",
+      "stepUpOnly": "Your second factor is enough",
+      "fleet": "{{touched}} of {{fleet}} enrolled devices",
+      "computedAt": "computed at {{at}}",
+      "computing": "Computing the preview…",
+      "conflicts_one": "{{count}} conflict",
+      "conflicts_other": "{{count}} conflicts",
+      "conflictsHint": "Two resources set the same key on the same target with the same priority and different values: change a priority or a value.",
+      "key": "Setting",
+      "added": "Added",
+      "changed": "Changed",
+      "removed": "Removed",
+      "notApplicable": "Not applicable",
+      "nothing": "No device changes: nothing is installed nor removed.",
+      "sample_one": "Sample of {{count}} device within your scopes",
+      "sample_other": "Sample of {{count}} devices within your scopes",
+      "allDevices": "All the devices…",
+      "devicesTitle": "Devices touched",
+      "noVisibleDevice": "No device within your scopes.",
+      "expired": "This preview has expired: compute it again.",
+      "request": "Request approval",
+      "reason": {
+        "devices_threshold": "25 devices or more are touched",
+        "fleet_share": "10 % of the fleet or more is touched",
+        "removal_threshold": "something is removed from 3 devices or more",
+        "restriction": "the restriction of this tenant requires it"
+      }
+    },
+    "outcome": {
+      "awaitingApproval": "Waiting for a second approver: nothing has changed yet.",
+      "published": "Published",
+      "applied": "Applied"
+    },
+    "validation": {
+      "invalid_content": "The content is not in the expected format",
+      "too_many_items": "Too many items (200 at most)",
+      "content_too_large": "The content is too large (512 KiB at most)",
+      "invalid_item": "The item is malformed",
+      "duplicate_item_id": "Two items carry the same identifier",
+      "unknown_type": "Unknown type",
+      "type_disabled": "This type is not offered",
+      "unknown_key": "Unknown key",
+      "type_mismatch": "Wrong type of value",
+      "out_of_range": "Value out of range",
+      "required": "Required key missing",
+      "invalid_instance": "Invalid instance name",
+      "duplicate_setting_key": "The same setting is set twice in this policy",
+      "unknown_variable": "Unknown variable",
+      "secret_expected": "A secret is expected here",
+      "secret_not_allowed": "A secret is not allowed here",
+      "secret_not_found": "Secret reference not found",
+      "asset_not_supported": "Assets are not supported yet",
+      "secret_requires_asset": "This type cannot carry a secret",
+      "identifier_too_long": "The identifier would be too long",
+      "remove_not_allowed": "This type cannot be removed by an item"
+    },
+    "rawProfile": {
+      "binary_plist": "A binary profile is not accepted: export it as XML.",
+      "encrypted_profile": "An encrypted profile cannot be imported.",
+      "forbidden_payload": "The profile holds a payload that is not accepted (a second MDM enrollment, a certificate enrollment, a removal password).",
+      "invalid_plist": "The file is not a readable profile.",
+      "invalid_value": "The profile holds a value that cannot be stored.",
+      "no_payload": "The profile holds no payload.",
+      "not_a_profile": "The file is not a configuration profile.",
+      "too_deep": "The profile is nested too deeply.",
+      "too_large": "The profile is larger than 1 MiB.",
+      "too_many_payloads": "The profile holds too many payloads.",
+      "unreadable_signature": "The signed envelope of the profile cannot be read: export the profile unsigned.",
+      "invalid_upload": "The upload is not valid."
+    }
+  },
+  "errors": {
+    "invalidRequest": "The request is not valid.",
+    "crossTenantBatch": "One request acts on one tenant only.",
+    "tenantFrozen": "The commands of this tenant are frozen.",
+    "commandRefused": "The command cannot be sent to this device.",
+    "rateLimited": "Too many requests: try again in a minute.",
+    "deviceUnderManagement": "A device under management leaves management before its record is deleted.",
+    "ownershipChangeNotAllowed": "The ownership changes between corporate and corporate, personally enabled, only, on a managed device in device mode; any other change is a new enrollment.",
+    "endUserExists": "An end user already carries this e-mail, this Managed Apple Account or this directory identifier.",
+    "policyNameTaken": "A policy of this tenant already has this name.",
+    "policyArchived": "An archived policy does not change.",
+    "policyVersionNotDraft": "Only a draft is changed, submitted or discarded.",
+    "policyVersionNotRejected": "Only a rejected version is taken up again.",
+    "policyVersionChanged": "The version changed since its preview: review it again.",
+    "policyHasOpenVersion": "The policy already has a draft or a version awaiting approval.",
+    "policyHasAssignments": "The policy still has assignments: remove them first.",
+    "assignmentExists": "This policy is already assigned to this target.",
+    "assignmentChanged": "An assignment of this request changed meanwhile: review it again.",
+    "impactChanged": "The impact changed since the preview (more devices, more removals, or another reach): preview the change again.",
+    "configurationBusy": "Too many changes of the configuration are waiting on this tenant: try again in a moment.",
+    "validationFailed": "The content of the policy is not valid.",
+    "policyConflict": "The change would create a conflict: two policies set the same key on the same target with the same priority.",
+    "rawProfileInvalid": "The profile cannot be imported.",
+    "tooManyTargets": "Too many devices for one request.",
+    "appleEdgeUnavailable": "The device service is unavailable: try again in a moment.",
+    "appleIntegrationDisabled": "The Apple integration is not enabled on this server.",
+    "jobsUnavailable": "The background jobs are not running.",
+    "deviceNotManaged": "This device is not under management."
   }
 }

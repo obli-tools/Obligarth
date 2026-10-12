@@ -66,7 +66,8 @@
     "expandNav": "Déplier la navigation",
     "collapseAdmin": "Replier l'administration",
     "expandAdmin": "Déplier l'administration",
-    "administration": "Administration"
+    "administration": "Administration",
+    "endUsers": "Utilisateurs finaux"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -224,7 +225,7 @@
     "notEnoughHistory": "Pas assez d'historique — données après 24h",
     "agentsOnlineOffline": "agents en ligne / hors ligne",
     "groupViewStatusSub": "en ligne · hors ligne · alertes",
-    "devicesManaged": "appareils gérés",
+    "devicesManaged": "Appareils sous gestion",
     "allDevices": "Voir tous les appareils",
     "osConnectivity": "Connectivité par OS",
     "noData": "Aucune donnée",
@@ -237,7 +238,35 @@
     "historyAvailableHours_other": "{{count}} h disponibles",
     "historyAvailable_one": "{{count}} j disponible",
     "historyAvailable_other": "{{count}} j disponibles",
-    "notEnoughForRange": "Historique insuffisant ({{have}}/{{need}})"
+    "notEnoughForRange": "Historique insuffisant ({{have}}/{{need}})",
+    "enrolled": "Enrôlés",
+    "compliant": "Conformes",
+    "nonCompliant": "Non conformes",
+    "enrolling": "En cours d'enrôlement",
+    "staleDays_one": "Sans contact depuis {{count}} jour",
+    "staleDays_other": "Sans contact depuis {{count}} jours",
+    "staleShort": "Sans contact",
+    "allInContact": "tout le parc est en contact",
+    "subStatEnrolling": "en cours d'enrôlement",
+    "subStatUnenrolling": "en sortie",
+    "subStatUnknown": "pas encore évalués",
+    "awaitingConfiguration": "{{count}} dans l'assistant de configuration",
+    "configErrors": "Erreurs de configuration",
+    "configPending": "{{count}} en attente",
+    "lostMode": "Mode perdu",
+    "recentContact": "En contact depuis moins de 24 h",
+    "neverSeen": "{{count}} jamais vus",
+    "byPlatform": "Plateformes",
+    "byOwnership": "Propriété",
+    "groupViewCounters": "enrôlés · non conformes · erreurs de configuration · sans contact",
+    "noGroupedDevice": "Aucun appareil sous gestion dans un groupe pour l'instant",
+    "tooltipEnrolled": "{{enrolled}} enrôlés sur {{total}} sous gestion",
+    "range": {
+      "24h": "24 h",
+      "7j": "7 j",
+      "14j": "14 j",
+      "30j": "30 j"
+    }
   },
   "groups": {
     "new": "Nouveau groupe",
@@ -260,7 +289,7 @@
     "failedDelete": "Échec de la suppression du groupe",
     "failedMove": "Échec du déplacement du groupe",
     "failedOrder": "Échec de l'enregistrement de l'ordre",
-    "confirmDelete": "Supprimer le groupe « {{name}} » et tous ses sous-groupes ? Les moniteurs seront dissociés.",
+    "confirmDelete": "Supprimer le groupe « {{name}} » ? Ses appareils se retrouveront sans groupe.",
     "form": {
       "sectionGeneral": "Général",
       "name": "Nom",
@@ -280,7 +309,15 @@
     "searchPlaceholder": "Rechercher un groupe...",
     "notFoundOrDenied": "Groupe introuvable ou accès refusé",
     "position": "Position",
-    "deviceGroup": "Groupe d'appareils"
+    "deviceGroup": "Groupe d'appareils",
+    "movePreviewTitle": "Déplacer le groupe « {{name}} »",
+    "movePreviewIntro": "Les appareils de ce groupe et de ses sous-groupes cessent d'hériter des politiques des groupes qu'il quitte, et héritent de celles de son nouveau parent ({{parent}}).",
+    "deletePreviewTitle": "Supprimer le groupe « {{name}} »",
+    "deletePreviewIntro": "Les affectations de ce groupe sont retirées avec lui et ses appareils se retrouvent sans groupe : ils perdent ce qu'ils héritaient de lui.",
+    "deleteSubgroupsNote": "Ses sous-groupes ne sont pas supprimés : ils sont détachés et affichés à la racine.",
+    "settingsFor": "Réglages de « {{name}} »",
+    "notificationsFor": "Notifications de « {{name}} »",
+    "maintenanceFor": "Maintenance de « {{name}} »"
   },
   "notifications": {
     "title": "Notifications",
@@ -566,7 +603,11 @@
       "readOnly": "Lecture seule",
       "readWrite": "Lecture/écriture",
       "collapse": "Replier",
-      "expand": "Déplier"
+      "expand": "Déplier",
+      "mdmCapabilities": "MDM",
+      "mdmCapabilitiesHint": "Actions MDM que cette équipe peut demander sur ces appareils",
+      "mdmCapabilitiesTitle": "Actions MDM de cette équipe",
+      "mdmCapabilitiesCooldown": "Une action destructrice donnée à une équipe ouvre un refroidissement de 72 h pour ses membres qui ne la détenaient pas, et lève une alerte."
     },
     "resetMfa": "Réinitialiser le MFA",
     "confirmResetMfa": "Désactiver tous les facteurs 2FA de \"{{username}}\" ? L'utilisateur pourra se connecter sans second facteur.",
@@ -781,7 +822,7 @@
       "refused": "Refusés",
       "suspended": "Suspendus",
       "search": "Rechercher des appareils...",
-      "searchHint": "Recherche par hostname, nom affiché, IP, MAC, dernier utilisateur, OS, version d'agent, localisation, tags, notes, UUID",
+      "searchHint": "Recherche dans le libellé, le nom, le numéro de série, le modèle, l'utilisateur final, les étiquettes et l'UUID",
       "allGroups": "Tous les groupes",
       "button": "Filtres",
       "clearAll": "Effacer les filtres",
@@ -802,7 +843,13 @@
       "osNamesTitle": "Versions",
       "buildsTitle": "Builds",
       "tagsTitle": "Tags appliqués",
-      "noTags": "Aucun tag dans le parc"
+      "noTags": "Aucun tag dans le parc",
+      "supervised": "Supervisés",
+      "osBelow": "OS antérieur à…",
+      "osBelowValue": "OS antérieur à {{version}}",
+      "osBelowHint": "Appareils dont le système d'exploitation est plus ancien qu'une version",
+      "osBelowTitle": "Système d'exploitation antérieur à",
+      "endUser": "Un utilisateur final"
     },
     "pagination": {
       "treeCapped": "Affichage des {{shown}} premiers sur {{total}} — utilisez la recherche ou choisissez un sous-groupe pour restreindre.",
@@ -825,7 +872,15 @@
       "changeGroupTitle_one": "Changer le groupe de {{count}} appareil",
       "changeGroupTitle_other": "Changer le groupe de {{count}} appareils",
       "moveHere": "Déplacer",
-      "changeGroupHint": "Choisissez un groupe cible, ou laissez vide pour déplacer vers « Sans groupe »."
+      "changeGroupHint": "Choisissez un groupe cible, ou laissez vide pour déplacer vers « Sans groupe ».",
+      "assignPolicy": "Affecter une politique",
+      "assignTooMany": "Une politique est affectée à 100 appareils au plus à la fois : affectez-la plutôt à leur groupe.",
+      "changeGroupPolicies": "Les appareils reçoivent alors les politiques affectées à leur nouveau groupe, et perdent celles du groupe quitté.",
+      "command": "Envoyer une commande",
+      "commandTitle_one": "Envoyer une commande à {{count}} appareil",
+      "commandTitle_other": "Envoyer une commande à {{count}} appareils",
+      "commandHint": "Les appareils qui ne peuvent pas recevoir la commande (non enrôlés, non supervisés, propriété) sont écartés. Les actions destructrices (effacement, verrouillage, mode perdu, retrait de gestion) se demandent depuis la fiche d'un appareil.",
+      "deleteRecords": "Supprimer les fiches"
     },
     "export": {
       "csv": "Exporter en CSV",
@@ -849,7 +904,17 @@
     "lastReboot": "Dernier redémarrage",
     "columns": {
       "title": "Colonnes affichées",
-      "button": "Colonnes"
+      "button": "Colonnes",
+      "tenant": "Tenant",
+      "platform": "Plateforme et OS",
+      "model": "Modèle",
+      "ownership": "Propriété",
+      "group": "Groupe",
+      "endUser": "Utilisateur final",
+      "contact": "Dernier contact",
+      "compliance": "Conformité",
+      "serial": "Numéro de série",
+      "tags": "Étiquettes"
     },
     "selection": {
       "exit": "Quitter le mode sélection",
@@ -857,6 +922,11 @@
       "active": "Sélection en cours",
       "select": "Sélectionner",
       "modeLabel": "Mode sélection"
+    },
+    "noDevicesFiltered": "Aucun appareil ne correspond à ces filtres.",
+    "state": {
+      "managed": "Sous gestion",
+      "enrolling": "En cours d'enrôlement"
     }
   },
   "deviceSummary": {
@@ -868,7 +938,89 @@
     "ungrouped": "Sans groupe",
     "status": "Statut",
     "lastSeen": "Vu en dernier",
-    "tenant": "Tenant"
+    "tenant": "Tenant",
+    "tabs": {
+      "label": "Sections de la fiche",
+      "overview": "Vue d'ensemble",
+      "configuration": "Configuration",
+      "apps": "Applications",
+      "profiles": "Profils",
+      "certificates": "Certificats",
+      "commands": "Commandes",
+      "history": "Historique",
+      "actions": "Actions"
+    },
+    "cards": {
+      "management": "Gestion",
+      "ownership": "Propriété et confidentialité",
+      "hardware": "Matériel",
+      "identity": "Identité et push",
+      "ddm": "Gestion déclarative"
+    },
+    "change": "Changer",
+    "enrollmentMethod": "Enrôlement",
+    "managementMode": "Mode de gestion",
+    "supervised": "supervisé",
+    "enrolledAt": "Enrôlé le",
+    "lastCheckin": "Dernier contact",
+    "unenrolledAt": "Sorti de gestion le",
+    "complianceReasons": "Non conforme parce que",
+    "ownership": "Propriété",
+    "collected": "Collecté sur cet appareil",
+    "collectedHint": "Ce qui est barré n'est jamais collecté pour cette propriété : la donnée est absente, pas vide.",
+    "endUser": "Utilisateur final",
+    "model": "Modèle",
+    "serial": "Numéro de série",
+    "deviceName": "Nom sur l'appareil",
+    "storage": "Stockage",
+    "storageFree": "libres sur",
+    "warranty": "Garantie",
+    "identity": "Identité de gestion",
+    "validUntil": "jusqu'au {{date}}",
+    "push": "Push",
+    "activationLock": "Verrouillage d'activation",
+    "bypassEscrowed": "code de contournement conservé",
+    "unlockToken": "Jeton de déverrouillage",
+    "present": "Présent",
+    "absent": "Absent",
+    "lastInventory": "Dernier inventaire",
+    "ddm": {
+      "enabled": "Activée",
+      "disabled": "Non activée",
+      "inSync": "À jour",
+      "syncing": "Synchronisation en cours",
+      "outOfSync": "Pas encore récupérée",
+      "sync": "Synchroniser",
+      "syncRequested": "Synchronisation demandée",
+      "syncAlready": "Une synchronisation a déjà été demandée dans la minute",
+      "declarations": "Déclarations",
+      "invalid": "{{count}} invalide(s)",
+      "fetchedAt": "récupérées le {{at}}",
+      "notReported": "pas encore rapportée",
+      "invalidOne": "invalide",
+      "active": "active",
+      "inactive": "inactive",
+      "statusItems": "Éléments de statut"
+    },
+    "edit": {
+      "title": "Modifier la fiche",
+      "displayName": "Nom affiché (remplace le nom rapporté par l'appareil)",
+      "tags": "Étiquettes (séparées par des virgules)"
+    },
+    "groupDialog": {
+      "title": "Changer de groupe"
+    },
+    "endUserDialog": {
+      "title": "Utilisateur final de l'appareil",
+      "unassign": "Retirer l'affectation"
+    },
+    "ownershipDialog": {
+      "title": "Changer la propriété",
+      "done": "Propriété changée",
+      "ticketRequired": "Numéro de ticket (obligatoire)",
+      "widen": "Davantage de données seront collectées sur cet appareil (toutes les applications, le numéro de téléphone…) : un ticket est exigé.",
+      "narrow": "Moins de données seront collectées : ce qui ne l'est plus est effacé de la fiche."
+    }
   },
   "apiKeys": {
     "defaultGroup": "Groupe par défaut",
@@ -897,7 +1049,99 @@
   },
   "policies": {
     "title": "Politiques",
-    "tabNotifications": "Notifications"
+    "tabNotifications": "Notifications",
+    "tabPolicies": "Politiques",
+    "search": "Rechercher une politique…",
+    "new": "Nouvelle politique",
+    "empty": "Aucune politique",
+    "emptyHint": "Une politique regroupe des réglages, les publie en versions immuables et les applique au tenant, à des groupes ou à des appareils.",
+    "name": "Nom",
+    "categoryLabel": "Catégorie",
+    "version": "Version",
+    "assignments": "Affectations",
+    "updated": "Modifiée le",
+    "shared": "bibliothèque",
+    "created": "Politique créée",
+    "copyFrom": "Partir d'une copie de (facultatif)",
+    "copyFromNone": "Une politique vide",
+    "notFound": "Politique introuvable",
+    "back": "Retour aux politiques",
+    "state": {
+      "draft": "Brouillon",
+      "published": "Publiée",
+      "archived": "Archivée"
+    },
+    "versionState": {
+      "draft": "Brouillon",
+      "pending_approval": "En attente d'approbation",
+      "published": "Publiée",
+      "superseded": "Remplacée",
+      "rejected": "Rejetée"
+    },
+    "category": {
+      "configuration": "Configuration",
+      "restrictions": "Restrictions",
+      "network": "Réseau",
+      "security": "Sécurité",
+      "updates": "Mises à jour",
+      "kiosk": "Kiosque",
+      "certificates": "Certificats"
+    },
+    "family": {
+      "declaration": "déclaration",
+      "profile_payload": "profil",
+      "command": "réglage"
+    },
+    "editor": {
+      "publishedVersion": "publiée : v{{version}}",
+      "archive": "Archiver",
+      "archived": "Politique archivée",
+      "confirmArchive": "Archiver la politique « {{name}} » ? Elle ne pourra plus être affectée.",
+      "versions": "Versions",
+      "newVersion": "Nouvelle version",
+      "publishedAt": "publiée le {{at}}",
+      "submittedAt": "soumise le {{at}}",
+      "createdAt": "créée le {{at}}",
+      "seeApproval": "Voir la demande d'approbation",
+      "readOnly": "Lecture seule : vous ne pouvez pas modifier les politiques.",
+      "importProfile": "Importer un profil",
+      "addItem": "Ajouter un élément",
+      "validate": "Valider",
+      "valid": "Le contenu est valide",
+      "publish": "Publier…",
+      "publishNow": "Publier",
+      "publishTitle": "Publier « {{name}} » v{{version}}",
+      "publishIntro": "Une version publiée est immuable : elle remplace la précédente sur tous les appareils auxquels la politique est affectée.",
+      "takeUpAgain": "La reprendre en brouillon",
+      "discard": "Abandonner",
+      "discarded": "Version abandonnée",
+      "confirmDiscard": "Abandonner la version {{version}} ? Son contenu sera perdu.",
+      "confirmLeave": "Le brouillon a des modifications non enregistrées : le quitter quand même ?",
+      "changeNote": "Note de cette version (ce qui change, pour l'approbateur et l'historique)",
+      "items_one": "{{count}} élément",
+      "items_other": "{{count}} éléments",
+      "noItem": "Cette version n'a encore aucun élément.",
+      "saved": "Brouillon enregistré",
+      "invalidJson": "Un élément n'est pas du JSON valide : corrigez-le avant d'enregistrer.",
+      "valuesObject": "Les valeurs sont un objet JSON",
+      "typeDisabled": "non proposé",
+      "tombstone": "retire l'élément hérité",
+      "instance": "Instance",
+      "removeInherited": "Retirer l'instance héritée au lieu de fixer des valeurs",
+      "rawProfile": "Profil importé : livré tel quel, chiffré pour chaque appareil. Son contenu ne se modifie pas ici (supprimez l'élément et importez de nouveau le fichier pour le remplacer).",
+      "showKeys": "Clés de ce type ({{count}})",
+      "hideKeys": "Masquer les clés de ce type",
+      "keysHint": "* obligatoire · (secret) : écrivez {{secret}} ; la valeur part au coffre à l'enregistrement du brouillon et n'est plus jamais affichée. Variables : {{variables}}…",
+      "note": "Commentaire (jamais envoyé à un appareil)",
+      "noType": "Aucun type ne correspond.",
+      "envelopeTitle": "Modifier la politique",
+      "importedTitle": "Profil importé",
+      "importedPayloads": "Charges",
+      "importedSecrets_one": "{{count}} secret déplacé au coffre",
+      "importedSecrets_other": "{{count}} secrets déplacés au coffre",
+      "importedSigned": "Le fichier était signé : sa signature a été retirée et n'a pas été vérifiée. Le profil est livré par ce serveur, chiffré pour chaque appareil.",
+      "importedHint": "Vérifiez les charges avant de publier : un profil brut est livré tel quel."
+    }
   },
   "supervision": {
     "title": "Supervision",
@@ -934,14 +1178,25 @@
     "settings": "Paramètres du groupe",
     "ungrouped": "Sans groupe",
     "ungroupedHint": "Appareils qui n'appartiennent encore à aucun groupe",
-    "tenantEmpty": "Aucun groupe pour le moment"
+    "tenantEmpty": "Aucun groupe pour le moment",
+    "enrolled": "Enrôlés",
+    "nonCompliant": "Non conformes",
+    "configErrors": "Erreurs de configuration",
+    "stale": "Sans contact"
   },
   "sort": {
     "name": "Nom",
     "status": "Statut",
     "lastSeen": "Vu en dernier",
     "os": "SE",
-    "group": "Groupe"
+    "group": "Groupe",
+    "state": "Enrôlement",
+    "lastCheckin": "Dernier contact",
+    "compliance": "Conformité",
+    "platform": "Plateforme",
+    "model": "Modèle",
+    "ownership": "Propriété",
+    "enrolledAt": "Enrôlé le"
   },
   "fanOut": {
     "label": "Diffuser à (lecture seule sur les tenants ciblés)",
@@ -1474,7 +1729,26 @@
     },
     "subtitle": "Actions destructrices en attente de la validation d'un second administrateur.",
     "title": "Approbations",
-    "yourRequest": "votre demande"
+    "yourRequest": "votre demande",
+    "publish": {
+      "version": "Publication de la version {{version}} de la politique",
+      "groupMove": "Déplacement du groupe",
+      "groupDelete": "Suppression du groupe",
+      "assignments_one": "{{count}} changement d'affectation",
+      "assignments_other": "{{count}} changements d'affectations",
+      "assignment": "affectation",
+      "base": "Versions avec lesquelles la demande a été déposée",
+      "conflicts": "Conflits",
+      "why": "Un second approbateur est exigé parce que",
+      "recheck": "À l'approbation, l'aperçu est recalculé : la demande est refusée si son contenu ou sa portée a changé.",
+      "keys_one": "{{count}} réglage touché",
+      "keys_other": "{{count}} réglages touchés",
+      "op": {
+        "create": "affecter",
+        "update": "modifier",
+        "delete": "retirer"
+      }
+    }
   },
   "os": {
     "other": "Autres"
@@ -1801,7 +2075,20 @@
       "crossTenantBatch": "Une demande ne vise qu'un seul tenant.",
       "approverSideRequired": "Cette demande attend un approbateur de l'autre côté (un approbateur client par défaut).",
       "selfApproval": "Le demandeur ne peut pas examiner sa demande.",
-      "approverFallbackHeld": "Aucun approbateur client : un approbateur client a été retiré récemment, et le repli sur un approbateur du MSP reste fermé jusqu'au {{until}}. Désignez un approbateur client (avec l'accord du client), ou attendez."
+      "approverFallbackHeld": "Aucun approbateur client : un approbateur client a été retiré récemment, et le repli sur un approbateur du MSP reste fermé jusqu'au {{until}}. Désignez un approbateur client (avec l'accord du client), ou attendez.",
+      "unknownGuardedAction": "Cette action gardée n'existe pas.",
+      "notFound": "Cette action gardée n'existe plus.",
+      "actionClosed": "Cette action est close : plus rien ne peut y être changé.",
+      "actionExecuting": "Cette action est en cours d'exécution et ne peut plus être annulée.",
+      "notAllowed": "Vous n'êtes pas autorisé à faire cela sur cette action ou sur ce tenant.",
+      "actionNotPaused": "Cette action n'est pas en pause : il n'y a rien à reprendre.",
+      "invalidTenant": "Ce tenant n'est pas valide.",
+      "notFrozen": "Le tenant n'est pas gelé.",
+      "invalidSettings": "Ces réglages des garde-fous ne sont pas valides.",
+      "invalidApprover": "Ce compte ne peut pas être désigné comme approbateur.",
+      "alreadyDesignated": "Ce compte est déjà un approbateur désigné du tenant.",
+      "invalidSelection": "La sélection d'appareils n'est pas valide.",
+      "invalidTicket": "Un numéro de ticket fait 64 caractères au plus."
     },
     "delay": {
       "none": "sans délai",
@@ -2033,7 +2320,27 @@
         "InstallApplication": "Installer une application",
         "RemoveApplication": "Supprimer une application",
         "Settings": "Réglages"
-      }
+      },
+      "command": "Commande",
+      "send": "Envoyer",
+      "reasonOptional": "Motif (facultatif)",
+      "reasonRequired": "Motif (10 caractères au moins) : il est écrit au journal d'audit",
+      "queued_one": "Commande mise en file pour {{count}} appareil",
+      "queued_other": "Commande mise en file pour {{count}} appareils",
+      "queuedOne": "Commande mise en file : elle atteint l'appareil à son prochain contact.",
+      "refusedSome_one": "{{count}} appareil écarté (non enrôlé, non supervisé, propriété…)",
+      "refusedSome_other": "{{count}} appareils écartés (non enrôlés, non supervisés, propriété…)",
+      "filterOpen": "En attente",
+      "filterFinal": "Terminées",
+      "deliveredAt": "Livrée le",
+      "completedAt": "Terminée le",
+      "cancelled": "Commande annulée",
+      "cancelRequested": "Annulation demandée : l'appareil a peut-être déjà reçu la commande.",
+      "notCancellable": "Cette commande ne peut plus être annulée.",
+      "cancelThroughGuard": "Cette commande appartient à une action gardée : retirez-la depuis l'action.",
+      "withdraw": "Retirer…",
+      "pushed": "Push envoyé",
+      "pushSkippedGeneric": "Aucun push n'a été envoyé pour cet appareil."
     },
     "alerts": {
       "enrollment": {
@@ -2423,6 +2730,407 @@
         "install-state": "État de la mise à jour",
         "pending-version": "Mise à jour en attente"
       }
+    },
+    "actions": {
+      "run": "Demander",
+      "guarded": "gardée",
+      "readOnly": "Vous pouvez consulter cet appareil, pas agir dessus.",
+      "removeManagementHint": "Retire le profil d'enrôlement : l'appareil sort de gestion et perd tout ce que la gestion a installé.",
+      "messageOrPhone": "Un message ou un numéro de téléphone est exigé : il est affiché sur l'écran verrouillé.",
+      "group": {
+        "inventory": "Inventaire",
+        "power": "Alimentation",
+        "security": "Sécurité",
+        "destructive": "Actions destructrices",
+        "management": "Gestion"
+      },
+      "param": {
+        "message": "Message affiché à l'écran",
+        "phoneNumber": "Numéro de téléphone affiché à l'écran",
+        "footnote": "Note de bas de page",
+        "preserveDataPlan": "Conserver le forfait cellulaire (eSIM)",
+        "disallowProximitySetup": "Interdire le démarrage rapide par proximité après l'effacement"
+      }
     }
+  },
+  "endUsers": {
+    "title": "Utilisateurs finaux",
+    "subtitle": "Les personnes auxquelles les appareils sont affectés. Elles n'ont pas de compte dans cette console.",
+    "search": "Nom, adresse électronique, identifiant…",
+    "active": "Actifs",
+    "departedLabel": "Partis",
+    "import": "Importer un CSV",
+    "new": "Nouvel utilisateur final",
+    "edit": "Modifier l'utilisateur final",
+    "importHint": "Colonnes du CSV : email, display_name, managed_apple_account, external_id (une ligne d'en-tête ; une ligne existante est mise à jour par son external_id, puis par son adresse).",
+    "none": "Aucun utilisateur final.",
+    "name": "Nom",
+    "email": "Adresse électronique",
+    "managedAppleAccount": "Compte Apple géré",
+    "externalId": "Identifiant d'annuaire",
+    "devices": "Appareils",
+    "depart": "Marquer comme parti",
+    "departed": "Marqué comme parti",
+    "confirmDepart": "Marquer {{name}} comme parti ? Ses appareils lui restent affectés 90 jours, puis la fiche est effacée.",
+    "importTooLarge": "Le fichier dépasse 1 Mio.",
+    "importReport": "Rapport d'import",
+    "variablesHint": "Ces valeurs renseignent les variables des politiques ({{variables}}…) sur les appareils affectés à cette personne.",
+    "source": {
+      "manual": "saisie",
+      "csv": "import CSV",
+      "directory": "annuaire",
+      "enrollment": "enrôlement"
+    },
+    "report": {
+      "created": "Créés",
+      "updated": "Mis à jour",
+      "unchanged": "Inchangés",
+      "rejected": "Rejetés",
+      "line": "Ligne {{line}}",
+      "code": {
+        "invalid_email": "adresse électronique invalide",
+        "invalid_managed_apple_account": "compte Apple géré invalide",
+        "invalid_external_id": "identifiant d'annuaire invalide",
+        "invalid_display_name": "nom invalide",
+        "identity_required": "une adresse électronique, un compte Apple géré ou un identifiant d'annuaire est exigé",
+        "identity_conflict": "ses identifiants désignent deux utilisateurs finaux différents"
+      }
+    }
+  },
+  "mdm": {
+    "enrollmentState": {
+      "enrolling": "En cours d'enrôlement",
+      "awaiting_configuration": "En attente de configuration",
+      "enrolled": "Enrôlé",
+      "unenrolling": "En sortie de gestion",
+      "unenrolled": "Sorti de gestion"
+    },
+    "contactState": {
+      "recent": "Contact récent",
+      "quiet": "Calme",
+      "stale": "Sans contact",
+      "never": "Jamais vu"
+    },
+    "complianceState": {
+      "compliant": "Conforme",
+      "non_compliant": "Non conforme",
+      "unknown": "Conformité inconnue",
+      "exempt": "Exempté"
+    },
+    "configState": {
+      "applied": "Configuration appliquée",
+      "pending": "Configuration en attente",
+      "error": "Erreur de configuration",
+      "unknown": "Configuration inconnue"
+    },
+    "lostModeState": {
+      "off": "Inactif",
+      "enabling": "Mode perdu : en cours d'activation",
+      "on": "Mode perdu",
+      "disabling": "Mode perdu : en cours de désactivation"
+    },
+    "complianceReason": {
+      "config_error": "Une configuration n'a pas pu être appliquée",
+      "passcode": "Le code ne respecte pas la politique",
+      "os_update_overdue": "Une mise à jour du système d'exploitation est en retard",
+      "stale": "Sans contact depuis trop longtemps",
+      "supervision_required": "La supervision est exigée"
+    },
+    "ownership": {
+      "corporate": "Entreprise",
+      "corporate_personal": "Entreprise, usage personnel permis",
+      "personal": "Personnel"
+    },
+    "enrollmentMethod": {
+      "ade": "Enrôlement automatisé (ADE)",
+      "ota": "Lien d'enrôlement",
+      "byod_account": "Enrôlement d'utilisateur par compte",
+      "configurator": "Apple Configurator",
+      "account_device": "Enrôlement d'appareil par compte",
+      "migration": "Migration"
+    },
+    "managementMode": {
+      "device": "Appareil",
+      "user_enrollment": "Enrôlement d'utilisateur",
+      "fully_managed": "Entièrement géré",
+      "dedicated": "Dédié",
+      "work_profile_corporate": "Profil professionnel (entreprise)",
+      "work_profile_personal": "Profil professionnel (personnel)"
+    },
+    "unenrollReason": {
+      "checkout": "profil de gestion retiré sur l'appareil",
+      "retired": "retiré",
+      "transfer": "transféré vers un autre tenant",
+      "superseded_by_proof": "remplacé par un enrôlement vérifié",
+      "superseded": "remplacé par un enrôlement plus récent",
+      "apns_inactive": "jeton de push devenu inactif",
+      "purged": "purgé",
+      "disabled_in_edge": "désactivé au service d'appareils",
+      "removed_by_command": "retiré de gestion par une commande",
+      "wiped": "effacé",
+      "replaced": "remplacé par un cycle plus récent"
+    },
+    "identityState": {
+      "valid": "Valide",
+      "expired": "Expirée",
+      "revoked": "Révoquée"
+    },
+    "pushState": {
+      "unknown": "Inconnu",
+      "ready": "Prêt",
+      "invalid_token": "Jeton invalide",
+      "inactive": "Inactif",
+      "topic_error": "Topic refusé",
+      "disabled": "Désactivé"
+    },
+    "collected": {
+      "serialNumber": "Numéro de série",
+      "hardwareIds": "Identifiants matériels",
+      "deviceName": "Nom de l'appareil",
+      "phoneNumber": "Numéro de téléphone",
+      "network": "Informations de réseau",
+      "allApps": "Toutes les applications",
+      "allCertificates": "Tous les certificats"
+    },
+    "unavailable": {
+      "schema_unknown": "Inconnu du schéma courant",
+      "platform_unsupported": "Non pris en charge sur cette plateforme",
+      "enrollment_type_unsupported": "Non pris en charge par ce type d'enrôlement",
+      "supervision_required": "Exige un appareil supervisé",
+      "os_removed": "Retiré de cette version du système d'exploitation",
+      "os_too_old": "Exige un système d'exploitation plus récent",
+      "ownership_forbidden": "Non permis pour cette propriété",
+      "client_unsupported": "Non pris en charge par l'appareil",
+      "asset_not_supported": "Exige une ressource que l'appareil ne peut pas encore recevoir",
+      "variable_unresolved": "Une variable n'a pas de valeur pour cet appareil",
+      "license_unavailable": "Aucune licence disponible"
+    },
+    "artifactState": {
+      "pending": "En attente",
+      "delivering": "En cours de livraison",
+      "applied": "Appliqué",
+      "error": "Erreur",
+      "not_applicable": "Non applicable",
+      "removing": "En cours de retrait",
+      "removed": "Retiré"
+    },
+    "artifactReason": {
+      "attempts_exhausted": "Toutes les tentatives de livraison ont échoué",
+      "drift": "L'appareil n'a plus la version attendue : relivré",
+      "drift_absent": "Absent de l'appareil : relivré",
+      "not_reported": "L'appareil ne l'a pas encore rapporté",
+      "compile_identifier": "Son identifiant est trop long pour être livré",
+      "compile_raw_profile": "Le profil importé ne peut pas être livré",
+      "compile_secret_in_declaration": "Une déclaration ne peut pas porter de secret",
+      "compile_required": "Clé obligatoire manquante : {{key}}",
+      "render_variable_unresolved": "Une variable n'a pas de valeur pour cet appareil",
+      "render_secret_unavailable": "Un secret de la politique est indisponible"
+    },
+    "channel": {
+      "ddm": "Déclaration",
+      "profile": "Profil",
+      "setting": "Réglage",
+      "app": "Application"
+    },
+    "provenance": {
+      "device": "Défini sur l'appareil",
+      "group": "Hérité d'un groupe",
+      "ownGroup": "Groupe de l'appareil",
+      "tenant": "Tout le tenant",
+      "library": "Bibliothèque"
+    },
+    "config": {
+      "counts": "{{settings}} réglage(s), {{artifacts}} artefact(s)",
+      "settingsTitle": "Réglages effectifs",
+      "noSettings": "Aucune politique ne s'applique à cet appareil.",
+      "key": "Réglage",
+      "value": "Valeur",
+      "provenance": "Provenance",
+      "availability": "Disponibilité",
+      "available": "S'applique",
+      "conflict": "Conflit avec",
+      "removed": "retiré",
+      "secret": "Secret : conservé au coffre, jamais affiché",
+      "artifactsTitle": "Artefacts livrés",
+      "noArtifacts": "Rien n'est livré à cet appareil par une politique.",
+      "artifact": "Artefact",
+      "channel": "Canal",
+      "delivered": "Livré le"
+    },
+    "inventory": {
+      "lastCollected": "collecté le {{at}}",
+      "noApps": "Aucune application rapportée.",
+      "noProfiles": "Aucun profil rapporté.",
+      "noCertificates": "Aucun certificat rapporté.",
+      "managedAppsOnly": "Applications gérées seulement : les autres applications de cet appareil ne sont pas collectées (règles de confidentialité de sa propriété).",
+      "managedCertificatesOnly": "Seuls les certificats de la gestion sont collectés sur cet appareil (règles de confidentialité de sa propriété).",
+      "app": "Application",
+      "version": "Version",
+      "management": "Gestion",
+      "size": "Taille",
+      "lastSeen": "Vu en dernier",
+      "managed": "Géré",
+      "unmanaged": "Non géré",
+      "profile": "Profil",
+      "payloads": "Charges",
+      "origin": "Origine",
+      "fromPolicy": "Politique",
+      "installedByUser": "Installé hors gestion",
+      "removalDisallowed": "L'utilisateur ne peut pas le retirer",
+      "encrypted": "chiffré",
+      "certificate": "Certificat",
+      "issuer": "Émetteur",
+      "validUntil": "Valide jusqu'au",
+      "mdmIdentity": "Identité de gestion",
+      "identity": "Identité"
+    },
+    "history": {
+      "episodes": "Épisodes d'enrôlement",
+      "noEpisode": "Aucun enrôlement enregistré.",
+      "current": "en cours",
+      "started": "Commencé le",
+      "enrolled": "Enrôlé le",
+      "ended": "Terminé le",
+      "timeline": "Chronologie",
+      "noEvent": "Rien ne s'est encore passé."
+    },
+    "assignments": {
+      "title": "Affectations",
+      "add": "Affecter",
+      "addTitle": "Affecter une politique",
+      "none": "Aucune affectation.",
+      "publishFirst": "Une politique s'affecte une fois qu'elle a une version publiée.",
+      "policy": "Politique",
+      "pickPolicy": "Choisir une politique publiée…",
+      "noPublishedPolicy": "Aucune politique publiée pour le moment.",
+      "target": "Cible",
+      "targetsCount_one": "{{count}} cible",
+      "targetsCount_other": "{{count}} cibles",
+      "wholeTenant": "Tout le tenant",
+      "searchDevice": "Rechercher un appareil…",
+      "mode": "Mode",
+      "include": "Inclure",
+      "exclude": "Exclure",
+      "priority": "Priorité",
+      "priorityHint": "Priorité : de 0 à 1000, la plus petite est la plus forte ; elle ne départage que des politiques affectées au même niveau.",
+      "noTenantExclude": "Une politique ne peut pas être exclue de tout le tenant : retirez plutôt son affectation.",
+      "preview": "Aperçu de l'impact",
+      "previewTitle": "Impact de l'affectation",
+      "remove": "Retirer l'affectation",
+      "removeTitle": "Retirer l'affectation",
+      "scope": {
+        "tenant": "Tenant",
+        "group": "Groupe",
+        "device": "Appareil"
+      }
+    },
+    "impact": {
+      "devicesTouched": "Appareils touchés",
+      "devicesInScope": "Appareils dans la portée",
+      "devicesAdded": "Commencent à la recevoir",
+      "devicesRemoved": "Cessent de la recevoir",
+      "installs": "Installations",
+      "removals": "Retraits",
+      "kioskLockChanges": "Changements de verrou de kiosque",
+      "fleetSize": "Parc enrôlé",
+      "approvalRequired": "Un second approbateur est exigé",
+      "stepUpOnly": "Votre second facteur suffit",
+      "fleet": "{{touched}} appareils sur {{fleet}} enrôlés",
+      "computedAt": "calculé à {{at}}",
+      "computing": "Calcul de l'aperçu…",
+      "conflicts_one": "{{count}} conflit",
+      "conflicts_other": "{{count}} conflits",
+      "conflictsHint": "Deux ressources fixent la même clé sur la même cible avec la même priorité et des valeurs différentes : changez une priorité ou une valeur.",
+      "key": "Réglage",
+      "added": "Ajoutés",
+      "changed": "Modifiés",
+      "removed": "Retirés",
+      "notApplicable": "Non applicables",
+      "nothing": "Aucun appareil ne change : rien n'est installé ni retiré.",
+      "sample_one": "Échantillon de {{count}} appareil dans vos portées",
+      "sample_other": "Échantillon de {{count}} appareils dans vos portées",
+      "allDevices": "Tous les appareils…",
+      "devicesTitle": "Appareils touchés",
+      "noVisibleDevice": "Aucun appareil dans vos portées.",
+      "expired": "Cet aperçu a expiré : recalculez-le.",
+      "request": "Demander l'approbation",
+      "reason": {
+        "devices_threshold": "25 appareils ou plus sont touchés",
+        "fleet_share": "10 % du parc ou plus est touché",
+        "removal_threshold": "un retrait touche 3 appareils ou plus",
+        "restriction": "la restriction de ce tenant l'exige"
+      }
+    },
+    "outcome": {
+      "awaitingApproval": "En attente d'un second approbateur : rien n'a encore changé.",
+      "published": "Publiée",
+      "applied": "Appliqué"
+    },
+    "validation": {
+      "invalid_content": "Le contenu n'est pas au format attendu",
+      "too_many_items": "Trop d'éléments (200 au plus)",
+      "content_too_large": "Le contenu est trop volumineux (512 Kio au plus)",
+      "invalid_item": "L'élément est mal formé",
+      "duplicate_item_id": "Deux éléments portent le même identifiant",
+      "unknown_type": "Type inconnu",
+      "type_disabled": "Ce type n'est pas proposé",
+      "unknown_key": "Clé inconnue",
+      "type_mismatch": "Mauvais type de valeur",
+      "out_of_range": "Valeur hors bornes",
+      "required": "Clé obligatoire manquante",
+      "invalid_instance": "Nom d'instance invalide",
+      "duplicate_setting_key": "Le même réglage est fixé deux fois dans cette politique",
+      "unknown_variable": "Variable inconnue",
+      "secret_expected": "Un secret est attendu ici",
+      "secret_not_allowed": "Un secret n'est pas admis ici",
+      "secret_not_found": "Référence de secret introuvable",
+      "asset_not_supported": "Les ressources ne sont pas encore prises en charge",
+      "secret_requires_asset": "Ce type ne peut pas porter de secret",
+      "identifier_too_long": "L'identifiant serait trop long",
+      "remove_not_allowed": "Ce type ne se retire pas par un élément"
+    },
+    "rawProfile": {
+      "binary_plist": "Un profil binaire n'est pas accepté : exportez-le en XML.",
+      "encrypted_profile": "Un profil chiffré ne peut pas être importé.",
+      "forbidden_payload": "Le profil contient une charge qui n'est pas acceptée (un second enrôlement MDM, un enrôlement de certificat, un mot de passe de retrait).",
+      "invalid_plist": "Le fichier n'est pas un profil lisible.",
+      "invalid_value": "Le profil contient une valeur qui ne peut pas être rangée.",
+      "no_payload": "Le profil ne contient aucune charge.",
+      "not_a_profile": "Le fichier n'est pas un profil de configuration.",
+      "too_deep": "Le profil est trop profondément imbriqué.",
+      "too_large": "Le profil dépasse 1 Mio.",
+      "too_many_payloads": "Le profil contient trop de charges.",
+      "unreadable_signature": "L'enveloppe signée du profil ne peut pas être lue : exportez le profil sans signature.",
+      "invalid_upload": "Le téléversement n'est pas valide."
+    }
+  },
+  "errors": {
+    "invalidRequest": "La demande n'est pas valide.",
+    "crossTenantBatch": "Une demande n'agit que sur un seul tenant.",
+    "tenantFrozen": "Les commandes de ce tenant sont gelées.",
+    "commandRefused": "La commande ne peut pas être envoyée à cet appareil.",
+    "rateLimited": "Trop de demandes : réessayez dans une minute.",
+    "deviceUnderManagement": "Un appareil sous gestion sort de gestion avant la suppression de sa fiche.",
+    "ownershipChangeNotAllowed": "La propriété ne change qu'entre « entreprise » et « entreprise, usage personnel permis », sur un appareil géré en mode appareil ; tout autre changement est un nouvel enrôlement.",
+    "endUserExists": "Un utilisateur final porte déjà cette adresse, ce compte Apple géré ou cet identifiant d'annuaire.",
+    "policyNameTaken": "Une politique de ce tenant porte déjà ce nom.",
+    "policyArchived": "Une politique archivée ne change plus.",
+    "policyVersionNotDraft": "Seul un brouillon se modifie, se soumet ou est abandonné.",
+    "policyVersionNotRejected": "Seule une version rejetée se reprend.",
+    "policyVersionChanged": "La version a changé depuis son aperçu : relisez-la.",
+    "policyHasOpenVersion": "La politique a déjà un brouillon ou une version en attente d'approbation.",
+    "policyHasAssignments": "La politique a encore des affectations : retirez-les d'abord.",
+    "assignmentExists": "Cette politique est déjà affectée à cette cible.",
+    "assignmentChanged": "Une affectation de cette demande a changé entre-temps : relisez-la.",
+    "impactChanged": "L'impact a changé depuis l'aperçu (plus d'appareils, plus de retraits, ou une autre portée) : refaites l'aperçu du changement.",
+    "configurationBusy": "Trop de changements de configuration attendent sur ce tenant : réessayez dans un instant.",
+    "validationFailed": "Le contenu de la politique n'est pas valide.",
+    "policyConflict": "Le changement créerait un conflit : deux politiques fixent la même clé sur la même cible avec la même priorité.",
+    "rawProfileInvalid": "Le profil ne peut pas être importé.",
+    "tooManyTargets": "Trop d'appareils pour une seule demande.",
+    "appleEdgeUnavailable": "Le service d'appareils est indisponible : réessayez dans un instant.",
+    "appleIntegrationDisabled": "L'intégration Apple n'est pas activée sur ce serveur.",
+    "jobsUnavailable": "Les tâches de fond ne tournent pas.",
+    "deviceNotManaged": "Cet appareil n'est pas sous gestion."
   }
 }
