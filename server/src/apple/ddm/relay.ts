@@ -18,7 +18,7 @@ import type { DeclarationFamily } from './capabilities';
 import { computeSet, type SetItem } from './engine';
 import { reportDropped, requestStatusIngest } from './jobs';
 import { ddmMetrics, type RelayEndpointKind } from './metrics';
-import { MAX_REPORT_BYTES, sanitizeReport } from './report';
+import { MAX_REPORT_BYTES, isStorableJson, sanitizeReport } from './report';
 import { storeStatusReport } from './status';
 import type { DroppedDeclaration } from './validate';
 
@@ -46,10 +46,12 @@ import type { DroppedDeclaration } from './validate';
 // Every answer to an authenticated request is signed over its exact bytes
 // (canonical JSON, or empty). The reads a device repeats (tokens,
 // declaration-items, a declaration) cost one statement in the tenant's
-// context, outside any transaction; a status report and the first
-// computation of a set take one transaction. Every statement is bounded to
-// 2 s; one row written at most. Never logged: data_b64, a status report, and
-// the enrollment id above the debug level.
+// context, outside any transaction; under a burst, the pure reads (tokens, a
+// declaration) of one tenant that arrive in the same turn of the event loop
+// share one statement (see "Reads grouped by tenant"); a status report and
+// the first computation of a set take one transaction. Every statement is
+// bounded to 2 s; one row written at most. Never logged: data_b64, a status
+// report, and the enrollment id above the debug level.
 // =============================================================================
 
 export const DDM_RELAY_PATH = '/internal/apple-edge/ddm';
@@ -177,7 +179,10 @@ function reportOf(dataB64: string | null | undefined): ReturnType<typeof sanitiz
   // PostgreSQL's jsonb refuses U+0000 in a string or a key: such a report is not one a device sends.
   if (text.includes('\\u0000') || text.includes('\u0000')) return null;
   try {
-    return sanitizeReport(JSON.parse(text));
+    const report = sanitizeReport(JSON.parse(text));
+    // Nor does it hold a lone surrogate, nor (like JSON.stringify) an unbounded nesting: refused here (400) rather
+    // than at the insertion, where the failure would answer 503 and the device would post the same report again.
+    return report && isStorableJson(report) ? report : null;
   } catch {
     return null;
   }
@@ -198,12 +203,13 @@ const deviceStatement = (q: Queryable, tenantId: number, enrollmentId: string): 
     JOIN obligarth.devices d ON d.id = a.device_id AND d.tenant_id = a.tenant_id
    WHERE a.tenant_id = ? AND a.enrollment_id = ?`, [tenantId, enrollmentId]);
 
-const tokensStatement = (q: Queryable, tenantId: number, enrollmentId: string): Knex.Raw => q.raw(`
-  SELECT d.id, d.enrollment_state, s.declarations_token, s.computed_at
+/** tokens, for the enrollments of one tenant read together (see "Reads grouped by tenant"). */
+const tokensStatement = (q: Queryable, tenantId: number, enrollmentIds: string[]): Knex.Raw => q.raw(`
+  SELECT a.enrollment_id, d.id, d.enrollment_state, s.declarations_token, s.computed_at
     FROM obligarth.apple_devices a
     JOIN obligarth.devices d ON d.id = a.device_id AND d.tenant_id = a.tenant_id
     LEFT JOIN obligarth.apple_declaration_sets s ON s.device_id = a.device_id AND s.tenant_id = a.tenant_id
-   WHERE a.tenant_id = ? AND a.enrollment_id = ?`, [tenantId, enrollmentId]);
+   WHERE a.tenant_id = ? AND a.enrollment_id = ANY (?::text[])`, [tenantId, enrollmentIds]);
 
 /** declaration-items: the set read and its fetch recorded in one statement. */
 const itemsStatement = (q: Queryable, tenantId: number, enrollmentId: string): Knex.Raw => q.raw(`
@@ -216,9 +222,10 @@ const itemsStatement = (q: Queryable, tenantId: number, enrollmentId: string): K
                RETURNING s.declarations_token, s.items)
   SELECT dev.id, dev.enrollment_state, upd.declarations_token, upd.items FROM dev LEFT JOIN upd ON true`, [tenantId, enrollmentId, tenantId]);
 
-/** One declaration: its ServerToken in the device's set, else in its previous set while that one is kept. */
-const declarationTokenStatement = (q: Queryable, tenantId: number, enrollmentId: string, family: string, identifier: string): Knex.Raw => q.raw(`
-  SELECT d.id, d.enrollment_state,
+/** One declaration: its ServerToken in the device's set, else in its previous set while that one is kept; for the
+ *  enrollments of one tenant that ask for the same declaration together. */
+const declarationTokenStatement = (q: Queryable, tenantId: number, enrollmentIds: string[], family: string, identifier: string): Knex.Raw => q.raw(`
+  SELECT a.enrollment_id, d.id, d.enrollment_state,
          (SELECT e->>'server_token' FROM jsonb_array_elements(s.items) e WHERE e->>'identifier' = ? AND e->>'family' = ? LIMIT 1) AS current_token,
          CASE WHEN s.previous_until > now() THEN
            (SELECT e->>'server_token' FROM jsonb_array_elements(s.previous_items) e WHERE e->>'identifier' = ? AND e->>'family' = ? LIMIT 1)
@@ -226,7 +233,7 @@ const declarationTokenStatement = (q: Queryable, tenantId: number, enrollmentId:
     FROM obligarth.apple_devices a
     JOIN obligarth.devices d ON d.id = a.device_id AND d.tenant_id = a.tenant_id
     LEFT JOIN obligarth.apple_declaration_sets s ON s.device_id = a.device_id AND s.tenant_id = a.tenant_id
-   WHERE a.tenant_id = ? AND a.enrollment_id = ?`, [identifier, family, identifier, family, tenantId, enrollmentId]);
+   WHERE a.tenant_id = ? AND a.enrollment_id = ANY (?::text[])`, [identifier, family, identifier, family, tenantId, enrollmentIds]);
 
 const declarationStatement = (q: Queryable, tenantId: number, family: string, identifier: string, token: string): Knex.Raw => q.raw(
   'SELECT type, payload FROM obligarth.apple_declarations WHERE tenant_id = ? AND identifier = ? AND server_token = ? AND family = ?',
@@ -241,6 +248,60 @@ async function one<T>(statement: Knex.Raw): Promise<T | undefined> {
 /** The first row of one statement of a transaction of the relay (its statements carry the budget already). */
 async function oneIn<T>(statement: Knex.Raw): Promise<T | undefined> {
   return (await statement as unknown as { rows: T[] }).rows[0];
+}
+
+// ── Reads grouped by tenant ────────────────────────────────────────────────────────
+// A read of the relay costs one lease of the pool: the signed context, then the statement. Under a burst (a fleet
+// told to synchronise), the reads of ONE tenant that arrive in the same turn of the event loop share one lease
+// and one statement (enrollment_id = ANY (…), in that tenant's context); each request then takes the row of its
+// own enrollment, and nothing else. A group never crosses a tenant: its key starts with the tenant, its statement
+// names the tenant and runs in asTenant(tenant). It holds GROUP_MAX enrollments at most and fails as a whole
+// (each of its requests answers 503: the devices retry). Only pure reads are grouped. declaration-items writes
+// its own row and keeps its own statement: grouped, it would lock the sets of several devices in one statement
+// while the outbox consumer locks them in the order of its events (a deadlock), and a set locked by a
+// computation would delay every device of the group instead of its own.
+
+const GROUP_MAX = 100;
+
+interface GroupedRow { enrollment_id: string }
+interface ReadGroup {
+  tenantId: number;
+  statement: (enrollmentIds: string[]) => Knex.Raw;
+  waiters: Array<{ enrollmentId: string; resolve: (row: GroupedRow | undefined) => void; reject: (err: unknown) => void }>;
+}
+const readGroups = new Map<string, ReadGroup>();
+
+function runReadGroup(key: string): void {
+  const g = readGroups.get(key);
+  if (!g) return;
+  readGroups.delete(key);
+  const enrollmentIds = [...new Set(g.waiters.map((w) => w.enrollmentId))];
+  asTenant(g.tenantId, EDGE_INTEGRATION, async () =>
+    (await g.statement(enrollmentIds).timeout(STATEMENT_BUDGET_MS, { cancel: true }) as unknown as { rows: GroupedRow[] }).rows)
+    .then((rows) => {
+      const byEnrollment = new Map(rows.map((r) => [r.enrollment_id, r]));
+      for (const w of g.waiters) w.resolve(byEnrollment.get(w.enrollmentId));
+    }, (err) => {
+      for (const w of g.waiters) w.reject(err);
+    });
+}
+
+/**
+ * The row of `enrollmentId` in the statement its group runs once, at the end of this turn of the event loop.
+ * `kind` tells apart the statements of one tenant (tokens; one declaration by family and identifier).
+ */
+function grouped<T extends GroupedRow>(tenantId: number, kind: string, enrollmentId: string, statement: (enrollmentIds: string[]) => Knex.Raw): Promise<T | undefined> {
+  return new Promise<T | undefined>((resolve, reject) => {
+    const key = `${tenantId}|${kind}`;
+    let g = readGroups.get(key);
+    if (!g) {
+      g = { tenantId, statement, waiters: [] };
+      readGroups.set(key, g);
+      setImmediate(runReadGroup, key);
+    }
+    g.waiters.push({ enrollmentId, resolve: resolve as (row: GroupedRow | undefined) => void, reject });
+    if (g.waiters.length >= GROUP_MAX) runReadGroup(key);
+  });
 }
 
 interface DeviceRow { id: number; enrollment_state: string }
@@ -306,7 +367,8 @@ async function serve(tenantId: number, body: z.infer<typeof RelayBody>): Promise
     if (endpoint === 'status') return serveStatus(tenantId, enrollmentId, body.data_b64);
 
     if (endpoint === 'tokens') {
-      const row = await one<DeviceRow & { declarations_token: string | null; computed_at: Date | null }>(tokensStatement(db, tenantId, enrollmentId));
+      const row = await grouped<GroupedRow & DeviceRow & { declarations_token: string | null; computed_at: Date | null }>(tenantId, 'tokens', enrollmentId,
+        (ids) => tokensStatement(db, tenantId, ids));
       const refused = unserved(row);
       if (refused) return refused;
       if (!row?.declarations_token || !row.computed_at) return serveFirstSet(tenantId, enrollmentId, 'tokens');
@@ -323,8 +385,8 @@ async function serve(tenantId: number, body: z.infer<typeof RelayBody>): Promise
 
     // declaration/<family>/<identifier>: served when the device's set cites it, or its previous set while it is kept.
     const [, family, identifier] = endpoint.split('/') as [string, DeclarationFamily, string];
-    const row = await one<DeviceRow & { current_token: string | null; previous_token: string | null }>(
-      declarationTokenStatement(db, tenantId, enrollmentId, family, identifier));
+    const row = await grouped<GroupedRow & DeviceRow & { current_token: string | null; previous_token: string | null }>(tenantId, `declaration|${family}|${identifier}`,
+      enrollmentId, (ids) => declarationTokenStatement(db, tenantId, ids, family, identifier));
     const refused = unserved(row);
     if (refused) return refused;
     const token = row?.current_token ?? row?.previous_token ?? null;
@@ -416,7 +478,9 @@ async function handle(req: Request, res: Response): Promise<void> {
  */
 export function createDdmRelayRouter(): Router {
   const router = express.Router();
-  router.post(DDM_RELAY_PATH, rawBodyParser({ type: () => true, limit: '6mb' }), (req: Request, res: Response) => {
+  // inflate: false: apple-edge never compresses and the signature covers the bytes received; a body with a
+  // Content-Encoding is refused (415) before anything is decompressed for a caller that proved nothing.
+  router.post(DDM_RELAY_PATH, rawBodyParser({ type: () => true, limit: '6mb', inflate: false }), (req: Request, res: Response) => {
     handle(req, res).catch((err) => {
       logger.error({ err: safeErr(err) }, 'DDM relay: unexpected failure');
       if (!res.headersSent) res.status(503).end();

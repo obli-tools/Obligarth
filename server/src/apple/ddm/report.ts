@@ -12,7 +12,9 @@ import { DECLARATION_FAMILIES, type DeclarationFamily } from './capabilities';
 //     what is not a known item is ignored;
 //   - declarationStatuses: the status of each declaration from
 //     management.declarations (reasons bounded to 4 KiB);
-//   - errorItems: the item names of the Errors, for a counter (no content).
+//   - errorItems: the item names of the Errors, for a counter (no content);
+//   - isStorableJson: what PostgreSQL's jsonb holds (no lone surrogate, a
+//     bounded nesting): anything else is not a status report.
 // Device data never size anything: every list and string is bounded here.
 // Self-contained: the unit tests run under node --test.
 // =============================================================================
@@ -22,6 +24,11 @@ export const MAX_REPORT_BYTES = 4 * 1024 * 1024;
 /** reasons of a declaration status kept (bytes of their JSON). */
 export const MAX_REASONS_BYTES = 4 * 1024;
 const MAX_DEPTH = 12;
+/** Nesting of a status report accepted (Apple's reports are a few levels deep). Neither JSON.stringify nor
+ *  PostgreSQL's jsonb reads an unbounded one. */
+export const MAX_REPORT_DEPTH = 32;
+/** A lone surrogate is no Unicode character: PostgreSQL's jsonb refuses it, as it refuses U+0000. */
+const LONE_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 const MAX_ITEMS = 500;
 const MAX_STATUSES = 2000;
 const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
@@ -53,6 +60,22 @@ export function sanitizeReport(raw: unknown): StatusReport | null {
     else items[group] = rest;
   }
   return { StatusItems: items, Errors: Array.isArray(raw.Errors) ? raw.Errors : [] };
+}
+
+/**
+ * Can the document be stored as it is (jsonb)? No lone surrogate in a string or a key, MAX_REPORT_DEPTH levels at
+ * most. The relay refuses anything else (400): stored, it would fail at the insertion at each attempt of the device.
+ */
+export function isStorableJson(v: unknown, depth = 0): boolean {
+  if (typeof v === 'string') return !LONE_SURROGATE_RE.test(v);
+  if (v === null || typeof v !== 'object') return true;
+  if (depth >= MAX_REPORT_DEPTH) return false;
+  if (Array.isArray(v)) {
+    for (const x of v) if (!isStorableJson(x, depth + 1)) return false;
+    return true;
+  }
+  for (const [k, x] of Object.entries(v)) if (LONE_SURROGATE_RE.test(k) || !isStorableJson(x, depth + 1)) return false;
+  return true;
 }
 
 export interface FlatStatusItem {
