@@ -187,6 +187,10 @@ export async function cancelAction(req: Request, uuid: string, rawReason: unknow
       });
       if (!n) {
         const fresh = await findAction(row.uuid, { tenantId });
+        // The execution started between the read above and this write: the request becomes the late cancellation
+        // (what the execution dispatches is withdrawn) instead of a refusal its author would take for "too late",
+        // while the commands still wait for their devices.
+        if (fresh && LATE_CANCEL_STATES.has(fresh.state)) return lateCancel(req, fresh, tenantId, userId, reason, ctx);
         throw new AppError(409, `The action is ${fresh?.state ?? 'closed'}`, 'actionClosed');
       }
       if (row.job_id) await cancelJob(row.job_id);
@@ -239,6 +243,9 @@ export async function requestResume(req: Request, uuid: string): Promise<Pending
       throw new AppError(403, 'Not allowed to resume this action', 'notAllowed');
     }
     if (row.state !== 'paused') throw new AppError(409, `The action is ${row.state}`, 'actionNotPaused');
+    // An action whose late cancellation was asked while it was being executed, then paused (a restore): its
+    // cancellation was accepted, it is never resumed (cancelled, or expired with its pause).
+    if (lateCancelOf(row.result)) throw new AppError(409, 'The cancellation of this action was asked: it cannot be resumed', 'actionClosed');
     const original = await personFacts(row.requested_by, tenantId);
     const required = await requiredSideFor({ ...original, side: row.requester_side }, tenantId);
     refuseHeldFallback(required);

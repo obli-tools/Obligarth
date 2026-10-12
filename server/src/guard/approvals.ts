@@ -41,6 +41,7 @@ import { recordRefusal } from './refusals';
 import { targetsWithoutRights } from './selection';
 import { readSettings } from './settings';
 import { findAction, findActionByApproval, toDto } from './store';
+import { lateCancelOf } from './types';
 
 const REVIEWER_MESSAGES: Record<string, string> = {
   selfApproval: 'The requester cannot review this request',
@@ -248,6 +249,7 @@ async function executeResume(x: ApprovalExecution): Promise<void> {
   const row = typeof uuid === 'string' ? await findAction(uuid, { tenantId: x.tenantId }) : undefined;
   if (!row) refuse('No guarded action matches this request — nothing was executed');
   if (row!.state !== 'paused') refuse(`The action is ${row!.state} — nothing was resumed`);
+  if (lateCancelOf(row!.result)) refuse('The cancellation of this action was asked — nothing was resumed');
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
   await recheck(row!, x.approvalId ? [x.approvalId] : [], ctx);
   await schedule(row!, x, 'guard.action_resumed', `${row!.uuid}:${x.approvalId}`);

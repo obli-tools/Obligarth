@@ -107,7 +107,11 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
     // A run after a crash: a freeze set meanwhile pauses the action (as
     // restore-reconcile does) instead of replaying it; resumed (a new
     // approval, the full delay), it starts again from its revalidation.
-    if ((await readSettings(tenantId, trx)).frozen_at) {
+    // Not an action whose late cancellation was asked: its run dispatches
+    // nothing, it withdraws and closes the action, frozen or not (paused, it
+    // could be resumed and would lose its mark).
+    const marked = !!def.cancelAfterDispatch && lateCancelOf(row.result) !== null;
+    if (!marked && (await readSettings(tenantId, trx)).frozen_at) {
       await trx('pending_actions').where({ id: row.id }).update({ state: 'paused', paused_at: new Date(), updated_at: new Date() });
       return { kind: 'paused', row, code: 'frozen' };
     }
@@ -151,8 +155,11 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
   if (!candidates.length) return closeRefused(trx, row, 'noTargets', summary);
 
   const serials = def.serialsOf ? await def.serialsOf(tenantId, candidates) : null;
+  // The mark of a late cancellation is never lost with the result written here: whatever brought a marked action
+  // back to 'scheduled', its run finds the mark and dispatches nothing.
+  const late = lateCancelOf(row.result);
   await trx('pending_actions').where({ id: row.id }).update({
-    state: 'executing', result: JSON.stringify({ ...summary, retained: candidates }), updated_at: new Date(),
+    state: 'executing', result: JSON.stringify({ ...summary, retained: candidates, ...(late ? { lateCancel: late } : {}) }), updated_at: new Date(),
   });
   // P1, last statement: the execution and its entry, or neither.
   await audit.appendInTx(trx, actionEntry(row, 'guard.action_executing', {

@@ -21,6 +21,16 @@ import type { Knex } from 'knex';
 // the row is written: a writer that replaces the rows of a team (delete all, insert all) would make every member
 // look new, hence the console writes only what changes (services/team.service.ts); a writer that does not errs
 // on the safe side (a cooldown too many, never one too few).
+// Second review of lot B4. The two writes that make a privilege together (the row that gains the capability, the
+// membership) may come from two transactions that cross: each trigger read the table without the other's row, and
+// neither recorded a grant (PUT …/members and PUT …/permissions sent together: one team in ten, and the account
+// created a minute ago scheduled its erase). Both now take a transaction lock of the tenant before they read
+// (two-key advisory lock, namespace 'GDTC'): the second waits for the first to commit, then reads its row (READ
+// COMMITTED, the level of every transaction of the server: a statement of a volatile function takes a fresh
+// snapshot). One lock per tenant, not per team: a statement that writes several teams never takes two locks in
+// an order another statement could reverse. And the capabilities of a row are read as the server reads them
+// (shared capabilities.ts): a jsonb string is taken there for the JSON text of a list; here, whatever it holds,
+// for every destructive capability.
 // Not covered, stated in the specification: a scope added to a team for a capability its members already hold
 // elsewhere in the tenant (more devices, same right), and a row whose level opens the writing (ro to rw).
 // No table: nothing to classify. Runs as obligarth_owner (server-migrate), after guard_integration, applied last
@@ -63,15 +73,25 @@ CREATE FUNCTION obligarth_private.guard_destructive_device_caps() RETURNS text[]
   SELECT ARRAY['mdm:lock', 'mdm:lost_mode', 'mdm:remove', 'mdm:wipe']
 $$;
 
--- The destructive capabilities among those of a team row (a jsonb array of names; anything else: none).
+-- The destructive capabilities among those of a team row: a jsonb array of names. A jsonb string is read by the
+-- server as the JSON text of such an array: it counts here for every destructive capability, whatever it holds
+-- (no writer of the server stores one; a cooldown too many, never one too few). Anything else: none.
 CREATE FUNCTION obligarth_private.guard_destructive_caps_of(p_caps jsonb) RETURNS text[]
   LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp AS $$
-  SELECT COALESCE(array_agg(DISTINCT c.cap ORDER BY c.cap), ARRAY[]::text[])
-    FROM jsonb_array_elements_text(CASE WHEN jsonb_typeof(p_caps) = 'array' THEN p_caps ELSE '[]'::jsonb END) AS c(cap)
-   WHERE c.cap = ANY (obligarth_private.guard_destructive_device_caps())
+  SELECT CASE jsonb_typeof(p_caps)
+           WHEN 'array' THEN (SELECT COALESCE(array_agg(DISTINCT c.cap ORDER BY c.cap), ARRAY[]::text[])
+                                FROM jsonb_array_elements_text(p_caps) AS c(cap)
+                               WHERE c.cap = ANY (obligarth_private.guard_destructive_device_caps()))
+           WHEN 'string' THEN obligarth_private.guard_destructive_device_caps()
+           ELSE ARRAY[]::text[]
+         END
 $$;
 
--- 3. The grants. VOLATILE (the default): each query below sees what the calling statement wrote so far.
+-- 3. The grants. VOLATILE (the default): each query below sees what the calling statement wrote so far, and,
+--    once the lock of the tenant is held, what the transactions that held it before committed. The lock
+--    (1195660355 is 'GDTC', the namespace of this two-key advisory lock; the tenant is its second key) is taken
+--    by a row that gains a destructive capability and by every account that joins a team, before they read:
+--    two transactions that write the two halves of a privilege never both miss the other's half.
 CREATE FUNCTION obligarth_private.record_team_capability_grant() RETURNS trigger
   LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
 DECLARE
@@ -86,6 +106,7 @@ BEGIN
                        WHERE NOT (g.cap = ANY (obligarth_private.guard_destructive_caps_of(OLD.capabilities))));
     END IF;
     IF cardinality(v_caps) > 0 THEN
+      PERFORM pg_advisory_xact_lock(1195660355, NEW.tenant_id);
       INSERT INTO obligarth.privilege_grants (user_id, tenant_id, kind, source, cause)
       SELECT m.user_id, NEW.tenant_id, 'tenant_admin', 'change', 'capability_team'
         FROM obligarth.team_memberships m
@@ -100,18 +121,20 @@ BEGIN
     END IF;
   ELSIF TG_TABLE_NAME = 'team_memberships' THEN
     -- An account that joins a team: a destructive capability of the team it did not hold in the tenant already.
-    IF (TG_OP = 'INSERT' OR NEW.team_id IS DISTINCT FROM OLD.team_id OR NEW.user_id IS DISTINCT FROM OLD.user_id
-        OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id)
-       AND NOT EXISTS (SELECT 1 FROM obligarth.users u WHERE u.id = NEW.user_id AND u.role = 'admin')
-       AND EXISTS (SELECT 1 FROM obligarth.team_permissions p
-                    CROSS JOIN LATERAL unnest(obligarth_private.guard_destructive_caps_of(p.capabilities)) AS g(cap)
-                    WHERE p.team_id = NEW.team_id AND p.tenant_id = NEW.tenant_id
-                      AND NOT EXISTS (SELECT 1 FROM obligarth.team_memberships m2
-                                        JOIN obligarth.team_permissions p2 ON p2.team_id = m2.team_id AND p2.tenant_id = m2.tenant_id
-                                       WHERE m2.tenant_id = NEW.tenant_id AND m2.user_id = NEW.user_id
-                                         AND p2.capabilities @> jsonb_build_array(g.cap))) THEN
-      INSERT INTO obligarth.privilege_grants (user_id, tenant_id, kind, source, cause)
-      VALUES (NEW.user_id, NEW.tenant_id, 'tenant_admin', 'change', 'capability_team');
+    IF TG_OP = 'INSERT' OR NEW.team_id IS DISTINCT FROM OLD.team_id OR NEW.user_id IS DISTINCT FROM OLD.user_id
+       OR NEW.tenant_id IS DISTINCT FROM OLD.tenant_id THEN
+      PERFORM pg_advisory_xact_lock(1195660355, NEW.tenant_id);
+      IF NOT EXISTS (SELECT 1 FROM obligarth.users u WHERE u.id = NEW.user_id AND u.role = 'admin')
+         AND EXISTS (SELECT 1 FROM obligarth.team_permissions p
+                      CROSS JOIN LATERAL unnest(obligarth_private.guard_destructive_caps_of(p.capabilities)) AS g(cap)
+                      WHERE p.team_id = NEW.team_id AND p.tenant_id = NEW.tenant_id
+                        AND NOT EXISTS (SELECT 1 FROM obligarth.team_memberships m2
+                                          JOIN obligarth.team_permissions p2 ON p2.team_id = m2.team_id AND p2.tenant_id = m2.tenant_id
+                                         WHERE m2.tenant_id = NEW.tenant_id AND m2.user_id = NEW.user_id
+                                           AND p2.capabilities @> jsonb_build_array(g.cap))) THEN
+        INSERT INTO obligarth.privilege_grants (user_id, tenant_id, kind, source, cause)
+        VALUES (NEW.user_id, NEW.tenant_id, 'tenant_admin', 'change', 'capability_team');
+      END IF;
     END IF;
   ELSIF TG_TABLE_NAME = 'users' THEN
     -- An account reactivated: the destructive capabilities of its teams start again, as its privileged roles do.
