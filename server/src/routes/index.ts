@@ -31,6 +31,7 @@ import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
 import restrictionRoutes from './restriction.routes';
 import mobileAppRoutes from './mobileApp.routes';
+import { createAppleCommandsRouter } from '../apple/commands';
 import { defaultRuntime } from '../jobs';
 import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
@@ -92,6 +93,9 @@ tenantRouter.use('/restrictions', restrictionRoutes);
 // Guards against mass erasure (audit-durci §10.11): guarded actions, freeze,
 // settings, designated approvers.
 tenantRouter.use('/guard',       createGuardRouter());
+// The MDM command queue of the console (integration-apple-edge §8.12): actions and queue of a device, commands,
+// cancellation, relaunch, timeline (apple/commands/routes.ts).
+tenantRouter.use('/apple',       createAppleCommandsRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));

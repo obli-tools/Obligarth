@@ -13,11 +13,17 @@
 //   obligarth_apple_command_duplicate_results_total   a final result repeated (§8.2: the first one stays)
 //   obligarth_apple_token_update_after_unenroll_total a TokenUpdate of a device already out of management
 //   obligarth_apple_apns_throttled_total         pushes throttled by Apple (apns.throttled)
+//   obligarth_apple_command_submissions_total{outcome}  submissions of the command queue (§8.6): submitted,
+//                                                held (frozen, apple-edge unavailable), failed (refused by
+//                                                apple-edge), retried (a later attempt follows)
+//   obligarth_apple_push_relaunches_total{outcome}      relaunch pushes asked of apple-edge (§8.7), by its answer
 // =============================================================================
 
 const calls = new Map<string, number>();
 const provisioning = new Map<string, number>();
 const ignored = new Map<string, number>();
+const submissions = new Map<string, number>();
+const relaunches = new Map<string, number>();
 let duplicateResults = 0;
 let tokenUpdateAfterUnenroll = 0;
 let apnsThrottled = 0;
@@ -40,6 +46,15 @@ export const appleMetrics = {
   eventIgnored(type: string): void {
     const t = EVENT_TYPE_RE.test(type) ? type : 'other';
     ignored.set(t, (ignored.get(t) ?? 0) + 1);
+  },
+  /** One run of mdm.commands.submit that reached a decision (§8.6). */
+  commandSubmission(outcome: 'submitted' | 'held' | 'failed' | 'retried'): void {
+    submissions.set(outcome, (submissions.get(outcome) ?? 0) + 1);
+  },
+  /** Relaunch pushes (§8.7), by the answer of apple-edge (sent, deferred, disabled, error). */
+  pushRelaunched(outcome: string, count = 1): void {
+    const o = /^[a-z_]{1,24}$/.test(outcome) ? outcome : 'other';
+    relaunches.set(o, (relaunches.get(o) ?? 0) + count);
   },
   duplicateResult(): void {
     duplicateResults += 1;
@@ -69,6 +84,8 @@ export const appleMetrics = {
       provisioning: [...provisioning.entries()].map(([outcome, value]) => ({ outcome, value })),
       eventsIgnored: [...ignored.entries()].map(([type, value]) => ({ type, value })),
       commandDuplicateResults: duplicateResults,
+      commandSubmissions: [...submissions.entries()].map(([outcome, value]) => ({ outcome, value })),
+      pushRelaunches: [...relaunches.entries()].map(([outcome, value]) => ({ outcome, value })),
       tokenUpdateAfterUnenroll,
       apnsThrottled,
     };

@@ -13,6 +13,8 @@ import {
 import { closeEpisode, markEpisodeEnrolled, openEpisode } from '../../mdm/registry/episodes';
 import { applyCollectionRules } from '../../mdm/inventory/ingestors';
 import { enrollmentReleaseJob } from '../../mdm/jobs';
+import { afterCommit, cancelOpenTargetsOfDevice } from '../commands/targets';
+import { realtime } from '../realtime';
 import { privacyRulesFor, type PrivacyRules } from './privacy';
 
 // =============================================================================
@@ -306,6 +308,11 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     // What the rules of the new cycle do not collect leaves the inventory of the previous one (§5.2, criterion 7:
     // a device enrolled again under a narrower ownership, corporate → COPE, keeps no unmanaged app).
     await applyCollectionRules(trx, tenantId, deviceId, rules);
+    // The commands requested before this Authenticate died with the previous cycle (apple-edge empties the queue of
+    // an enrollment that authenticates again): their open targets are closed, the hooks of the final states run
+    // (review of lot B3, INT-B3-R4). A command requested since belongs to the new cycle and stays.
+    const closed = await cancelOpenTargetsOfDevice(trx, tenantId, deviceId, 'unenrolled', f.occurredAt, f.occurredAt);
+    if (closed.length > 0) afterCommit(trx, () => realtime.commandChanged(tenantId, closed.slice(0, 500), [deviceId]));
     // The erased device lost its declarations: the set is to be synchronised again (§7.3, step 4).
     await trx('apple_declaration_sets').where({ tenant_id: tenantId, device_id: deviceId })
       .update({ sent_token: null, fetched_token: null, sync_command_id: null });
@@ -459,12 +466,13 @@ export async function onUnenrolled(trx: Knex.Transaction, tenantId: number, enro
   }
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(satUpdate);
   await closeEpisode(trx, tenantId, deviceId, reason, occurredAt);
-  // Open targets of the device's commands: cancelled (rank 3 over pending 0, queued 1, sent and notnow 2).
-  await trx('mdm_command_targets')
-    .where({ tenant_id: tenantId, device_id: deviceId })
-    .whereIn('state', ['pending', 'queued', 'sent', 'notnow'])
-    .update({ state: 'cancelled', reject_code: 'unenrolled', state_event_at: occurredAt });
+  // A setup plan in progress ends first (its hook would otherwise release a device that is gone).
   await trx('apple_setup_plans').where({ tenant_id: tenantId, device_id: deviceId, state: 'running' })
     .update({ state: 'cancelled', completed_at: occurredAt, outcome_code: 'unenrolled' });
+  // Open targets of the device's commands: cancelled (rank 3 over pending 0, queued 1, sent and notnow 2), through
+  // the writer of the target states: the hooks of the final states run (setup plan, DDM, policies), and the console
+  // is told once the event is committed (review of lot B3, INT-B3-R4).
+  const closed = await cancelOpenTargetsOfDevice(trx, tenantId, deviceId, 'unenrolled', occurredAt);
+  if (closed.length > 0) afterCommit(trx, () => realtime.commandChanged(tenantId, closed.slice(0, 500), [deviceId]));
   return { deviceId, outcome: 'unenrolled' };
 }

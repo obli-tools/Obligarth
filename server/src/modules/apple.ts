@@ -7,9 +7,11 @@ import { registerSecretColumn, setEdgeKekIdSource } from '../vault';
 import { registerAppleEdgeAdmin } from '../apple/admin.routes';
 import { registerAppleAlertJobs } from '../apple/alerts/service';
 import { registerAppleAuditActions } from '../apple/audit';
+import { registerAppleCommands } from '../apple/commands';
 import { registerMvpResultIngestors, registerResultJobs } from '../apple/commands/results';
+import { requestResubmitAll, requestResubmitHeld } from '../apple/commands/submit';
 import { registerDeviceJobs } from '../apple/devices/jobs';
-import { checkEdgeAtStart, edgeKekId } from '../apple/edge/health';
+import { checkEdgeAtStart, edgeKekId, onEdgeRecovered } from '../apple/edge/health';
 import { registerAppleOutboxHandlers } from '../apple/outbox';
 import { registerTenantJobs } from '../apple/tenants/jobs';
 import { appleTenants } from '../apple/tenants/registry';
@@ -27,9 +29,10 @@ import { appleTenants } from '../apple/tenants/registry';
 // apple-edge, the handlers of the tenant events, the platform alerts, the
 // administration routes. Lot B3: the handlers of every event of the outbox
 // (enrollment cycles, commands, security, push, ADE), their follow-up jobs and
-// the ingestion of the results; the device surface, the command queue, the
-// DDM relay and the integrations of the console come with their lots (B4 to
-// C4).
+// the ingestion of the results. Lot B4: the command queue (catalogue, bus,
+// submission, relaunches, cancellation, guarded MDM actions, inventory, setup
+// plan). The device surface and the integrations of the console come with
+// their lots (C1 to C4).
 // =============================================================================
 
 let registered = false;
@@ -63,6 +66,9 @@ export function registerAppleModule(): void {
   registerDeviceJobs();           // apple.device-onboard, apple.await-configuration, devices.unenroll-cleanup
   registerResultJobs();           // apple.command-result-ingest
   registerMvpResultIngestors();   // §7.6: the ingestors whose writers the data model provides
+  // §8: catalogue, bus jobs (mdm.commands.*), guarded MDM actions, restrictable actions, approvals of restricted
+  // commands, initial and periodic inventory (apple.inventory.*), setup plan (apple.setup-timeout)
+  registerAppleCommands();
   registerAppleOutboxHandlers();  // the 34 handlers of §7.4
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
@@ -77,8 +83,14 @@ export function registerAppleModule(): void {
     const actor: DbActor = currentDbContext()?.actor ?? { type: 'job', name: 'actions.edge-freeze-sync' };
     const r = await appleTenants.setCommandsFrozen(tenantId, frozen, actor);
     if (r === 'done') logger.info({ tenantId, frozen }, 'commands freeze applied at apple-edge');
+    // The unfreeze: the commands held meanwhile go back to their submission (§8.6). Best effort: the sweep
+    // mdm.commands.resubmit-all finds them within 5 minutes otherwise.
+    if (!frozen) await requestResubmitHeld(tenantId).catch((err) => { logger.warn({ tenantId, code: (err as { code?: unknown })?.code }, 'held commands not resubmitted at the unfreeze'); });
     return r;
   });
+
+  // apple-edge back after an outage: the commands held meanwhile (edge_unavailable) are submitted again (§8.6).
+  onEdgeRecovered(() => requestResubmitAll());
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
   registerBootTask('apple.instance-id', ensureInstanceId);

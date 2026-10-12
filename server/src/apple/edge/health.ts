@@ -129,6 +129,14 @@ export async function checkEdgeAtStart(o: { exit?: (code: number) => void } = {}
   return outcome;
 }
 
+const recoveryHooks: Array<() => Promise<void>> = [];
+
+/** Called when a probe answers after one that did not: apple-edge is back (the command queue submits again what it
+ *  held meanwhile, integration §8.6). Registered before anything starts; a hook never fails the probe. */
+export function onEdgeRecovered(fn: () => Promise<void>): void {
+  recoveryHooks.push(fn);
+}
+
 /** The probe of apple-edge.health. Never throws. */
 export async function probeEdge(actor: DbActor, requestId: string): Promise<{ up: boolean; compatible: boolean | null }> {
   state.checkedAt = new Date().toISOString();
@@ -136,6 +144,7 @@ export async function probeEdge(actor: DbActor, requestId: string): Promise<{ up
     const { status, version } = await appleEdge.status({ actor: `job:${actor.type === 'job' ? actor.name : 'apple-edge.health'}`, requestId, timeoutMs: 3_000 });
     noteEdgeVersion(version);
     const wasDown = state.consecutiveFailures >= UNREACHABLE_ALERT_AFTER;
+    const back = state.up === false;
     state.up = true;
     state.version = version;
     state.kekId = typeof status.kek_id === 'string' ? status.kek_id : null;
@@ -152,6 +161,11 @@ export async function probeEdge(actor: DbActor, requestId: string): Promise<{ up
     await settle(actor, 'edge.incompatible', !verdict.ok, { version: /^[0-9A-Za-z.+-]{1,64}$/.test(version) ? version : 'unreadable' });
     await settle(actor, 'edge.kek_shared', !!(state.kekId && ours && state.kekId === ours));
     if (raised === null) raised = new Set([...(!verdict.ok ? ['edge.incompatible'] : []), ...(state.kekId && ours && state.kekId === ours ? ['edge.kek_shared'] : [])]);
+    if (back && verdict.ok) {
+      for (const hook of recoveryHooks) {
+        await hook().catch((e) => { logger.warn({ code: (e as { code?: unknown })?.code }, 'apple-edge recovery hook failed'); });
+      }
+    }
     return { up: true, compatible: verdict.ok };
   } catch (err) {
     state.up = false;

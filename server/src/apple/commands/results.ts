@@ -229,6 +229,13 @@ async function ingestDeviceConfigured(ctx: ResultIngestContext): Promise<void> {
   await resolveInTx(trx, tenantId, 'enrollment.setup_timeout', deviceId);
 }
 
+let afterDeviceInformation: ((ctx: ResultIngestContext) => Promise<void>) | null = null;
+
+/** A follow-up of the ingestion of DeviceInformation, in the same transaction (the inventory of the command queue). */
+export function setAfterDeviceInformation(fn: (ctx: ResultIngestContext) => Promise<void>): void {
+  afterDeviceInformation = fn;
+}
+
 let mvpRegistered = false;
 
 /** The ingestors of the MVP whose writers the data model provides (registerAppleModule). DeclarativeManagement
@@ -240,7 +247,11 @@ export function registerMvpResultIngestors(): void {
     requestType: 'DeviceInformation', mode: 'inline',
     apply: async (c) => {
       const q = obj(c.result.QueryResponses);
-      if (q) await ingestDeviceInformation(c.trx, c.tenantId, c.deviceId, q, c.occurredAt);
+      if (!q) return;
+      await ingestDeviceInformation(c.trx, c.tenantId, c.deviceId, q, c.occurredAt);
+      // What the inventory of the command queue does once the record knows more (§8.10: the bypass code of the
+      // activation lock of a company device found supervised).
+      if (afterDeviceInformation) await afterDeviceInformation(c);
     },
   });
   registerCommandResultIngestor({

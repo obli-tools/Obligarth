@@ -127,6 +127,70 @@ async function runFinalHooks(trx: Knex.Transaction, tenantId: number, deviceId: 
   for (const h of finalHooks) await h.fn({ trx, tenantId, deviceId, commandId: commandId.toLowerCase(), requestType, state });
 }
 
+/** Runs fn once the transaction of `trx` is committed (never when it is rolled back); fn never throws out. Used
+ *  for the deferred MDM_COMMAND_CHANGED of a change written inside the caller's transaction. */
+export function afterCommit(trx: Knex.Transaction, fn: () => void): void {
+  const done = (trx as unknown as { executionPromise?: Promise<unknown> }).executionPromise;
+  if (!done || typeof done.then !== 'function') return;
+  done.then(() => { try { fn(); } catch { /* best effort */ } }, () => { /* rolled back: nothing happened */ });
+}
+
+export interface FinalizeTargets {
+  tenantId: number;
+  commandId: string;
+  /** The targets concerned; null: every target of the command. */
+  deviceIds: number[] | null;
+  /** The states a target must be in for the change to apply (a subset of the states of rank below 3). */
+  from: readonly TargetState[];
+  to: 'cancelled' | 'rejected' | 'expired';
+  rejectCode: string;
+  at: Date;
+}
+
+/**
+ * Closes targets of one command without a result (§8.2: cancellation before or after the submission, refusal of
+ * a target by apple-edge, expiry before the submission) in one statement, then runs the onTargetFinal hooks of
+ * each target changed. The rank rule holds: only the listed states of rank below 3 change. Returns the devices
+ * changed.
+ */
+export async function finalizeTargets(trx: Knex.Transaction, f: FinalizeTargets): Promise<number[]> {
+  if (!UUID_RE.test(f.commandId)) return [];
+  const from = f.from.filter((s) => targetRank(s) >= 0 && targetRank(s) < 3);
+  if (from.length === 0 || (f.deviceIds !== null && f.deviceIds.length === 0)) return [];
+  const res = await trx.raw(`
+    UPDATE obligarth.mdm_command_targets t
+       SET state = ?, state_event_at = ?, reject_code = ?, completed_at = CASE WHEN ? = 'expired' THEN ?::timestamptz ELSE t.completed_at END
+      FROM obligarth.mdm_commands c
+     WHERE t.tenant_id = ? AND t.command_id = ?::uuid AND c.tenant_id = t.tenant_id AND c.id = t.command_id
+       AND t.state = ANY (?::text[]) AND (?::int[] IS NULL OR t.device_id = ANY (?::int[]))
+    RETURNING t.device_id, c.request_type`,
+  [f.to, f.at, f.rejectCode.slice(0, 48), f.to, f.at, f.tenantId, f.commandId, from, f.deviceIds, f.deviceIds]) as
+    { rows: Array<{ device_id: number; request_type: string }> };
+  for (const r of res.rows) await runFinalHooks(trx, f.tenantId, Number(r.device_id), f.commandId, r.request_type, f.to);
+  return res.rows.map((r) => Number(r.device_id));
+}
+
+/**
+ * The open targets of a device are cancelled (§7.3, §8.2): the device left management ('unenrolled'), or started
+ * a new enrollment cycle, whose Authenticate emptied its queue at apple-edge (then `createdBefore`: the commands
+ * requested before that Authenticate only). The hooks of each target run; the commands changed are returned (the
+ * caller emits MDM_COMMAND_CHANGED after its commit).
+ */
+export async function cancelOpenTargetsOfDevice(trx: Knex.Transaction, tenantId: number, deviceId: number, rejectCode: string, at: Date,
+  createdBefore: Date | null = null): Promise<string[]> {
+  const res = await trx.raw(`
+    UPDATE obligarth.mdm_command_targets t
+       SET state = 'cancelled', state_event_at = ?, reject_code = ?
+      FROM obligarth.mdm_commands c
+     WHERE t.tenant_id = ? AND t.device_id = ? AND c.tenant_id = t.tenant_id AND c.id = t.command_id
+       AND t.state IN ('pending', 'queued', 'sent', 'notnow')
+       AND (?::timestamptz IS NULL OR c.created_at < ?::timestamptz)
+    RETURNING t.command_id, c.request_type`, [at, rejectCode.slice(0, 48), tenantId, deviceId, createdBefore, createdBefore]) as
+    { rows: Array<{ command_id: string; request_type: string }> };
+  for (const r of res.rows) await runFinalHooks(trx, tenantId, deviceId, String(r.command_id), r.request_type, 'cancelled');
+  return res.rows.map((r) => String(r.command_id).toLowerCase());
+}
+
 /**
  * mdm.command_expired (§8.2): the listed targets of a command (enrollment ids) of rank below 3 become 'expired'
  * in one statement (a shared command may list thousands), completed_at = the event's time; the hooks run for

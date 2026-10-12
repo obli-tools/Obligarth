@@ -72,7 +72,9 @@ const EXPIRY_MINUTES = 30;
 export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_kek_rotation'
   | 'guarded_action' | 'guard_resume' | 'guard_unfreeze' | 'guard_settings_change' | 'guard_approver_designate'
   // Publication of a policy version or a batch of assignment changes beyond the thresholds (mdm, lot B5b).
-  | 'mdm_policy_publish';
+  | 'mdm_policy_publish'
+  // A command of the MDM queue the tenant's matrix holds at 'restricted' (integration-apple-edge §8.11, lot B4).
+  | 'apple_action';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */
