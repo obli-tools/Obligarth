@@ -1,3 +1,4 @@
+import { AsyncResource } from 'node:async_hooks';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { z } from 'zod';
@@ -30,12 +31,15 @@ const manage = requireTenantCapability('mdm.policies.manage');
 /** A .mobileconfig, in memory: 1 MiB at most, one file. */
 const profileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024, files: 1, fields: 4, parts: 6 } }).single('file');
 const uploadProfile = (req: Request, res: Response, next: NextFunction): void => {
-  profileUpload(req, res, (err: unknown) => {
+  // The body is read from the events of the socket, outside the asynchronous context of the request: a profile
+  // that does not fit in what was already buffered would reach the rest of the chain without its database context
+  // (every query refused, 500). The continuation is bound to the context this middleware was called in.
+  profileUpload(req, res, AsyncResource.bind((err: unknown) => {
     if (!err) { next(); return; }
     const code = (err as { code?: string }).code;
     next(new AppError(code === 'LIMIT_FILE_SIZE' ? 413 : 400, code === 'LIMIT_FILE_SIZE' ? 'The profile is larger than 1 MiB' : 'Invalid upload', 'rawProfileInvalid',
       { reason: code === 'LIMIT_FILE_SIZE' ? 'too_large' : 'invalid_upload' }));
-  });
+  }));
 };
 
 const CreateBody = z.object({

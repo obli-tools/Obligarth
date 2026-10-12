@@ -33,7 +33,7 @@ const SLICE_ROWS = 500;
 const ARTIFACT_UNUSED_DAYS = 7;
 /** A removed artifact is kept this long (the console shows what left the device). */
 const REMOVED_KEPT_DAYS = 30;
-/** Devices of one tenant the daily sweep asks again, per run. */
+/** Devices of one tenant the daily sweep asks again, per page. */
 const SWEEP_DEVICES = 1000;
 
 const DevicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
@@ -49,7 +49,7 @@ async function runReconcile(ctx: JobContext<z.infer<typeof DevicePayload>>): Pro
   try {
     const r = await ctx.withTenant((trx) => reconcileDevice(trx, tenantId, deviceId, `j:${ctx.name}`));
     if (r.changed) emitConfigChanged(tenantId, [deviceId]);
-    return { output: { outcome: r.outcome, installs: r.installs, removals: r.removals, adopted: r.adopted, waiting: r.waiting } };
+    return { output: { outcome: r.outcome, installs: r.installs, removals: r.removals, adopted: r.adopted, waiting: r.waiting, deferred: r.deferred } };
   } finally {
     fetchNext(RECONCILE_QUEUE);
   }
@@ -87,7 +87,15 @@ async function runGc(ctx: JobContext<Record<string, never>>): Promise<JobResult>
       out.removed += n;
       if (n < SLICE_ROWS) break;
     }
-    out.swept += await requestArtifactReconcile(null, tenantId, await stuckDevices(db, tenantId, SWEEP_DEVICES));
+    // Every device that waits, page by page: a first page that never empties (devices in an error no pass changes)
+    // must not keep the others from their next pass.
+    for (let after = 0; ;) {
+      ctx.throwIfAborted();
+      const ids = await stuckDevices(db, tenantId, SWEEP_DEVICES, after);
+      out.swept += await requestArtifactReconcile(null, tenantId, ids);
+      if (ids.length < SWEEP_DEVICES) break;
+      after = ids[ids.length - 1];
+    }
   });
   if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed, ${ok} done`);
   return { output: { tenants: ok, ...out } };

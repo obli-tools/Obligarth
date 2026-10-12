@@ -45,11 +45,17 @@ async function readSecrets(trx: Knex.Transaction, tenantId: number, ids: string[
   if (ids.length === 0) return out;
   const rows = await trx('tenant_secrets').where({ tenant_id: tenantId }).whereIn('id', ids).select('id', 'purpose') as Array<{ id: string; purpose: string }>;
   const purposes = new Map(rows.map((r) => [String(r.id), String(r.purpose)]));
-  for (const id of ids) {
-    const purpose = purposes.get(id);
-    // Unknown, of another tenant (row level security), or kept for something else than this kind of profile.
-    if (!purpose || !purpose.startsWith('policy.') || (purpose === RAW_SECRET_PURPOSE) !== raw) throw new RenderError('secret_unavailable');
-    out.set(id, await vault.readTenantSecret(tenantId, id, { trx }));
+  try {
+    for (const id of ids) {
+      const purpose = purposes.get(id);
+      // Unknown, of another tenant (row level security), or kept for something else than this kind of profile.
+      if (!purpose || !purpose.startsWith('policy.') || (purpose === RAW_SECRET_PURPOSE) !== raw) throw new RenderError('secret_unavailable');
+      out.set(id, await vault.readTenantSecret(tenantId, id, { trx }));
+    }
+  } catch (err) {
+    // The caller never sees the secrets read before the one that failed: zeroed here.
+    for (const b of out.values()) b.fill(0);
+    throw err;
   }
   return out;
 }

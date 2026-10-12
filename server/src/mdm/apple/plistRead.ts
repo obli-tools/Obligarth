@@ -52,11 +52,19 @@ export const RAW_PROFILE_MAX_BYTES = 1024 * 1024;
 export const RAW_PROFILE_MAX_PAYLOADS = 50;
 
 const LEADING = new Set([0xef, 0xbb, 0xbf, 0x20, 0x09, 0x0d, 0x0a]);
+/** What no jsonb column holds: U+0000, a lone surrogate (a character reference may write either). A profile that
+ *  carries one in a key or a value is refused at its import, never left to fail at the insertion. */
+const UNSTORABLE_RE = /\u0000|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const UNSTORABLE_ALL_RE = new RegExp(UNSTORABLE_RE.source, 'g');
 
 /** A plist value as typed JSON. */
 export function plistToTypedJson(v: PlistValue, depth = 0): JsonValue {
   if (depth > RAW_PROFILE_MAX_DEPTH) throw new RawProfileError('too_deep');
-  if (typeof v === 'string' || typeof v === 'boolean') return v;
+  if (typeof v === 'string') {
+    if (UNSTORABLE_RE.test(v)) throw new RawProfileError('invalid_value');
+    return v;
+  }
+  if (typeof v === 'boolean') return v;
   if (typeof v === 'number') return v;
   if (typeof v === 'bigint') return { $int: v.toString(10) };
   if (v instanceof PlistReal) return Number.isInteger(v.value) ? { $real: v.value } : v.value;
@@ -67,6 +75,8 @@ export function plistToTypedJson(v: PlistValue, depth = 0): JsonValue {
   for (const [k, e] of Object.entries(v)) {
     // A key that would read as a marker of the stored form ($secret, $data…) or as a template is refused.
     if (k.startsWith('$') || k.includes('{{')) throw new RawProfileError('invalid_value', k.slice(0, 64));
+    // '__proto__' would set the prototype of the object instead of a key, and be dropped without a word.
+    if (k === '__proto__' || UNSTORABLE_RE.test(k)) throw new RawProfileError('invalid_value');
     out[k] = plistToTypedJson(e, depth + 1);
   }
   return out;
@@ -119,7 +129,9 @@ export function readRawProfile(bytes: Buffer): RawProfile {
     if (FORBIDDEN_PAYLOAD_TYPES.has(p.PayloadType.toLowerCase())) throw new RawProfileError('forbidden_payload', p.PayloadType);
     return plistToTypedJson(p, 1) as Record<string, JsonValue>;
   });
-  const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '');
+  // The names are labels: control characters and what jsonb does not hold are blanked, never refused.
+  const text = (v: unknown, max: number): string => (typeof v === 'string'
+    ? v.slice(0, 4 * max).replace(UNSTORABLE_ALL_RE, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max).replace(UNSTORABLE_ALL_RE, '') : '');
   return {
     displayName: text(root.PayloadDisplayName, 200) || 'Imported profile',
     originalIdentifier: text(root.PayloadIdentifier, 255),

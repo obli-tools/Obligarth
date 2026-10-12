@@ -57,6 +57,10 @@ const NOT_APPLICABLE_REFUSALS = new Set(['not_apple', 'ownership', 'not_supervis
 const PROFILE_ABSENT_CODES = new Set(['MCProfileErrorDomain:1001']);
 /** One ProfileList per device and per window after an installation. */
 const PROFILE_LIST_WINDOW_MS = 10 * 60_000;
+/** Removals a device may have open because of what its ProfileList shows. The device writes that list: without a
+ *  bound, a hostile one (hundreds of made-up profiles under the prefixes of the policies) would have as many
+ *  commands, and as many entries of the journal, written in one pass. What is left is taken up by the next passes. */
+export const MAX_DRIFT_REMOVALS = 20;
 
 const isPolicyProfileKey = (key: string): boolean => POLICY_PROFILE_PREFIXES.some((p) => key.startsWith(`profile:${p}`));
 const parse = <T>(v: unknown, fallback: T): T => {
@@ -150,8 +154,18 @@ async function settle(trx: Knex.Transaction, row: ArtifactRow, cmd: LinkedComman
   };
   const why = [cmd.rejectCode && /^[a-z][a-z0-9_]{0,47}$/.test(cmd.rejectCode) ? cmd.rejectCode : cmd.state];
   if (of.removal) {
-    // A removal that ends while the artifact is desired again changes nothing: its installation follows.
-    if (row.desired_hash !== null || (row.state !== 'removing' && row.state !== 'error')) return none;
+    if (row.desired_hash !== null) {
+      // A removal the device acknowledged after it was delivered a profile it is to hold (a RemoveProfile of the
+      // console, or an older removal that ended late): the profile left the device. The drift is known at once, as
+      // a ProfileList would show it (section 7.10), and the profile is delivered again. A removal that ended before
+      // the delivery, or while the artifact is being delivered, changes nothing: its installation follows.
+      const removedAt = cmd.completedAt?.getTime() ?? null;
+      const deliveredAt = row.delivered_at ? new Date(row.delivered_at).getTime() : null;
+      if (cmd.state !== 'acknowledged' || row.state !== 'applied' || removedAt === null || deliveredAt === null || removedAt <= deliveredAt) return none;
+      await set({ state: 'pending', state_reasons: JSON.stringify(['drift_absent']), desired_at: now });
+      return { changed: true, retry: true, installed: false };
+    }
+    if (row.state !== 'removing' && row.state !== 'error') return none;
     if (cmd.state === 'acknowledged') { await set({ ...REMOVED }); return { ...none, changed: true }; }
     if (cmd.state === 'error') {
       const codes = errorCodes(cmd.errorChain);
@@ -217,10 +231,13 @@ export async function onPolicyTargetFinal(ctx: TargetFinalContext): Promise<void
   await lockDeviceRows(trx, tenantId, [deviceId]);
   const row = await trx('device_artifacts').where({ tenant_id: tenantId, device_id: deviceId, artifact_key: key }).forUpdate().first('*') as ArtifactRow | undefined;
   if (!row) return;
-  // Another command is the artifact's last one: this one was superseded, its end says nothing of the artifact.
-  if (row.last_command_id && String(row.last_command_id).toLowerCase() !== commandId) return;
   cmd = cmd ?? await linkedCommand(trx, tenantId, commandId, deviceId);
   if (!cmd) return;
+  // Another command is the artifact's last one: this one was superseded, its end says nothing of the artifact. But
+  // for the removal of a profile the device is to hold: whoever asked for it (a user of the console), it tells that
+  // the profile left the device (settle decides from its date).
+  const superseded = !!row.last_command_id && String(row.last_command_id).toLowerCase() !== commandId;
+  if (superseded && !(cmd.requestType === 'RemoveProfile' && row.desired_hash !== null)) return;
   const r = await settle(trx, row, cmd, new Date());
   if (!r.changed) return;
   await rollupConfigState(trx, [deviceId]);
@@ -263,6 +280,8 @@ export interface ReconcileOutcome {
   removals: number;
   adopted: number;
   waiting: number;
+  /** Unwanted profiles the last ProfileList shows that this pass left for the next ones (MAX_DRIFT_REMOVALS). */
+  deferred: number;
   changed: boolean;
 }
 
@@ -431,14 +450,24 @@ async function applyDrift(x: Run): Promise<void> {
   const rows = await x.trx('device_artifacts').where({ tenant_id: x.tenantId, device_id: x.deviceId, channel: 'profile' })
     .orderBy('artifact_key').forUpdate().select('*') as ArtifactRow[];
   const known = new Map(rows.map((r) => [r.artifact_key, r]));
-  for (const key of installed.keys()) {
+  // What the list shows is the device's word: the removals it opens are bounded (MAX_DRIFT_REMOVALS), in the order
+  // of the keys; the rest waits for the next passes.
+  let budget = MAX_DRIFT_REMOVALS - rows.filter((r) => r.desired_hash === null && (r.state === 'removing' || r.state === 'error')).length;
+  for (const key of [...installed.keys()].sort()) {
     const row = known.get(key);
+    const unwanted = !row || (row.state === 'removed' && listAt > new Date(row.state_at).getTime());
+    if (!unwanted) continue;
+    if (budget <= 0) {
+      x.out.deferred++;
+      continue;
+    }
+    budget--;
     if (!row) {
       // On the device, wanted by nothing: removed.
       await x.trx('device_artifacts').insert({ tenant_id: x.tenantId, device_id: x.deviceId, artifact_key: key, channel: 'profile', desired_hash: null,
         state: 'removing', state_reasons: JSON.stringify(['drift']), state_at: x.now }).onConflict(['tenant_id', 'device_id', 'artifact_key']).ignore();
       x.out.changed = true;
-    } else if (row.state === 'removed' && listAt > new Date(row.state_at).getTime()) {
+    } else {
       await setRow(x, row, { state: 'removing', state_reasons: JSON.stringify(['drift']), last_command_id: null });
     }
   }
@@ -459,7 +488,7 @@ async function applyDrift(x: Run): Promise<void> {
  * the tenant's context. No network: the bus writes the commands, their submission is its job's.
  */
 export async function reconcileDevice(trx: Knex.Transaction, tenantId: number, deviceId: number, actor = ACTOR, now = new Date()): Promise<ReconcileOutcome> {
-  const x: Run = { trx, tenantId, deviceId, actor, now, listed: null, out: { outcome: 'done', installs: 0, removals: 0, adopted: 0, waiting: 0, changed: false } };
+  const x: Run = { trx, tenantId, deviceId, actor, now, listed: null, out: { outcome: 'done', installs: 0, removals: 0, adopted: 0, waiting: 0, deferred: 0, changed: false } };
   await trx.raw(`
     SELECT t.command_id
       FROM obligarth.mdm_command_targets t
@@ -495,10 +524,16 @@ export async function reconcileDevice(trx: Knex.Transaction, tenantId: number, d
 }
 
 /** The devices of a tenant whose artifacts wait without anything moving them: asked again by the daily sweep
- *  (an error to try again after 24 hours, a refusal of the bus that may have lifted). */
-export async function stuckDevices(q: Knex | Knex.Transaction, tenantId: number, limit: number): Promise<number[]> {
+ *  (an error to try again after 24 hours, a refusal of the bus that may have lifted), by pages in the order of
+ *  their ids (`after`: the last id of the previous page). An artifact a pass would leave as it is (an installation
+ *  whose attempts are exhausted, an error of its compilation or of its rendering: both wait for a change of what
+ *  the device wants) does not count: a fleet in such an error would otherwise fill every page. */
+export async function stuckDevices(q: Knex | Knex.Transaction, tenantId: number, limit: number, after = 0): Promise<number[]> {
   const rows = await q('device_artifacts').where({ tenant_id: tenantId }).whereIn('channel', ['profile', 'setting'])
     .whereIn('state', ['pending', 'error', 'removing', 'delivering']).whereRaw("state_at < now() - interval '1 hour'")
+    .whereRaw(`NOT (state = 'error' AND desired_hash IS NOT NULL
+                    AND (state_reasons->>0 = 'attempts_exhausted' OR state_reasons->>0 LIKE 'compile:%' OR state_reasons->>0 LIKE 'render:%'))`)
+    .where('device_id', '>', after)
     .distinct('device_id').orderBy('device_id').limit(limit) as Array<{ device_id: number }>;
   return rows.map((r) => Number(r.device_id));
 }
