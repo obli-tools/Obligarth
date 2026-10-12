@@ -27,9 +27,17 @@ import { cancelAtEdge } from './submit';
 //                        after a stop, it finds the same batch: neither the
 //                        brain nor apple-edge creates a second command
 //   cancelAfterDispatch  the commands of the action not yet delivered are
-//                        withdrawn (apple-edge's answer per device)
+//                        withdrawn (apple-edge's answer per device). The
+//                        engine calls it for a late cancellation, while the
+//                        action is executed and after (its commands wait for
+//                        their devices for days: 7 for an erase), until they
+//                        expired (cancelWindowSeconds); the route of the
+//                        command queue refuses to cancel these commands, the
+//                        engine being their only way out too
 // The bus refuses these request types from any other path (409
-// guardedActionRequired): the engine is their only way in.
+// guardedActionRequired): the engine is their only way in. It also refuses
+// them for an action whose late cancellation was asked (the mark the engine
+// writes under the lock of the action's row).
 // =============================================================================
 
 export type GuardedRequestType = 'EraseDevice' | 'RemoveProfile' | 'DeviceLock' | 'EnableLostMode';
@@ -164,7 +172,8 @@ export function defineGuardedMdmAction<P>(
     return out;
   }
 
-  return { ...def, revalidate, execute, cancelAfterDispatch };
+  // Once its commands expired, nothing of the action waits for a device any more: no late cancellation beyond.
+  return { ...def, revalidate, execute, cancelAfterDispatch, cancelWindowSeconds: opts.expiresAfterSeconds };
 }
 
 /** Serial numbers of the targets for the execution entry of the journal (J29); '' when not collected. */

@@ -84,8 +84,20 @@ export interface GuardedActionDef<P = Record<string, unknown>> {
   revalidate(ctx: GuardExecutionContext<P>): Promise<Map<number, 'ok' | GuardTargetRefusal>>;
   /** Idempotent: run again after a crash, it must not act twice (deterministic command UUIDs). */
   execute(ctx: GuardExecutionContext<P>, deviceIds: number[]): Promise<Map<number, GuardTargetResult>>;
-  /** Optional: withdraw what was dispatched but not yet delivered (undelivered MDM commands). */
+  /**
+   * Optional: withdraw what was dispatched but not yet delivered (undelivered MDM commands); the answer names
+   * every target something was dispatched for. The engine calls it for a late cancellation: of an action being
+   * executed, or already executed while what it dispatched still waits for its devices (states 'executing',
+   * 'done', 'partial', 'failed'), and for a paused action that an interrupted run had started. Before the call
+   * the engine marks the action (result.lateCancel) under a lock of its row: an action that defines this hook
+   * dispatches under a lock of that row too and refuses a marked action (the bus of the MDM commands reads the
+   * row FOR SHARE and refuses), so that nothing is dispatched once the withdrawal started. Idempotent; throws when
+   * the withdrawal could not be completed (the caller asks again).
+   */
   cancelAfterDispatch?(ctx: GuardExecutionContext<P>): Promise<Map<number, 'cancelled' | 'already_delivered' | 'completed'>>;
+  /** How long after its execution something of the action may still wait for a device (the expiry of what it
+   *  dispatched), in seconds: a late cancellation is refused beyond it. Without it: no limit. */
+  cancelWindowSeconds?: number;
 }
 
 /** Size of a tenant's active fleet (hourly cap, whole fleet). */
@@ -108,6 +120,28 @@ export interface GuardResultSummary {
   /** Targets set aside at revalidation or refused at execution (200 at most). */
   setAside?: Array<{ id: number; code: string }>;
   failures?: Array<{ id: number; code: string }>;
-  /** Late cancellation (cancelAfterDispatch), per target. */
+  /** Late cancellation (cancelAfterDispatch), per target something was dispatched for; present once the
+   *  withdrawal completed. */
   cancellation?: Array<{ id: number; outcome: string }>;
+  /** A late cancellation was requested: written under the lock of the row before anything is withdrawn; from
+   *  then on nothing more is dispatched for the action. */
+  lateCancel?: GuardLateCancel;
+}
+
+/** The mark of a late cancellation (pending_actions.result.lateCancel). */
+export interface GuardLateCancel {
+  /** ISO date of the request. */
+  at: string;
+  /** The account that asked. */
+  by: number;
+  reason?: string;
+}
+
+/** The mark of a late cancellation in a result read from the database, or null (any other shape: none). */
+export function lateCancelOf(result: unknown): GuardLateCancel | null {
+  const m = (result as { lateCancel?: unknown } | null | undefined)?.lateCancel as Partial<GuardLateCancel> | null | undefined;
+  if (!m || typeof m !== 'object' || typeof m.at !== 'string' || Number.isNaN(Date.parse(m.at))) return null;
+  const by = Number(m.by);
+  if (!Number.isSafeInteger(by) || by <= 0) return null;
+  return { at: m.at, by, ...(typeof m.reason === 'string' && m.reason ? { reason: m.reason.slice(0, 500) } : {}) };
 }

@@ -15,6 +15,10 @@
 //      the tenant was frozen meanwhile (then paused, 'frozen');
 //   3. 'done', 'partial' or 'failed', executed_at, result, then the entry
 //      guard.action_executed (P3).
+// A late cancellation (operations.ts) marks the action under the lock of its
+// row: a run that finds the mark dispatches nothing more; it withdraws what an
+// earlier run had dispatched (cancelAfterDispatch) and closes the action,
+// 'cancelled' when nothing was ever dispatched.
 import type { Knex } from 'knex';
 import { GUARD_FALLBACK_HOLD_DAYS, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit, type AuditEntryInput, type AuditWriteContext } from '../audit';
@@ -34,7 +38,7 @@ import { checkAnomalies } from './refusals';
 import { targetsWithoutRights } from './selection';
 import { readSettings } from './settings';
 import { ACTION_COLUMNS, findAction, normaliseRow, toDto, toDtos, type PendingActionRow } from './store';
-import type { GuardExecutionContext, GuardResultSummary, GuardTargetResult, GuardedActionDef } from './types';
+import { lateCancelOf, type GuardExecutionContext, type GuardResultSummary, type GuardTargetResult, type GuardedActionDef } from './types';
 
 const MAX_LISTED = 200;
 
@@ -159,9 +163,14 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
   return { kind: 'execute', row: { ...row, state: 'executing' }, def, retained: candidates, summary };
 }
 
-/** Steps 3: the final state and its entry. */
+/**
+ * Step 3: the final state and its entry. The row is read again under its lock: a late cancellation asked while the
+ * action was executing keeps its mark and its per-target result, and an action cancelled before anything was
+ * dispatched is closed 'cancelled'. withdrawn: what this run withdrew itself (a run that found the mark).
+ */
 async function finish(tenantId: number, row: PendingActionRow, retained: number[], before: GuardResultSummary,
-  results: Map<number, GuardTargetResult> | null, failure: string | null, auditCtx: AuditWriteContext): Promise<PendingActionRow> {
+  results: Map<number, GuardTargetResult> | null, failure: string | null, auditCtx: AuditWriteContext,
+  withdrawn: Map<number, string> | null = null): Promise<PendingActionRow> {
   let done = 0;
   let failed = 0;
   let skipped = Number(before.skipped) || 0;
@@ -172,21 +181,36 @@ async function finish(tenantId: number, row: PendingActionRow, retained: number[
     else if (r && r.status === 'skipped') { skipped++; failures.push({ id, code: (r.code ?? 'skipped').slice(0, 64) }); }
     else { failed++; failures.push({ id, code: (r?.code ?? failure ?? 'not_executed').slice(0, 64) }); }
   }
-  const state = done === 0 ? 'failed' : (failed > 0 || skipped > 0 ? 'partial' : 'done');
-  const summary: GuardResultSummary = {
-    done, failed, skipped,
-    ...(before.setAside ? { setAside: before.setAside } : {}),
-    ...(failures.length ? { failures: failures.slice(0, MAX_LISTED) } : {}),
-  };
-  await asTenant(tenantId, { type: 'job', name: 'actions.execute-delayed' }, () => db('pending_actions').where({ id: row.id })
-    .update({ state, executed_at: new Date(), result: JSON.stringify(summary), updated_at: new Date() }));
+  const actor = { type: 'job', name: 'actions.execute-delayed' } as const;
+  const closed = await asTenant(tenantId, actor, () => db.transaction(async (trx) => {
+    const cur = await findAction(row.uuid, { trx, forUpdate: true, tenantId });
+    const late = lateCancelOf(cur?.result);
+    const stored = cur?.result?.cancellation;
+    const cancellation = Array.isArray(stored) ? stored
+      : withdrawn ? [...withdrawn.entries()].map(([id, outcome]) => ({ id, outcome })).slice(0, MAX_LISTED) : undefined;
+    const state: PendingActionRow['state'] = done === 0 ? (late ? 'cancelled' : 'failed') : (failed > 0 || skipped > 0 ? 'partial' : 'done');
+    const summary: GuardResultSummary = {
+      done, failed, skipped,
+      ...(before.setAside ? { setAside: before.setAside } : {}),
+      ...(failures.length ? { failures: failures.slice(0, MAX_LISTED) } : {}),
+      ...(late ? { lateCancel: late } : {}),
+      ...(cancellation ? { cancellation } : {}),
+    };
+    const at = new Date();
+    const cancelled = state === 'cancelled' && late
+      ? { cancelled_at: new Date(late.at), cancelled_by: late.by, cancel_reason: late.reason ?? null } : null;
+    await trx('pending_actions').where({ id: row.id })
+      .update({ state, result: JSON.stringify(summary), updated_at: at, ...(cancelled ?? { executed_at: at }) });
+    return { state, summary, at, cancelled };
+  }));
+  const { state, summary } = closed;
   // P3: after the fact.
-  await asTenant(tenantId, { type: 'job', name: 'actions.execute-delayed' }, () => audit.append(actionEntry(row, 'guard.action_executed', {
-    outcome: state === 'failed' ? 'failure' : 'success',
-    details: { state, done, failed, skipped, ...(failure ? { error: failure } : {}) },
+  await asTenant(tenantId, actor, () => audit.append(actionEntry(row, 'guard.action_executed', {
+    outcome: state === 'cancelled' ? 'cancelled' : state === 'failed' ? 'failure' : 'success',
+    details: { state, done, failed, skipped, ...(failure ? { error: failure } : {}), ...(summary.lateCancel ? { lateCancel: true } : {}) },
   }), auditCtx));
   guardMetrics.inc('obligarth_guard_executions_total', { action: row.action_key, state });
-  return { ...row, state, result: summary, executed_at: new Date() };
+  return { ...row, state, result: summary, ...(closed.cancelled ?? { executed_at: closed.at }) };
 }
 
 /** actions.execute-delayed. */
@@ -218,16 +242,28 @@ export async function executeDelayed(ctx: JobContext<{ tenantId: number; actionU
   ctx.throwIfAborted();
   let results: Map<number, GuardTargetResult> | null = null;
   let failure: string | null = null;
+  let withdrawn: Map<number, string> | null = null;
+  const exec = executionContext(step.row, step.retained, { requestId: ctx.requestId, actor: ctx.actor, signal: ctx.signal });
+  const withdraw = step.def.cancelAfterDispatch;
   try {
-    results = await ctx.inTenant(() => step.def.execute(
-      executionContext(step.row, step.retained, { requestId: ctx.requestId, actor: ctx.actor, signal: ctx.signal }), step.retained));
+    // A late cancellation asked since the action started (it waited for this run after a stop, or for its retry):
+    // nothing more is dispatched. What an earlier run dispatched is withdrawn here too (the request that asked may
+    // have been cut before it finished): those targets were served, the others never were.
+    const late = withdraw ? lateCancelOf((await ctx.inTenant(() => findAction(step.row.uuid, { tenantId })))?.result) : null;
+    if (late && withdraw) {
+      const out = await ctx.inTenant(() => withdraw(exec));
+      withdrawn = out;
+      results = new Map(step.retained.map((id): [number, GuardTargetResult] => [id, out.has(id) ? { status: 'queued' } : { status: 'skipped', code: 'cancelled' }]));
+    } else {
+      results = await ctx.inTenant(() => step.def.execute(exec, step.retained));
+    }
   } catch (err) {
     // Retried while attempts remain (the execution is idempotent); then failed.
     if (!ctx.isLastAttempt) throw err;
     failure = err instanceof JobError ? err.code : 'execution_failed';
     logger.error({ err: safeErr(err), action: step.row.action_key, uuid: step.row.uuid }, 'guard: execution failed on its last attempt');
   }
-  const final = await finish(tenantId, step.row, step.retained, step.summary, results, failure, auditCtx);
+  const final = await finish(tenantId, step.row, step.retained, step.summary, results, failure, auditCtx, withdrawn);
   await ctx.inTenant(async () => notifyAction(await toDto(final)));
   return { output: { state: final.state, done: final.result?.done ?? 0, failed: final.result?.failed ?? 0 } };
 }
@@ -302,12 +338,15 @@ export async function privilegeWatch(ctx: JobContext<Record<string, never>>): Pr
       // Causes of the integration of lot A (privilege_grants.cause): the
       // reactivation of a privileged account, a role holding a destructive
       // capability, the credentials of an approver or a platform administrator
-      // changed by another account.
+      // changed by another account. Review of lot B4: a destructive device
+      // capability (erase, removal from management, lock, lost mode) received
+      // through a team.
       const message = g.cause === 'credentials_reset'
         ? `The password, second factor or SSO identity of ${who} (${what}) was changed by another account: 72-hour cooldown before destructive actions and reviews.`
         : g.cause === 'reactivated' ? `${who} (${what}) was reactivated: 72-hour cooldown before destructive actions.`
           : g.cause === 'capability_set' ? `${who} received a role that can delete or erase devices: 72-hour cooldown before destructive actions.`
-            : `${who} became ${what}: 72-hour cooldown before destructive actions.`;
+            : g.cause === 'capability_team' ? `${who} received through a team the right to erase, lock or remove devices from management: 72-hour cooldown before destructive actions.`
+              : `${who} became ${what}: 72-hour cooldown before destructive actions.`;
       await alertTenants(g.tenant_id ? [MASTER_TENANT_ID, Number(g.tenant_id)] : [MASTER_TENANT_ID], {
         severity: g.cause === 'credentials_reset' ? 'critical' : 'warning',
         title: g.cause === 'credentials_reset' ? 'Credentials of a privileged account changed by another account' : 'New privilege granted',

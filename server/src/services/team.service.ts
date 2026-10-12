@@ -193,18 +193,32 @@ export const teamService = {
     }
   },
 
-  /** Replaces the members of a team: members of the team's tenant only
-   *  (assertMembersInTenant). */
+  /**
+   * Replaces the members of a team: members of the team's tenant only
+   * (assertMembersInTenant). Only what changes is written, never the whole
+   * list again: the database records a privilege grant, and its 72-hour
+   * cooldown, for an account that joins a team holding a destructive device
+   * capability (migration guard_team_capabilities); a member who stays must
+   * not look like one who joins.
+   */
   async setMembers(teamId: number, userIds: number[]): Promise<void> {
     const tenantId = await teamTenantId(teamId);
     if (tenantId === null) throw new AppError(404, 'Team not found');
     const ids = [...new Set(userIds.map(Number))];
     await this.assertMembersInTenant(tenantId, ids);
     await db.transaction(async (trx) => {
-      await trx('team_memberships').where({ team_id: teamId, tenant_id: tenantId }).del();
-      if (ids.length > 0) {
+      const current = (await trx('team_memberships').where({ team_id: teamId, tenant_id: tenantId }).forUpdate()
+        .pluck('user_id') as number[]).map(Number);
+      const wanted = new Set(ids);
+      const have = new Set(current);
+      const gone = current.filter((uid) => !wanted.has(uid));
+      const added = ids.filter((uid) => !have.has(uid));
+      if (gone.length > 0) {
+        await trx('team_memberships').where({ team_id: teamId, tenant_id: tenantId }).whereIn('user_id', gone).del();
+      }
+      if (added.length > 0) {
         await trx('team_memberships').insert(
-          ids.map((uid) => ({ tenant_id: tenantId, team_id: teamId, user_id: uid })),
+          added.map((uid) => ({ tenant_id: tenantId, team_id: teamId, user_id: uid })),
         );
       }
     });
@@ -242,8 +256,14 @@ export const teamService = {
     await assertScopesInTenant(tenantId, permissions);
   },
 
-  /** Replaces the scopes of a team: groups and devices of the team's tenant
-   *  only (400 otherwise). */
+  /**
+   * Replaces the scopes of a team: groups and devices of the team's tenant
+   * only (400 otherwise). Only what changes is written (a scope removed, a
+   * scope added, a level or capabilities changed), never every row again:
+   * the database records a privilege grant for the members of a team whose
+   * row gains a destructive device capability (migration
+   * guard_team_capabilities); a row that stays must not look like a new one.
+   */
   async setPermissions(
     teamId: number,
     permissions: Array<{ scope: 'group' | 'device' | 'ungrouped'; scopeId: number; level: 'ro' | 'rw'; capabilities?: DeviceCapability[] }>,
@@ -254,19 +274,25 @@ export const teamService = {
     await assertScopesInTenant(tenantId, permissions);
 
     return db.transaction(async (trx) => {
-      await trx('team_permissions').where({ team_id: teamId }).del();
-      if (permissions.length > 0) {
-        await trx('team_permissions').insert(
-          permissions.map((p) => ({
-            team_id: teamId,
-            tenant_id: tenantId,
-            scope: p.scope,
-            scope_id: p.scopeId,
-            level: p.level,
-            capabilities: JSON.stringify(p.capabilities ?? DEFAULT_DEVICE_CAPABILITIES),
-          })),
-        );
+      const keyOf = (scope: string, scopeId: number): string => `${scope}:${Number(scopeId)}`;
+      const capsKey = (caps: unknown): string => JSON.stringify([...new Set(Array.isArray(caps) ? caps.map(String) : [])].sort());
+      const current = await trx('team_permissions').where({ team_id: teamId }).forUpdate()
+        .select('id', 'scope', 'scope_id', 'level', 'capabilities') as Array<{ id: number; scope: string; scope_id: number; level: string; capabilities: unknown }>;
+      const wanted = new Set(permissions.map((p) => keyOf(p.scope, p.scopeId)));
+      const gone = current.filter((r) => !wanted.has(keyOf(r.scope, r.scope_id))).map((r) => r.id);
+      if (gone.length > 0) await trx('team_permissions').where({ team_id: teamId }).whereIn('id', gone).del();
+      const byKey = new Map(current.map((r) => [keyOf(r.scope, r.scope_id), r]));
+      const added: Array<Record<string, unknown>> = [];
+      for (const p of permissions) {
+        const caps = [...(p.capabilities ?? DEFAULT_DEVICE_CAPABILITIES)];
+        const row = byKey.get(keyOf(p.scope, p.scopeId));
+        if (!row) {
+          added.push({ team_id: teamId, tenant_id: tenantId, scope: p.scope, scope_id: p.scopeId, level: p.level, capabilities: JSON.stringify(caps) });
+        } else if (row.level !== p.level || capsKey(row.capabilities) !== capsKey(caps)) {
+          await trx('team_permissions').where({ id: row.id, team_id: teamId }).update({ level: p.level, capabilities: JSON.stringify(caps) });
+        }
       }
+      if (added.length > 0) await trx('team_permissions').insert(added);
       const rows = await trx<PermissionRow>('team_permissions')
         .where({ team_id: teamId })
         .orderBy('scope')

@@ -11,8 +11,12 @@
 //   audit.appendManyInTx(trx, entries)   several chains, ascending tenant order
 //   audit.withIntent(entry, ctx, fn)     P2: critical intent, fn, result
 //   audit.prepare(entry, ctx)            body for a SQL function that appends it
+//   audit.collectorOf(trx)               the collector of a transaction that
+//                                        writes its entries at its end (a batch
+//                                        of the outbox: collector.ts), or null
 //   audit.fromRequest / fromJob / system contexts of an entry
 import { forgetAuditActor, fromDbActor, fromJob, fromRequest, system } from './actor';
+import { txAuditCollector } from './collector';
 import { auditMetrics } from './metrics';
 import { append, appendInTx, appendManyInTx, prepare, withIntent } from './writer';
 
@@ -21,6 +25,7 @@ export { AuditUnavailableError, AuditBodyError, isAuditUnavailable } from './err
 export { canonicalJson } from './canonical';
 export { linkHash } from './chain';
 export { forgetAuditActor } from './actor';
+export { bindTxAuditCollector, txAuditCollector, type AuditCollector } from './collector';
 export type {
   AuditActor, AuditActionDef, AuditAppendResult, AuditEntryInput, AuditOrigin, AuditWriteContext, AuditTargets,
 } from './types';
@@ -31,6 +36,7 @@ export const audit = {
   appendManyInTx,
   withIntent,
   prepare,
+  collectorOf: txAuditCollector,
   fromRequest,
   fromJob,
   system,

@@ -6,32 +6,37 @@
 import type { Request } from 'express';
 import {
   type GuardApprovalPayload, type GuardApproverDto, type GuardSettingsInput, type GuardSide,
-  type PendingActionDto,
+  type PendingActionDto, type PendingActionState,
 } from '@obligarth/shared';
-import { audit } from '../audit';
+import { audit, type AuditWriteContext } from '../audit';
 import { db } from '../db';
 import { asTargetTenant, globalViewRead } from '../middleware/dbContext';
 import { AppError } from '../middleware/errorHandler';
 import { approvalService, type PendingApproval } from '../services/approval.service';
 import { hasGlobalView } from '../services/deviceScope.service';
 import { userLabels } from '../services/userLabels.service';
+import { safeErr } from '../jobs/errors';
+import { logger } from '../utils/logger';
 import {
   closeAwaiting, designationRefusal, fileGuardRequest, mayOperate, refuseHeldFallback, requiredSideFor,
 } from './approvals';
 import { guardedActionDef } from './catalog';
 import { fallbackNotice, GuardStepUpError, requestFallbackNotice } from './engine';
-import { actionEntry } from './executor';
+import { actionEntry, executionContext } from './executor';
 import { freezeTenant, type FreezeResult } from './freeze';
 import { cancelJob } from './jobs';
 import { guardMetrics } from './metrics';
-import { notifyAction } from './notify';
+import { notifyAction, notifyLateCancel } from './notify';
 import { cooldownUntil, personFacts } from './people';
 import { checkReason } from './policy';
 import { readSettings } from './settings';
 import { findAction, toDto, type PendingActionRow } from './store';
+import { lateCancelOf } from './types';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const notFound = (): AppError => new AppError(404, 'Guarded action not found', 'notFound');
+/** The states in which what an action dispatched may still wait for its devices: its late cancellation (§10.5). */
+const LATE_CANCEL_STATES: ReadonlySet<PendingActionState> = new Set<PendingActionState>(['executing', 'done', 'partial', 'failed']);
 
 const userOf = (req: Request): number => {
   const id = Number(req.session?.userId);
@@ -69,15 +74,95 @@ function optionalReason(v: unknown): string | undefined {
 
 // ── Cancellation (§10.5) ────────────────────────────────────────────────────
 
+type Cancellation = Array<{ id: number; outcome: string }>;
+type CancelResult = { action: PendingActionDto; cancellation?: Cancellation };
+
+const closed = (state: string): AppError => new AppError(409, `The action is ${state}`, 'actionClosed');
+const tally = (c: Cancellation): { cancelled: number; tooLate: number } => {
+  const cancelled = c.filter((x) => x.outcome === 'cancelled').length;
+  return { cancelled, tooLate: c.length - cancelled };
+};
+
+/**
+ * The late cancellation (§10.5, §10.12) of an action that withdraws what it dispatched (cancelAfterDispatch: the
+ * MDM commands not delivered yet). Open while the action is being executed and once it is executed — an execution
+ * that only enqueues commands is over in a moment, while its commands wait for their devices for days (review of
+ * lot B4, INT-B4-R1: no route could withdraw an erase sent to a switched-off device). In order:
+ *   1. the mark (result.lateCancel), under the lock of the row: from its commit on nothing more is dispatched for
+ *      the action (the executor reads it before it executes, the bus of the commands under a lock that conflicts
+ *      with this one), so a cancellation that meets a running execution loses nothing: what the execution wrote
+ *      first is withdrawn, what it would write next is refused;
+ *   2. the withdrawal, outside any transaction (apple-edge is called), per target;
+ *   3. the result (result.cancellation) and the entry guard.action_cancelled (late: true), protective (P4).
+ * The state stays what the execution made it ('done', 'partial'): the action did run, and its targets stay counted
+ * in the hourly cap; an action marked before it dispatched anything is closed 'cancelled' by its execution.
+ * A withdrawal that could not be completed (apple-edge unreachable) leaves the mark and is asked again; a
+ * completed one is not repeated (409 actionClosed), nor one asked after everything the action dispatched expired.
+ */
+async function lateCancel(req: Request, row: PendingActionRow, tenantId: number, userId: number, reason: string | undefined,
+  ctx: AuditWriteContext): Promise<CancelResult> {
+  const def = guardedActionDef(row.action_key);
+  if (!def?.cancelAfterDispatch) {
+    if (row.state === 'executing') throw new AppError(409, 'The action is running and cannot be cancelled any more', 'actionExecuting');
+    throw closed(row.state);
+  }
+  const empty = { done: 0, failed: 0, skipped: 0 };
+  const marked = await db.transaction(async (trx) => {
+    const cur = await findAction(row.uuid, { trx, forUpdate: true, tenantId });
+    if (!cur || !LATE_CANCEL_STATES.has(cur.state)) throw closed(cur?.state ?? 'closed');
+    if (Array.isArray(cur.result?.cancellation)) throw new AppError(409, 'The action was already cancelled', 'actionClosed');
+    if (cur.state !== 'executing' && def.cancelWindowSeconds !== undefined && cur.executed_at
+      && Date.now() > cur.executed_at.getTime() + def.cancelWindowSeconds * 1000) {
+      throw new AppError(409, 'Nothing of this action waits for a device any more', 'actionClosed');
+    }
+    const mark = lateCancelOf(cur.result) ?? { at: new Date().toISOString(), by: userId, ...(reason ? { reason } : {}) };
+    await trx('pending_actions').where({ id: cur.id })
+      .update({ result: JSON.stringify({ ...(cur.result ?? empty), lateCancel: mark }), updated_at: new Date() });
+    return { row: cur, mark };
+  });
+  const from = marked.row.state;
+  let cancellation: Cancellation;
+  try {
+    const res = await def.cancelAfterDispatch(executionContext(marked.row, marked.row.target_device_ids,
+      { requestId: req.requestId ?? 'request', actor: `user:${userId}` }));
+    cancellation = [...res.entries()].map(([id, outcome]) => ({ id, outcome }));
+  } catch (err) {
+    // P4: the request is journaled whatever became of the withdrawal (what could be withdrawn was; the rest is
+    // retried by the queue of the commands, and the cancellation may be asked again).
+    await audit.append(actionEntry(row, 'guard.action_cancelled', {
+      outcome: 'cancelled', ...(reason ? { reason } : {}), details: { from, late: true, cancelledBy: userId, incomplete: true },
+    }), ctx);
+    throw err;
+  }
+  // An execution that failed dispatched nothing: there was nothing to withdraw.
+  if (from === 'failed' && cancellation.length === 0) throw closed(from);
+  await db.transaction(async (trx) => {
+    const cur = await findAction(row.uuid, { trx, forUpdate: true, tenantId });
+    if (!cur) return;
+    await trx('pending_actions').where({ id: cur.id }).update({
+      result: JSON.stringify({ ...(cur.result ?? empty), lateCancel: lateCancelOf(cur.result) ?? marked.mark, cancellation: cancellation.slice(0, 200) }),
+      updated_at: new Date(),
+    });
+  });
+  await audit.append(actionEntry(row, 'guard.action_cancelled', {
+    outcome: 'cancelled', ...(reason ? { reason } : {}), details: { from, late: true, cancelledBy: userId, ...tally(cancellation) },
+  }), ctx);
+  guardMetrics.inc('obligarth_guard_cancellations_total', { state: from });
+  const fresh = (await findAction(row.uuid, { tenantId }))!;
+  const dto = await toDto(fresh);
+  await notifyLateCancel(dto, tally(cancellation));
+  return { action: dto, cancellation };
+}
+
 /**
  * Open to the requester, the platform administrators, the tenant's
  * administrators and its designated approvers. Awaiting approval: the
  * request is withdrawn; scheduled or paused: cancelled, job cancelled; both
- * protective (P4: passes even when the journal is unavailable). Executing:
- * the late cancellation of the action when it has one (undelivered MDM
- * commands), per target; otherwise 409.
+ * protective (P4: passes even when the journal is unavailable). Being
+ * executed or executed: the late cancellation of the action when it has one
+ * (undelivered MDM commands), per target (lateCancel); otherwise 409.
  */
-export async function cancelAction(req: Request, uuid: string, rawReason: unknown): Promise<{ action: PendingActionDto; cancellation?: Array<{ id: number; outcome: string }> }> {
+export async function cancelAction(req: Request, uuid: string, rawReason: unknown): Promise<CancelResult> {
   const userId = userOf(req);
   const reason = optionalReason(rawReason);
   return withAction(req, uuid, async (row, tenantId) => {
@@ -86,6 +171,7 @@ export async function cancelAction(req: Request, uuid: string, rawReason: unknow
       throw new AppError(403, 'Not allowed to cancel this action', 'notAllowed');
     }
     const ctx = await audit.fromRequest(req, tenantId);
+    if (LATE_CANCEL_STATES.has(row.state)) return lateCancel(req, row, tenantId, userId, reason, ctx);
     if (row.state === 'awaiting_approval') {
       if (row.approval_id) {
         await approvalService.withdraw({ tenantId, approvalId: row.approval_id, byUserId: userId, auditCtx: ctx, reason });
@@ -104,33 +190,37 @@ export async function cancelAction(req: Request, uuid: string, rawReason: unknow
         throw new AppError(409, `The action is ${fresh?.state ?? 'closed'}`, 'actionClosed');
       }
       if (row.job_id) await cancelJob(row.job_id);
+      // A run interrupted before the pause (a stop, then a freeze or a restore), or before a resumption, may have
+      // dispatched already: withdrawn too. The action is cancelled whatever becomes of it (P4): the state above
+      // already keeps anything more from being dispatched, and the queue of the commands retries what apple-edge
+      // could not take now.
+      let cancellation: Cancellation = [];
+      const def = guardedActionDef(row.action_key);
+      if (def?.cancelAfterDispatch) {
+        try {
+          const res = await def.cancelAfterDispatch(executionContext(row, row.target_device_ids,
+            { requestId: req.requestId ?? 'request', actor: `user:${userId}` }));
+          cancellation = [...res.entries()].map(([id, outcome]) => ({ id, outcome }));
+          if (cancellation.length > 0) {
+            await db('pending_actions').where({ id: row.id })
+              .update({ result: JSON.stringify({ ...(row.result ?? { done: 0, failed: 0, skipped: 0 }), cancellation: cancellation.slice(0, 200) }) });
+          }
+        } catch (err) {
+          logger.warn({ err: safeErr(err), action: row.action_key, uuid: row.uuid }, 'guard: withdrawal of a cancelled action not completed yet');
+        }
+      }
       await audit.append(actionEntry(row, 'guard.action_cancelled', {
-        outcome: 'cancelled', ...(reason ? { reason } : {}), details: { from: row.state, cancelledBy: userId },
+        outcome: 'cancelled', ...(reason ? { reason } : {}),
+        details: { from: row.state, cancelledBy: userId, ...(cancellation.length > 0 ? tally(cancellation) : {}) },
       }), ctx);
       const fresh = await findAction(row.uuid, { tenantId });
       if (fresh) await notifyAction(await toDto(fresh));
-    } else if (row.state === 'executing') {
-      const def = guardedActionDef(row.action_key);
-      if (!def?.cancelAfterDispatch) throw new AppError(409, 'The action is running and cannot be cancelled any more', 'actionExecuting');
-      const { executionContext } = await import('./executor');
-      const res = await def.cancelAfterDispatch(executionContext(row, row.target_device_ids, { requestId: req.requestId ?? 'request', actor: `user:${userId}` }));
-      const cancellation = [...res.entries()].map(([id, outcome]) => ({ id, outcome }));
-      await db('pending_actions').where({ id: row.id }).update({
-        result: JSON.stringify({ ...(row.result ?? { done: 0, failed: 0, skipped: 0 }), cancellation: cancellation.slice(0, 200) }),
-        updated_at: new Date(),
-      });
-      await audit.append(actionEntry(row, 'guard.action_cancelled', {
-        outcome: 'cancelled', ...(reason ? { reason } : {}),
-        details: {
-          from: 'executing', late: true, cancelledBy: userId,
-          cancelled: cancellation.filter((c) => c.outcome === 'cancelled').length,
-          tooLate: cancellation.filter((c) => c.outcome !== 'cancelled').length,
-        },
-      }), ctx);
-      guardMetrics.inc('obligarth_guard_cancellations_total', { state: 'executing' });
-      return { action: await toDto((await findAction(row.uuid, { tenantId }))!), cancellation };
+      if (cancellation.length > 0) {
+        guardMetrics.inc('obligarth_guard_cancellations_total', { state: row.state });
+        return { action: await toDto((await findAction(row.uuid, { tenantId }))!), cancellation };
+      }
     } else {
-      throw new AppError(409, `The action is ${row.state}`, 'actionClosed');
+      throw closed(row.state);
     }
     guardMetrics.inc('obligarth_guard_cancellations_total', { state: row.state });
     return { action: await toDto((await findAction(row.uuid, { tenantId }))!) };

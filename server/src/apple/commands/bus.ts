@@ -4,9 +4,10 @@ import type {
   MdmCancelOutcome, MdmCommandOrigin, MdmRefusalCode, MdmRelaunchOutcome, MdmTargetState, NanoEnrollType, Ownership,
 } from '@obligarth/shared';
 import { MDM_COMMAND_ORIGINS } from '@obligarth/shared';
-import { audit, type AuditWriteContext } from '../../audit';
+import { audit, type AuditEntryInput, type AuditWriteContext } from '../../audit';
 import type { DbActor } from '../../db/context';
 import { readSettings } from '../../guard/settings';
+import { lateCancelOf } from '../../guard/types';
 import { jobIdFor, type JobHandle } from '../../jobs';
 import { AppError } from '../../middleware/errorHandler';
 import { privacyRulesFor, type PrivacyRules } from '../devices/privacy';
@@ -144,6 +145,12 @@ function guardRequired(): never {
   throw new AppError(409, 'This command goes through its guarded action', 'guardedActionRequired');
 }
 
+/** A jsonb column as the driver gives it (an object), or as a text (parsed); anything else: null. */
+function jsonOf(v: unknown): unknown {
+  if (typeof v !== 'string') return v ?? null;
+  try { return JSON.parse(v); } catch { return null; }
+}
+
 /** The database actor a token names (the audit's default context). */
 function actorOfToken(token: string): DbActor {
   const [kind, name] = [token.slice(0, 1), token.slice(2)];
@@ -156,6 +163,23 @@ function actorOfToken(token: string): DbActor {
 
 async function auditContext(req: { actor: string; tenantId: number; auditCtx?: AuditWriteContext }): Promise<AuditWriteContext> {
   return req.auditCtx ?? audit.fromDbActor(actorOfToken(req.actor), req.tenantId);
+}
+
+/**
+ * The entry of a request or a cancellation, in the caller's transaction (it never blocks: spooled on a failure).
+ * Rule G-7 (review INT-RC8; review of lot B4, INT-B4-R3): when the caller is a handler of the outbox (the follow-up
+ * of a result, a hook of a final target), its transaction is the batch of the consumer; appending here would lock
+ * the chain head of the tenant until the end of that batch, in the order of the events. The entry is then handed
+ * to the collector the consumer bound to its transaction, which writes it at the end of the batch (ascending tenant
+ * order, with the event's id, in the name of the consumer).
+ */
+async function journalInTx(trx: Knex.Transaction, entry: AuditEntryInput, who: { actor: string; tenantId: number; auditCtx?: AuditWriteContext }): Promise<void> {
+  const collect = audit.collectorOf(trx);
+  if (collect) {
+    collect(entry);
+    return;
+  }
+  await audit.appendInTx(trx, entry, await auditContext(who), { onFailure: 'spool' });
 }
 
 interface DeviceRow {
@@ -272,11 +296,13 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
   const guardKey = [...guardKeys].find((k) => k !== '') ?? null;
   if (guardKey) {
     if (guardKeys.size > 1 || req.origin !== 'guard' || !req.guardActionUuid || !UUID_RE.test(req.guardActionUuid)) guardRequired();
-    // The action as the engine holds it: of this tenant, of this key, being executed. Locked for the transaction:
-    // it cannot be closed or cancelled while its commands are written.
+    // The action as the engine holds it: of this tenant, of this key, being executed, and not cancelled meanwhile.
+    // Locked for the transaction: it cannot be closed or cancelled while its commands are written. A late
+    // cancellation marks the action under the same row lock (guard/operations.ts): either it waits for these
+    // commands and withdraws them, or its mark is read here and nothing is written.
     const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: req.guardActionUuid as string }).forShare()
-      .first('action_key', 'state') as { action_key: string; state: string } | undefined;
-    if (!action || action.action_key !== guardKey || action.state !== 'executing') guardRequired();
+      .first('action_key', 'state', 'result') as { action_key: string; state: string; result: unknown } | undefined;
+    if (!action || action.action_key !== guardKey || action.state !== 'executing' || lateCancelOf(jsonOf(action.result))) guardRequired();
   } else if (req.origin === 'guard' || req.guardActionUuid || req.commandIdFor) {
     invalid(`${spec.requestType} is not a guarded command`, 'notGuardedCommand');
   }
@@ -456,7 +482,7 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
     }
   }
   const deviceIds = planned.flatMap((p) => p.devices.map((d) => d.id));
-  await audit.appendInTx(trx, {
+  await journalInTx(trx, {
     tenantId, action: 'mdm.command_requested',
     ...(deviceIds.length === 1 ? { target: { type: 'device', id: String(deviceIds[0]), device: deviceIds[0] } } : { targets: { deviceIds } }),
     ...(reason ? { reason } : {}), ...(ticket ? { ticket } : {}),
@@ -465,7 +491,7 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
       : planned.length === 1 ? { links: { command: planned[0].id } } : {}),
     details: { requestType: spec.requestType, origin: req.origin, batchId, commands: planned.length, targets: deviceIds.length,
       refused: refused.length, held, ...(notBefore ? { notBefore: notBefore.toISOString() } : {}) },
-  }, await auditContext(req), { onFailure: 'spool' });
+  }, req);
   afterCommit(trx, () => realtime.commandChanged(tenantId, planned.map((p) => p.id), deviceIds.slice(0, 500)));
   return outcome;
 }
@@ -515,11 +541,11 @@ async function cancel(trx: Knex.Transaction, tenantId: number, commandId: string
   if (!opts.silent && (out.cancelled > 0 || out.requested > 0)) {
     const ids = [...pending, ...atEdge];
     // P4: the cancellation stands whatever the journal says.
-    await audit.appendInTx(trx, {
+    await journalInTx(trx, {
       tenantId, action: 'mdm.command_cancelled', links: { command: String(cmd.id).toLowerCase() },
       ...(ids.length === 1 ? { target: { type: 'device', id: String(ids[0]), device: ids[0] } } : { targets: { deviceIds: ids } }),
       details: { requestType: cmd.request_type, cancelled: out.cancelled, requested: out.requested, notCancellable: out.notCancellable },
-    }, await auditContext({ actor, tenantId, auditCtx: opts.auditCtx }), { onFailure: 'spool' });
+    }, { actor, tenantId, auditCtx: opts.auditCtx });
   }
   if (out.cancelled > 0 || out.requested > 0) afterCommit(trx, () => realtime.commandChanged(tenantId, [String(cmd.id)], [...pending, ...atEdge].slice(0, 500)));
   return out;

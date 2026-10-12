@@ -14,7 +14,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { db } from '../db';
-import { JobError, registerJob, type JobHandle } from '../jobs';
+import { JobError, SCHEDULED_POLL_SECONDS, registerJob, type JobHandle } from '../jobs';
 import { registerBootTask } from '../lifecycle';
 import { refuse, registerApprovalRequestType, requirePlatformAdmin } from '../services/approval.service';
 import { logger } from '../utils/logger';
@@ -69,6 +69,8 @@ export function registerVaultJobs(): void {
     description: 'Check that every data key unwraps and that one sealed value per column and key opens',
     payload: empty,
     schedule: { cron: '10 4 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 900,
     handler: async (ctx) => {
       const report = await verifyVault({ actor: ctx.dbActor, signal: ctx.signal });
@@ -90,6 +92,8 @@ export function registerVaultJobs(): void {
     description: 'Mark the tenant secrets no document refers to, delete them 30 days later',
     payload: empty,
     schedule: { cron: '25 4 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 900,
     handler: async (ctx) => {
       const r = await collectTenantSecrets(ctx.dbActor);

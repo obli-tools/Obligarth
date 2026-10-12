@@ -1791,7 +1791,7 @@
       "noTargets": "The selection designates no device.",
       "targetsOutsideScope": "Some devices are outside your scope.",
       "tenantFrozen": "The tenant is frozen: no guarded action until it is unfrozen.",
-      "privilegeCooldown": "Your administrator or approver rights are too recent (72-hour cooldown, until {{until}}).",
+      "privilegeCooldown": "Your rights are too recent: administrator or approver role, or the right to erase, lock or remove devices received through a team (72-hour cooldown, until {{until}}).",
       "personalDeviceForbidden": "This action is refused on personal devices.",
       "wholeFleetForbidden": "This action is refused on the whole fleet.",
       "hourlyCapExceeded": "The hourly cap of destructive actions would be exceeded ({{remaining}} of {{cap}} devices left).",
@@ -1845,7 +1845,11 @@
       "empty": "No guarded action in progress.",
       "fallback": "MSP approval (no client approver)",
       "resume": "Resume",
-      "result": "done {{done}}, failed {{failed}}, skipped {{skipped}}"
+      "result": "done {{done}}, failed {{failed}}, skipped {{skipped}}",
+      "withdraw": "Withdraw",
+      "withdrawTitle": "Withdraw what this action sent?",
+      "withdrawHelp": "What no device received yet is withdrawn; devices that already received it are not affected.",
+      "withdrawnAt": "withdrawn on {{at}}"
     },
     "freeze": {
       "banner": "Tenant frozen since {{since}}",
@@ -1907,7 +1911,8 @@
       "cooldown": "A new administrator attempted a destructive action",
       "edge-freeze": "Freeze not applied at apple-edge yet",
       "approver-lost": "Client approver removed",
-      "credentials": "Credentials of a privileged account changed by another account"
+      "credentials": "Credentials of a privileged account changed by another account",
+      "withdrawn": "Guarded action withdrawn"
     }
   },
   "capabilities": {

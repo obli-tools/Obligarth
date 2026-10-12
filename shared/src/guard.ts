@@ -97,6 +97,11 @@ export interface PendingActionDto {
   executedAt: string | null;
   result: { done: number; failed: number; skipped: number } | null;
   createdAt: string;
+  /** What the action dispatched may still be withdrawn (POST …/actions/:uuid/cancel on an action being executed
+   *  or executed: undelivered MDM commands, until they expire). */
+  lateCancellable?: boolean;
+  /** A late cancellation was asked (ISO date). */
+  lateCancelledAt?: string | null;
 }
 
 /** The quota of the hourly cap (family device_destruction). */

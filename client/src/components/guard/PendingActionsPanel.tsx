@@ -63,7 +63,8 @@ export function PendingActionsPanel() {
   const [quota, setQuota] = useState<GuardQuota | null>(null);
   const [approvers, setApprovers] = useState<GuardApproverDto[]>([]);
   const [members, setMembers] = useState<User[]>([]);
-  const [showClosed, setShowClosed] = useState(false);
+  // A link to one action (the alert of its execution) shows it even once executed: its late cancellation is there.
+  const [showClosed, setShowClosed] = useState(!!highlight);
   const [, tick] = useState(0);
 
   const load = useCallback(async () => {
@@ -102,11 +103,14 @@ export function PendingActionsPanel() {
   }, [load]);
 
   const cancel = async (a: PendingActionDto) => {
+    // An action already executed: what it sent and no device received yet is withdrawn (late cancellation).
+    const late = !OPEN.has(a.state);
     const reason = await prompt({
-      title: t('guard.list.cancelTitle') || 'Cancel this action?',
-      message: t(`guard.actions.${a.actionKey}`, a.actionKey) + ` — ${a.targetCount}`,
+      title: late ? (t('guard.list.withdrawTitle') || 'Withdraw what this action sent?') : (t('guard.list.cancelTitle') || 'Cancel this action?'),
+      message: t(`guard.actions.${a.actionKey}`, a.actionKey) + ` — ${a.targetCount}`
+        + (late ? ` — ${t('guard.list.withdrawHelp') || 'Devices that already received it are not affected.'}` : ''),
       placeholder: t('guard.list.cancelReason') || 'Reason (optional)',
-      confirmLabel: t('guard.list.cancel') || 'Cancel the action',
+      confirmLabel: late ? (t('guard.list.withdraw') || 'Withdraw') : (t('guard.list.cancel') || 'Cancel the action'),
       multiline: false,
     });
     if (reason === null) return;
@@ -238,6 +242,7 @@ export function PendingActionsPanel() {
                       <span className="inline-flex items-center gap-1"><Clock className="w-3 h-3" />{countdown(a.executeAfter, t)}</span>
                     )}
                     {a.result && <span>{t('guard.list.result', { done: a.result.done, failed: a.result.failed, skipped: a.result.skipped }) || `done ${a.result.done}, failed ${a.result.failed}, skipped ${a.result.skipped}`}</span>}
+                    {a.lateCancelledAt && <span className="text-orange-400">{t('guard.list.withdrawnAt', { at: new Date(a.lateCancelledAt).toLocaleString() }) || `withdrawn on ${new Date(a.lateCancelledAt).toLocaleString()}`}</span>}
                     <span>{new Date(a.createdAt).toLocaleString()}</span>
                   </div>
                 </div>
@@ -247,9 +252,9 @@ export function PendingActionsPanel() {
                       <Play className="w-3.5 h-3.5" /> {t('guard.list.resume') || 'Resume'}
                     </button>
                   )}
-                  {OPEN.has(a.state) && (
+                  {(OPEN.has(a.state) || a.lateCancellable) && (
                     <button type="button" onClick={() => cancel(a)} className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded border border-red-400/30 text-red-400 hover:bg-red-400/10 coarse:min-h-10">
-                      <X className="w-3.5 h-3.5" /> {t('guard.list.cancel') || 'Cancel the action'}
+                      <X className="w-3.5 h-3.5" /> {OPEN.has(a.state) ? (t('guard.list.cancel') || 'Cancel the action') : (t('guard.list.withdraw') || 'Withdraw')}
                     </button>
                   )}
                 </div>

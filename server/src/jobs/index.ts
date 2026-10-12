@@ -55,6 +55,7 @@ export const jobs = {
 };
 
 export { jobIdFor, jitterSeconds } from './ids';
+export { SCHEDULED_POLL_SECONDS } from './registry';
 export { registerOutboxHandler } from './outbox/handlers';
 export type { OutboxEvent, OutboxHandlerContext, OutboxHandlerDefinition, OutboxScope } from './outbox/handlers';
 export { JobError, PermanentJobError, sanitizeError, safeErr } from './errors';

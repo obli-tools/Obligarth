@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import type { Logger } from 'pino';
+import { bindTxAuditCollector } from '../../audit/collector';
 import type { AuditEntryInput } from '../../audit/types';
 import type { DbActor } from '../../db/context';
 import { tenantContextStatement } from '../../db/tenantContext';
@@ -26,7 +27,12 @@ import { outboxHandlerFor, type OutboxEvent, type OutboxScope } from './handlers
 // The handler runs in a savepoint of the caller's transaction, in the event's
 // tenant context ('none' for a platform event), set in that savepoint: a
 // rolled-back savepoint drops everything the handler wrote, the jobs it sent,
-// its afterCommit effects and its audit entries. One round trip per event
+// its afterCommit effects and its audit entries. While the handler runs, the
+// event's audit collector is bound to the transaction (audit/collector.ts):
+// what the handler reaches and would journal in its caller's transaction (a
+// command enqueued by the follow-up of a result) hands its entry to it too,
+// and no chain head is locked before the end of the batch (review FD-RC6,
+// INT-RC8; review of lot B4, INT-B4-R3). One round trip per event
 // (file-durable L2, EventScope): the savepoint of an applied event is
 // released by the statement that opens the next one, joined to the next
 // event's context; the consumer's own statements (attempts, dead letters,
@@ -210,7 +216,11 @@ export async function applyEvent(trx: Knex.Transaction, row: OutboxRow, o: Apply
   const effects: Array<() => void | Promise<void>> = [];
   const audits: AuditEntryInput[] = [];
   const event = toEvent(row, parsed.data);
+  const collectAudit = (entry: AuditEntryInput): void => {
+    audits.push({ ...entry, details: { ...(entry.details ?? {}), eventId: event.eventId } });
+  };
   await o.scope.enter(tenantId);
+  const release = bindTxAuditCollector(trx, collectAudit);
   try {
     await def.handle({
       event,
@@ -220,11 +230,10 @@ export async function applyEvent(trx: Knex.Transaction, row: OutboxRow, o: Apply
       log,
       redrive: o.redrive,
       afterCommit: (fn) => { effects.push(fn); },
-      audit: (entry) => {
-        audits.push({ ...entry, details: { ...(entry.details ?? {}), eventId: event.eventId } });
-      },
+      audit: collectAudit,
     });
   } catch (err) {
+    release();
     // The rollback drops the handler's writes and jobs; the consumer's
     // context again. A failure here fails the batch.
     await o.scope.failed();
@@ -239,6 +248,7 @@ export async function applyEvent(trx: Knex.Transaction, row: OutboxRow, o: Apply
     if (!s.retryable) return { outcome: deadLetter('permanent_error', s.code, o.priorAttempts), tenantId };
     return { outcome: failure('handler_error', s.code, o.priorAttempts), tenantId };
   }
+  release();
   o.scope.applied();
   o.collector.effects.push(...effects);
   o.collector.audits.push(...audits);

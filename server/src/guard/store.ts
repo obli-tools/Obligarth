@@ -5,7 +5,8 @@ import type { Knex } from 'knex';
 import type { GuardSide, PendingActionDto, PendingActionState } from '@obligarth/shared';
 import { db } from '../db';
 import { userLabels } from '../services/userLabels.service';
-import type { GuardResultSummary } from './types';
+import { guardedActionDef } from './catalog';
+import { lateCancelOf, type GuardResultSummary } from './types';
 
 export interface PendingActionRow {
   id: number;
@@ -110,6 +111,16 @@ export async function findActionByApproval(approvalId: number, trx?: Knex.Transa
 
 const MAX_DTO_TARGETS = 1000;
 
+/** May what the action dispatched still be withdrawn (the console offers the late cancellation)? An action that
+ *  defines the withdrawal, being executed or executed, not withdrawn yet, within the life of what it dispatched. */
+function lateCancellable(r: PendingActionRow): boolean {
+  if (r.state !== 'executing' && r.state !== 'done' && r.state !== 'partial') return false;
+  const def = guardedActionDef(r.action_key);
+  if (!def?.cancelAfterDispatch || Array.isArray(r.result?.cancellation)) return false;
+  if (r.state === 'executing' || def.cancelWindowSeconds === undefined || !r.executed_at) return true;
+  return Date.now() <= r.executed_at.getTime() + def.cancelWindowSeconds * 1000;
+}
+
 /** The console shape of rows (names through obligarth.user_labels). */
 export async function toDtos(rows: PendingActionRow[]): Promise<PendingActionDto[]> {
   const labels = await userLabels(rows.flatMap((r) => [r.requested_by, r.approved_by]).filter((v) => v !== null));
@@ -138,6 +149,8 @@ export async function toDtos(rows: PendingActionRow[]): Promise<PendingActionDto
       executedAt: r.executed_at ? r.executed_at.toISOString() : null,
       result: summary ? { done: Number(summary.done) || 0, failed: Number(summary.failed) || 0, skipped: Number(summary.skipped) || 0 } : null,
       createdAt: r.created_at.toISOString(),
+      lateCancellable: lateCancellable(r),
+      lateCancelledAt: lateCancelOf(summary)?.at ?? null,
     };
   });
 }

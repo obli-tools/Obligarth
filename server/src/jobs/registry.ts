@@ -16,6 +16,15 @@ export const JOB_MODULES: readonly string[] = [
 
 /** The shared dead letter queue (no worker). */
 export const DEAD_LETTER_QUEUE = 'jobs.dead-letter';
+/**
+ * Polling of a scheduled housekeeping queue woken by NOTIFY (`notify: true`), in seconds. The budget of the server at
+ * rest is 5 statements per second (file-durable L3), and a queue polled every 15 s (the default of a scheduled
+ * job) costs a statement every 15 s whether it has work or not: with some sixty queues the budget was spent (review
+ * of lot B4, INT-B4-R12). An occurrence is announced when the cron pass sends it and starts at once; the poll only
+ * picks up what a notification missed (JOBS_LISTEN_NOTIFY=false, a connection cut) and the retries, a minute late
+ * at most, for work no one waits for (hourly and daily sweeps, purges, snapshots).
+ */
+export const SCHEDULED_POLL_SECONDS = 60;
 
 /** Queue names: `<module>.<name>[.<name>…]`, at most 62 characters (the
  *  database actor j:<queue> of the runs, db/context.ts). */

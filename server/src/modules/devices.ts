@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { forEachTenant } from '../db/tenantContext';
 import { registerFleetSizeProvider, registerGuardedAction, registerOwnershipProvider, type DeviceOwnership, type GuardedActionDef } from '../guard';
-import { JobError, registerJob, type JobContext } from '../jobs';
+import { JobError, SCHEDULED_POLL_SECONDS, registerJob, type JobContext } from '../jobs';
 import { registerApprovalExecutor } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { deviceService } from '../services/device.service';
@@ -49,6 +49,8 @@ export function registerDeviceModule(): void {
     description: 'Daily fleet snapshot of every tenant (dashboard deltas)',
     payload: empty,
     schedule: { cron: '5 0 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     runAtStart: true,
     timeoutSeconds: 600,
     handler: perTenant((tenantId) => deviceService.snapshotFleetDaily(tenantId)),
@@ -62,6 +64,8 @@ export function registerDeviceModule(): void {
     description: 'Hourly fleet snapshot of every tenant (7 days kept)',
     payload: empty,
     schedule: { cron: '1 * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     runAtStart: true,
     timeoutSeconds: 600,
     handler: perTenant((tenantId) => deviceService.snapshotFleetHourly(tenantId)),
@@ -75,6 +79,8 @@ export function registerDeviceModule(): void {
     description: 'Self-healing: purge records of deleted devices, resolve their live alerts',
     payload: empty,
     schedule: { cron: '35 */4 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     runAtStart: true,
     timeoutSeconds: 900,
     handler: perTenant((tenantId) => deviceService.cleanOrphans(tenantId)),

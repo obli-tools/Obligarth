@@ -15,7 +15,7 @@ import { jobAlerts } from './alerts';
 import { JobError } from './errors';
 import { defaultRuntime, registerJob } from './index';
 import { purgeExpiredOnce } from './once';
-import { DEAD_LETTER_QUEUE } from './registry';
+import { DEAD_LETTER_QUEUE, SCHEDULED_POLL_SECONDS } from './registry';
 import { jobStatus } from './status';
 import type { JobContext, JobResult } from './types';
 
@@ -215,6 +215,8 @@ export function registerCoreJobs(): void {
     description: 'Queues behind, scheduled jobs without success, new dead letters: alerts of the master tenant',
     payload: empty,
     schedule: { cron: '*/5 * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     retry: { limit: 0 },
     timeoutSeconds: 120,
     handler: monitor,
@@ -226,6 +228,8 @@ export function registerCoreJobs(): void {
     description: 'Purge the expired job_once keys and the job_status rows of retired queues',
     payload: empty,
     schedule: { cron: '45 3 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 300,
     handler: async () => {
       const once = await purgeExpiredOnce();
@@ -241,6 +245,8 @@ export function registerCoreJobs(): void {
     description: 'Expire the pending two-step approvals past their deadline',
     payload: empty,
     schedule: { cron: '* * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     runAtStart: true,
     retry: { limit: 0 },
     timeoutSeconds: 60,
@@ -255,6 +261,8 @@ export function registerCoreJobs(): void {
     description: 'Delete the phone-key challenges expired for more than 7 days',
     payload: empty,
     schedule: { cron: '17 * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 120,
     handler: async (ctx) => {
       const { deviceKeyService } = await import('../services/deviceKey/deviceKey.service');
@@ -272,6 +280,8 @@ export function registerCoreJobs(): void {
     description: 'Revoke the phone keys unused for 180 days, refresh the attestation revocation list',
     payload: empty,
     schedule: { cron: '40 2 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 600,
     handler: async (ctx) => {
       const { deviceKeyService } = await import('../services/deviceKey/deviceKey.service');
@@ -287,6 +297,8 @@ export function registerCoreJobs(): void {
     description: 'Delete the expired second-factor trusts',
     payload: empty,
     schedule: { cron: '7 * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 120,
     handler: async (ctx) => ({ output: { deleted: await asIdentity(ctx.dbActor, () => tfaTrustService.sweepExpired()) } }),
   });
@@ -298,6 +310,8 @@ export function registerCoreJobs(): void {
     description: 'Delete the live alerts read or resolved more than 90 days ago',
     payload: empty,
     schedule: { cron: '15 3 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 300,
     handler: (ctx) => eachTenant(ctx, (tenantId) => liveAlertService.purgeOld(LIVE_ALERT_RETENTION_DAYS, tenantId)),
   });
@@ -344,6 +358,8 @@ export function registerCoreJobs(): void {
     description: 'Purge the journal of the cross-tenant read grants (PLATFORM_GRANT_RETENTION_DAYS)',
     payload: empty,
     schedule: { cron: '30 3 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 300,
     handler: async () => ({ output: { deleted: await purgePlatformGrants() } }),
   });

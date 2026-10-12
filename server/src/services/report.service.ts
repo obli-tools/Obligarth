@@ -5,7 +5,7 @@ import { z } from 'zod';
 import type { Report, ReportOutput, ReportSection } from '@obligarth/shared';
 import { config } from '../config';
 import { forEachTenant } from '../db/tenantContext';
-import { JobError, registerJob, sanitizeError, type JobContext, type JobHandle, type JobResult } from '../jobs';
+import { JobError, SCHEDULED_POLL_SECONDS, registerJob, sanitizeError, type JobContext, type JobHandle, type JobResult } from '../jobs';
 import { logger } from '../utils/logger';
 import { renderReportHtml } from './reportRenderer';
 import { launchChromium } from '../utils/chromium';
@@ -592,6 +592,8 @@ export function registerReportJobs(): void {
     description: 'Give up the report outputs left generating for more than 60 minutes',
     payload: empty,
     schedule: { cron: '*/15 * * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     runAtStart: true,
     retry: { limit: 0 },
     timeoutSeconds: 120,
@@ -604,6 +606,8 @@ export function registerReportJobs(): void {
     description: 'Delete the expired report outputs and their files',
     payload: empty,
     schedule: { cron: '50 3 * * *' },
+    notify: true,
+    pollSeconds: SCHEDULED_POLL_SECONDS,
     timeoutSeconds: 900,
     heartbeatSeconds: 60,
     handler: (ctx) => eachTenant(ctx, (tenantId) => reportService.purgeExpiredOutputs(tenantId, () => ctx.throwIfAborted())),

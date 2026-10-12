@@ -74,6 +74,19 @@ export async function notifyAction(dto: PendingActionDto, extra: { code?: string
   });
 }
 
+/** The live alert of a late cancellation (the state of the action does not change: guard:<uuid>:withdrawn), then
+ *  GUARD_ACTION_UPDATED. A warning when a device had already received what was dispatched. */
+export async function notifyLateCancel(dto: PendingActionDto, n: { cancelled: number; tooLate: number }): Promise<void> {
+  emitAction(dto);
+  await alertTenantAndMsp(dto.tenantId, {
+    severity: n.tooLate > 0 ? 'warning' : 'info',
+    title: 'Guarded action withdrawn',
+    message: `${dto.actionKey}: withdrawn for ${n.cancelled} device(s)${n.tooLate > 0 ? `, too late for ${n.tooLate}` : ''}.`,
+    stableKey: `guard:${dto.uuid}:withdrawn`,
+    navigateTo: linkOf(dto.uuid),
+  });
+}
+
 export function emitAction(dto: PendingActionDto): void {
   try { getIO().to(`tenant:${dto.tenantId}`).emit(SocketEvents.GUARD_ACTION_UPDATED, dto); } catch { /* no Socket.io */ }
 }

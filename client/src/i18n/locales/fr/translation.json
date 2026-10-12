@@ -1791,7 +1791,7 @@
       "noTargets": "La sélection ne désigne aucun appareil.",
       "targetsOutsideScope": "Certains appareils sont hors de votre portée.",
       "tenantFrozen": "Le tenant est gelé : aucune action gardée avant son dégel.",
-      "privilegeCooldown": "Vos droits d'administrateur ou d'approbateur sont trop récents (refroidissement de 72 h, jusqu'au {{until}}).",
+      "privilegeCooldown": "Vos droits sont trop récents : rôle d'administrateur ou d'approbateur, ou droit d'effacer, de verrouiller ou de retirer des appareils reçu par une équipe (refroidissement de 72 h, jusqu'au {{until}}).",
       "personalDeviceForbidden": "Cette action est refusée sur les appareils personnels.",
       "wholeFleetForbidden": "Cette action est refusée sur tout le parc.",
       "hourlyCapExceeded": "Le plafond horaire des actions destructrices serait dépassé (reste {{remaining}} appareils sur {{cap}}).",
@@ -1845,7 +1845,11 @@
       "empty": "Aucune action gardée en cours.",
       "fallback": "Approbation du MSP (aucun approbateur client)",
       "resume": "Reprendre",
-      "result": "faites {{done}}, en échec {{failed}}, écartées {{skipped}}"
+      "result": "faites {{done}}, en échec {{failed}}, écartées {{skipped}}",
+      "withdraw": "Retirer",
+      "withdrawTitle": "Retirer ce que cette action a envoyé ?",
+      "withdrawHelp": "Ce qu'aucun appareil n'a encore reçu est retiré ; les appareils qui l'ont déjà reçu ne sont pas concernés.",
+      "withdrawnAt": "retirée le {{at}}"
     },
     "freeze": {
       "banner": "Tenant gelé depuis le {{since}}",
@@ -1907,7 +1911,8 @@
       "cooldown": "Un nouvel administrateur a tenté une action destructrice",
       "edge-freeze": "Gel pas encore appliqué par apple-edge",
       "approver-lost": "Approbateur client retiré",
-      "credentials": "Facteurs d'un compte privilégié changés par un autre compte"
+      "credentials": "Facteurs d'un compte privilégié changés par un autre compte",
+      "withdrawn": "Action gardée retirée"
     }
   },
   "capabilities": {
