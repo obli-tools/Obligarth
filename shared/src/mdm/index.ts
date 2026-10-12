@@ -13,3 +13,5 @@ export * from './apple/availability';
 export * from './apple/keys';
 // Command queue (lot B4, integration-apple-edge §8): states, views, outcomes.
 export * from './commands';
+// DDM engine (lot B5a, integration-apple-edge §9.9): declaration set, statuses and status items of a device.
+export * from './ddm';
