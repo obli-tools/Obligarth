@@ -7,7 +7,7 @@ import { permissionService } from '../../services/permission.service';
 import { restrictionFloor, restrictionService } from '../../services/restriction.service';
 import { getIO } from '../../socket';
 import { impactGrew, type ImpactResult } from './impact';
-import { keyWithoutInstance, widerEntry } from './impactPure';
+import { decodeSpread, keyWithoutInstance, widerEntry } from './impactPure';
 
 // =============================================================================
 // What the guarded changes of the configuration share (docs:
@@ -81,24 +81,18 @@ export interface ApprovedImpact {
   artifacts: PolicyImpact['artifacts'];
   /** Digest of the content the approval was given on. */
   digest: string;
-  /** The devices each entry of that content reached, by entry name (impactPure.ts, entryName). */
+  /** The devices each entry of that content reached, by entry name (impactPure.ts: entryName, decodeSpread). */
   spread: Record<string, number>;
-}
-
-/** The devices of each entry of a content, as a request keeps them: entry names, a positive count each. */
-function isSpread(v: unknown): v is Record<string, number> {
-  return !!v && typeof v === 'object' && !Array.isArray(v)
-    && Object.entries(v).every(([name, n]) => /^[0-9a-f]{32}$/.test(name) && Number.isSafeInteger(n) && (n as number) > 0);
 }
 
 /** The preview a request was approved with; null when the payload carries none, or none with its digest and the
  *  devices of each of its entries (a request filed before they were kept is not executed: it is filed again). */
 export function approvedImpactOf(payload: { impact?: unknown }): ApprovedImpact | null {
-  const i = payload.impact as Partial<ApprovedImpact> | undefined;
-  return i && typeof i === 'object' && typeof i.devicesTouched === 'number' && !!i.artifacts
-    && typeof i.artifacts.removals === 'number' && typeof i.digest === 'string' && /^[0-9a-f]{64}$/.test(i.digest)
-    && isSpread(i.spread)
-    ? i as ApprovedImpact : null;
+  const i = payload.impact as (Partial<Omit<ApprovedImpact, 'spread'>> & { spread?: unknown }) | undefined;
+  if (!i || typeof i !== 'object' || typeof i.devicesTouched !== 'number' || !i.artifacts
+    || typeof i.artifacts.removals !== 'number' || typeof i.digest !== 'string' || !/^[0-9a-f]{64}$/.test(i.digest)) return null;
+  const spread = decodeSpread(i.spread);
+  return spread ? { devicesTouched: i.devicesTouched, artifacts: i.artifacts, digest: i.digest, spread } : null;
 }
 
 /**

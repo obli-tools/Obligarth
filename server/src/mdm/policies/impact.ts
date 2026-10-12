@@ -6,7 +6,7 @@ import {
 import { AppError } from '../../middleware/errorHandler';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { findConflicts } from './conflicts';
-import { ancestryWithout, describeKeys, entryName, impactDigest, movedAncestry } from './impactPure';
+import { ancestryWithout, describeKeys, encodeSpread, entryName, impactDigest, movedAncestry } from './impactPure';
 import {
   contributionsOf, devicesOfTargets, loadDevices, loadGroupAncestors, loadPolicyState, loadResources,
   type DeviceSet, type PolicyState,
@@ -342,8 +342,8 @@ const APPROVAL_KEYS_MAX = 100;
 /**
  * What a request for approval keeps of its preview, read by its reviewers and by its executor: the counters, the
  * keys the change adds, changes and removes (their names and counts, never a value), the digest of the content
- * the approval is given on, and the devices each entry of that content reaches (`spread`, by entry name: every
- * entry, whatever the number of keys shown).
+ * the approval is given on, and the devices each entry of that content reaches (`spread`: every entry, whatever
+ * the number of keys shown, in one line of text for the executor: impactPure.ts, encodeSpread).
  */
 export function approvalImpact(r: ImpactResult): Record<string, unknown> {
   return {
@@ -351,7 +351,7 @@ export function approvalImpact(r: ImpactResult): Record<string, unknown> {
     keys: r.impact.keys.slice(0, APPROVAL_KEYS_MAX),
     keysTotal: r.impact.keys.length,
     digest: r.digest,
-    spread: Object.fromEntries(r.content.map((c) => [c.name, c.devices])),
+    spread: encodeSpread(r.content),
   };
 }
 

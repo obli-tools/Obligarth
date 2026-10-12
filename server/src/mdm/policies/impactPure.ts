@@ -74,6 +74,30 @@ export function keyWithoutInstance(settingKey: string): string {
 }
 
 /**
+ * The devices each entry of a content reaches, as a request for approval keeps them: one line of text,
+ * "<entry name>:<devices>" joined by commas, sorted by name. One value, whatever the number of entries: the payload
+ * of a request is what its reviewers read, field by field, and this one is only there for the executor.
+ */
+export function encodeSpread(entries: ReadonlyArray<{ name: string; devices: number }>): string {
+  return entries.map((e) => `${e.name}:${e.devices}`).sort().join(',');
+}
+
+const SPREAD_ENTRY = /^([0-9a-f]{32}):([1-9][0-9]{0,8})$/;
+
+/** The devices of each entry, read back from a request; null when the text is not one encodeSpread wrote. */
+export function decodeSpread(text: unknown): Record<string, number> | null {
+  if (typeof text !== 'string') return null;
+  const out: Record<string, number> = {};
+  if (text === '') return out;
+  for (const part of text.split(',')) {
+    const m = SPREAD_ENTRY.exec(part);
+    if (!m || Object.hasOwn(out, m[1])) return null;
+    out[m[1]] = Number(m[2]);
+  }
+  return out;
+}
+
+/**
  * The entry of a content that reaches more devices than it was approved for, beyond `tolerance` (null: none).
  * `approved`: the devices each entry reached when the request was filed, by entry name; `now`: the same entries as
  * the preview computed again gives them. The digest says that a change still sets what was approved; this says that
