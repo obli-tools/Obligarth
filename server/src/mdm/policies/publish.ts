@@ -19,6 +19,7 @@ import { executeGroupTreeChange } from './groupTree';
 import {
   approvalImpact, computeImpact, describeKeys, impactSummary, type AssignmentDelta, type ImpactResult, type ProposedChange,
 } from './impact';
+import { quoted } from './impactPure';
 import { signImpactToken } from './impactToken';
 import { rowToAssignment } from './loader';
 import { policyService, rowToVersion, settleOrphanedPending, validateForSubmission, validationFailed } from './policyService';
@@ -41,7 +42,8 @@ import { requestTenantResolution } from './triggers';
 // batch in the request's payload), the request type mdm_policy_publish is
 // executed as the requester once approved, and its executor computes the
 // preview again: beyond 20 % more touched devices or removals than approved,
-// or with another content than the one approved, the execution is refused
+// with another content than the one approved, or with a key of that content
+// set on more devices than approved (same tolerance), the execution is refused
 // (impactChanged, contentChanged) and the version goes back to the draft. A
 // refused or expired request rejects the version.
 // The decision is taken where the change is written (review of lot B5b,
@@ -192,7 +194,7 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
     if (level === 'restricted') {
       const approval = await approvalService.createInTx(trx, {
         tenantId, userId: Number(userId), requestType: POLICY_PUBLISH_REQUEST_TYPE,
-        description: `Publish version ${version} of the policy "${policy.name}" — ${impact.devicesTouched} device(s) touched, `
+        description: `Publish version ${version} of the policy ${quoted(policy.name)} — ${impact.devicesTouched} device(s) touched, `
           + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`,
         payload: { kind: 'version', policyId, versionId, version, impact: approvalImpact(check) },
         auditCtx: ctx,
@@ -345,7 +347,7 @@ export async function policyBaseOf(q: Knex | Knex.Transaction, deltas: Assignmen
 
 /** The policies of a batch in a few words, for the description of its request. */
 function describePolicies(base: PolicyBase[], max = 4): string {
-  const one = (b: PolicyBase): string => `"${b.name}" (${b.version === null ? 'not published' : `version ${b.version}`})`;
+  const one = (b: PolicyBase): string => `${quoted(b.name)} (${b.version === null ? 'not published' : `version ${b.version}`})`;
   if (base.length === 1) return `the policy ${one(base[0])}`;
   const shown = base.slice(0, max).map(one).join(', ');
   return `${base.length} policies: ${base.length > max ? `${shown} (+${base.length - max} more)` : shown}`;
@@ -538,7 +540,7 @@ async function executeAssignmentChanges(x: ApprovalExecution, p: PublishPayload)
     for (const b of base) {
       const key = `${b.tenantId}:${b.policyId}`;
       if (!approvedBase!.has(key) || approvedBase!.get(key) !== b.versionId) {
-        refuse(`policyVersionChanged: the policy "${b.name}" was published again since the request `
+        refuse(`policyVersionChanged: the policy ${quoted(b.name)} was published again since the request `
           + `(${b.version === null ? 'no published version' : `version ${b.version}`} now); submit the batch again`);
       }
     }

@@ -4,9 +4,9 @@ import type { PolicyImpact } from '@obligarth/shared';
 // =============================================================================
 // The pure parts of the impact preview (docs: modele-donnees-mdm §7.11; review
 // of lot B5b, MDM-B5b-C2 and C3), without the database: the ancestry of the
-// groups once the tree has changed, the digest of the content of a preview,
-// its keys in the words of a request. impact.ts reads the tenant and calls
-// them.
+// groups once the tree has changed, the digest of the content of a preview
+// and the devices each of its entries reaches, its keys in the words of a
+// request. impact.ts reads the tenant and calls them.
 // =============================================================================
 
 /** For each group: its ancestors with their depth (the group itself at depth 0), as the closure holds them. */
@@ -51,6 +51,45 @@ export function impactDigest(parts: Iterable<string>): string {
 }
 
 /**
+ * The name of an entry of the content of a preview in a request for approval: the first 32 hex digits of its
+ * SHA-256. Neither a value nor the instance of a collection is kept under it, and its 128 bits leave no way to make
+ * two entries pass for one (the values of a content are chosen by its author).
+ */
+export function entryName(entry: string): string {
+  return createHash('sha256').update(entry, 'utf8').digest('hex').slice(0, 32);
+}
+
+/**
+ * A name a user chose (a policy, a group), in the words of a request: between quotes, its own quotes and control
+ * characters escaped. The description of a request is what its approver reads: a name never passes for the rest of
+ * the sentence (its counts, its keys).
+ */
+export function quoted(name: string): string {
+  return JSON.stringify(String(name));
+}
+
+/** A setting key without the instance of its collection (an SSID, the identifier of an app: a value of the content). */
+export function keyWithoutInstance(settingKey: string): string {
+  return settingKey.replace(/\[[\s\S]*\]$/, '[…]');
+}
+
+/**
+ * The entry of a content that reaches more devices than it was approved for, beyond `tolerance` (null: none).
+ * `approved`: the devices each entry reached when the request was filed, by entry name; `now`: the same entries as
+ * the preview computed again gives them. The digest says that a change still sets what was approved; this says that
+ * it still sets it on as many devices: a key the approver was shown on one device is not set on thirty, whatever the
+ * total (second review of lot B5b, MDM-B5b-C12).
+ */
+export function widerEntry<E extends { name: string; devices: number }>(approved: Readonly<Record<string, number>>, now: readonly E[],
+  tolerance: number): { entry: E; approved: number } | null {
+  for (const entry of now) {
+    const was = Object.hasOwn(approved, entry.name) ? approved[entry.name] : 0;
+    if (entry.devices > was * (1 + tolerance)) return { entry, approved: was };
+  }
+  return null;
+}
+
+/**
  * The keys of a preview in a few words, for the description of a request ("key (+added ~changed -removed)"). The
  * description is journaled with the request (approval.requested): the instance of a collection (an SSID, the
  * identifier of an app) is a value of the content and stays out of it ("type[…]", the instances of a type counted
@@ -60,7 +99,7 @@ export function describeKeys(i: PolicyImpact, max = 6): string {
   if (!i.keys.length) return 'no key changed';
   const byName = new Map<string, { added: number; changed: number; removed: number }>();
   for (const k of i.keys) {
-    const name = k.settingKey.replace(/\[[\s\S]*\]$/, '[…]');
+    const name = keyWithoutInstance(k.settingKey);
     const s = byName.get(name) ?? { added: 0, changed: 0, removed: 0 };
     s.added += k.added;
     s.changed += k.changed;

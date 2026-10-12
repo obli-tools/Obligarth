@@ -6,7 +6,7 @@ import {
 import { AppError } from '../../middleware/errorHandler';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { findConflicts } from './conflicts';
-import { ancestryWithout, describeKeys, impactDigest, movedAncestry } from './impactPure';
+import { ancestryWithout, describeKeys, entryName, impactDigest, movedAncestry } from './impactPure';
 import {
   contributionsOf, devicesOfTargets, loadDevices, loadGroupAncestors, loadPolicyState, loadResources,
   type DeviceSet, type PolicyState,
@@ -29,7 +29,11 @@ import {
 // The preview also has a digest of its content: what the change sets and
 // unsets, whatever the number of devices. An approval is given on that content
 // (DM10): at its execution the digest must be the one that was approved
-// (MDM-B5b-C3).
+// (MDM-B5b-C3). And each entry of that content has the number of devices it
+// reaches: at the execution of an approval, no entry reaches more devices than
+// approved beyond the tolerance of DM23, whatever the total (a key shown to
+// the approver on one device is not set on thirty: second review of lot B5b,
+// MDM-B5b-C12).
 // =============================================================================
 
 export type AssignmentDelta = { before: ResolutionAssignment | null; after: ResolutionAssignment | null };
@@ -55,12 +59,22 @@ export interface ImpactOptions {
 
 export interface TouchedDevice { deviceId: number; label: string; added: string[]; changed: string[]; removed: string[] }
 
+/** An entry of the content of a preview (a key set to a value, or a key that no longer applies) and the devices it reaches. */
+export interface ContentEntry {
+  /** Name of the entry in a request (impactPure.ts, entryName): neither a value nor an instance. */
+  name: string;
+  settingKey: string;
+  devices: number;
+}
+
 export interface ImpactResult {
   impact: PolicyImpact;
   /** Every touched device, by id (the pages of GET /api/mdm/impact/:token/devices). */
   touched: TouchedDevice[];
   /** SHA-256 of what the change sets and unsets (impactPure.ts, impactDigest). */
   digest: string;
+  /** The entries of that digest, each with the number of devices it reaches. */
+  content: ContentEntry[];
 }
 
 const KIOSK_LOCK_TYPE = 'com.apple.app.lock';
@@ -200,7 +214,12 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
   let devicesRemoved = 0;
   let removalDevices = 0;
   const touched: TouchedDevice[] = [];
-  const content = new Set<string>();
+  // What the change does, entry by entry (a device counts once per entry: it has one state per key).
+  const content = new Map<string, { settingKey: string; devices: number }>();
+  const mark = (entry: string, settingKey: string): void => {
+    const c = content.get(entry);
+    if (c) c.devices++; else content.set(entry, { settingKey, devices: 1 });
+  };
   const labelOf = new Map(devices.map((d) => [d.id, d.label]));
   for (let i = 0; i < devices.length; i++) {
     const b = before.devices[i].settings;
@@ -214,14 +233,14 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       const p = bm.get(k);
       const differs = !!p && settingState(p) !== settingState(s);
       if (!p) { added.push(k); keyStat(k).added++; } else if (differs) { changed.push(k); keyStat(k).changed++; }
-      if (!p || differs) content.add(`S|${k}|${s.valueHash}|${s.removed ? 1 : 0}`);
+      if (!p || differs) mark(`S|${k}|${s.valueHash}|${s.removed ? 1 : 0}`, k);
       if (s.availability.status === 'not_applicable' && (!p || differs)) keyStat(k).notApplicable++;
     }
     for (const k of bm.keys()) {
       if (am.has(k)) continue;
       removed.push(k);
       keyStat(k).removed++;
-      content.add(`U|${k}`);
+      mark(`U|${k}`, k);
     }
     if (added.length || changed.length || removed.length) {
       touched.push({ deviceId: devices[i].id, label: labelOf.get(devices[i].id) ?? '', added, changed, removed });
@@ -287,7 +306,10 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     approval: { required: reasons.length > 0, reasons },
     removalDevices,
   };
-  return { impact, touched, digest: impactDigest(content) };
+  return {
+    impact, touched, digest: impactDigest(content.keys()),
+    content: [...content].map(([entry, c]) => ({ name: entryName(entry), settingKey: c.settingKey, devices: c.devices })),
+  };
 }
 
 /** The conflicts a change would create (section 7.7), without resolving any device. */
@@ -319,8 +341,9 @@ const APPROVAL_KEYS_MAX = 100;
 
 /**
  * What a request for approval keeps of its preview, read by its reviewers and by its executor: the counters, the
- * keys the change adds, changes and removes (their names and counts, never a value), and the digest of the content
- * the approval is given on.
+ * keys the change adds, changes and removes (their names and counts, never a value), the digest of the content
+ * the approval is given on, and the devices each entry of that content reaches (`spread`, by entry name: every
+ * entry, whatever the number of keys shown).
  */
 export function approvalImpact(r: ImpactResult): Record<string, unknown> {
   return {
@@ -328,6 +351,7 @@ export function approvalImpact(r: ImpactResult): Record<string, unknown> {
     keys: r.impact.keys.slice(0, APPROVAL_KEYS_MAX),
     keysTotal: r.impact.keys.length,
     digest: r.digest,
+    spread: Object.fromEntries(r.content.map((c) => [c.name, c.devices])),
   };
 }
 

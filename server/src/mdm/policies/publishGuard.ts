@@ -1,5 +1,5 @@
 import type { Request } from 'express';
-import { POLICY_PUBLISH_ACTION, SocketEvents, type PolicyImpact } from '@obligarth/shared';
+import { POLICY_PUBLISH_ACTION, PUBLISH_APPROVAL_THRESHOLDS, SocketEvents, type PolicyImpact } from '@obligarth/shared';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
 import { refuse } from '../../services/approval.service';
@@ -7,6 +7,7 @@ import { permissionService } from '../../services/permission.service';
 import { restrictionFloor, restrictionService } from '../../services/restriction.service';
 import { getIO } from '../../socket';
 import { impactGrew, type ImpactResult } from './impact';
+import { keyWithoutInstance, widerEntry } from './impactPure';
 
 // =============================================================================
 // What the guarded changes of the configuration share (docs:
@@ -80,21 +81,33 @@ export interface ApprovedImpact {
   artifacts: PolicyImpact['artifacts'];
   /** Digest of the content the approval was given on. */
   digest: string;
+  /** The devices each entry of that content reached, by entry name (impactPure.ts, entryName). */
+  spread: Record<string, number>;
 }
 
-/** The preview a request was approved with; null when the payload carries none, or none with its digest. */
+/** The devices of each entry of a content, as a request keeps them: entry names, a positive count each. */
+function isSpread(v: unknown): v is Record<string, number> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+    && Object.entries(v).every(([name, n]) => /^[0-9a-f]{32}$/.test(name) && Number.isSafeInteger(n) && (n as number) > 0);
+}
+
+/** The preview a request was approved with; null when the payload carries none, or none with its digest and the
+ *  devices of each of its entries (a request filed before they were kept is not executed: it is filed again). */
 export function approvedImpactOf(payload: { impact?: unknown }): ApprovedImpact | null {
   const i = payload.impact as Partial<ApprovedImpact> | undefined;
   return i && typeof i === 'object' && typeof i.devicesTouched === 'number' && !!i.artifacts
     && typeof i.artifacts.removals === 'number' && typeof i.digest === 'string' && /^[0-9a-f]{64}$/.test(i.digest)
+    && isSpread(i.spread)
     ? i as ApprovedImpact : null;
 }
 
 /**
  * Refuses the execution of an approved request whose preview, computed again under the lock, is no longer the one
- * that was approved: more devices touched or more removals than the tolerance of DM23 (impactChanged), or another
+ * that was approved: more devices touched or more removals than the tolerance of DM23 (impactChanged), another
  * content, whatever the number of devices (contentChanged: a policy the change depends on was published, assigned
- * or moved since the request; DM10, an approval bears on a frozen content).
+ * or moved since the request; DM10, an approval bears on a frozen content), or the same content on the same number
+ * of devices but spread otherwise (impactChanged: a key of the change reaches more devices than approved, beyond
+ * the same tolerance; an exclusion or a stronger assignment that kept it away was changed since the request).
  */
 export function refuseUnlessAsApproved(approved: ApprovedImpact, now: ImpactResult, again: string): void {
   if (impactGrew(approved, now.impact)) {
@@ -104,5 +117,11 @@ export function refuseUnlessAsApproved(approved: ApprovedImpact, now: ImpactResu
   if (now.digest !== approved.digest) {
     refuse(`contentChanged: the change no longer sets what was approved (a policy it depends on was published, assigned or `
       + `inherited otherwise since the request); ${again}`);
+  }
+  const wider = widerEntry(approved.spread, now.content, PUBLISH_APPROVAL_THRESHOLDS.recheckTolerance);
+  if (wider) {
+    // The key without the instance of its collection: the refusal is journaled with the request.
+    refuse(`impactChanged: ${keyWithoutInstance(wider.entry.settingKey)} would now change on ${wider.entry.devices} device(s), `
+      + `${wider.approved} approved; ${again}`);
   }
 }

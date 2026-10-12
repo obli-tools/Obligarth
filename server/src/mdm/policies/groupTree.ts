@@ -12,6 +12,7 @@ import { permissionService } from '../../services/permission.service';
 import { restrictionService } from '../../services/restriction.service';
 import { withConfigurationLock } from './configLock';
 import { approvalImpact, computeImpact, describeKeys, impactSummary, type GroupTreeChange, type ImpactResult } from './impact';
+import { quoted } from './impactPure';
 import { signImpactToken } from './impactToken';
 import { devicesOfTargets } from './loader';
 import {
@@ -84,11 +85,12 @@ async function write(trx: Knex.Transaction, change: GroupTreeChange,
 
 async function describe(q: Knex | Knex.Transaction, tenantId: number, group: { id: number; name: string }, change: GroupTreeChange,
   impact: PolicyImpact): Promise<string> {
-  let what = `Delete the group "${group.name}"`;
+  // Names chosen by the requester: quoted, so that none passes for the rest of the sentence.
+  let what = `Delete the group ${quoted(group.name)}`;
   if (change.kind === 'group_move') {
     const parent = change.newParentId === null ? null
       : await q('device_groups').where({ tenant_id: tenantId, id: change.newParentId }).first('name') as { name: string } | undefined;
-    what = `Move the group "${group.name}" ${change.newParentId === null ? 'to the root of the tree' : `under "${parent?.name ?? `#${change.newParentId}`}"`}`;
+    what = `Move the group ${quoted(group.name)} ${change.newParentId === null ? 'to the root of the tree' : `under ${quoted(parent?.name ?? `#${change.newParentId}`)}`}`;
   }
   return `${what} — ${impact.devicesInScope} device(s) in its subtree, ${impact.devicesTouched} touched, `
     + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`;
