@@ -21,7 +21,7 @@ import { Button } from '@/components/common/Button';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
 import { DeviceStateBadges, StateBadge } from '@/components/mdm/DeviceStateBadges';
 import {
-  PlatformIcon, enrollmentMethodLabel, formatBytes, formatDate, formatDateTime, managementModeLabel, osLabel, ownershipLabel,
+  PlatformIcon, enrollmentMethodLabel, formatBytes, formatDate, formatDateTime, formatDay, managementModeLabel, osLabel, ownershipLabel,
 } from '@/components/mdm/PlatformIcon';
 import { DeviceConfigurationTab } from '@/components/mdm/DeviceConfigurationTab';
 import { DeviceAppsTab, DeviceCertificatesTab, DeviceProfilesTab } from '@/components/mdm/DeviceInventoryTabs';
@@ -265,7 +265,11 @@ export function DeviceSummaryPage() {
             )}
             {(device.asset.warrantyExpiry || device.asset.purchaseDate) && (
               <Field label={t('deviceSummary.warranty') || 'Warranty'}>
-                {[device.asset.warrantyVendor, device.asset.warrantyExpiry && formatDate(device.asset.warrantyExpiry)].filter(Boolean).join(' · ') || '—'}
+                {[
+                  device.asset.warrantyVendor,
+                  device.asset.warrantyExpiry && (t('devices.row.warrantyUntil', { date: formatDay(device.asset.warrantyExpiry) }) || `Warranty until ${formatDay(device.asset.warrantyExpiry)}`),
+                  device.asset.purchaseDate && (t('deviceSummary.purchasedOn', { date: formatDay(device.asset.purchaseDate) }) || `Purchased on ${formatDay(device.asset.purchaseDate)}`),
+                ].filter(Boolean).join(' · ') || '—'}
               </Field>
             )}
           </Card>

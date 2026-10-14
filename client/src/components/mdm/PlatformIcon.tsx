@@ -61,6 +61,19 @@ export function shortAge(iso: string | null | undefined, now = Date.now()): stri
 
 export const formatDateTime = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleString() : '—');
 export const formatDate = (iso: string | null | undefined): string => (iso ? new Date(iso).toLocaleDateString() : '—');
+/** A calendar day (YYYY-MM-DD, a DATE column) in the viewer's format. Read as a local day: new Date('2027-03-01')
+ *  is midnight UTC, the day before west of UTC. */
+export const formatDay = (ymd: string | null | undefined): string => {
+  const m = typeof ymd === 'string' ? /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd) : null;
+  return m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])).toLocaleDateString() : (ymd || '—');
+};
+/** True when a calendar day (YYYY-MM-DD) is before today, in the viewer's calendar. */
+export const dayIsPast = (ymd: string | null | undefined): boolean => {
+  if (typeof ymd !== 'string' || !/^\d{4}-\d{2}-\d{2}/.test(ymd)) return false;
+  const n = new Date();
+  const today = `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+  return ymd.slice(0, 10) < today;
+};
 
 /** '64 GB' from a number of bytes. */
 export function formatBytes(n: number | null | undefined): string {

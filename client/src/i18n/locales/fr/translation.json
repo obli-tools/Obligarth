@@ -893,7 +893,9 @@
       "count_other": "{{count}} appareils"
     },
     "row": {
-      "select": "Sélectionner"
+      "select": "Sélectionner",
+      "warrantyUntil": "Garantie jusqu'au {{date}}",
+      "warrantyExpired": "Garantie échue"
     },
     "sort": {
       "ascending": "Croissant",
@@ -914,7 +916,8 @@
       "contact": "Dernier contact",
       "compliance": "Conformité",
       "serial": "Numéro de série",
-      "tags": "Étiquettes"
+      "tags": "Étiquettes",
+      "warranty": "Garantie"
     },
     "selection": {
       "exit": "Quitter le mode sélection",
@@ -1020,7 +1023,8 @@
       "ticketRequired": "Numéro de ticket (obligatoire)",
       "widen": "Davantage de données seront collectées sur cet appareil (toutes les applications, le numéro de téléphone…) : un ticket est exigé.",
       "narrow": "Moins de données seront collectées : ce qui ne l'est plus est effacé de la fiche."
-    }
+    },
+    "purchasedOn": "Acheté le {{date}}"
   },
   "apiKeys": {
     "defaultGroup": "Groupe par défaut",
@@ -1140,7 +1144,9 @@
       "importedSecrets_one": "{{count}} secret déplacé au coffre",
       "importedSecrets_other": "{{count}} secrets déplacés au coffre",
       "importedSigned": "Le fichier était signé : sa signature a été retirée et n'a pas été vérifiée. Le profil est livré par ce serveur, chiffré pour chaque appareil.",
-      "importedHint": "Vérifiez les charges avant de publier : un profil brut est livré tel quel."
+      "importedHint": "Vérifiez les charges avant de publier : un profil brut est livré tel quel.",
+      "importedSuspect_one": "{{count}} clé ressemble à un secret mais est restée en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-la avant de publier ; supprimez l'élément pour la retirer.",
+      "importedSuspect_other": "{{count}} clés ressemblent à des secrets mais sont restées en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-les avant de publier ; supprimez l'élément pour les retirer."
     }
   },
   "supervision": {
@@ -1196,7 +1202,8 @@
     "platform": "Plateforme",
     "model": "Modèle",
     "ownership": "Propriété",
-    "enrolledAt": "Enrôlé le"
+    "enrolledAt": "Enrôlé le",
+    "warranty": "Fin de garantie"
   },
   "fanOut": {
     "label": "Diffuser à (lecture seule sur les tenants ciblés)",
@@ -2795,6 +2802,11 @@
         "identity_required": "une adresse électronique, un compte Apple géré ou un identifiant d'annuaire est exigé",
         "identity_conflict": "ses identifiants désignent deux utilisateurs finaux différents"
       }
+    },
+    "importError": {
+      "empty": "Le fichier est vide.",
+      "header": "La ligne d'en-tête ne nomme aucune colonne d'identité (email, managed_apple_account ou external_id).",
+      "too_many_lines": "Le fichier dépasse 5 000 lignes : découpez-le."
     }
   },
   "mdm": {

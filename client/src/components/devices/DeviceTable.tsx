@@ -702,6 +702,7 @@ export function DeviceTable({
     { field: 'ownership', label: t('sort.ownership') || 'Ownership' },
     { field: 'group', label: t('sort.group', 'Group') },
     { field: 'enrolledAt', label: t('sort.enrolledAt') || 'Enrolled' },
+    { field: 'warranty', label: t('sort.warranty') || 'Warranty expiry' },
   ];
 
   const shownDevices = isMaster && tenantFilters.size > 0 ? devices.filter((d) => tenantFilters.has(d.tenantId)) : devices;

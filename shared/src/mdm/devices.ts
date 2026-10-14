@@ -32,6 +32,8 @@ export interface DeviceSummary {
   osVersion: string | null; model: string | null; modelName: string | null; serialNumber?: string | null;
   endUser: { id: number; displayName: string | null; email: string | null } | null;
   tags: string[]; enrolledAt: string | null;
+  /** End of the warranty (asset data entered by an administrator, YYYY-MM-DD): the inventory's column (§11.3). */
+  warrantyExpiry: string | null;
 }
 
 /** The Apple satellite, without its secrets nor the raw responses (identity_cert_pem, device_information). */

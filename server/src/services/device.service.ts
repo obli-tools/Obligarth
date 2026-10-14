@@ -31,6 +31,15 @@ function isGlobalView(tenantId: number, view?: TenantView): boolean {
 }
 
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v ? new Date(String(v)).toISOString() : null);
+/** A DATE column as YYYY-MM-DD. node-postgres builds a DATE as a Date at the server's local midnight: its UTC form
+ *  (toISOString) is the day before on a server east of UTC, so the local calendar fields are read instead. */
+const dateOnly = (v: unknown): string | null => {
+  if (v instanceof Date) {
+    if (Number.isNaN(v.getTime())) return null;
+    return `${String(v.getFullYear()).padStart(4, '0')}-${String(v.getMonth() + 1).padStart(2, '0')}-${String(v.getDate()).padStart(2, '0')}`;
+  }
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v) ? v.slice(0, 10) : null;
+};
 const nanoTypeOfMode = (mode: string): NanoEnrollType => (mode === 'user_enrollment' ? 'User Enrollment (Device)' : 'Device');
 const asArray = <T = unknown>(v: unknown): T[] => {
   if (Array.isArray(v)) return v as T[];
@@ -80,7 +89,7 @@ const SUMMARY_COLUMNS = [
   'devices.usage', 'devices.enrollment_state', 'devices.last_checkin_at', 'devices.compliance_state',
   'devices.compliance_reasons', 'devices.config_state', 'devices.lost_mode_state', 'devices.os_version',
   'devices.model', 'devices.model_name', 'devices.serial_number', 'devices.end_user_id', 'devices.tags',
-  'devices.enrolled_at', 'device_groups.name as group_name', 'tenants.name as tenant_name',
+  'devices.enrolled_at', 'devices.warranty_expiry', 'device_groups.name as group_name', 'tenants.name as tenant_name',
   'end_users.display_name as end_user_display_name', 'end_users.email as end_user_email',
 ];
 
@@ -105,6 +114,7 @@ const SORT_COLUMNS: Record<string, string> = {
   compliance: 'devices.compliance_state',
   ownership: 'devices.ownership',
   model: 'devices.model_name',
+  warranty: 'devices.warranty_expiry',
 };
 
 /** A cache of the privacy rules of a request: one resolution per (tenant, ownership, type). */
@@ -150,6 +160,7 @@ class DeviceService {
       } : null,
       tags: asArray<string>(row.tags).map(String),
       enrolledAt: iso(row.enrolled_at),
+      warrantyExpiry: dateOnly(row.warranty_expiry),
     };
     if (row.tenant_name) summary.tenantName = row.tenant_name;
     // Absent, never null, when the rules of the device's ownership do not collect it (EX-19).
@@ -364,8 +375,8 @@ class DeviceService {
       unenrolledAt: iso(row.unenrolled_at),
       unenrollReason: row.unenroll_reason ?? null,
       asset: {
-        purchaseDate: row.purchase_date ? iso(row.purchase_date)!.slice(0, 10) : null,
-        warrantyExpiry: row.warranty_expiry ? iso(row.warranty_expiry)!.slice(0, 10) : null,
+        purchaseDate: dateOnly(row.purchase_date),
+        warrantyExpiry: dateOnly(row.warranty_expiry),
         warrantyVendor: row.warranty_vendor ?? null,
         warrantyStatus: row.warranty_status ?? null,
         expectedLifetimeYears: row.expected_lifetime_years ?? null,

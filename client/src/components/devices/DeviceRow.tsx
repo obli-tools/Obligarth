@@ -1,5 +1,5 @@
 import { memo, type MouseEvent, type ReactNode } from 'react';
-import { Eye, FolderOpen, User, Building2, Briefcase, Hash, Clock } from 'lucide-react';
+import { Eye, FolderOpen, User, Building2, Briefcase, Hash, Clock, ShieldCheck } from 'lucide-react';
 import type { DeviceSummary } from '@obligarth/shared';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
@@ -7,7 +7,7 @@ import { useAuthStore } from '@/store/authStore';
 import { anonymize } from '@/utils/anonymize';
 import { useMediaQuery } from '@/hooks/useMediaQuery';
 import { DeviceStateBadges, complianceLabel } from '@/components/mdm/DeviceStateBadges';
-import { PlatformIcon, osLabel, ownershipLabel, shortAge } from '@/components/mdm/PlatformIcon';
+import { PlatformIcon, dayIsPast, formatDay, osLabel, ownershipLabel, shortAge } from '@/components/mdm/PlatformIcon';
 
 interface DeviceRowProps {
   device: DeviceSummary;
@@ -241,6 +241,14 @@ export const DeviceRow = memo(function DeviceRow({
                 <span key={tag} className="px-1.5 py-0 rounded-full bg-bg-tertiary text-text-muted text-[10px]">{tag}</span>
               ))}
               {tags.length > 5 && <span className="text-[10px] text-text-muted/60">+{tags.length - 5}</span>}
+            </span>
+          ),
+          // Asset data entered by an administrator: absent when none was entered.
+          fieldOn('warranty') && device.warrantyExpiry && (
+            <span key="warranty" className={clsx('inline-flex items-center gap-1', dayIsPast(device.warrantyExpiry) && 'text-amber-400')}
+              title={dayIsPast(device.warrantyExpiry) ? (t('devices.row.warrantyExpired') || 'Warranty expired') : undefined}>
+              <ShieldCheck className="w-3 h-3" />
+              <span>{t('devices.row.warrantyUntil', { date: formatDay(device.warrantyExpiry) }) || `Warranty until ${formatDay(device.warrantyExpiry)}`}</span>
             </span>
           ),
         ]}

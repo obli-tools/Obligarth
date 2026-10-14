@@ -456,6 +456,12 @@ export function PolicyEditorPage() {
                 <span className="ml-1 font-mono text-text-primary">{imported.movedSecrets.join(', ')}</span>
               </p>
             )}
+            {(imported.suspectKeys?.length ?? 0) > 0 && (
+              <div className="rounded border border-amber-400/40 bg-amber-400/5 p-2 text-xs text-amber-400">
+                <p>{t('policies.editor.importedSuspect', { count: imported.suspectKeys!.length }) || `${imported.suspectKeys!.length} key(s) look like secrets but were kept in clear in the policy (they are still delivered encrypted to each device). Check them before publishing; delete the item to remove them.`}</p>
+                <p className="mt-1 font-mono text-text-primary break-all">{imported.suspectKeys!.join(', ')}</p>
+              </div>
+            )}
             {imported.signed && (
               <p className="text-xs text-amber-400">{t('policies.editor.importedSigned') || 'The file was signed: its signature was removed and was not verified. The profile is delivered by this server, encrypted for each device.'}</p>
             )}

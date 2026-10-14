@@ -22,6 +22,7 @@ export const LINE2_FIELDS: Line2FieldDef[] = [
   { key: 'compliance', label: 'Compliance',       defaultVisible: false },
   { key: 'serial',     label: 'Serial number',    defaultVisible: false },
   { key: 'tags',       label: 'Tags',             defaultVisible: false },
+  { key: 'warranty',   label: 'Warranty',         defaultVisible: false },
 ];
 
 // A new key: the catalog of the agent era (IP, MAC, last user, geolocation, reboot) no longer applies.

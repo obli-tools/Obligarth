@@ -63,7 +63,7 @@ const ListQuery = z.object({
   q: z.string().max(200).optional(),
   tenantIds: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map(Number)),
     z.array(z.number().int().positive()).max(200).optional()),
-  sortBy: z.enum(['name', 'platform', 'os', 'lastCheckin', 'enrolledAt', 'group', 'state', 'compliance', 'ownership', 'model']).optional(),
+  sortBy: z.enum(['name', 'platform', 'os', 'lastCheckin', 'enrolledAt', 'group', 'state', 'compliance', 'ownership', 'model', 'warranty']).optional(),
   sortOrder: z.enum(['asc', 'desc']).optional(),
   page: intOpt,
   pageSize: intOpt,
@@ -457,6 +457,7 @@ async function sendExport(res: Response, fmt: 'csv' | 'xlsx' | 'pdf', devices: D
     { header: 'Tags', key: 'tags', width: 20, pdf: false },
     { header: 'Enrolled', key: 'enrolledAt', width: 22, pdf: false },
     { header: 'Last contact', key: 'lastCheckinAt', width: 22 },
+    { header: 'Warranty expiry', key: 'warrantyExpiry', width: 14, pdf: false },
     { header: 'UUID', key: 'uuid', width: 38, pdf: false },
   ];
   const rows = devices.map((d) => ({
@@ -464,7 +465,7 @@ async function sendExport(res: Response, fmt: 'csv' | 'xlsx' | 'pdf', devices: D
     ownership: d.ownership, enrollmentState: d.enrollmentState, contactState: d.contactState,
     complianceState: d.complianceState, configState: d.configState, groupName: d.groupName ?? '',
     endUser: d.endUser?.displayName ?? d.endUser?.email ?? '', serialNumber: d.serialNumber ?? '',
-    tags: d.tags.join(', '), enrolledAt: d.enrolledAt ?? '', lastCheckinAt: d.lastCheckinAt ?? '', uuid: d.uuid,
+    tags: d.tags.join(', '), enrolledAt: d.enrolledAt ?? '', lastCheckinAt: d.lastCheckinAt ?? '', warrantyExpiry: d.warrantyExpiry ?? '', uuid: d.uuid,
   }));
   const ExcelJS = (await import('exceljs')).default;
   if (fmt === 'csv' || fmt === 'xlsx') {

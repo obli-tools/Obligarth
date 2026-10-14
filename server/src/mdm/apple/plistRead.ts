@@ -177,6 +177,41 @@ export function rawSecretSites(payloads: Array<Record<string, JsonValue>>, secre
   return sites;
 }
 
+/** Key names that look like a secret to a reader, whatever their case, beyond the words of Apple that
+ *  rawSecretSites moves to the vault (MDM-B5c-R9): an API token, a lower-case password, an authorization header. */
+const SUSPECT_KEY_RE = /pass(word|wd|phrase)|pwd|secret|token|api[-_]?key|credential|authori[sz]ation|bearer|private[-_]?key|psk|pin(code)?$/i;
+/** Suspect keys reported at most (names only). */
+const SUSPECT_KEYS_MAX = 50;
+
+/**
+ * The keys of an imported profile that look like secrets and stay in clear in the policy because no rule moves
+ * them to the vault (MDM-B5c-R9): their dotted names (payload indexes left out), never a value, for the editor to
+ * check before publishing. A non-empty string or data only; the sites already moved are not reported.
+ */
+export function rawSuspectKeys(payloads: Array<Record<string, JsonValue>>, sites: RawSecretSite[]): string[] {
+  const moved = new Set(sites.map((s) => JSON.stringify(s.path)));
+  const out = new Set<string>();
+  const walk = (v: JsonValue, path: Array<string | number>, names: string[], depth: number): void => {
+    if (out.size >= SUSPECT_KEYS_MAX || depth > RAW_PROFILE_MAX_DEPTH + 2 || v === null || typeof v !== 'object') return;
+    if (Array.isArray(v)) {
+      v.forEach((e, i) => walk(e, [...path, i], names, depth + 1));
+      return;
+    }
+    for (const [k, e] of Object.entries(v)) {
+      if (k.startsWith('$')) continue;
+      const here = [...names, k];
+      const leaf = typeof e === 'string' || (!!e && typeof e === 'object' && !Array.isArray(e) && typeof (e as { $data?: unknown }).$data === 'string');
+      if (leaf) {
+        if (nonEmpty(e) && SUSPECT_KEY_RE.test(k) && !moved.has(JSON.stringify([...path, k]))) out.add(here.join('.'));
+        continue;
+      }
+      walk(e, [...path, k], here, depth + 1);
+    }
+  };
+  payloads.forEach((p, i) => walk(p, [i], [], 1));
+  return [...out].sort();
+}
+
 /** The payloads with each secret site replaced by a reference (ids in the order of the sites). A copy. */
 export function withRawSecretRefs(payloads: Array<Record<string, JsonValue>>, sites: RawSecretSite[], ids: string[]): Array<Record<string, JsonValue>> {
   const copy = JSON.parse(JSON.stringify(payloads)) as Array<Record<string, JsonValue>>;

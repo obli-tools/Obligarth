@@ -14,13 +14,24 @@ import { useConfirm } from '@/components/common/ConfirmDialog';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { formatDate } from '@/components/mdm/PlatformIcon';
 import { anonymize } from '@/utils/anonymize';
-import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { apiErrorBody, apiErrorMessage, trCode } from '@/utils/apiError';
 
 // The end users of the tenant (modele-donnees-mdm §4.8, PLT-28): the employees of the client a device is
 // assigned to. They have no account here: a name, an e-mail, a Managed Apple Account, an identifier of the
 // client's directory. Created by hand, by a CSV import, or at an enrollment.
 
 const PAGE_SIZE = 100;
+/** The message of a refused end user or CSV file: the server answers 400 invalidRequest with the reason in
+ *  details.code (empty, header, too_many_lines; invalid_email…), translated before the generic message. */
+function endUserErrorMessage(err: unknown): string {
+  const reason = (apiErrorBody(err)?.details as { code?: unknown } | undefined)?.code;
+  if (typeof reason === 'string' && /^[a-z][A-Za-z_]*$/.test(reason)) {
+    const why = trCode(`endUsers.importError.${reason}`, '') || trCode(`endUsers.report.code.${reason}`, '');
+    if (why) return why;
+  }
+  return apiErrorMessage(err);
+}
+
 const nameOf = (u: EndUser): string => u.displayName || u.email || u.managedAppleAccount || u.externalId || `#${u.id}`;
 
 export function EndUsersPage() {
@@ -72,7 +83,7 @@ export function EndUsersPage() {
       setReport(await mdmApi.importEndUsers(await file.text()));
       load();
     } catch (err) {
-      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+      if (!isStepUpHandled(err)) toast.error(endUserErrorMessage(err), { duration: 7000 });
     } finally {
       setImporting(false);
       if (fileRef.current) fileRef.current.value = '';
@@ -223,7 +234,7 @@ function EndUserDialog({ target, onClose, onSaved }: { target: EndUser | 'new' |
       onSaved();
       onClose();
     } catch (err) {
-      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+      if (!isStepUpHandled(err)) toast.error(endUserErrorMessage(err), { duration: 7000 });
     } finally {
       setBusy(false);
     }

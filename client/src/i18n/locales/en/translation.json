@@ -893,7 +893,9 @@
       "count_other": "{{count}} devices"
     },
     "row": {
-      "select": "Select"
+      "select": "Select",
+      "warrantyUntil": "Warranty until {{date}}",
+      "warrantyExpired": "Warranty expired"
     },
     "sort": {
       "ascending": "Ascending",
@@ -914,7 +916,8 @@
       "contact": "Last contact",
       "compliance": "Compliance",
       "serial": "Serial number",
-      "tags": "Tags"
+      "tags": "Tags",
+      "warranty": "Warranty"
     },
     "selection": {
       "exit": "Exit selection mode",
@@ -1020,7 +1023,8 @@
       "ticketRequired": "Ticket number (required)",
       "widen": "More data will be collected on this device (every application, the phone number…): a ticket is required.",
       "narrow": "Less data will be collected: what is no longer collected is erased from the record."
-    }
+    },
+    "purchasedOn": "Purchased on {{date}}"
   },
   "apiKeys": {
     "defaultGroup": "Default group",
@@ -1140,7 +1144,9 @@
       "importedSecrets_one": "{{count}} secret moved to the vault",
       "importedSecrets_other": "{{count}} secrets moved to the vault",
       "importedSigned": "The file was signed: its signature was removed and was not verified. The profile is delivered by this server, encrypted for each device.",
-      "importedHint": "Check the payloads before publishing: a raw profile is delivered as it is."
+      "importedHint": "Check the payloads before publishing: a raw profile is delivered as it is.",
+      "importedSuspect_one": "{{count}} key looks like a secret but was kept in clear in the policy (the profile is still delivered encrypted to each device). Check it before publishing; delete the item to remove it.",
+      "importedSuspect_other": "{{count}} keys look like secrets but were kept in clear in the policy (the profile is still delivered encrypted to each device). Check them before publishing; delete the item to remove them."
     }
   },
   "supervision": {
@@ -1196,7 +1202,8 @@
     "platform": "Platform",
     "model": "Model",
     "ownership": "Ownership",
-    "enrolledAt": "Enrolled"
+    "enrolledAt": "Enrolled",
+    "warranty": "Warranty expiry"
   },
   "fanOut": {
     "label": "Share to (read-only on target tenants)",
@@ -2795,6 +2802,11 @@
         "identity_required": "an e-mail, a Managed Apple Account or a directory identifier is required",
         "identity_conflict": "its identifiers match two different end users"
       }
+    },
+    "importError": {
+      "empty": "The file is empty.",
+      "header": "The header line names no identity column (email, managed_apple_account or external_id).",
+      "too_many_lines": "The file has more than 5,000 lines: split it."
     }
   },
   "mdm": {

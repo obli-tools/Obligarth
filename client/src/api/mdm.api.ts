@@ -17,7 +17,7 @@ interface ApiResponse<T> { data?: T; error?: string; code?: string }
 
 export type ContactFilter = 'never' | 'recent' | 'quiet' | 'stale';
 export type DeviceSortField = 'name' | 'platform' | 'os' | 'lastCheckin' | 'enrolledAt' | 'group' | 'state'
-  | 'compliance' | 'ownership' | 'model';
+  | 'compliance' | 'ownership' | 'model' | 'warranty';
 
 /** The filters of GET /api/mdm/devices (lists are sent comma-separated). */
 export interface DeviceListParams {
@@ -79,6 +79,8 @@ export interface RawProfileImport {
   signed: boolean;
   /** Names of the keys whose values were moved to the vault. */
   movedSecrets: string[];
+  /** Keys that look like secrets and stay in clear in the policy (no rule moved them: MDM-B5c-R9). Names only. */
+  suspectKeys?: string[];
   payloadTypes: string[];
 }
 
