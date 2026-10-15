@@ -75,9 +75,10 @@ type state struct {
 	body      []byte // buffered body, examined only once the identity is verified
 	checkin   bool   // check-in message (route or Content-Type)
 	// largeBytes is the reservation of the large-body budget held by the
-	// request (0: none); largeDevice the identity that holds it, if any.
+	// request (0: none); largeHolder its holder ("dev:" and the
+	// fingerprint of the device identity).
 	largeBytes  int64
-	largeDevice string
+	largeHolder string
 }
 
 func stateFrom(ctx context.Context) *state {
@@ -296,7 +297,7 @@ func (s *Surface) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	ctx := context.WithValue(reqctx.WithRequestID(r.Context(), st.requestID), ctxKeyState{}, st)
 	switch op {
 	case "scep":
-		s.serveSCEP(w, r.WithContext(ctx), t)
+		s.serveSCEP(w, r.WithContext(ctx), t, source)
 	default:
 		s.serveMDM(w, r.WithContext(ctx), op, source, st)
 	}
@@ -324,18 +325,25 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	if op == "checkin" {
 		limit, timeout = s.cfg.BodyCheckin, s.cfg.TimeoutCheckin
 	}
-	body, reserved, code := s.readBody(r, limit, st.tenant.Key)
+	// A large body is reserved for the identity the Mdm-Signature header
+	// announces, presumed before the body is read (an enrolled device of the
+	// tenant); an anonymous request is held to 1 MiB (AE-C0-R3).
+	header := r.Header.Get("Mdm-Signature")
+	claim := func() (string, bool) {
+		if sha := s.verifier.Presumed(r.Context(), st.tenant, header); sha != "" {
+			return deviceHolder(sha), false
+		}
+		return "", false
+	}
+	body, reserved, holder, code := s.readBody(r, limit, st.tenant.Key, claim)
 	if code != 0 {
 		fail(w, code, retryIfOverload(code))
 		return
 	}
-	st.largeBytes = reserved
+	st.largeBytes, st.largeHolder = reserved, holder
 	defer func() {
-		if st.largeDevice != "" {
-			s.large.dropDevice(st.largeDevice)
-		}
-		if st.largeBytes > 0 {
-			s.releaseLarge(st.tenant.Key, st.largeBytes)
+		if st.largeHolder != "" {
+			s.large.release(st.largeHolder)
 		}
 	}()
 	// Query parameters would reach NanoMDM as forgeable Params.
@@ -372,40 +380,58 @@ func retryIfOverload(code int) string {
 	return ""
 }
 
-// tryLarge reserves n bytes of the large-body budget for tenant, without
-// waiting.
-func (s *Surface) tryLarge(tenant string, n int64) bool {
-	if s.large.acquire(tenant, max(n, largeBody)) {
+// deviceHolder names the holder of a reservation made for a device identity.
+func deviceHolder(sha string) string { return "dev:" + sha }
+
+// tryLarge reserves n bytes (at least 1 MiB) of the large-body budget for
+// tenant on behalf of holder, without waiting.
+func (s *Surface) tryLarge(tenant, holder string, n int64, anon bool) bool {
+	switch s.large.acquire(tenant, holder, max(n, largeBody), anon) {
+	case largeOK:
 		return true
+	case largeHeld:
+		s.metrics.RateLimited.Inc("large_body_device")
+	default:
+		s.metrics.RateLimited.Inc("large_body")
 	}
-	s.metrics.RateLimited.Inc("large_body")
 	return false
 }
-
-func (s *Surface) releaseLarge(tenant string, n int64) { s.large.release(tenant, max(n, largeBody)) }
 
 // readBody reads the whole body within limit. Beyond 1 MiB, announced or
 // read (chunked body), a body needs a reservation of the large-body budget
 // of its tenant, taken before the rest is read: its announced length, or
-// the limit when the length is unknown. Without a reservation, a request
-// holds at most 1 MiB. It returns the bytes reserved (the caller releases
-// them), or a status code on failure.
-func (s *Surface) readBody(r *http.Request, limit int64, tenant string) (body []byte, reserved int64, code int) {
+// the limit when the length is unknown. claim names the holder of the
+// reservation (and whether it is anonymous); without one (""), the request
+// is held to 1 MiB (413). Without a reservation, a request holds at most
+// 1 MiB. It returns the bytes reserved and their holder (the caller
+// releases them), or a status code on failure.
+func (s *Surface) readBody(r *http.Request, limit int64, tenant string, claim func() (string, bool)) (body []byte, reserved int64, holder string, code int) {
 	if r.ContentLength > limit {
-		return nil, 0, http.StatusRequestEntityTooLarge
+		return nil, 0, "", http.StatusRequestEntityTooLarge
 	}
 	defer func() {
-		if code != 0 && reserved > 0 {
-			s.releaseLarge(tenant, reserved)
-			reserved = 0
+		if code != 0 && holder != "" {
+			s.large.release(holder)
+			reserved, holder = 0, ""
 		}
 	}()
+	reserve := func(n int64) int {
+		h, anon := claim()
+		if h == "" {
+			s.metrics.RateLimited.Inc("large_body_anonymous")
+			return http.StatusRequestEntityTooLarge
+		}
+		if !s.tryLarge(tenant, h, n, anon) {
+			return http.StatusServiceUnavailable
+		}
+		reserved, holder = max(n, largeBody), h
+		return 0
+	}
 	var err error
 	if r.ContentLength > largeBody {
-		if !s.tryLarge(tenant, r.ContentLength+1) {
-			return nil, 0, http.StatusServiceUnavailable
+		if c := reserve(r.ContentLength + 1); c != 0 {
+			return nil, 0, "", c
 		}
-		reserved = r.ContentLength + 1
 		// One buffer of the announced length (one byte more detects a
 		// longer body), bounded by the budget.
 		body, err = readInto(make([]byte, 0, r.ContentLength+1), r.Body)
@@ -414,25 +440,24 @@ func (s *Surface) readBody(r *http.Request, limit int64, tenant string) (body []
 		body, err = io.ReadAll(io.LimitReader(r.Body, min(limit, largeBody)+1))
 	}
 	if err != nil {
-		return nil, reserved, http.StatusBadRequest
+		return nil, reserved, holder, http.StatusBadRequest
 	}
 	if reserved == 0 && int64(len(body)) > largeBody && int64(len(body)) <= limit {
 		// Unknown length beyond 1 MiB: a reservation of the limit before
 		// the rest is read.
-		if !s.tryLarge(tenant, limit+1) {
-			return nil, 0, http.StatusServiceUnavailable
+		if c := reserve(limit + 1); c != 0 {
+			return nil, 0, "", c
 		}
-		reserved = limit + 1
 		full := make([]byte, len(body), limit+1)
 		copy(full, body)
 		if body, err = readInto(full, r.Body); err != nil {
-			return nil, reserved, http.StatusBadRequest
+			return nil, reserved, holder, http.StatusBadRequest
 		}
 	}
 	if int64(len(body)) > limit {
-		return nil, reserved, http.StatusRequestEntityTooLarge
+		return nil, reserved, holder, http.StatusRequestEntityTooLarge
 	}
-	return body, reserved, 0
+	return body, reserved, holder, 0
 }
 
 // readInto appends what r yields to buf, up to the capacity of buf.
@@ -450,7 +475,7 @@ func readInto(buf []byte, r io.Reader) ([]byte, error) {
 	return buf, nil
 }
 
-func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant) {
+func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant, source string) {
 	op := r.URL.Query().Get("operation")
 	outcome := "error"
 	defer func() {
@@ -476,13 +501,16 @@ func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant) 
 		return
 	}
 	if r.Method == http.MethodPost {
-		body, reserved, code := s.readBody(r, s.cfg.BodySCEP, t.Key)
+		// SCEP is anonymous: a body above 1 MiB (EDGE_BODY_SCEP raised) is
+		// reserved for its source address, within the anonymous share.
+		claim := func() (string, bool) { return "src:" + source, true }
+		body, _, holder, code := s.readBody(r, s.cfg.BodySCEP, t.Key, claim)
 		if code != 0 {
 			fail(w, code, retryIfOverload(code))
 			return
 		}
-		if reserved > 0 {
-			defer s.releaseLarge(t.Key, reserved)
+		if holder != "" {
+			defer s.large.release(holder)
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
@@ -569,23 +597,22 @@ func (s *Surface) bodyGate(next http.Handler) http.Handler {
 			fail(w, http.StatusBadRequest, "")
 			return
 		}
+		// One reservation per device: what costs memory (decoding,
+		// conversion, outbox) comes after this point. A reservation taken
+		// before the body was read belongs to the presumed identity, which
+		// must be the verified one.
+		if st.largeHolder != "" && (st.certSHA == "" || st.largeHolder != deviceHolder(st.certSHA)) {
+			s.metrics.SecurityEvents.Inc(st.tenant.Key, "large_body_identity")
+			fail(w, http.StatusBadRequest, "")
+			return
+		}
 		if stats.Elements > HeavyPlist && st.largeBytes == 0 {
 			n := max(int64(len(st.body)), largeBody)
-			if !s.tryLarge(st.tenant.Key, n) {
+			if st.certSHA == "" || !s.tryLarge(st.tenant.Key, deviceHolder(st.certSHA), n, false) {
 				fail(w, http.StatusServiceUnavailable, retryOverload)
 				return
 			}
-			st.largeBytes = n
-		}
-		// One reservation per device: what costs memory (decoding,
-		// conversion, outbox) comes after this point.
-		if st.largeBytes > 0 {
-			if st.certSHA == "" || !s.large.holdDevice(st.certSHA) {
-				s.metrics.RateLimited.Inc("large_body_device")
-				fail(w, http.StatusServiceUnavailable, retryOverload)
-				return
-			}
-			st.largeDevice = st.certSHA
+			st.largeBytes, st.largeHolder = n, deviceHolder(st.certSHA)
 		}
 		if st.checkin {
 			var mt struct{ MessageType string }

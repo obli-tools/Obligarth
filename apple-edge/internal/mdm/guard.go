@@ -10,6 +10,8 @@ import (
 
 	"github.com/micromdm/nanomdm/mdm"
 	"github.com/micromdm/nanomdm/service"
+	"github.com/micromdm/nanomdm/service/certauth"
+	"github.com/micromdm/plist"
 
 	"github.com/MeeJay/Obligarth/apple-edge/internal/config"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ddm"
@@ -73,6 +75,7 @@ var (
 	errNoUserAuth   = httpErr(http.StatusGone, "user authentication not supported")
 	errBusy         = httpErr(http.StatusServiceUnavailable, "busy")
 	errMissingUUID  = httpErr(http.StatusBadRequest, "command result without CommandUUID")
+	errNotBound     = httpErr(http.StatusForbidden, "device identity not bound to the enrollment")
 	finalStatuses   = map[string]bool{"Acknowledged": true, "Error": true, "CommandFormatError": true}
 	knownStatuses   = map[string]bool{"Idle": true, "NotNow": true, "Acknowledged": true, "Error": true, "CommandFormatError": true}
 	errUnknownState = httpErr(http.StatusBadRequest, "unknown command status")
@@ -258,17 +261,46 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	// tenant (or an OTA enrollment announcing as UDID the EnrollmentID of a
 	// User Enrollment) would take its enrollment. Refused, unless the ADE
 	// proof of this Authenticate prevails: the other identifier is then
-	// released (INT-B3-R3, option A).
-	otherKind, err := store.ActiveDeviceIDIn(ctx, g.db, t.Key, store.OtherKind(p.kind), p.raw)
+	// released (INT-B3-R3, option A). The identifier "exists" under the
+	// other kind when it is active, and also while an Authenticate of the
+	// other kind accepted on the channel awaits its TokenUpdate (review of
+	// lot C0, AE-C0-R1): the first device to authenticate holds the channel
+	// until its identifier is released. Authenticates of a device channel
+	// are serialised by its advisory lock, held across the upstream call
+	// and up to the commit, so that two of them never both pass the check.
+	select {
+	case g.holds <- struct{}{}:
+		defer func() { <-g.holds }()
+	case <-ctx.Done():
+		return errBusy
+	}
+	tx, err := g.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if otherKind != nil && proof != store.ProofADE {
-		g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
-		g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_kind")
-		return errKindConflict
+	defer tx.Rollback()
+	if err := lockDeviceChannel(ctx, tx, p.deviceID); err != nil {
+		return err
 	}
-	holder, err := store.ActiveDeviceID(ctx, g.db, p.kind, p.raw)
+	otherKind, err := store.ActiveDeviceIDIn(ctx, tx, t.Key, store.OtherKind(p.kind), p.raw)
+	if err != nil {
+		return err
+	}
+	if proof != store.ProofADE {
+		refuse := otherKind != nil
+		if !refuse {
+			if refuse, err = g.pendingOtherKind(ctx, tx, p); err != nil {
+				return err
+			}
+		}
+		if refuse {
+			_ = tx.Rollback()
+			g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
+			g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_kind")
+			return errKindConflict
+		}
+	}
+	holder, err := store.ActiveDeviceID(ctx, tx, p.kind, p.raw)
 	if err != nil {
 		return err
 	}
@@ -280,12 +312,13 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	}
 	d := Decide(t.Key, p.kind, proof, g.policy, holder, transfer)
 	if !d.Accept {
+		_ = tx.Rollback()
 		g.security(ctx, conflictEvents(t.Key, holder.Tenant, d, p.kind, m.SerialNumber, g.policy)...)
 		g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_conflict")
 		return errConflict
 	}
 	if err := g.next.Authenticate(r, m); err != nil {
-		return err
+		return upstreamErr(err)
 	}
 	if d.Conflict && d.DisableHolder {
 		if err := g.upstream.DisableEnrollment(ctx, holder.EnrollmentID); err != nil {
@@ -302,11 +335,17 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	if ch != nil {
 		identity["session_ref"] = nilIfEmpty(ch.SessionRef)
 	}
-	err = g.commit(ctx, func(tx *sql.Tx) ([]outbox.Event, error) {
+	evs, err := func() ([]outbox.Event, error) {
 		var evs []outbox.Event
-		// The identity of this Authenticate is the only one of the enrollment
-		// from now on (lot C0): a previous holder's identity no longer answers.
-		if is := p.st.issued; is != nil && is.SHA256 != "" {
+		// Under the ADE proof, the identity of this Authenticate is the only
+		// one of the enrollment from now on (lot C0): a squatter's identity
+		// no longer answers. Without proof, the other associations stay until
+		// the identifier is activated anew (TokenUpdate): an Authenticate
+		// alone never cuts a device off (review of lot C0, AE-C0-R1), and a
+		// re-enrollment without proof of an active identifier shares the
+		// channel as before lot C0 (AE-C0-R2, option B of MDM-B2-R13 left to
+		// the owners for lot C2).
+		if is := p.st.issued; proof == store.ProofADE && is != nil && is.SHA256 != "" {
 			if _, err := nanomdmsql.DropOtherCertHashes(ctx, tx, p.deviceID, is.SHA256); err != nil {
 				return nil, err
 			}
@@ -347,10 +386,17 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 			"identity": identity, "message": msg,
 		}).WithEnrollment(p.enrollmentID))
 		return evs, nil
-	})
+	}()
 	if err != nil {
 		return err
 	}
+	if err := g.out.Insert(ctx, tx, evs...); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	g.out.Committed()
 	g.metrics.Checkins.Inc(t.Key, "Authenticate", "ok")
 	return nil
 }
@@ -408,7 +454,7 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	}
 	if p.userChannel {
 		if err := g.next.TokenUpdate(r, m); err != nil {
-			return err
+			return upstreamErr(err)
 		}
 		if err := g.commit(ctx, events); err != nil {
 			return err
@@ -435,6 +481,15 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 		return err
 	}
 	defer tx.Rollback()
+	// The lock of the device channel orders the Authenticates and the
+	// activations of both kinds (MDM-B2-R13): taken first, before any row.
+	if err := lockDeviceChannel(ctx, tx, p.deviceID); err != nil {
+		return err
+	}
+	wasActive, err := store.ActiveDeviceIDIn(ctx, tx, t.Key, p.kind, p.raw)
+	if err != nil {
+		return err
+	}
 	activated := true
 	if err := store.ActivateDeviceID(ctx, tx, t.Key, p.kind, p.raw, p.deviceID, proof); err != nil {
 		_ = tx.Rollback()
@@ -453,6 +508,9 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 					return err
 				}
 				defer tx.Rollback()
+				if err := lockDeviceChannel(ctx, tx, p.deviceID); err != nil {
+					return err
+				}
 				break
 			}
 			d := Decision{Conflict: true, RequesterOutcome: OutcomeRefused, HolderOutcome: OutcomeKept}
@@ -465,16 +523,10 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 			return err
 		}
 	}
-	// The other kind of identifier, as at Authenticate (MDM-B2-R13): the
-	// lock of the device channel orders two activations of both kinds, the
-	// later one sees the earlier one committed.
+	// The other kind of identifier, as at Authenticate (MDM-B2-R13): under
+	// the lock of the device channel, the later of two activations of both
+	// kinds sees the earlier one committed.
 	var kindEvents []outbox.Event
-	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "device_channel:"+p.deviceID); err != nil {
-		if store.IsLockTimeout(err) {
-			return errBusy
-		}
-		return err
-	}
 	otherKind, err := store.ActiveDeviceIDIn(ctx, tx, t.Key, store.OtherKind(p.kind), p.raw)
 	if err != nil {
 		return err
@@ -495,7 +547,16 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 		}
 	}
 	if err := g.next.TokenUpdate(r, m); err != nil {
-		return err
+		return upstreamErr(err)
+	}
+	// The identifier activated anew: the identity of this TokenUpdate is the
+	// only one of the enrollment from now on (lot C0). An Authenticate on the
+	// channel that did not reach its TokenUpdate, or the identity of a holder
+	// whose identifier was released, no longer answers.
+	if activated && wasActive == nil && p.st.certSHA != "" {
+		if _, err := nanomdmsql.DropOtherCertHashes(ctx, tx, p.deviceID, p.st.certSHA); err != nil {
+			return err
+		}
 	}
 	evs, err := events(tx)
 	if err != nil {
@@ -525,7 +586,7 @@ func (g *Guard) CheckOut(r *mdm.Request, m *mdm.CheckOut) error {
 		return err
 	}
 	if err := g.next.CheckOut(r, m); err != nil {
-		return err
+		return upstreamErr(err)
 	}
 	err = g.commit(ctx, func(tx *sql.Tx) ([]outbox.Event, error) {
 		evs := []outbox.Event{outbox.T(p.t.Key, "mdm.checkout", map[string]any{"device_id": p.raw}).WithEnrollment(p.enrollmentID)}
@@ -551,7 +612,7 @@ func (g *Guard) SetBootstrapToken(r *mdm.Request, m *mdm.SetBootstrapToken) erro
 	if _, err := g.prepare(r, &m.Enrollment, "SetBootstrapToken", "", false); err != nil {
 		return err
 	}
-	return g.next.SetBootstrapToken(r, m)
+	return upstreamErr(g.next.SetBootstrapToken(r, m))
 }
 
 // GetBootstrapToken returns the escrowed token.
@@ -559,7 +620,8 @@ func (g *Guard) GetBootstrapToken(r *mdm.Request, m *mdm.GetBootstrapToken) (*md
 	if _, err := g.prepare(r, &m.Enrollment, "GetBootstrapToken", "", false); err != nil {
 		return nil, err
 	}
-	return g.next.GetBootstrapToken(r, m)
+	tok, err := g.next.GetBootstrapToken(r, m)
+	return tok, upstreamErr(err)
 }
 
 // UserAuthenticate is not supported: 410 tells the device not to create
@@ -584,6 +646,7 @@ func (g *Guard) DeclarativeManagement(r *mdm.Request, m *mdm.DeclarativeManageme
 		return nil, errEndpoint
 	}
 	out, err := g.next.DeclarativeManagement(r, m)
+	err = upstreamErr(err)
 	outcome := "ok"
 	if err != nil {
 		outcome = "error"
@@ -631,7 +694,7 @@ func (g *Guard) CommandAndReportResults(r *mdm.Request, res *mdm.CommandResults)
 	}
 	cmd, err := g.next.CommandAndReportResults(r, forUpstream)
 	if err != nil {
-		return nil, err
+		return nil, upstreamErr(err)
 	}
 	if cmd != nil && t.CommandsFrozen {
 		cmd = nil
@@ -749,4 +812,62 @@ func nilIfEmpty(s string) any {
 		return nil
 	}
 	return s
+}
+
+// upstreamErr translates the refusals of certauth (an identity that is not,
+// or no longer, bound to the enrollment: its association was removed when
+// another identity activated the identifier) into a 403; NanoMDM would
+// answer 500 (review of lot C0, AE-C0-R4).
+func upstreamErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, certauth.ErrNoCertAssoc) || errors.Is(err, certauth.ErrNoCertReuse) || errors.Is(err, certauth.ErrMissingCert) {
+		return errNotBound
+	}
+	return err
+}
+
+// lockDeviceChannel takes the advisory lock of a device channel for the
+// transaction: Authenticates and activations of the channel, of both kinds
+// of identifier, are serialised by it.
+func lockDeviceChannel(ctx context.Context, tx *sql.Tx, deviceID string) error {
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "device_channel:"+deviceID); err != nil {
+		if store.IsLockTimeout(err) {
+			return errBusy
+		}
+		return err
+	}
+	return nil
+}
+
+// pendingOtherKind reports whether the last Authenticate NanoMDM stored for
+// the device channel announced the other kind of identifier, and the
+// identifier of that kind was not released since: a device of the other
+// kind authenticated on the channel and awaits (or skipped) its
+// TokenUpdate. The first device to authenticate keeps the channel (review
+// of lot C0, AE-C0-R1); only an ADE proof, or the release of the identifier
+// (CheckOut, retirement), lets the other kind in.
+func (g *Guard) pendingOtherKind(ctx context.Context, q nanomdmsql.Querier, p *prep) (bool, error) {
+	other := store.OtherKind(p.kind)
+	raw, releasedAfter, found, err := nanomdmsql.LastAuthenticate(ctx, q, p.deviceID, p.t.Key, other, p.raw)
+	if err != nil || !found || releasedAfter {
+		return false, err
+	}
+	var last struct {
+		UDID         string
+		EnrollmentID string
+	}
+	if err := plist.Unmarshal(raw, &last); err != nil {
+		// Stored by NanoMDM from a message the guard accepted: unreadable
+		// means corrupted, refuse rather than guess.
+		g.logger.Error("msg", "stored Authenticate unreadable", "tenant", p.t.Key, "err", err)
+		return true, nil
+	}
+	switch other {
+	case store.KindUDID:
+		return last.UDID != "", nil
+	default:
+		return last.UDID == "" && last.EnrollmentID != "", nil
+	}
 }

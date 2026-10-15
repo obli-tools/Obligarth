@@ -293,3 +293,44 @@ func (d *dedup) first(key string, now time.Time) bool {
 	d.last[key] = now
 	return true
 }
+
+// Presumed returns the fingerprint of the identity announced by the
+// Mdm-Signature header of a request whose body is not read yet, when that
+// identity is one the verifier would accept for the tenant (chain, usage,
+// validity, issued to the tenant, not revoked); "" otherwise. Nothing is
+// verified of the signature itself (the body is not read): the identity is
+// only presumed, the verifier still decides once the body is read. It lets
+// a large body be reserved for an enrolled identity of the tenant, never
+// for an anonymous request (review of lot C0, AE-C0-R3). No event, no
+// metric: an invalid header is refused later on its own merits.
+func (v *Verifier) Presumed(ctx context.Context, t *tenant.Tenant, header string) string {
+	if header == "" || t == nil || t.Roots == nil || len(header) > maxPresumedHeader {
+		return ""
+	}
+	raw, err := base64.StdEncoding.DecodeString(header)
+	if err != nil {
+		return ""
+	}
+	p7, err := pkcs7.Parse(raw)
+	if err != nil || len(p7.Signers) != 1 {
+		return ""
+	}
+	cert := p7.GetOnlySigner()
+	if cert == nil {
+		return ""
+	}
+	if _, err := cert.Verify(x509.VerifyOptions{Roots: t.Roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: v.now()}); err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(cert.Raw)
+	sha := hex.EncodeToString(sum[:])
+	ic, err := v.lookup(ctx, sha)
+	if err != nil || ic == nil || ic.Tenant != t.Key || ic.Revoked {
+		return ""
+	}
+	return sha
+}
+
+// maxPresumedHeader bounds the Mdm-Signature examined before the body is
+// read (a device signature holds one certificate: a few KiB).
+const maxPresumedHeader = 32 << 10

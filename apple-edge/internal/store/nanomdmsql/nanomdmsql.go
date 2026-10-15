@@ -212,11 +212,35 @@ func CertHashes(ctx context.Context, q Querier, deviceID string) ([]string, erro
 	return out, rows.Err()
 }
 
+// LastAuthenticate returns the raw Authenticate NanoMDM last stored for a
+// device enrollment (found false when none), and whether the identifier
+// (tenant, kind, raw) of apple-edge's registry was released after it. The
+// timestamps are compared in the database: NanoMDM writes a timestamp
+// without time zone from CURRENT_TIMESTAMP, in the session's time zone.
+func LastAuthenticate(ctx context.Context, q Querier, deviceID, tenant, kind, raw string) (msg []byte, releasedAfter, found bool, err error) {
+	err = q.QueryRowContext(ctx, `
+SELECT d.authenticate,
+       EXISTS (SELECT 1 FROM apple_edge.device_ids i
+                WHERE i.tenant_key = $2 AND i.id_kind = $3 AND i.raw_id = $4
+                  AND i.state = 'released' AND i.released_at >= d.authenticate_at::timestamptz)
+  FROM nanomdm.devices d WHERE d.id = $1`, deviceID, tenant, kind, raw).Scan(&msg, &releasedAfter)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, false, false, nil
+	}
+	if err != nil {
+		return nil, false, false, err
+	}
+	return msg, releasedAfter, true, nil
+}
+
 // DropOtherCertHashes removes the certificate associations of a device
-// enrollment other than keep (the identity of an Authenticate accepted on
-// it): NanoMDM's certauth only adds associations, so the identity of a
-// previous holder (a device erased, a User Enrollment superseded by an ADE
-// proof) would otherwise keep answering for the enrollment.
+// enrollment other than keep: NanoMDM's certauth only adds associations,
+// so the identity of a previous holder would otherwise keep answering for
+// the enrollment. The guard calls it when an ADE proof supersedes the
+// previous holders (Authenticate) and when the identifier of the device
+// channel is activated anew (TokenUpdate); never at an Authenticate
+// without proof, whose device may not complete its enrollment (review of
+// lot C0, AE-C0-R1 and R2).
 func DropOtherCertHashes(ctx context.Context, q Querier, deviceID, keep string) (int64, error) {
 	res, err := q.ExecContext(ctx, `DELETE FROM nanomdm.cert_auth_associations WHERE id = $1 AND sha256 <> lower($2)`, deviceID, keep)
 	if err != nil {
