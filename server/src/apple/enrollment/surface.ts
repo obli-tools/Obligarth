@@ -115,7 +115,7 @@ export function createAppleDeviceSurface(): Router {
     sendPage(res, 404, messagePage(t, t.invalidTitle, t.invalidBody));
   };
 
-  // ── OTA: notice page (no write) ─────────────────────────────────────────────
+  // ── OTA: the profile (single-use download nonce) ────────────────────────────
   router.get('/enroll/s/:sessionId/profile', route('GET /t/:key/enroll/s/:sessionId/profile'), perAddress(10), asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     const sessionId = String(req.params.sessionId ?? '');
@@ -151,6 +151,7 @@ export function createAppleDeviceSurface(): Router {
     }
   }));
 
+  // ── OTA: notice page (no write) ─────────────────────────────────────────────
   router.get('/enroll/:token', route('GET /t/:key/enroll/:token'), perAddress(30), asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     const token = String(req.params.token ?? '');
