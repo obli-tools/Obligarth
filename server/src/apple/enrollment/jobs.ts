@@ -32,12 +32,15 @@ async function expireSessions(ctx: JobContext<Record<string, never>>): Promise<J
         q.where((a) => a.whereIn('state', EXPIRABLE as unknown as string[]).where('expires_at', '<=', new Date(now)))
           .orWhere((b) => b.where('state', 'certificate_issued').where('expires_at', '<=', new Date(now - CERTIFIED_GRACE_MS)));
       })
-      .orderBy('expires_at').limit(SLICE).pluck('id') as string[];
+      .orderBy('expires_at').limit(SLICE).select('id', 'state') as Array<{ id: string; state: string }>;
     if (!due.length) return;
     const ended: string[] = [];
     await db.transaction(async (trx) => {
-      for (const id of due) {
-        if (await endSession(trx, tenantId, id, 'expired', null, [...EXPIRABLE, 'certificate_issued'])) ended.push(id);
+      for (const { id, state } of due) {
+        // A session found due before its identity was issued, and certified since (scep.certificate_issued consumed
+        // between the read and here), keeps its grace (second review of lot C1): it leaves EXPIRABLE states only.
+        const from = state === 'certificate_issued' ? ['certificate_issued'] : EXPIRABLE;
+        if (await endSession(trx, tenantId, id, 'expired', null, from)) ended.push(id);
       }
     });
     expired += ended.length;
