@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math"
 	"net/netip"
 	"net/url"
 	"os"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -80,6 +82,10 @@ type Config struct {
 	MaxHeaderBytes int
 	MaxInflight    int
 	LargeBodySlots int
+	// LargeBodyBudget and LargeBodyTenant bound the bytes of large bodies
+	// in flight, overall and per tenant (AE-B0-R3).
+	LargeBodyBudget int64
+	LargeBodyTenant int64
 
 	TimeoutCheckin time.Duration
 	TimeoutMDM     time.Duration
@@ -143,8 +149,16 @@ func Load(getenv func(string) string) (*Config, error) {
 		LogLevel:                 p.str("EDGE_LOG_LEVEL", "info"),
 	}
 	c.TrustedProxies = p.prefixes("EDGE_TRUSTED_PROXY_CIDRS", "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16")
+	budget := DefaultLargeBodyBudget(c.BodyMDM, memoryLimit())
+	c.LargeBodyBudget = p.size("EDGE_LARGE_BODY_BUDGET", budget, 1<<20, 1<<30)
+	c.LargeBodyTenant = p.size("EDGE_LARGE_BODY_TENANT", min(c.LargeBodyBudget, c.BodyMDM+(1<<20)), 1<<20, 1<<30)
 	if p.err != nil {
 		return nil, p.err
+	}
+	if c.LargeBodyTenant > c.LargeBodyBudget || c.LargeBodyTenant <= c.BodyMDM {
+		return nil, fmt.Errorf("EDGE_LARGE_BODY_TENANT (%d bytes) must exceed EDGE_BODY_MDM (%d bytes) and stay within the large-body budget (%d bytes; "+
+			"EDGE_LARGE_BODY_BUDGET, by default a sixteenth of GOMEMLIMIT): raise GOMEMLIMIT and the container's memory limit, or lower EDGE_BODY_MDM",
+			c.LargeBodyTenant, c.BodyMDM, c.LargeBodyBudget)
 	}
 	if c.Env != EnvProduction && c.Env != EnvDevelopment {
 		return nil, fmt.Errorf("EDGE_ENV must be %q or %q", EnvProduction, EnvDevelopment)
@@ -156,6 +170,31 @@ func Load(getenv func(string) string) (*Config, error) {
 		return nil, errors.New(`EDGE_LOG_LEVEL must be "info" or "debug"`)
 	}
 	return c, nil
+}
+
+// memoryLimit is the soft memory limit of the Go runtime (GOMEMLIMIT),
+// math.MaxInt64 when none is set; tests replace it.
+var memoryLimit = func() int64 { return debug.SetMemoryLimit(-1) }
+
+// LargeBodyAmplification is the memory a large command result costs per
+// byte while it is checked, decoded, converted and written to the outbox:
+// measured on lot C0 at 14 times its size (a signed result of 16 MiB of a
+// queued InstalledApplicationList: 228 MiB of committed memory over the
+// idle process, under GOMEMLIMIT=410MiB), rounded up for the garbage the
+// collector has not yet returned.
+const LargeBodyAmplification = 16
+
+// DefaultLargeBodyBudget returns the default byte budget of the large
+// bodies in flight: two bodies of the largest size of the /mdm route and
+// 2 MiB, within a sixteenth of the memory limit of the process when one is
+// set (GOMEMLIMIT, 80 % of the container's mem_limit: with 410 MiB, 25.6 MiB,
+// one body of 16 MiB and smaller ones at once).
+func DefaultLargeBodyBudget(bodyMDM, memLimit int64) int64 {
+	b := 2*bodyMDM + 2<<20
+	if memLimit > 0 && memLimit < math.MaxInt64 {
+		b = min(b, memLimit/LargeBodyAmplification)
+	}
+	return max(b, 1<<20)
 }
 
 // ValidateServe checks what the serve command needs.

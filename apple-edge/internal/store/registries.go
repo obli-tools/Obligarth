@@ -48,6 +48,24 @@ SELECT tenant_key, enrollment_id, proof, since FROM apple_edge.device_ids
 	return a, nil
 }
 
+// OtherKind returns the other kind of device identifier: a UDID and an
+// EnrollmentID share the namespace "<key>_<id>" of the device channel.
+func OtherKind(kind string) string {
+	if kind == KindUDID {
+		return KindEnrollmentID
+	}
+	return KindUDID
+}
+
+// ActiveDeviceIDIn returns the active row of (tenant, kind, raw), or nil.
+func ActiveDeviceIDIn(ctx context.Context, q Querier, tenant, kind, raw string) (*ActiveID, error) {
+	a, err := ActiveDeviceID(ctx, q, kind, raw)
+	if err != nil || a == nil || a.Tenant != tenant {
+		return nil, err
+	}
+	return a, nil
+}
+
 // ErrIDConflict means the identifier is active in another tenant.
 var ErrIDConflict = errors.New("store: device identifier active in another tenant")
 

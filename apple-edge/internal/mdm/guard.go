@@ -66,6 +66,7 @@ var (
 	errBadIDs       = httpErr(http.StatusBadRequest, "invalid device identifiers")
 	errTopic        = httpErr(http.StatusForbidden, "topic does not belong to the tenant")
 	errConflict     = httpErr(http.StatusForbidden, "device identifier reserved by another tenant")
+	errKindConflict = httpErr(http.StatusForbidden, "device identifier reserved")
 	errMismatch     = httpErr(http.StatusForbidden, "device does not match the enrollment challenge")
 	errUnsupported  = httpErr(http.StatusBadRequest, "message not supported")
 	errEndpoint     = httpErr(http.StatusBadRequest, "declarative management endpoint not allowed")
@@ -206,6 +207,17 @@ func conflictEvents(requester, holder string, d Decision, kind, serial, policy s
 	}
 }
 
+// kindConflictEvent tells the tenant that the identifier of its device
+// channel is held under the other kind (UDID or EnrollmentID). It names
+// the enrollment (the brain's record of that channel gets a timeline
+// entry) and nothing else of the device. A superseded identifier of the
+// other kind gets no device.id_released: that event names the same
+// enrollment, which now belongs to the ADE device; the brain detaches the
+// record of the other kind itself when it consumes the Authenticate.
+func kindConflictEvent(tenant string, p *prep, outcome string) outbox.Event {
+	return outbox.T(tenant, "security.device_id_conflict", map[string]any{"id_kind": p.kind, "outcome": outcome}).WithEnrollment(p.enrollmentID)
+}
+
 // Authenticate checks the topic, the challenge binding and the
 // cross-tenant policy, then lets certauth and NanoMDM store the enrollment.
 func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
@@ -239,6 +251,22 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	proof, err := g.proof(ctx, t.Key, ch, p)
 	if err != nil {
 		return err
+	}
+	// The other kind of identifier (decision MDM-B2-R13, option A): a UDID
+	// and an EnrollmentID share the device channel "<key>_<id>", so a User
+	// Enrollment whose EnrollmentID is the UDID of an enrolled device of the
+	// tenant (or an OTA enrollment announcing as UDID the EnrollmentID of a
+	// User Enrollment) would take its enrollment. Refused, unless the ADE
+	// proof of this Authenticate prevails: the other identifier is then
+	// released (INT-B3-R3, option A).
+	otherKind, err := store.ActiveDeviceIDIn(ctx, g.db, t.Key, store.OtherKind(p.kind), p.raw)
+	if err != nil {
+		return err
+	}
+	if otherKind != nil && proof != store.ProofADE {
+		g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
+		g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_kind")
+		return errKindConflict
 	}
 	holder, err := store.ActiveDeviceID(ctx, g.db, p.kind, p.raw)
 	if err != nil {
@@ -276,6 +304,22 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	}
 	err = g.commit(ctx, func(tx *sql.Tx) ([]outbox.Event, error) {
 		var evs []outbox.Event
+		// The identity of this Authenticate is the only one of the enrollment
+		// from now on (lot C0): a previous holder's identity no longer answers.
+		if is := p.st.issued; is != nil && is.SHA256 != "" {
+			if _, err := nanomdmsql.DropOtherCertHashes(ctx, tx, p.deviceID, is.SHA256); err != nil {
+				return nil, err
+			}
+		}
+		if otherKind != nil {
+			released, err := store.ReleaseDeviceID(ctx, tx, t.Key, otherKind.Kind, p.raw, "superseded_by_proof")
+			if err != nil {
+				return nil, err
+			}
+			if released {
+				evs = append(evs, kindConflictEvent(t.Key, p, OutcomeSupersededOtherKind))
+			}
+		}
 		if d.Conflict {
 			if d.ReleaseReason != "" {
 				released, err := store.ReleaseDeviceID(ctx, tx, holder.Tenant, p.kind, p.raw, d.ReleaseReason)
@@ -421,6 +465,35 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 			return err
 		}
 	}
+	// The other kind of identifier, as at Authenticate (MDM-B2-R13): the
+	// lock of the device channel orders two activations of both kinds, the
+	// later one sees the earlier one committed.
+	var kindEvents []outbox.Event
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, "device_channel:"+p.deviceID); err != nil {
+		if store.IsLockTimeout(err) {
+			return errBusy
+		}
+		return err
+	}
+	otherKind, err := store.ActiveDeviceIDIn(ctx, tx, t.Key, store.OtherKind(p.kind), p.raw)
+	if err != nil {
+		return err
+	}
+	if otherKind != nil {
+		if proof != store.ProofADE {
+			_ = tx.Rollback()
+			g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
+			g.metrics.Checkins.Inc(t.Key, "TokenUpdate", "refused_kind")
+			return errKindConflict
+		}
+		released, err := store.ReleaseDeviceID(ctx, tx, t.Key, otherKind.Kind, p.raw, "superseded_by_proof")
+		if err != nil {
+			return err
+		}
+		if released {
+			kindEvents = append(kindEvents, kindConflictEvent(t.Key, p, OutcomeSupersededOtherKind))
+		}
+	}
 	if err := g.next.TokenUpdate(r, m); err != nil {
 		return err
 	}
@@ -428,6 +501,7 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	if err != nil {
 		return err
 	}
+	evs = append(kindEvents, evs...)
 	if err := g.out.Insert(ctx, tx, evs...); err != nil {
 		return err
 	}

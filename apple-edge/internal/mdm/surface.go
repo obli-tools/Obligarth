@@ -74,7 +74,10 @@ type state struct {
 	issued    *issuedInfo
 	body      []byte // buffered body, examined only once the identity is verified
 	checkin   bool   // check-in message (route or Content-Type)
-	largeHeld bool   // the request holds a large-body slot
+	// largeBytes is the reservation of the large-body budget held by the
+	// request (0: none); largeDevice the identity that holds it, if any.
+	largeBytes  int64
+	largeDevice string
 }
 
 func stateFrom(ctx context.Context) *state {
@@ -92,7 +95,7 @@ type Surface struct {
 	mdm      http.Handler
 	checkin  http.Handler
 	inflight chan struct{}
-	large    chan struct{}
+	large    *largeBudget
 
 	tenantLim *ratelimit.Limiter
 	deviceLim *ratelimit.Limiter
@@ -105,7 +108,7 @@ func NewSurface(cfg *config.Config, reg *tenant.Registry, g *Guard, v *Verifier,
 	s := &Surface{
 		reg: reg, cfg: cfg, logger: logger.With("component", "device"), metrics: m, verifier: v,
 		inflight:  make(chan struct{}, cfg.MaxInflight),
-		large:     make(chan struct{}, cfg.LargeBodySlots),
+		large:     newLargeBudget(cfg.LargeBodyBudget, cfg.LargeBodyTenant, cfg.LargeBodySlots),
 		tenantLim: ratelimit.New(TenantRate, TenantBurst, 100000),
 		deviceLim: ratelimit.New(DeviceRate, DeviceBurst, 1000000),
 		scepLim:   ratelimit.New(SCEPRate, SCEPBurst, 100000),
@@ -321,15 +324,18 @@ func (s *Surface) serveMDM(w *statusWriter, r *http.Request, op, source string, 
 	if op == "checkin" {
 		limit, timeout = s.cfg.BodyCheckin, s.cfg.TimeoutCheckin
 	}
-	body, held, code := s.readBody(r, limit)
+	body, reserved, code := s.readBody(r, limit, st.tenant.Key)
 	if code != 0 {
 		fail(w, code, retryIfOverload(code))
 		return
 	}
-	st.largeHeld = held
+	st.largeBytes = reserved
 	defer func() {
-		if st.largeHeld {
-			s.releaseLarge()
+		if st.largeDevice != "" {
+			s.large.dropDevice(st.largeDevice)
+		}
+		if st.largeBytes > 0 {
+			s.releaseLarge(st.tenant.Key, st.largeBytes)
 		}
 	}()
 	// Query parameters would reach NanoMDM as forgeable Params.
@@ -366,66 +372,67 @@ func retryIfOverload(code int) string {
 	return ""
 }
 
-// tryLarge takes one of the large-body slots, without waiting.
-func (s *Surface) tryLarge() bool {
-	select {
-	case s.large <- struct{}{}:
+// tryLarge reserves n bytes of the large-body budget for tenant, without
+// waiting.
+func (s *Surface) tryLarge(tenant string, n int64) bool {
+	if s.large.acquire(tenant, max(n, largeBody)) {
 		return true
-	default:
-		s.metrics.RateLimited.Inc("large_body")
-		return false
 	}
+	s.metrics.RateLimited.Inc("large_body")
+	return false
 }
 
-func (s *Surface) releaseLarge() { <-s.large }
+func (s *Surface) releaseLarge(tenant string, n int64) { s.large.release(tenant, max(n, largeBody)) }
 
 // readBody reads the whole body within limit. Beyond 1 MiB, announced or
-// read (chunked body), a body needs one of the large-body slots, taken
-// before the rest is read: without a slot, a request holds at most 1 MiB.
-// It reports whether a slot is held (the caller releases it), or a status
-// code on failure.
-func (s *Surface) readBody(r *http.Request, limit int64) (body []byte, held bool, code int) {
+// read (chunked body), a body needs a reservation of the large-body budget
+// of its tenant, taken before the rest is read: its announced length, or
+// the limit when the length is unknown. Without a reservation, a request
+// holds at most 1 MiB. It returns the bytes reserved (the caller releases
+// them), or a status code on failure.
+func (s *Surface) readBody(r *http.Request, limit int64, tenant string) (body []byte, reserved int64, code int) {
 	if r.ContentLength > limit {
-		return nil, false, http.StatusRequestEntityTooLarge
+		return nil, 0, http.StatusRequestEntityTooLarge
 	}
 	defer func() {
-		if code != 0 && held {
-			s.releaseLarge()
-			held = false
+		if code != 0 && reserved > 0 {
+			s.releaseLarge(tenant, reserved)
+			reserved = 0
 		}
 	}()
 	var err error
 	if r.ContentLength > largeBody {
-		if !s.tryLarge() {
-			return nil, false, http.StatusServiceUnavailable
+		if !s.tryLarge(tenant, r.ContentLength+1) {
+			return nil, 0, http.StatusServiceUnavailable
 		}
-		held = true
+		reserved = r.ContentLength + 1
 		// One buffer of the announced length (one byte more detects a
-		// longer body), bounded by the slots.
+		// longer body), bounded by the budget.
 		body, err = readInto(make([]byte, 0, r.ContentLength+1), r.Body)
 	} else {
 		// Grows with what arrives: an announced length costs nothing.
 		body, err = io.ReadAll(io.LimitReader(r.Body, min(limit, largeBody)+1))
 	}
 	if err != nil {
-		return nil, held, http.StatusBadRequest
+		return nil, reserved, http.StatusBadRequest
 	}
-	if !held && int64(len(body)) > largeBody && int64(len(body)) <= limit {
-		// Unknown length beyond 1 MiB: a slot before the rest is read.
-		if !s.tryLarge() {
-			return nil, held, http.StatusServiceUnavailable
+	if reserved == 0 && int64(len(body)) > largeBody && int64(len(body)) <= limit {
+		// Unknown length beyond 1 MiB: a reservation of the limit before
+		// the rest is read.
+		if !s.tryLarge(tenant, limit+1) {
+			return nil, 0, http.StatusServiceUnavailable
 		}
-		held = true
+		reserved = limit + 1
 		full := make([]byte, len(body), limit+1)
 		copy(full, body)
 		if body, err = readInto(full, r.Body); err != nil {
-			return nil, held, http.StatusBadRequest
+			return nil, reserved, http.StatusBadRequest
 		}
 	}
 	if int64(len(body)) > limit {
-		return nil, held, http.StatusRequestEntityTooLarge
+		return nil, reserved, http.StatusRequestEntityTooLarge
 	}
-	return body, held, 0
+	return body, reserved, 0
 }
 
 // readInto appends what r yields to buf, up to the capacity of buf.
@@ -469,13 +476,13 @@ func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant) 
 		return
 	}
 	if r.Method == http.MethodPost {
-		body, held, code := s.readBody(r, s.cfg.BodySCEP)
+		body, reserved, code := s.readBody(r, s.cfg.BodySCEP, t.Key)
 		if code != 0 {
 			fail(w, code, retryIfOverload(code))
 			return
 		}
-		if held {
-			defer s.releaseLarge()
+		if reserved > 0 {
+			defer s.releaseLarge(t.Key, reserved)
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		r.ContentLength = int64(len(body))
@@ -562,12 +569,23 @@ func (s *Surface) bodyGate(next http.Handler) http.Handler {
 			fail(w, http.StatusBadRequest, "")
 			return
 		}
-		if stats.Elements > HeavyPlist && !st.largeHeld {
-			if !s.tryLarge() {
+		if stats.Elements > HeavyPlist && st.largeBytes == 0 {
+			n := max(int64(len(st.body)), largeBody)
+			if !s.tryLarge(st.tenant.Key, n) {
 				fail(w, http.StatusServiceUnavailable, retryOverload)
 				return
 			}
-			st.largeHeld = true
+			st.largeBytes = n
+		}
+		// One reservation per device: what costs memory (decoding,
+		// conversion, outbox) comes after this point.
+		if st.largeBytes > 0 {
+			if st.certSHA == "" || !s.large.holdDevice(st.certSHA) {
+				s.metrics.RateLimited.Inc("large_body_device")
+				fail(w, http.StatusServiceUnavailable, retryOverload)
+				return
+			}
+			st.largeDevice = st.certSHA
 		}
 		if st.checkin {
 			var mt struct{ MessageType string }

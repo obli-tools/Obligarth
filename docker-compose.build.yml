@@ -161,6 +161,10 @@ services:
       EDGE_FAIL_LIMIT_PER_IP: ${EDGE_FAIL_LIMIT_PER_IP:-60}
       EDGE_DB_MAX_CONNS: ${EDGE_DB_MAX_CONNS:-32}
       EDGE_LOG_LEVEL: ${EDGE_LOG_LEVEL:-info}
+      # Soft memory limit of the Go runtime: 80 % of mem_limit (512m below). apple-edge
+      # sizes its budget of large device bodies from it (a sixteenth: 25.6 MiB, one
+      # body of 16 MiB and smaller ones at once, one per device, 17 MiB per tenant).
+      GOMEMLIMIT: 410MiB
     secrets:
       - apple_edge_db_password
       - edge_kek

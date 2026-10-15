@@ -11,6 +11,11 @@ const (
 	OutcomeKept        = "kept"
 	OutcomeSuperseded  = "superseded"
 	OutcomeTransferred = "transferred"
+
+	// Within a tenant: the identifier is active under the other kind
+	// (UDID or EnrollmentID) of the same device channel.
+	OutcomeRefusedOtherKind    = "refused_other_kind"
+	OutcomeSupersededOtherKind = "superseded_other_kind"
 )
 
 // Decision is the result of the cross-tenant policy at Authenticate.

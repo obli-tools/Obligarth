@@ -212,6 +212,19 @@ func CertHashes(ctx context.Context, q Querier, deviceID string) ([]string, erro
 	return out, rows.Err()
 }
 
+// DropOtherCertHashes removes the certificate associations of a device
+// enrollment other than keep (the identity of an Authenticate accepted on
+// it): NanoMDM's certauth only adds associations, so the identity of a
+// previous holder (a device erased, a User Enrollment superseded by an ADE
+// proof) would otherwise keep answering for the enrollment.
+func DropOtherCertHashes(ctx context.Context, q Querier, deviceID, keep string) (int64, error) {
+	res, err := q.ExecContext(ctx, `DELETE FROM nanomdm.cert_auth_associations WHERE id = $1 AND sha256 <> lower($2)`, deviceID, keep)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // PurgeDevice deletes a device and everything that cascades from it
 // (enrollments, users, queue, results) plus its certificate associations.
 func PurgeDevice(ctx context.Context, q Querier, deviceID string) error {
