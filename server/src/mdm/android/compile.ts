@@ -9,7 +9,8 @@ import { secretRefsOf } from '../apple/compile';
 import type { VariableValues } from '../apple/variables';
 import { androidKeyAvailability } from './availability';
 import { androidCatalog, type AndroidCatalogView } from './catalog';
-import { POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES } from './overlay';
+import { FAILED_PASSWORDS_FOR_WIPE, POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES } from './overlay';
+import { defaultApplicationDomain, preferredActivityConflicts, preferredDomains } from './validate';
 
 // =============================================================================
 // The Android compilation: the settings a resolution retained for one device
@@ -24,7 +25,15 @@ import { POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES } fro
 //      KIOSK or holding the KIOSK role, or the custom launcher); a device that
 //      is not a kiosk never receives one;
 //   5. ownership rules (through the availability: ownership_forbidden);
-//   6. canonical JSON (RFC 8785, the function of the DDM engine) and hash.
+//   6. conflicts between two keys (persistentPreferredActivities and
+//      defaultApplicationSettings on one intent domain, from two policies):
+//      broken by the rule of the resolution (the first of rank, priority,
+//      resource wins), the loser's entries on the domain left out and the
+//      conflict listed; without the provenance of both keys, a problem;
+//   7. the guards known at the compilation (enterprise domain of the FRP
+//      administrators, the tenant's floor of failed passwords): a policy
+//      written before a change of either is not delivered (problems);
+//   8. canonical JSON (RFC 8785, the function of the DDM engine) and hash.
 // The secret references and the variables stay in the body: a secret and a
 // device's values exist at rendering only (render.ts). The hash addresses the
 // body, not the device: SHA-256 of the canonical { channel, policyId: null,
@@ -59,6 +68,28 @@ export interface CompiledAndroidPolicy {
   deferred: string[];
   /** Why the policy cannot be delivered as compiled (codes, never a value); empty: deliverable. */
   problems: string[];
+  /** Conflicts between two keys broken here: the loser's entries on the domains were left out. */
+  conflicts: AndroidKeyConflict[];
+}
+
+/** Provenance of a retained setting (the resolver's ResolvedSetting.source). */
+export interface AndroidSettingSource {
+  type: 'policy' | 'app';
+  id: number;
+  tenantId?: number;
+  assignmentId?: number;
+  rank: number;
+  priority: number;
+}
+
+export interface AndroidKeyConflict {
+  /** The key whose entries were left out, and the key that kept the domains. */
+  settingKey: string;
+  winner: string;
+  domains: string[];
+  /** Same rank and priority (a conflict the write refuses; broken here by the resource order). */
+  sameRank: boolean;
+  source: AndroidSettingSource;
 }
 
 /** A setting retained by the resolution (the resolver's ResolvedSetting has this shape). */
@@ -67,6 +98,8 @@ export interface AndroidEffectiveSetting {
   removed: boolean;
   availability: { status: 'available' } | { status: 'not_applicable'; reason: string; detail?: string };
   value?: JsonValue;
+  /** Provenance (needed to break a conflict between two keys). */
+  source?: AndroidSettingSource;
 }
 
 export interface AndroidDeviceFacts extends AndroidAvailabilityFacts {
@@ -85,6 +118,8 @@ export interface AndroidCompileContext {
   /** The values of the variables known for the device; absent: the resolution decided (variable_unresolved). An
    *  enrollment policy has the tenant's only. */
   variables?: VariableValues;
+  /** Guards re-checked at the compilation (the validation checked them at the write, against the values then). */
+  guards?: { adminDomain?: string | null; minFailedPasswordsForWipe?: number };
   catalog?: AndroidCatalogView;
 }
 
@@ -100,6 +135,13 @@ export class AndroidCompileError extends Error {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const isObject = (v: unknown): v is Record<string, JsonValue> => !!v && typeof v === 'object' && !Array.isArray(v);
 const byKey = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
+/** The order of the resolution (resolver.ts compareCandidates): the first wins. */
+const bySource = (x: AndroidSettingSource, y: AndroidSettingSource): number =>
+  x.rank - y.rank || x.priority - y.priority || byKey(x.type, y.type) || (x.tenantId ?? 0) - (y.tenantId ?? 0) || x.id - y.id
+  || (x.assignmentId ?? 0) - (y.assignmentId ?? 0);
+const PPA = 'persistentPreferredActivities';
+const DAS = 'defaultApplicationSettings';
+const EMAIL_DOMAIN_RE = /^[^\s@{}]{1,64}@([A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+)$/;
 
 /** statusReportingSettings of an ownership: the inventory is minimised at the source. */
 export function statusReportingSettings(ownership: string, privacy: AndroidCompileContext['privacy'] = {}): Record<string, JsonValue> {
@@ -154,6 +196,8 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
   const notApplicable: CompiledAndroidPolicy['notApplicable'] = [];
   const deferred: string[] = [];
   const problems: string[] = [];
+  const conflicts: AndroidKeyConflict[] = [];
+  const fieldSettings = new Map<string, AndroidEffectiveSetting>();
   const apps = new Map<string, { key: string; entry: Record<string, JsonValue> }>();
   const networks = new Map<string, { key: string; entry: Record<string, JsonValue> }>();
   let oncRest: { key: string; value: Record<string, JsonValue> } | null = null;
@@ -180,6 +224,7 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
         continue;
       }
       body[k.field] = s.value;
+      fieldSettings.set(k.field, s);
       sources.push(s.settingKey);
     } else if (k.kind === 'app') {
       if (!isObject(s.value)) continue;
@@ -229,6 +274,47 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
   }
   if (Array.isArray(body.setupActions) && body.setupActions.length > POLICY_LIMITS.setupActions) problems.push('compile:limit:setup_actions');
 
+  // 6. Preferred activities against default applications, from two keys.
+  const domains = preferredActivityConflicts(body[PPA], body[DAS]);
+  if (domains.length > 0) {
+    const ppa = fieldSettings.get(PPA)!;
+    const das = fieldSettings.get(DAS)!;
+    if (!ppa.source || !das.source || (ppa.source.type === das.source.type && ppa.source.id === das.source.id)) {
+      problems.push('compile:conflict:preferred_activities');
+    } else {
+      const ppaWins = bySource(ppa.source, das.source) < 0;
+      const [winner, loser] = ppaWins ? [ppa, das] : [das, ppa];
+      const field = ppaWins ? DAS : PPA;
+      const lost = new Set(domains);
+      const kept = (body[field] as JsonValue[]).filter((e) => (ppaWins
+        ? !lost.has(defaultApplicationDomain(e) ?? '')
+        : ![...preferredDomains(e)].some((d) => lost.has(d))));
+      if (kept.length > 0) body[field] = kept;
+      else {
+        delete body[field];
+        sources.splice(sources.indexOf(loser.settingKey), 1);
+      }
+      conflicts.push({ settingKey: loser.settingKey, winner: winner.settingKey, domains, source: loser.source!,
+        sameRank: winner.source!.rank === loser.source!.rank && winner.source!.priority === loser.source!.priority });
+    }
+  }
+  // 7. Guards re-checked against today's values.
+  if (ctx.guards) {
+    if (Array.isArray(body.frpAdminEmails) && body.frpAdminEmails.length > 0) {
+      const domain = typeof ctx.guards.adminDomain === 'string' && ctx.guards.adminDomain ? ctx.guards.adminDomain.toLowerCase() : null;
+      if (body.frpAdminEmails.some((e) => {
+        const m = typeof e === 'string' ? EMAIL_DOMAIN_RE.exec(e) : null;
+        return !m || domain === null || m[1].toLowerCase() !== domain;
+      })) problems.push('compile:frp_email_outside_domain');
+    }
+    if (Array.isArray(body.passwordPolicies) && ctx.guards.minFailedPasswordsForWipe !== undefined) {
+      const floor = Math.max(FAILED_PASSWORDS_FOR_WIPE.min, Number.isInteger(ctx.guards.minFailedPasswordsForWipe)
+        ? ctx.guards.minFailedPasswordsForWipe : FAILED_PASSWORDS_FOR_WIPE.defaultFloor);
+      if (body.passwordPolicies.some((pp) => isObject(pp) && typeof pp.maximumFailedPasswordsForWipe === 'number'
+        && pp.maximumFailedPasswordsForWipe !== 0 && pp.maximumFailedPasswordsForWipe < floor)) problems.push('compile:wipe_threshold_too_low');
+    }
+  }
+
   const secretRefs = [...secretRefsOf(body)].sort();
   if (enrollment && secretRefs.length > 0) throw new AndroidCompileError('enrollmentPolicySecret');
   let hash: string;
@@ -242,6 +328,6 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
   sources.sort(byKey);
   return {
     artifactKey: AMAPI_ARTIFACT_KEY, channel: AMAPI_CHANNEL, policyId, body, hash, secretRefs,
-    hasVariables: variablesOf(body).length > 0, sources, notApplicable, deferred, problems,
+    hasVariables: variablesOf(body).length > 0, sources, notApplicable, deferred, problems, conflicts,
   };
 }

@@ -5,7 +5,7 @@ import { ANDROID_ONC_GUID_RE, isAndroidPackage } from '@obligarth/shared/dist/an
 import { androidCatalog, type AndroidCatalogView, type SchemaIssue } from './catalog';
 import {
   APP_CONFIG_SECRET_PURPOSE, DEPRECATED_APP_FIELDS, DEPRECATED_FIELDS, FAILED_PASSWORDS_FOR_WIPE, MIN_WIPE_AFTER_DAYS,
-  ONC_SECRET_KEYS, POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES,
+  POLICY_LIMITS, PRIVATE_SPACE_DISALLOWED, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES, isOncSecretKey, oncSecretPurpose,
 } from './overlay';
 
 // =============================================================================
@@ -24,8 +24,13 @@ import {
 //   - the settings that can wipe a device: complete enforcement rules that
 //     wipe after 14 days at least, a failed-passwords threshold between the
 //     tenant's floor and 100, FRP administrators of the enterprise's domain
-//     only, one setup action at most; the keys set are returned (impact
-//     preview: wipeRules, publication at the restricted level);
+//     only (written out, never through a variable), one setup action at
+//     most, wipe flags without duplicates, a private space disallowed; the
+//     keys set are returned (impact preview: wipeRules, publication at the
+//     restricted level);
+//   - persistent preferred activities and default applications never on the
+//     same intent domain (in one section here; between two policies, the
+//     compilation breaks the conflict: compile.ts);
 //   - secrets only where the overlay allows them (ONC passphrases, managed
 //     configurations), returned with their purpose: the caller moves the
 //     values typed in to the vault before any storage;
@@ -39,7 +44,7 @@ export type AndroidValidationCode =
   | 'duplicate_setting_key' | 'onc_guid_invalid' | 'unknown_variable' | 'secret_not_allowed' | 'secret_invalid' | 'secret_expected'
   | 'wipe_rule_invalid' | 'wipe_threshold_too_low' | 'frp_email_outside_domain' | 'too_many_setup_actions'
   | 'too_many_required_for_setup' | 'too_many_minimum_version_code' | 'too_many_kiosk_apps'
-  | 'managed_configuration_exclusive' | 'preferred_activities_conflict';
+  | 'managed_configuration_exclusive' | 'preferred_activities_conflict' | 'duplicate_value';
 
 export interface AndroidValidationIssue {
   /** Path of the value in the section ('fragment.cameraDisabled', 'applications[com.example.app].roles[0]'). */
@@ -77,7 +82,7 @@ const MAX_DEPTH = 32;
 const EMAIL_RE = /^[^\s@]{1,64}@([A-Za-z0-9-]{1,63}(\.[A-Za-z0-9-]{1,63})+)$/;
 
 /** Intent domains a persistent preferred activity and a default application setting can both claim. */
-function preferredDomains(activity: unknown): Set<string> {
+export function preferredDomains(activity: unknown): Set<string> {
   const out = new Set<string>();
   if (!isObject(activity)) return out;
   const actions = Array.isArray(activity.actions) ? activity.actions : [];
@@ -88,6 +93,25 @@ function preferredDomains(activity: unknown): Set<string> {
   if (actions.includes('android.intent.action.SENDTO')) out.add('DEFAULT_SMS');
   if (actions.includes('android.intent.action.ASSIST')) out.add('DEFAULT_ASSISTANT');
   return out;
+}
+
+/** The intent domain a default application setting claims (null: none). */
+export function defaultApplicationDomain(setting: unknown): string | null {
+  return isObject(setting) && typeof setting.defaultApplicationType === 'string' ? setting.defaultApplicationType : null;
+}
+
+/** The domains claimed by both a persistentPreferredActivities value and a defaultApplicationSettings value
+ *  (Google: « do not configure both for the same intent domain »), sorted. */
+export function preferredActivityConflicts(activities: unknown, defaults: unknown): string[] {
+  if (!Array.isArray(activities) || !Array.isArray(defaults)) return [];
+  const claimed = new Set<string>();
+  for (const a of activities) for (const d of preferredDomains(a)) claimed.add(d);
+  const out = new Set<string>();
+  for (const s of defaults) {
+    const d = defaultApplicationDomain(s);
+    if (d !== null && claimed.has(d)) out.add(d);
+  }
+  return [...out].sort();
 }
 
 export function validateAndroidSection(section: unknown, opts: AndroidValidationOptions = {}): AndroidValidationResult {
@@ -239,7 +263,8 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
     wipe.add('android:frpAdminEmails');
     const domain = typeof opts.adminDomain === 'string' && opts.adminDomain ? opts.adminDomain.toLowerCase() : null;
     fragment.frpAdminEmails.forEach((e, i) => {
-      const m = typeof e === 'string' ? EMAIL_RE.exec(e) : null;
+      // Written out: a variable would choose the recovery account per device, out of the domain check.
+      const m = typeof e === 'string' && !e.includes('{{') ? EMAIL_RE.exec(e) : null;
       if (!m || domain === null || m[1].toLowerCase() !== domain) issues.push({ path: `fragment.frpAdminEmails[${i}]`, code: 'frp_email_outside_domain' });
     });
   }
@@ -247,24 +272,45 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
     wipe.add('android:setupActions');
     if (fragment.setupActions.length > POLICY_LIMITS.setupActions) issues.push({ path: 'fragment.setupActions', code: 'too_many_setup_actions' });
   }
+  // What a wipe takes with it (WIPE_ESIMS: the eSIMs, irreversibly), for every wipe, a compliance rule's included.
+  if (Array.isArray(fragment.wipeDataFlags) && fragment.wipeDataFlags.length > 0) {
+    wipe.add('android:wipeDataFlags');
+    const seen = new Set<unknown>();
+    fragment.wipeDataFlags.forEach((f, i) => {
+      if (seen.has(f)) issues.push({ path: `fragment.wipeDataFlags[${i}]`, code: 'duplicate_value' });
+      seen.add(f);
+    });
+  }
+  // A private space disallowed: an existing one is removed with the user's data.
+  const personal = fragment.personalUsagePolicies;
+  if (isObject(personal)) {
+    if (personal.privateSpacePolicy === PRIVATE_SPACE_DISALLOWED) wipe.add('android:personalUsagePolicies');
+    // Google: below the minimum of 3 days (0 turns the feature off), an error.
+    const off = personal.maxDaysWithWorkOff;
+    if (typeof off === 'number' && off !== 0 && off < 3) issues.push({ path: 'fragment.personalUsagePolicies.maxDaysWithWorkOff', code: 'out_of_range' });
+  }
 
   // ── Preferred activities against default applications ─────────────────────
-  if (Array.isArray(fragment.persistentPreferredActivities) && Array.isArray(fragment.defaultApplicationSettings)) {
-    const claimed = new Set<string>();
-    for (const a of fragment.persistentPreferredActivities) for (const d of preferredDomains(a)) claimed.add(d);
+  if (Array.isArray(fragment.defaultApplicationSettings)) {
+    const conflicts = new Set(preferredActivityConflicts(fragment.persistentPreferredActivities, fragment.defaultApplicationSettings));
+    const types = new Set<string>();
     fragment.defaultApplicationSettings.forEach((s, i) => {
-      if (isObject(s) && typeof s.defaultApplicationType === 'string' && claimed.has(s.defaultApplicationType)) {
-        issues.push({ path: `fragment.defaultApplicationSettings[${i}]`, code: 'preferred_activities_conflict' });
-      }
+      const d = defaultApplicationDomain(s);
+      if (d === null) return;
+      // Google: only one DefaultApplicationSetting for each DefaultApplicationType.
+      if (types.has(d)) issues.push({ path: `fragment.defaultApplicationSettings[${i}]`, code: 'duplicate_setting_key' });
+      types.add(d);
+      if (conflicts.has(d)) issues.push({ path: `fragment.defaultApplicationSettings[${i}]`, code: 'preferred_activities_conflict' });
     });
   }
 
   // ── Secrets and variables, at any depth ───────────────────────────────────
-  const scan = (v: unknown, path: string, place: { onc: boolean; config: boolean }, key: string | null, depth: number): void => {
+  // `parent`: the key of the object holding `key` (the purpose of an ONC Password depends on it: EAP or VPN).
+  const scan = (v: unknown, path: string, place: { onc: boolean; config: boolean }, key: string | null, depth: number,
+    parent: string | null = null): void => {
     if (depth > MAX_DEPTH) { issues.push({ path, code: 'too_deep' }); return; }
     // A secret key of the ONC holds a secret marker, never a value in clear (stored and logged with the version).
-    if (place.onc && !place.config && key !== null && Object.prototype.hasOwnProperty.call(ONC_SECRET_KEYS, key)
-      && !looksLikeSecretMarker(v)) {
+    if (place.onc && !place.config && key !== null && isOncSecretKey(key) && !looksLikeSecretMarker(v)) {
       issues.push({ path, code: 'secret_expected' });
       return;
     }
@@ -272,11 +318,11 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
       if (v.includes('{{') && variablesInString(v).unknown.length > 0) issues.push({ path, code: 'unknown_variable' });
       return;
     }
-    if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${path}[${i}]`, place, key, depth + 1)); return; }
+    if (Array.isArray(v)) { v.forEach((x, i) => scan(x, `${path}[${i}]`, place, key, depth + 1, parent)); return; }
     if (!isObject(v)) return;
     if (looksLikeSecretMarker(v)) {
       const purpose = place.config ? APP_CONFIG_SECRET_PURPOSE
-        : place.onc && key !== null && Object.prototype.hasOwnProperty.call(ONC_SECRET_KEYS, key) ? ONC_SECRET_KEYS[key] : null;
+        : place.onc && key !== null ? oncSecretPurpose(key, parent) : null;
       if (purpose === null) { issues.push({ path, code: 'secret_not_allowed' }); return; }
       if (isSecretRef(v)) secrets.push({ path, purpose, kind: 'ref' });
       else if (isSecretValue(v)) {
@@ -287,7 +333,7 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
       return;
     }
     for (const [k, x] of Object.entries(v)) {
-      scan(x, `${path}.${k}`, place, k, depth + 1);
+      scan(x, `${path}.${k}`, place, k, depth + 1, key);
     }
   };
   for (const field of Object.keys(fragment).sort()) {
@@ -298,6 +344,8 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
     if (!isObject(entry) || !isAndroidPackage(entry.packageName)) continue;
     const path = `${rawPath.startsWith('fragment.') ? 'fragment.applications' : 'applications'}[${entry.packageName}]`;
     for (const [k, x] of Object.entries(entry)) {
+      // A whole managed configuration is an object of the app's properties, never one secret (a string once rendered).
+      if (k === 'managedConfiguration' && looksLikeSecretMarker(x)) { issues.push({ path: `${path}.${k}`, code: 'secret_not_allowed' }); continue; }
       scan(x, `${path}.${k}`, { onc: false, config: k === 'managedConfiguration' }, k, 2);
     }
   }

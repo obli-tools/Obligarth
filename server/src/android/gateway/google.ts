@@ -10,6 +10,7 @@ import type {
 import { db } from '../../db';
 import { currentDbContext } from '../../db/context';
 import { readSettings } from '../../guard/settings';
+import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert } from '../alerts';
 import type { AndroidConfig } from '../config';
@@ -41,18 +42,9 @@ const DURATION_RE = /^[0-9]{1,10}(\.[0-9]{1,9})?s$/;
 
 type DestructiveKind = 'wipe' | 'relinquish' | 'delete' | 'disable' | 'cleanup';
 
-/** Does a policy body carry a wipe-capable setting (section 22.4: the closed list of JSON paths)? */
-export function policyHasWipeSettings(p: Record<string, unknown> | null | undefined): boolean {
-  if (!p || typeof p !== 'object') return false;
-  const rules = p.policyEnforcementRules;
-  if (Array.isArray(rules) && rules.some((r) => r && typeof r === 'object' && (r as Record<string, unknown>).wipeAction !== undefined)) return true;
-  const pp = p.passwordPolicies;
-  if (Array.isArray(pp) && pp.some((r) => r && typeof r === 'object' && (r as Record<string, unknown>).maximumFailedPasswordsForWipe !== undefined)) return true;
-  const pr = p.passwordRequirements;
-  if (pr && typeof pr === 'object' && (pr as Record<string, unknown>).maximumFailedPasswordsForWipe !== undefined) return true;
-  if (p.frpAdminEmails !== undefined || p.setupActions !== undefined) return true;
-  return false;
-}
+/** Does a policy body carry a wipe-capable setting (section 22.4: the closed list of JSON paths of the overlay, one
+ *  list for the validation and the freeze lock)? */
+export { policyHasWipeSettings };
 
 /** Android devices of the tenant not released (AN47 cap base). Replaced at lot AN-C1 (android_devices). */
 let deviceCountOf: (tenantId: number) => Promise<number> = async () => 0;
