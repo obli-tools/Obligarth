@@ -82,13 +82,23 @@ async function visibleIdsOf(req: Request): Promise<number[] | 'all' | undefined>
   return permissionService.getVisibleDeviceIds(req.session.userId!, false);
 }
 
+/** An asset date (a DATE column): a calendar day YYYY-MM-DD that exists, years 1900 to 9999. Any other text went
+ *  to PostgreSQL as is and was answered 500. */
+const assetDay = z.string().max(10).refine((v) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  if (!m) return false;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const at = new Date(Date.UTC(y, mo - 1, d));
+  return y >= 1900 && at.getUTCFullYear() === y && at.getUTCMonth() === mo - 1 && at.getUTCDate() === d;
+}, 'a calendar day YYYY-MM-DD');
+
 const PatchBody = z.object({
   displayName: z.string().max(500).nullable().optional(),
   description: z.string().max(10_000).nullable().optional(),
   tags: z.array(z.string().max(100)).max(50).optional(),
   customFields: z.record(z.string().max(100), z.string().max(1000)).optional(),
-  purchaseDate: z.string().max(40).nullable().optional(),
-  warrantyExpiry: z.string().max(40).nullable().optional(),
+  purchaseDate: assetDay.nullable().optional(),
+  warrantyExpiry: assetDay.nullable().optional(),
   warrantyVendor: z.string().max(200).nullable().optional(),
   warrantyStatus: z.enum(['active', 'expired', 'unknown']).nullable().optional(),
   expectedLifetimeYears: z.number().int().min(0).max(100).nullable().optional(),

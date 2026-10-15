@@ -331,7 +331,10 @@ apiClient.interceptors.response.use(
         // The server's sentence is English: a code the console translates (errors.<code>) is shown translated.
         const code = typeof body.code === 'string' && /^[A-Za-z][A-Za-z0-9]*$/.test(body.code) ? body.code : null;
         const codeKey = code ? ['errors', 'apple.errors', 'guard.errors'].map((ns) => `${ns}.${code}`).find((k) => i18n.exists(k)) : undefined;
-        const translated = codeKey ? i18n.t(codeKey) : body.error;
+        // The details of the answer are the values of the translation when they are a flat object (the date of
+        // a cooldown, for example: guard.errors.privilegeCooldown, {{until}}).
+        const details = body.details && typeof body.details === 'object' && !Array.isArray(body.details) ? body.details : {};
+        const translated = codeKey ? i18n.t(codeKey, details) : body.error;
         toast.error(stepUpMsg ? i18n.t(stepUpMsg[0], stepUpMsg[1]) : translated, { duration: 6000 });
       }).catch(() => {});
     }

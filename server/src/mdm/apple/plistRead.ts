@@ -198,6 +198,8 @@ export function rawSuspectKeys(payloads: Array<Record<string, JsonValue>>, sites
       return;
     }
     for (const [k, e] of Object.entries(v)) {
+      // The bound holds inside one dictionary too (a payload of 60 suspect keys answered 60 names).
+      if (out.size >= SUSPECT_KEYS_MAX) return;
       if (k.startsWith('$')) continue;
       const here = [...names, k];
       const leaf = typeof e === 'string' || (!!e && typeof e === 'object' && !Array.isArray(e) && typeof (e as { $data?: unknown }).$data === 'string');
