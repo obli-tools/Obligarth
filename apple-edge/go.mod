@@ -12,7 +12,7 @@ require (
 	github.com/micromdm/scep/v2 v2.3.0
 	github.com/smallstep/pkcs7 v0.2.3
 	github.com/smallstep/scep v0.0.0-20241223071629-a37a330173bc
-	golang.org/x/net v0.59.0
+	golang.org/x/net v0.60.0
 )
 
 require (

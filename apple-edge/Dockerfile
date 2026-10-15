@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # Build context: ./apple-edge. Pin the base images by digest at the first release.
-ARG GO_VERSION=1.26.8
+ARG GO_VERSION=1.26.9
 
 FROM golang:${GO_VERSION}-alpine AS build
 WORKDIR /src
