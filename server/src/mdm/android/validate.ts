@@ -1,5 +1,5 @@
 import {
-  POLICY_MAX_ITEMS, isSecretRef, isSecretValue, looksLikeSecretMarker, variablesInString, type JsonValue,
+  POLICY_MAX_ITEMS, POLICY_MAX_SECRET_VALUE_LENGTH, isSecretRef, isSecretValue, looksLikeSecretMarker, variablesInString, type JsonValue,
 } from '@obligarth/shared';
 import { ANDROID_ONC_GUID_RE, isAndroidPackage } from '@obligarth/shared/dist/android/policy.js';
 import { androidCatalog, type AndroidCatalogView, type SchemaIssue } from './catalog';
@@ -36,7 +36,7 @@ import {
 export type AndroidValidationCode =
   | 'invalid_content' | 'too_many_items' | 'unknown_key' | 'type_mismatch' | 'out_of_range' | 'too_deep'
   | 'field_reserved' | 'field_deprecated' | 'package_invalid' | 'package_reserved' | 'role_reserved'
-  | 'duplicate_setting_key' | 'onc_guid_invalid' | 'unknown_variable' | 'secret_not_allowed' | 'secret_invalid'
+  | 'duplicate_setting_key' | 'onc_guid_invalid' | 'unknown_variable' | 'secret_not_allowed' | 'secret_invalid' | 'secret_expected'
   | 'wipe_rule_invalid' | 'wipe_threshold_too_low' | 'frp_email_outside_domain' | 'too_many_setup_actions'
   | 'too_many_required_for_setup' | 'too_many_minimum_version_code' | 'too_many_kiosk_apps'
   | 'managed_configuration_exclusive' | 'preferred_activities_conflict';
@@ -262,6 +262,12 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
   // ── Secrets and variables, at any depth ───────────────────────────────────
   const scan = (v: unknown, path: string, place: { onc: boolean; config: boolean }, key: string | null, depth: number): void => {
     if (depth > MAX_DEPTH) { issues.push({ path, code: 'too_deep' }); return; }
+    // A secret key of the ONC holds a secret marker, never a value in clear (stored and logged with the version).
+    if (place.onc && !place.config && key !== null && Object.prototype.hasOwnProperty.call(ONC_SECRET_KEYS, key)
+      && !looksLikeSecretMarker(v)) {
+      issues.push({ path, code: 'secret_expected' });
+      return;
+    }
     if (typeof v === 'string') {
       if (v.includes('{{') && variablesInString(v).unknown.length > 0) issues.push({ path, code: 'unknown_variable' });
       return;
@@ -273,7 +279,10 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
         : place.onc && key !== null && Object.prototype.hasOwnProperty.call(ONC_SECRET_KEYS, key) ? ONC_SECRET_KEYS[key] : null;
       if (purpose === null) { issues.push({ path, code: 'secret_not_allowed' }); return; }
       if (isSecretRef(v)) secrets.push({ path, purpose, kind: 'ref' });
-      else if (isSecretValue(v)) secrets.push({ path, purpose, kind: 'value' });
+      else if (isSecretValue(v)) {
+        if (v.$secretValue.length === 0 || v.$secretValue.length > POLICY_MAX_SECRET_VALUE_LENGTH) issues.push({ path, code: 'secret_invalid' });
+        else secrets.push({ path, purpose, kind: 'value' });
+      }
       else issues.push({ path, code: 'secret_invalid' });
       return;
     }

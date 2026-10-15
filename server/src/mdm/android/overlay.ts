@@ -79,6 +79,8 @@ export const ONC_SECRET_KEYS: Readonly<Record<string, string>> = {
   Passphrase: 'policy.wifi_password',
   Password: 'policy.eap_password',
   PSK: 'policy.vpn_shared_secret',
+  // A client certificate with its private key (ONC Certificates[].PKCS12): the vault's, as for Apple.
+  PKCS12: 'policy.pkcs12_identity',
 };
 export const APP_CONFIG_SECRET_PURPOSE = 'policy.app_config_secret';
 
