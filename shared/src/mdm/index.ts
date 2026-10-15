@@ -15,3 +15,5 @@ export * from './apple/keys';
 export * from './commands';
 // DDM engine (lot B5a, integration-apple-edge §9.9): declaration set, statuses and status items of a device.
 export * from './ddm';
+// Enrollment (lot C1, integration-apple-edge §10.1, §10.9): profiles, links, invitations, sessions.
+export * from './enrollment';
