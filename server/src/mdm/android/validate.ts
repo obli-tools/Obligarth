@@ -5,7 +5,8 @@ import { ANDROID_ONC_GUID_RE, isAndroidPackage } from '@obligarth/shared/dist/an
 import { androidCatalog, type AndroidCatalogView, type SchemaIssue } from './catalog';
 import {
   APP_CONFIG_SECRET_PURPOSE, DEPRECATED_APP_FIELDS, DEPRECATED_FIELDS, FAILED_PASSWORDS_FOR_WIPE, MIN_WIPE_AFTER_DAYS,
-  POLICY_LIMITS, PRIVATE_SPACE_DISALLOWED, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES, isOncSecretKey, oncSecretPurpose,
+  POLICY_LIMITS, PRIVATE_SPACE_DISALLOWED, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES, fieldSecretPurpose, isOncSecretKey,
+  oncSecretPurpose,
 } from './overlay';
 
 // =============================================================================
@@ -31,8 +32,9 @@ import {
 //   - persistent preferred activities and default applications never on the
 //     same intent domain (in one section here; between two policies, the
 //     compilation breaks the conflict: compile.ts);
-//   - secrets only where the overlay allows them (ONC passphrases, managed
-//     configurations), returned with their purpose: the caller moves the
+//   - secrets only where the overlay allows them (ONC passphrases, the
+//     password of an APN, managed configurations), never in clear at a
+//     secret key, returned with their purpose: the caller moves the
 //     values typed in to the vault before any storage;
 //   - variables of the closed list only.
 // Pure: the vault and the database are the caller's. The unit tests load it.
@@ -306,11 +308,13 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
 
   // ── Secrets and variables, at any depth ───────────────────────────────────
   // `parent`: the key of the object holding `key` (the purpose of an ONC Password depends on it: EAP or VPN).
-  const scan = (v: unknown, path: string, place: { onc: boolean; config: boolean }, key: string | null, depth: number,
+  const scan = (v: unknown, path: string, place: { onc: boolean; config: boolean; field: string | null }, key: string | null, depth: number,
     parent: string | null = null): void => {
     if (depth > MAX_DEPTH) { issues.push({ path, code: 'too_deep' }); return; }
     // A secret key of the ONC holds a secret marker, never a value in clear (stored and logged with the version).
-    if (place.onc && !place.config && key !== null && isOncSecretKey(key) && !looksLikeSecretMarker(v)) {
+    // Likewise at a secret slot of another field (the password of an APN).
+    const slot = !place.config && place.field !== null && key !== null ? fieldSecretPurpose(place.field, key, parent) : null;
+    if (((place.onc && !place.config && key !== null && isOncSecretKey(key)) || slot !== null) && !looksLikeSecretMarker(v)) {
       issues.push({ path, code: 'secret_expected' });
       return;
     }
@@ -322,7 +326,7 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
     if (!isObject(v)) return;
     if (looksLikeSecretMarker(v)) {
       const purpose = place.config ? APP_CONFIG_SECRET_PURPOSE
-        : place.onc && key !== null ? oncSecretPurpose(key, parent) : null;
+        : place.onc && key !== null ? oncSecretPurpose(key, parent) : slot;
       if (purpose === null) { issues.push({ path, code: 'secret_not_allowed' }); return; }
       if (isSecretRef(v)) secrets.push({ path, purpose, kind: 'ref' });
       else if (isSecretValue(v)) {
@@ -338,7 +342,7 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
   };
   for (const field of Object.keys(fragment).sort()) {
     if (field === 'applications') continue;
-    scan(fragment[field], `fragment.${field}`, { onc: field === 'openNetworkConfiguration', config: false }, field, 1);
+    scan(fragment[field], `fragment.${field}`, { onc: field === 'openNetworkConfiguration', config: false, field }, field, 1);
   }
   for (const { entry, path: rawPath } of apps) {
     if (!isObject(entry) || !isAndroidPackage(entry.packageName)) continue;
@@ -346,7 +350,7 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
     for (const [k, x] of Object.entries(entry)) {
       // A whole managed configuration is an object of the app's properties, never one secret (a string once rendered).
       if (k === 'managedConfiguration' && looksLikeSecretMarker(x)) { issues.push({ path: `${path}.${k}`, code: 'secret_not_allowed' }); continue; }
-      scan(x, `${path}.${k}`, { onc: false, config: k === 'managedConfiguration' }, k, 2);
+      scan(x, `${path}.${k}`, { onc: false, config: k === 'managedConfiguration', field: null }, k, 2);
     }
   }
   return result();

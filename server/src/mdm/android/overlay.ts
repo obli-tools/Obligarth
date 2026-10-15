@@ -128,6 +128,18 @@ export function oncSecretPurpose(key: string, parent: string | null): string | n
   return ONC_SECRET_KEYS[key];
 }
 export const APP_CONFIG_SECRET_PURPOSE = 'policy.app_config_secret';
+/** Secret slots of the policy outside the ONC and the managed configurations: the top-level field, the key of the
+ *  object that holds the secret and the secret's key. A value in clear is refused there (secret_expected), as at the
+ *  ONC's: the password of an APN (deviceConnectivityManagement.apnPolicy.apnSettings[].password). */
+export const FIELD_SECRET_SLOTS: ReadonlyArray<{ field: string; parent: string; key: string; purpose: string }> = [
+  { field: 'deviceConnectivityManagement', parent: 'apnSettings', key: 'password', purpose: 'policy.apn_password' },
+];
+/** The purpose of the secret slot at `key` held by the object at key `parent` under the top-level `field` (null:
+ *  not a slot). */
+export function fieldSecretPurpose(field: string, key: string, parent: string | null): string | null {
+  const slot = FIELD_SECRET_SLOTS.find((s) => s.field === field && s.key === key && s.parent === parent);
+  return slot ? slot.purpose : null;
+}
 
 const COMPANY: readonly AndroidMode[] = ['fully_managed', 'dedicated', 'work_profile_corporate'];
 const DEVICE_OWNER: readonly AndroidMode[] = ['fully_managed', 'dedicated'];
@@ -172,7 +184,7 @@ export function overlayFingerprintData(): Record<string, unknown> {
     reservedFields: [...RESERVED_FIELDS].sort(), reservedPackages: [...RESERVED_PACKAGES].sort(), reservedRoles: [...RESERVED_ROLES].sort(),
     deprecated: DEPRECATED_FIELDS, deprecatedApp: DEPRECATED_APP_FIELDS, wipe: [...WIPE_CAPABLE_FIELDS].sort(),
     wipeFloor: FAILED_PASSWORDS_FOR_WIPE, minWipeAfterDays: MIN_WIPE_AFTER_DAYS, limits: POLICY_LIMITS, onc: ONC_SECRET_KEYS,
-    oncByParent: ONC_SECRET_PURPOSE_BY_PARENT, wipePaths: WIPE_CAPABLE_PATHS,
+    oncByParent: ONC_SECRET_PURPOSE_BY_PARENT, fieldSecrets: FIELD_SECRET_SLOTS, wipePaths: WIPE_CAPABLE_PATHS,
     support: FIELD_SUPPORT,
   };
 }
