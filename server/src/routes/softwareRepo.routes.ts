@@ -1,10 +1,17 @@
-import { Router } from 'express';
+import { AsyncResource } from 'node:async_hooks';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import multer from 'multer';
 import { softwareRepoService, RepoError } from '../services/softwareRepo.service';
 import { requireRole } from '../middleware/rbac';
 
 const router = Router();
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } });
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 500 * 1024 * 1024 } }).single('file');
+// The body is read from the events of the socket, outside the asynchronous context of the request: a file that
+// does not fit in what was already buffered would reach the route without its database context (every query
+// refused, 500). The continuation is bound to the context this middleware was called in (as policies.routes.ts).
+const uploadFile = (req: Request, res: Response, next: NextFunction): void => {
+  upload(req, res, AsyncResource.bind((err?: unknown) => next(err)));
+};
 
 // GET /software-repo/packages — list all packages for tenant
 router.get('/packages', async (req, res, next) => {
@@ -51,7 +58,7 @@ router.delete('/access-key', requireRole('admin'), async (req, res, next) => {
 });
 
 // POST /software-repo/packages — upload (admin only)
-router.post('/packages', requireRole('admin'), upload.single('file'), async (req, res, next) => {
+router.post('/packages', requireRole('admin'), uploadFile, async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const platform = (req.body.platform || 'windows') as 'windows' | 'linux' | 'macos';

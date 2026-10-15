@@ -92,6 +92,9 @@ export function PolicyPublishSummary({ payload }: { payload: unknown }) {
               </li>
             ))}
           </ul>
+          {changes.length > 100 && (
+            <p className="mt-0.5 text-text-muted">{t('approvals.publish.moreChanges', { count: changes.length - 100, defaultValue: '+{{count}} more changes' })}</p>
+          )}
           {Array.isArray(p.base) && p.base.length > 0 && (
             <p className="mt-0.5 text-text-muted">
               {t('approvals.publish.base') || 'Versions the request was filed with'}: {p.base.map((b) => `#${b.policyId} v${b.version}`).join(', ')}

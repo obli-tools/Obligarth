@@ -1754,7 +1754,8 @@
         "create": "affecter",
         "update": "modifier",
         "delete": "retirer"
-      }
+      },
+      "moreChanges": "+{{count}} autres changements"
     }
   },
   "os": {
