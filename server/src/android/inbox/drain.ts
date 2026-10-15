@@ -147,14 +147,19 @@ async function applyOne(trx: Knex.Transaction, tenantId: number, row: InboxRow, 
   return { state: 'applied' };
 }
 
-/** Does every enterprises/... name of the payload (at any depth, strings only) name `enterprise`? */
+/**
+ * Does every enterprises/... name of the payload (strings only) name `enterprise`? A payload nested deeper than
+ * NAMES_MAX_DEPTH (far beyond any AMAPI resource) is refused rather than left unchecked.
+ */
+const NAMES_MAX_DEPTH = 16;
 function namesBelong(payload: unknown, enterprise: string, depth = 0): boolean {
-  if (depth > 6 || payload === null || payload === undefined) return true;
+  if (payload === null || payload === undefined) return true;
+  if (depth > NAMES_MAX_DEPTH) return typeof payload !== 'object' && typeof payload !== 'string';
   if (typeof payload === 'string') {
     const head = enterpriseOfResource(payload);
     return head === null || head === enterprise;
   }
-  if (Array.isArray(payload)) return payload.slice(0, 2000).every((v) => namesBelong(v, enterprise, depth + 1));
+  if (Array.isArray(payload)) return payload.every((v) => namesBelong(v, enterprise, depth + 1));
   if (typeof payload === 'object') return Object.values(payload as Record<string, unknown>).every((v) => namesBelong(v, enterprise, depth + 1));
   return true;
 }

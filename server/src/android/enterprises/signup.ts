@@ -98,6 +98,8 @@ export async function startSignup(tenantId: number, userId: number, req: SignupR
     if (live && live.state !== 'pending') throw new SignupError(409, 'androidAlreadyLinked', 'an Android enterprise is already linked');
     const open = await trx('android_signups').whereIn('state', ['requested', 'url_issued', 'consuming']).first('id');
     if (open) throw new SignupError(409, 'androidSignupInProgress', 'a signup is already in progress');
+    // Two tenants claiming the same domain at once: serialized by the domain, so the second sees the first's claim.
+    await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`android.domain:${domain}`]);
     const claimed = await trx.raw('SELECT obligarth.android_domain_claimed(?) AS c', [domain]) as { rows: Array<{ c: boolean }> };
     if (claimed.rows[0]?.c) throw new SignupError(409, 'androidDomainClaimed', 'this domain is claimed by another customer');
     if (isPersonalDomain(domain) && !(live?.mgpa_exception) && tenantId !== MASTER_TENANT_ID) {
@@ -160,7 +162,8 @@ async function rejected(reason: string, tenantId: number | null): Promise<Callba
   if (rejectedTimes.length > 5) void raiseAndroidPlatformAlert('android.signup_callback_rejected', { lastHour: rejectedTimes.length }, new Date().toISOString().slice(0, 13));
   if (tenantId !== null) {
     try {
-      await audit.append({ tenantId, action: 'android.signup_callback_rejected', details: { reason } }, audit.system('anonymous', 'android.signup-callback'));
+      await asTenant(tenantId, CALLBACK_ACTOR, () => audit.append({ tenantId, action: 'android.signup_callback_rejected', details: { reason } },
+        audit.system('anonymous', 'android.signup-callback')));
     } catch { /* standard class: spooled */ }
   }
   return { result: 'error', reason };
@@ -198,7 +201,8 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
   };
   const enterpriseToken = typeof query.enterpriseToken === 'string' ? query.enterpriseToken : '';
   if (!enterpriseToken) {
-    await audit.append({ tenantId, action: 'android.signup_callback_rejected', details: { reason: 'token_missing' } }, ctxAudit).catch(() => undefined);
+    await asTenant(tenantId, CALLBACK_ACTOR, () => audit.append({ tenantId, action: 'android.signup_callback_rejected', details: { reason: 'token_missing' } }, ctxAudit))
+      .catch(() => undefined);
     return fail('token_missing', 'android.signup_failed');
   }
   if (!s.signup_url_name) return fail('google_error', 'android.signup_failed');
