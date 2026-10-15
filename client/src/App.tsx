@@ -15,6 +15,7 @@ import { DeviceSummaryPage } from '@/pages/DeviceSummaryPage';
 import { PoliciesPage } from '@/pages/PoliciesPage';
 import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
 import { EndUsersPage } from '@/pages/EndUsersPage';
+import { DeviceEnrollmentPage } from '@/pages/DeviceEnrollmentPage';
 import { SupervisionPage } from '@/pages/SupervisionPage';
 import { GroupDetailPage } from '@/pages/GroupDetailPage';
 import { GroupEditPage } from '@/pages/GroupEditPage';
@@ -96,6 +97,10 @@ export default function App() {
  <Route path="/end-users" element={<EndUsersPage />} />
  </Route>
 
+ {/* Device enrollment: profiles, links, invitations, sessions (mdm.enrollment.manage). */}
+ <Route element={<ProtectedRoute requiredCapabilities={['mdm.enrollment.manage']} />}>
+  <Route path="/device-enrollment" element={<DeviceEnrollmentPage />} />
+ </Route>
  {/* The approval queue on its own (the Security page embeds it): its reviewers, and the members who
      may request a restricted action. */}
  <Route element={<ProtectedRoute requiredCapabilities={['approvals.review', 'devices.manage', 'mdm.policies.manage']} />}>

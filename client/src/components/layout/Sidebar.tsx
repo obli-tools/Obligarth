@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   ScrollText,
   Contact,
+  QrCode,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -257,6 +258,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
   const hasSupervisionCap = tenantCaps.has('supervision:read');
   const hasEndUsersCap = tenantCaps.has('users.manage') || tenantCaps.has('devices.manage');
+  //   - mdm.enrollment.manage → Device enrollment (profiles, links, invitations)
+  const hasEnrollmentCap = tenantCaps.has('mdm.enrollment.manage');
   //   - audit.read / approvals.review / devices.manage → Security (the
   //     journal; the approvals; the guarded actions)
   const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review') || tenantCaps.has('devices.manage');
@@ -481,6 +484,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // End users: the reader gate of the routes (users.manage or devices.manage).
     ...(admin || hasEndUsersCap
       ? [{ label: t('nav.endUsers', 'End users'), path: '/end-users',  icon: <Contact size={18} /> } as NavItem]
+      : []),
+    ...(admin || hasEnrollmentCap
+      ? [{ label: t('nav.deviceEnrollment', 'Enrollment'), path: '/device-enrollment', icon: <QrCode size={18} /> } as NavItem]
       : []),
   ];
 

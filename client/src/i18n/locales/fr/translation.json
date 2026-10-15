@@ -67,7 +67,8 @@
     "collapseAdmin": "Replier l'administration",
     "expandAdmin": "Déplier l'administration",
     "administration": "Administration",
-    "endUsers": "Utilisateurs finaux"
+    "endUsers": "Utilisateurs finaux",
+    "deviceEnrollment": "Inscription"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -1606,7 +1607,8 @@
       "users_manage": "Gestion des utilisateurs",
       "audit_read": "Audit · Lire le journal du tenant",
       "approvals_review": "Approbations · Examiner les demandes",
-      "mdm_policies_manage": "Politiques · Modifier, affecter et publier"
+      "mdm_policies_manage": "Politiques · Modifier, affecter et publier",
+      "mdm_enrollment_manage": "Inscription · Profils, liens et invitations"
     }
   },
   "notificationCenter": {
@@ -3148,6 +3150,136 @@
     "appleEdgeUnavailable": "Le service d'appareils est indisponible : réessayez dans un instant.",
     "appleIntegrationDisabled": "L'intégration Apple n'est pas activée sur ce serveur.",
     "jobsUnavailable": "Les tâches de fond ne tournent pas.",
-    "deviceNotManaged": "Cet appareil n'est pas sous gestion."
+    "deviceNotManaged": "Cet appareil n'est pas sous gestion.",
+    "enrollmentProfileNotFound": "Profil d'inscription introuvable.",
+    "enrollmentUsageTaken": "Un autre profil ADE utilise déjà cette clé d'usage.",
+    "enrollmentProfileRules": "Cette combinaison de méthode, de propriété et de réglages n'est pas permise.",
+    "enrollmentProfileArchived": "Ce profil d'inscription est archivé.",
+    "enrollmentProfileDisabled": "Ce profil d'inscription est désactivé.",
+    "enrollmentMethodFixed": "La méthode d'un profil d'inscription ne peut pas changer.",
+    "enrollmentDefaultRequired": "Désignez d'abord un autre profil ADE par défaut.",
+    "enrollmentLinkNotOta": "Les liens ne servent qu'aux profils d'inscription OTA.",
+    "enrollmentInvitationNotByod": "Les invitations ne servent qu'aux profils d'appareil personnel (par compte).",
+    "enrollmentTokenNotFound": "Lien ou invitation introuvable.",
+    "ownershipNotAllowed": "Cette propriété n'est pas permise pour cette méthode d'inscription.",
+    "usageRequired": "Un profil ADE a besoin d'une clé d'usage.",
+    "usageNotAllowed": "Seul un profil ADE a une clé d'usage.",
+    "noticeRequired": "La notice ne peut être désactivée que sur un profil ADE (bornes).",
+    "defaultNotAde": "Seul un profil ADE peut être le profil par défaut.",
+    "invalidSettings": "Un réglage du profil n'est pas valide.",
+    "webAuthRequired": "La notice d'un profil ADE s'affiche dans la vue web : gardez la vue web.",
+    "mdmRemovableCorporate": "Le profil de gestion d'un appareil de l'entreprise ne peut pas être amovible.",
+    "appleTenantNotProvisioned": "Ce tenant n'est pas encore provisionné auprès du service des appareils.",
+    "groupNotFound": "Groupe introuvable.",
+    "endUserNotFound": "Utilisateur final introuvable."
+  },
+  "deviceEnrollment": {
+    "title": "Inscription des appareils",
+    "subtitle": "Profils d'inscription, liens et invitations, et inscriptions en cours.",
+    "tabs": {
+      "profiles": "Profils",
+      "tokens": "Liens et invitations",
+      "sessions": "Sessions"
+    },
+    "method": {
+      "ota": "Lien ou QR code (OTA)",
+      "ade": "Automatisée (ADE)",
+      "byod_account": "Appareil personnel (compte)"
+    },
+    "ownership": {
+      "corporate": "Entreprise",
+      "corporate_personal": "Entreprise, usage personnel",
+      "personal": "Personnel"
+    },
+    "tokenState": {
+      "active": "Actif",
+      "exhausted": "Épuisé",
+      "expired": "Expiré",
+      "revoked": "Révoqué"
+    },
+    "sessionState": {
+      "started": "Commencée",
+      "acknowledged": "Notice lue",
+      "profile_issued": "Profil téléchargé",
+      "certificate_issued": "Identité délivrée",
+      "authenticated": "Authentifiée",
+      "enrolled": "Inscrit",
+      "failed": "Échec",
+      "expired": "Expirée"
+    },
+    "kind": {
+      "link": "Lien",
+      "invitation": "Invitation"
+    },
+    "mail": {
+      "not_requested": "Non envoyé par courriel",
+      "not_configured": "Non envoyé : aucun serveur SMTP n'est configuré",
+      "sent": "Courriel envoyé",
+      "failed": "Le courriel n'a pas pu être envoyé"
+    },
+    "failure": {
+      "signing_unavailable": "Profil non signé",
+      "identity_mismatch": "Identité contredite"
+    },
+    "confirmArchive": "Archiver le profil {{name}} ? Ses liens et invitations cessent de fonctionner.",
+    "archived": "Profil archivé",
+    "showArchived": "Afficher les profils archivés",
+    "newProfile": "Nouveau profil",
+    "editProfile": "Modifier le profil d'inscription",
+    "noProfile": "Aucun profil d'inscription pour l'instant.",
+    "name": "Nom",
+    "methodLabel": "Méthode",
+    "ownershipLabel": "Propriété",
+    "ownershipHint": "Choisie avant l'inscription ; elle décide de ce qui est collecté.",
+    "defaultGroup": "Groupe par défaut",
+    "noGroup": "Aucun groupe",
+    "activeTokens": "Liens utilisables",
+    "isDefault": "par défaut",
+    "archivedLabel": "Archivé",
+    "enabled": "Actif",
+    "disabled": "Désactivé",
+    "newLink": "Nouveau lien",
+    "newInvitation": "Nouvelle invitation",
+    "archive": "Archiver",
+    "locale": "Langue des pages et du profil",
+    "deviceNameTemplate": "Modèle du nom de l'appareil",
+    "deviceNameTemplateHint": "Variables {serial}, {model}, {n} ; jamais une donnée du salarié.",
+    "linkTtlHours": "Durée de vie du lien (heures)",
+    "linkMaxUses": "Usages d'un lien",
+    "linkMaxUsesHint": "Un par défaut : un lien pour plusieurs appareils est un choix explicite.",
+    "invitationTtlHours": "Durée de vie de l'invitation (heures)",
+    "usage": "Clé d'usage ADE",
+    "usageHint": "Lettres minuscules, chiffres et _ (standard, kiosk…).",
+    "supportPhone": "Téléphone du support",
+    "supportEmail": "Courriel du support",
+    "department": "Service",
+    "noticeRequired": "Afficher la notice au salarié (à désactiver pour les bornes seulement)",
+    "webAuth": "Vue web pendant l'assistant de configuration",
+    "isDefaultLabel": "Profil ADE par défaut du tenant",
+    "enabledLabel": "Inscriptions permises",
+    "create": "Créer",
+    "shownOnce": "Affiché une seule fois : copiez-le maintenant. La console n'en garde que le préfixe.",
+    "qrAlt": "QR code du lien d'inscription",
+    "linkFacts": "{{uses}} usage(s), expire le {{expires}}",
+    "label": "Libellé (facultatif)",
+    "emailTo": "Envoyer par courriel à (facultatif)",
+    "emailHint": "Envoyé quand un serveur SMTP est configuré pour le tenant ou la plateforme.",
+    "invitationCode": "Code d'invitation",
+    "invitationFacts": "Usage unique, expire le {{expires}}. Le lien montre les étapes au salarié.",
+    "managedAppleAccount": "Compte Apple géré",
+    "confirmRevoke": "Révoquer {{prefix}} ? Il ne pourra plus servir.",
+    "revoked": "Révoqué",
+    "allKinds": "Liens et invitations",
+    "noToken": "Rien ici.",
+    "prefix": "Préfixe",
+    "kindLabel": "Type",
+    "profile": "Profil",
+    "uses": "Usages",
+    "expires": "Expire le",
+    "revoke": "Révoquer",
+    "noSession": "Aucune session d'inscription.",
+    "started": "Commencée le",
+    "device": "Appareil",
+    "more": "Plus"
   }
 }

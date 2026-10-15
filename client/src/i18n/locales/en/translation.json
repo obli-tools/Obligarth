@@ -67,7 +67,8 @@
     "collapseAdmin": "Collapse administration",
     "expandAdmin": "Expand administration",
     "administration": "Administration",
-    "endUsers": "End users"
+    "endUsers": "End users",
+    "deviceEnrollment": "Enrollment"
   },
   "login": {
     "title": "Sign in to your account",
@@ -1606,7 +1607,8 @@
       "users_manage": "User Management",
       "audit_read": "Audit · Read the tenant's log",
       "approvals_review": "Approvals · Review requests",
-      "mdm_policies_manage": "Policies · Edit, assign and publish"
+      "mdm_policies_manage": "Policies · Edit, assign and publish",
+      "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations"
     }
   },
   "notificationCenter": {
@@ -3148,6 +3150,136 @@
     "appleEdgeUnavailable": "The device service is unavailable: try again in a moment.",
     "appleIntegrationDisabled": "The Apple integration is not enabled on this server.",
     "jobsUnavailable": "The background jobs are not running.",
-    "deviceNotManaged": "This device is not under management."
+    "deviceNotManaged": "This device is not under management.",
+    "enrollmentProfileNotFound": "Enrollment profile not found.",
+    "enrollmentUsageTaken": "Another ADE profile already uses this usage key.",
+    "enrollmentProfileRules": "This combination of method, ownership and settings is not allowed.",
+    "enrollmentProfileArchived": "This enrollment profile is archived.",
+    "enrollmentProfileDisabled": "This enrollment profile is disabled.",
+    "enrollmentMethodFixed": "The method of an enrollment profile cannot change.",
+    "enrollmentDefaultRequired": "Designate another default ADE profile first.",
+    "enrollmentLinkNotOta": "Links serve OTA enrollment profiles only.",
+    "enrollmentInvitationNotByod": "Invitations serve personal-device (account) profiles only.",
+    "enrollmentTokenNotFound": "Link or invitation not found.",
+    "ownershipNotAllowed": "This ownership is not allowed for this enrollment method.",
+    "usageRequired": "An ADE profile needs a usage key.",
+    "usageNotAllowed": "Only an ADE profile has a usage key.",
+    "noticeRequired": "The notice can be turned off on an ADE profile only (kiosks).",
+    "defaultNotAde": "Only an ADE profile can be the default one.",
+    "invalidSettings": "A setting of the profile is invalid.",
+    "webAuthRequired": "The notice of an ADE profile is shown in the web view: keep the web view on.",
+    "mdmRemovableCorporate": "The management profile of a corporate device cannot be removable.",
+    "appleTenantNotProvisioned": "This tenant is not provisioned at the device service yet.",
+    "groupNotFound": "Group not found.",
+    "endUserNotFound": "End user not found."
+  },
+  "deviceEnrollment": {
+    "title": "Device enrollment",
+    "subtitle": "Enrollment profiles, links and invitations, and the enrollments in progress.",
+    "tabs": {
+      "profiles": "Profiles",
+      "tokens": "Links and invitations",
+      "sessions": "Sessions"
+    },
+    "method": {
+      "ota": "Link or QR code (OTA)",
+      "ade": "Automated (ADE)",
+      "byod_account": "Personal device (account)"
+    },
+    "ownership": {
+      "corporate": "Corporate",
+      "corporate_personal": "Corporate, personal use",
+      "personal": "Personal"
+    },
+    "tokenState": {
+      "active": "Active",
+      "exhausted": "Used up",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "sessionState": {
+      "started": "Started",
+      "acknowledged": "Notice read",
+      "profile_issued": "Profile downloaded",
+      "certificate_issued": "Identity issued",
+      "authenticated": "Authenticated",
+      "enrolled": "Enrolled",
+      "failed": "Failed",
+      "expired": "Expired"
+    },
+    "kind": {
+      "link": "Link",
+      "invitation": "Invitation"
+    },
+    "mail": {
+      "not_requested": "Not e-mailed",
+      "not_configured": "Not e-mailed: no SMTP server is configured",
+      "sent": "E-mail sent",
+      "failed": "The e-mail could not be sent"
+    },
+    "failure": {
+      "signing_unavailable": "Profile not signed",
+      "identity_mismatch": "Identity mismatch"
+    },
+    "confirmArchive": "Archive the profile {{name}}? Its links and invitations stop working.",
+    "archived": "Profile archived",
+    "showArchived": "Show archived profiles",
+    "newProfile": "New profile",
+    "editProfile": "Edit the enrollment profile",
+    "noProfile": "No enrollment profile yet.",
+    "name": "Name",
+    "methodLabel": "Method",
+    "ownershipLabel": "Ownership",
+    "ownershipHint": "Chosen before the enrollment; it decides what is collected.",
+    "defaultGroup": "Default group",
+    "noGroup": "No group",
+    "activeTokens": "Usable links",
+    "isDefault": "default",
+    "archivedLabel": "Archived",
+    "enabled": "Active",
+    "disabled": "Disabled",
+    "newLink": "New link",
+    "newInvitation": "New invitation",
+    "archive": "Archive",
+    "locale": "Language of the pages and of the profile",
+    "deviceNameTemplate": "Device name template",
+    "deviceNameTemplateHint": "Variables {serial}, {model}, {n}; never a value of the employee.",
+    "linkTtlHours": "Link lifetime (hours)",
+    "linkMaxUses": "Uses of a link",
+    "linkMaxUsesHint": "One by default: a link for several devices is an explicit choice.",
+    "invitationTtlHours": "Invitation lifetime (hours)",
+    "usage": "ADE usage key",
+    "usageHint": "Lower case letters, digits and _ (standard, kiosk…).",
+    "supportPhone": "Support phone",
+    "supportEmail": "Support e-mail",
+    "department": "Department",
+    "noticeRequired": "Show the employee notice (turn off for kiosks only)",
+    "webAuth": "Web view during the setup assistant",
+    "isDefaultLabel": "Default ADE profile of the tenant",
+    "enabledLabel": "Enrollments allowed",
+    "create": "Create",
+    "shownOnce": "Shown only once: copy it now. The console keeps only its prefix.",
+    "qrAlt": "QR code of the enrollment link",
+    "linkFacts": "{{uses}} use(s), expires {{expires}}",
+    "label": "Label (optional)",
+    "emailTo": "Send by e-mail to (optional)",
+    "emailHint": "Sent when an SMTP server is configured for the tenant or the platform.",
+    "invitationCode": "Invitation code",
+    "invitationFacts": "Single use, expires {{expires}}. The link shows the steps to the employee.",
+    "managedAppleAccount": "Managed Apple Account",
+    "confirmRevoke": "Revoke {{prefix}}? It can no longer be used.",
+    "revoked": "Revoked",
+    "allKinds": "Links and invitations",
+    "noToken": "Nothing here.",
+    "prefix": "Prefix",
+    "kindLabel": "Kind",
+    "profile": "Profile",
+    "uses": "Uses",
+    "expires": "Expires",
+    "revoke": "Revoke",
+    "noSession": "No enrollment session.",
+    "started": "Started",
+    "device": "Device",
+    "more": "More"
   }
 }
