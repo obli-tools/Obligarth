@@ -2375,6 +2375,10 @@
         "ownership_mismatch": {
           "title": "Propriété différente de celle du profil d'enrôlement",
           "message": "Un appareil s'est enrôlé avec une propriété que son profil d'enrôlement n'autorise pas."
+        },
+        "reenrolled_without_proof": {
+          "title": "Appareil géré réenrôlé sans preuve",
+          "message": "Un appareil géré s'est enrôlé de nouveau sans preuve de propriété : vérifiez qu'il s'agit bien du même appareil."
         }
       },
       "device": {

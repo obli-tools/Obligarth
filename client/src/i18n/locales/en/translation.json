@@ -2375,6 +2375,10 @@
         "ownership_mismatch": {
           "title": "Ownership differs from the enrollment profile",
           "message": "A device enrolled with an ownership its enrollment profile does not allow."
+        },
+        "reenrolled_without_proof": {
+          "title": "Managed device enrolled again without proof",
+          "message": "A device under management enrolled again without proof of ownership: check that it is the same device."
         }
       },
       "device": {

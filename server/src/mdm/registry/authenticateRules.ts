@@ -17,8 +17,9 @@ import type { PrivacyRules } from '../../apple/devices/privacy';
 // The serial number of the Authenticate message is device data: apple-edge
 // verifies it only for an ADE enrollment (the SCEP challenge bound to the
 // session's MachineInfo, signed by Apple). An unverified serial number finds
-// a record that left management only (§4.4: unenrolled → enrolling); a
-// record still under management is never taken by it.
+// a record that left management only, whose identifier is released (§4.4:
+// unenrolled → enrolling; MDM-B2-R12), which onAuthenticate renews; a record
+// still under management, or out of it without a release, is never taken.
 // =============================================================================
 
 export interface SessionFacts {
@@ -160,9 +161,10 @@ export interface SerialHeld {
  * The existing record of the device: by enrollment id (the satellite), else by (tenant, apple_mdm, serial
  * number) when the rules of the session's ownership keep the serial number (never for a personal device):
  *   - a verified serial number (serialClaimOf) finds its record whatever its state;
- *   - an unverified one finds a record out of management only (unenrolled → enrolling, §4.4); held by a
- *     record still under management, it answers { serialHeldBy }: the Authenticate never takes that record
- *     (review of lot B2, MDM-B2-R1; DM6, S10).
+ *   - an unverified one finds a record out of management whose identifier is released only (unenrolled →
+ *     enrolling, §4.4; decision MDM-B2-R12, option A); held by any other record (still under management, or out
+ *     of it without a release), it answers { serialHeldBy }: the Authenticate never takes that record (review of
+ *     lot B2, MDM-B2-R1; DM6, S10).
  * The record found by its serial number is locked (FOR UPDATE): its state is read after any concurrent cycle.
  */
 export async function findDeviceForAuthenticate(trx: Knex.Transaction, tenantId: number, f: AuthenticateFacts,
@@ -180,11 +182,15 @@ export async function findDeviceForAuthenticate(trx: Knex.Transaction, tenantId:
     .where({ 'd.tenant_id': tenantId, 'd.management_channel': 'apple_mdm', 'd.serial_number': claim.serial })
     // The record's row only (PostgreSQL refuses a lock on the nullable side of an outer join).
     .forUpdate('d')
-    .first('d.id', 'd.enrollment_state', 'a.enrollment_id') as
-    { id: number; enrollment_state: string; enrollment_id: string | null } | undefined;
+    .first('d.id', 'd.enrollment_state', 'a.enrollment_id', 'a.device_id as sat_device_id', 'a.id_released_at') as
+    { id: number; enrollment_state: string; enrollment_id: string | null; sat_device_id: number | null; id_released_at: Date | null } | undefined;
   if (!row) return null;
   if (claim.verified) return { deviceId: Number(row.id), enrollmentId: row.enrollment_id ?? null, by: 'verified_serial' };
-  if (row.enrollment_state === 'unenrolled') return { deviceId: Number(row.id), enrollmentId: row.enrollment_id ?? null, by: 'serial' };
+  // Unverified (decision MDM-B2-R12, option A, 15/10/2026): a record out of management whose identifier is released
+  // (or without a satellite) only; onAuthenticate renews it. A record that left without a release (wiped, removed by
+  // command, disabled at apple-edge) still holds an enrollment there: never taken by a serial number announced.
+  const released = row.sat_device_id === null || row.sat_device_id === undefined || row.id_released_at !== null;
+  if (row.enrollment_state === 'unenrolled' && released) return { deviceId: Number(row.id), enrollmentId: row.enrollment_id ?? null, by: 'serial' };
   return { serialHeldBy: Number(row.id) };
 }
 

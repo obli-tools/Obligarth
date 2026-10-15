@@ -105,12 +105,30 @@ async function handleAuthenticate(ctx: Ctx<'mdm.authenticate'>): Promise<void> {
     eventId: event.eventId,
   };
   const r = await onAuthenticate(trx, tenantId, facts);
+  if (r.detached?.superseded) {
+    // INT-B3-R3, option A: the record of the other kind (a User Enrollment whose EnrollmentID was this ADE device's
+    // UDID, or the reverse) left management, superseded by the ADE proof; its satellite is detached. Its departure
+    // as for device.id_released ('superseded_by_proof'), written once per event.
+    const recordId = r.detached.recordId;
+    if (await deviceEvents.add(trx, tenantId, recordId, 'released', event.occurredAt, event.eventId, { reason: 'superseded_by_proof' })) {
+      const departure = await departureOf(trx, tenantId, recordId);
+      await sendUnenrollCleanup(trx, tenantId, recordId, departure.unenrolledAt);
+      const otherKind = facts.kind === 'udid' ? 'enrollment_id' : 'udid';
+      ctx.audit({ tenantId, action: 'device.id_released', target: deviceTarget(recordId), details: { reason: 'superseded_by_proof', idKind: otherKind } });
+      ctx.audit({ tenantId, action: 'security.identity_mismatch', outcome: 'denied', target: deviceTarget(recordId),
+        details: { field: 'udid', stage: 'authenticate', nanoType: p.enrollment_type, outcome: 'superseded_by_proof' } });
+      await raiseInTx(trx, tenantId, 'device.superseded', { discriminant: recordId, navigateTo: `/devices/${recordId}` });
+      ctx.afterCommit(() => realtime.deviceChanged(tenantId, recordId));
+    }
+  }
   switch (r.outcome) {
     case 'created':
     case 'new_cycle': {
       const deviceId = r.deviceId as number;
-      await deviceEvents.add(trx, tenantId, deviceId, 'enrollment_started', event.occurredAt, event.eventId,
-        { cycle: r.outcome === 'created' ? 'first' : 'new', proof: p.proof });
+      await deviceEvents.add(trx, tenantId, deviceId, 'enrollment_started', event.occurredAt, event.eventId, {
+        cycle: r.outcome === 'created' ? 'first' : 'new', proof: p.proof,
+        ...(r.renewed ? { renewed: true } : {}), ...(r.reenrolledWithoutProof ? { withoutProof: true } : {}),
+      });
       if (r.serialHeldBy !== undefined) {
         // Another enrollment announced the serial number of a device under management: that record keeps it (review
         // of lot B2, MDM-B2-R1). The alert is raised by the lifecycle; the entry targets the record it protects.

@@ -34,9 +34,15 @@ import { privacyRulesFor, type PrivacyRules } from './privacy';
 //     (barrier 2) creates no record and asks apple-edge to release it.
 //   - The serial number of the message is device data (S10): only an ADE
 //     enrollment verifies it (apple-edge, against the session's MachineInfo).
-//     Unverified, it finds a record that left management only; held by a
-//     record still under management, it is never taken: the device gets a
-//     record of its own, without a serial number, and an alert is raised.
+//     Unverified, it finds a record that left management only, whose
+//     identifier is released, and renews it (decision MDM-B2-R12, option A:
+//     the profile's group, no direct assignment, lost mode off, no position);
+//     held by any other record, it is never taken: the device gets a record
+//     of its own, without a serial number, and an alert is raised.
+//   - The kind of the identifier (UDID or EnrollmentID) of an enrollment id
+//     never changes on a record (MDM-B2-R13); a record of the other kind out
+//     of management, or under management against an ADE proof, gives its
+//     enrollment id up (INT-B3-R3, options A and B: its satellite detached).
 //   - The identifier of the device becomes active at the first TokenUpdate
 //     of the cycle (DM26), like apple_edge.device_ids: the loser of an
 //     Authenticate race never holds it; a violation of the unique index there
@@ -74,6 +80,18 @@ export interface AuthenticateResult {
    *  record when the device was found by its enrollment id), which keeps it: the device was recorded without it
    *  and the alert security.identity_mismatch raised (the handler audits it). */
   serialHeldBy?: number;
+  /** The record of the other kind of identifier that held this enrollment id gave it up (INT-B3-R3): out of management
+   *  (superseded: false), or under management and superseded by the ADE proof of this Authenticate (superseded: true:
+   *  it left management, 'superseded_by_proof', and the alert security.identity_mismatch was raised). Its satellite
+   *  is deleted: the record keeps its history, the enrollment id is the new device's. */
+  detached?: { recordId: number; superseded: boolean };
+  /** Found by an unverified serial number (a record out of management whose identifier is released): renewed
+   *  (MDM-B2-R12, option A): the group of the session's profile, its direct assignments, lost mode and positions
+   *  removed. */
+  renewed?: { assignments: number; locations: number };
+  /** A new cycle without ADE proof on a record still under management and activated (MDM-B2-R13, option A): the
+   *  alert enrollment.reenrolled_without_proof was raised. */
+  reenrolledWithoutProof?: boolean;
   /** identity_mismatch: what the Authenticate contradicts. Absent: the serial number of the session's MachineInfo;
    *  'udid': the kind of the identifier of the record of this enrollment id (a UDID presented as an EnrollmentID, or
    *  the reverse), whose record (recordId) is not written (review of lot B2, MDM-B2-R13); the enrollment is released
@@ -215,7 +233,25 @@ function satelliteColumns(f: AuthenticateFacts, s: SessionFacts) {
  */
 export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f: AuthenticateFacts):
   Promise<AuthenticateResult> {
-  const sat = await satelliteOf(trx, tenantId, f.enrollmentId);
+  let sat = await satelliteOf(trx, tenantId, f.enrollmentId);
+  let detached: AuthenticateResult['detached'];
+  if (sat && sat.nano_enroll_type !== f.enrollmentType && f.occurredAt.getTime() > time(sat.authenticated_at)
+    && (sat.enrollment_state === 'unenrolled' || f.proof === 'ade')) {
+    // INT-B3-R3 (decided on 15/10/2026, options A and B): the record of the other kind gives the enrollment id up when
+    // it is out of management (its identifier is free at apple-edge, which accepted this Authenticate), or when this
+    // Authenticate carries the ADE proof (apple-edge released the other kind: an ADE device of the tenant prevails
+    // over an EnrollmentID announced as its UDID). Before anything else: whatever this Authenticate becomes, the
+    // enrollment id now answers to this device, never to that record (its next TokenUpdate would read as a refresh).
+    const recordId = Number(sat.device_id);
+    const superseded = sat.enrollment_state !== 'unenrolled';
+    if (superseded) {
+      await onUnenrolled(trx, tenantId, f.enrollmentId, 'superseded_by_proof', f.occurredAt, f.eventId);
+      await raiseInTx(trx, tenantId, 'security.identity_mismatch', { params: { field: 'udid' } });
+    }
+    await trx('apple_devices').where({ tenant_id: tenantId, device_id: recordId }).del();
+    detached = { recordId, superseded };
+    sat = undefined;
+  }
   if (sat) {
     // The kind of the identifier never changes under one enrollment id (review of lot B2, MDM-B2-R13): apple-edge
     // shares '<key>_<id>' between a UDID and an EnrollmentID, so a User Enrollment whose EnrollmentID is the UDID of
@@ -226,7 +262,10 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     // it would receive. As every refused Authenticate, the enrollment is released (mdm.enrollment-release, which
     // releases it only while apple-edge still holds it under the refused certificate): device.id_released then
     // takes the record out of management, and the device it belongs to enrolls again. An event older than the
-    // record's cycle (consumed late, replayed after a new cycle) is stale: nothing raised nor released.
+    // record's cycle (consumed late, replayed after a new cycle) is stale: nothing raised nor released. Since lot C0,
+    // apple-edge refuses such an Authenticate itself (403, security.device_id_conflict 'refused_other_kind') while the
+    // record's identifier is active there: this branch remains for a record under management whose identifier is not
+    // active at apple-edge (not yet activated, or released and not yet consumed), without an ADE proof (above).
     if (sat.nano_enroll_type !== f.enrollmentType) {
       if (f.occurredAt.getTime() <= time(sat.authenticated_at)) return { deviceId: Number(sat.device_id), outcome: 'stale' };
       await raiseInTx(trx, tenantId, 'security.identity_mismatch', { discriminant: Number(sat.device_id), params: { field: 'udid' } });
@@ -249,14 +288,14 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   const session = await findSessionForAuthenticate(trx, tenantId, f);
   if (!session) {
     await raiseUnknownSession(trx, tenantId, f);
-    return { deviceId: null, outcome: 'no_session' };
+    return detached ? { deviceId: null, outcome: 'no_session', detached } : { deviceId: null, outcome: 'no_session' };
   }
   const mode = managementModeFor(f, session);
   if (!mode) {
     await raiseInTx(trx, tenantId, 'enrollment.ownership_mismatch', {});
     await enrollmentReleaseJob().sendInTx(trx, { tenantId, eventId: f.eventId },
       { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
-    return { deviceId: null, outcome: 'ownership_mismatch' };
+    return detached ? { deviceId: null, outcome: 'ownership_mismatch', detached } : { deviceId: null, outcome: 'ownership_mismatch' };
   }
   // The serial number and its trust (S10): a message that contradicts the session's MachineInfo creates nothing
   // (apple-edge refuses such an Authenticate first; the enrollment is released if one got through).
@@ -265,7 +304,7 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     await raiseInTx(trx, tenantId, 'security.identity_mismatch', { params: { field: 'serial' } });
     await enrollmentReleaseJob().sendInTx(trx, { tenantId, eventId: f.eventId },
       { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
-    return { deviceId: null, outcome: 'identity_mismatch' };
+    return detached ? { deviceId: null, outcome: 'identity_mismatch', detached } : { deviceId: null, outcome: 'identity_mismatch' };
   }
   const rules = await privacyRulesFor(trx, tenantId, session.ownership, f.enrollmentType);
   const keepsSerial = session.ownership !== 'personal' && rules.storeSerialNumber;
@@ -274,6 +313,8 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   let deviceId: number;
   let created = false;
   let serialHeldBy: number | undefined;
+  let renewed: AuthenticateResult['renewed'];
+  let reenrolledWithoutProof = false;
   const lookup = sat ? { deviceId: Number(sat.device_id), enrollmentId: f.enrollmentId, by: 'enrollment_id' as const }
     : await findDeviceForAuthenticate(trx, tenantId, f, rules, session);
   if (lookup && 'serialHeldBy' in lookup) serialHeldBy = lookup.serialHeldBy;
@@ -284,7 +325,9 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
       .first('group_id', 'platform', 'enrollment_state_at', 'serial_number') as
       { group_id: number | null; platform: string; enrollment_state_at: Date | null; serial_number: string | null } | undefined;
     if (!current) throw new JobError('missing_prerequisite', 'record of the device not found');
-    if (!sat && f.occurredAt.getTime() < time(current.enrollment_state_at)) return { deviceId, outcome: 'stale' };
+    if (!sat && f.occurredAt.getTime() < time(current.enrollment_state_at)) {
+      return detached ? { deviceId, outcome: 'stale', detached } : { deviceId, outcome: 'stale' };
+    }
     const cols = cycleColumns(f, session, mode, rules, { platform: current.platform, isNew: false });
     // The serial number: cleared when the rules of the new cycle do not keep it (§5.2). A record found by its
     // enrollment id keeps a known serial number (a different one only raises an alert, as at the ingestion,
@@ -299,8 +342,23 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
         else cols.serial_number = claim.serial;
       }
     }
-    // The group changes only when the profile asks for it (§4.5 rule 3).
-    if (session.resetGroupOnReenroll) cols.group_id = session.groupId;
+    // The group changes only when the profile asks for it (§4.5 rule 3), or when an unverified serial number found
+    // the record (MDM-B2-R12, option A, decided on 15/10/2026): a device that only announced the serial number of a
+    // retired record takes nothing of its configuration: the group of its own profile, no direct assignment (policies
+    // and apps), lost mode off and no position of the previous cycle.
+    if (session.resetGroupOnReenroll || found.by === 'serial') cols.group_id = session.groupId;
+    if (found.by === 'serial') {
+      cols.lost_mode_state = 'off';
+      cols.lost_mode_changed_at = null;
+      const assignments = await trx('assignments').where({ tenant_id: tenantId, target_scope: 'device', target_id: deviceId }).del();
+      const locations = await trx('lost_mode_locations').where({ tenant_id: tenantId, device_id: deviceId }).del();
+      renewed = { assignments: Number(assignments), locations: Number(locations) };
+    } else if (sat && sat.enrollment_state !== 'unenrolled' && sat.id_activated_at && f.proof !== 'ade') {
+      // MDM-B2-R13, option A: a new cycle of a record under management without the ADE proof (an OTA enrollment that
+      // announces the UDID of an enrolled device, or the device itself installing a profile again): the operator checks.
+      await raiseInTx(trx, tenantId, 'enrollment.reenrolled_without_proof', { discriminant: deviceId, navigateTo: `/devices/${deviceId}` });
+      reenrolledWithoutProof = true;
+    }
     await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
     const satCols = satelliteColumns(f, session);
     const updated = await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(satCols);
@@ -349,9 +407,12 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   if (claim.verified && claim.serial && session.ownership !== 'personal') {
     await trx('apple_ade_devices').where({ tenant_id: tenantId, serial_number: claim.serial }).update({ device_id: deviceId, updated_at: new Date() });
   }
-  return serialHeldBy !== undefined
-    ? { deviceId, outcome: created ? 'created' : 'new_cycle', serialHeldBy }
-    : { deviceId, outcome: created ? 'created' : 'new_cycle' };
+  const result: AuthenticateResult = { deviceId, outcome: created ? 'created' : 'new_cycle' };
+  if (serialHeldBy !== undefined) result.serialHeldBy = serialHeldBy;
+  if (detached) result.detached = detached;
+  if (renewed) result.renewed = renewed;
+  if (reenrolledWithoutProof) result.reenrolledWithoutProof = true;
+  return result;
 }
 
 /**

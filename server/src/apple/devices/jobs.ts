@@ -180,7 +180,8 @@ async function awaitConfiguration(ctx: JobContext<DeviceJob>): Promise<JobResult
 }
 
 /** The alerts of a device that tell an ongoing problem of its management (resolved when it leaves). */
-const DEVICE_PROBLEM_ALERTS = ['enrollment.setup_timeout', 'device.serial_changed', 'security.identity_mismatch'] as const;
+const DEVICE_PROBLEM_ALERTS = ['enrollment.setup_timeout', 'device.serial_changed', 'security.identity_mismatch',
+  'enrollment.reenrolled_without_proof'] as const;
 
 /** devices.unenroll-cleanup (§13.3; modele §5.5, §10.4). */
 async function cleanup(ctx: JobContext<DeviceJob>): Promise<JobResult> {
