@@ -26,7 +26,10 @@ export interface EnrollmentMail {
   invitation?: { code: string; account: string; url: string };
 }
 
-const MAIL_TIMEOUT_MS = 15_000;
+const MAIL_TIMEOUT_MS = 10_000;
+/** The whole sending, in the console's request (review of lot C1, INT-C1-R4): beyond it, 'failed' (the link or the
+ *  code is shown to the administrator anyway). */
+const MAIL_DEADLINE_MS = 15_000;
 
 /** The SMTP transport of the tenant's channel (in the tenant's context), or null when none is configured. */
 export async function enrollmentMailChannel(tenantId: number): Promise<SmtpTransport | null> {
@@ -65,18 +68,27 @@ export async function sendEnrollmentMail(tenantId: number, m: EnrollmentMail): P
     if (u && l === u) return `<p><a href="${esc(u)}">${esc(u)}</a></p>`;
     return `<p>${esc(l)}</p>`;
   }).join('\n');
+  let transport: ReturnType<typeof nodemailer.createTransport> | null = null;
+  let timer: NodeJS.Timeout | undefined;
   try {
-    const transport = nodemailer.createTransport({
+    transport = nodemailer.createTransport({
       host: smtp.host, port: smtp.port, secure: smtp.secure,
       ...(smtp.username ? { auth: { user: smtp.username, pass: smtp.password } } : {}),
       connectionTimeout: MAIL_TIMEOUT_MS, greetingTimeout: MAIL_TIMEOUT_MS, socketTimeout: MAIL_TIMEOUT_MS,
     });
-    await transport.sendMail({ from: smtp.fromAddress, to: m.to, subject, text: lines.join('\n\n'), html });
+    const deadline = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(Object.assign(new Error('deadline'), { code: 'EDEADLINE' })), MAIL_DEADLINE_MS);
+      timer.unref?.();
+    });
+    await Promise.race([transport.sendMail({ from: smtp.fromAddress, to: m.to, subject, text: lines.join('\n\n'), html }), deadline]);
     return 'sent';
   } catch (err) {
     // The error of nodemailer may quote the envelope: its code only.
     logger.warn({ tenantId, code: (err as { code?: unknown; responseCode?: unknown })?.code ?? (err as { responseCode?: unknown })?.responseCode ?? null },
       'enrollment e-mail not sent');
     return 'failed';
+  } finally {
+    if (timer) clearTimeout(timer);
+    try { transport?.close(); } catch { /* already closed */ }
   }
 }

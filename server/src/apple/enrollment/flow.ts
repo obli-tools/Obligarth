@@ -137,9 +137,27 @@ export interface SessionForDownload {
 
 export type ConsumeOutcome = { kind: 'ok'; session: SessionForDownload } | { kind: 'invalid' } | { kind: 'expired'; locale: SurfaceLocale };
 
+/**
+ * Why the link or the profile of a session no longer allows it (review of lot C1, INT-C1-R2): 'link_revoked' (its link
+ * revoked), 'profile_withdrawn' (its profile archived or disabled); null: still allowed. The expiry and the uses of the
+ * link do not count: the use is the session's own, reserved by its acknowledgement.
+ */
+export async function withdrawalOf(q: Knex | Knex.Transaction, tenantId: number, profileId: string, tokenId: string | null):
+  Promise<'link_revoked' | 'profile_withdrawn' | null> {
+  if (tokenId) {
+    const tok = await q('enrollment_tokens').where({ tenant_id: tenantId, id: tokenId }).first('revoked_at') as { revoked_at: Date | null } | undefined;
+    if (tok?.revoked_at) return 'link_revoked';
+  }
+  const p = await q('enrollment_profiles').where({ tenant_id: tenantId, id: profileId }).first('archived_at', 'enabled') as
+    { archived_at: Date | null; enabled: boolean } | undefined;
+  if (!p || p.archived_at || !p.enabled) return 'profile_withdrawn';
+  return null;
+}
+
 /** Step 3, first part: the nonce of the session, consumed (erased) in a short transaction. */
 export async function consumeNonce(t: TenantFacts, sessionId: string, nonce: string, actor: DbActor): Promise<ConsumeOutcome> {
-  return asTenant(t.tenantId, actor, () => db.transaction(async (trx): Promise<ConsumeOutcome> => {
+  let ended = false;
+  const out = await asTenant(t.tenantId, actor, () => db.transaction(async (trx): Promise<ConsumeOutcome> => {
     const row = await trx('enrollment_sessions')
       .where({ tenant_id: t.tenantId, id: sessionId, nonce_hash: sha256Hex(nonce), method: 'ota' })
       .forUpdate()
@@ -151,6 +169,13 @@ export async function consumeNonce(t: TenantFacts, sessionId: string, nonce: str
     const locale: SurfaceLocale = row.locale === 'en' ? 'en' : 'fr';
     const now = Date.now();
     if (row.state !== 'acknowledged') return { kind: 'invalid' };
+    // The link revoked, the profile archived or disabled since the acknowledgement (the console ends the session
+    // then; a concurrent withdrawal is caught here): the session ends, the page of an invalid link answers.
+    const withdrawn = await withdrawalOf(trx, t.tenantId, String(row.profile_id), row.token_id ? String(row.token_id) : null);
+    if (withdrawn) {
+      ended = await endSession(trx, t.tenantId, sessionId, 'failed', withdrawn, ['acknowledged']);
+      return { kind: 'invalid' };
+    }
     if (!row.nonce_expires_at || new Date(row.nonce_expires_at).getTime() <= now || new Date(row.expires_at).getTime() <= now) {
       return { kind: 'expired', locale };
     }
@@ -162,17 +187,49 @@ export async function consumeNonce(t: TenantFacts, sessionId: string, nonce: str
       },
     };
   }));
+  if (ended) realtime.sessionChanged(t.tenantId, sessionId);
+  return out;
 }
 
-/** A new download nonce for a session still acknowledged and not expired (the retry page); null otherwise. */
+/** A new download nonce for a session still acknowledged and not expired, its link not revoked and its profile active
+ *  (the retry page); null otherwise. */
 export async function renewNonce(t: TenantFacts, sessionId: string, actor: DbActor): Promise<string | null> {
   const nonce = newNonce();
-  const n = await asTenant(t.tenantId, actor, () => db('enrollment_sessions')
-    .where({ tenant_id: t.tenantId, id: sessionId, state: 'acknowledged' })
-    .where('expires_at', '>', new Date())
+  const n = await asTenant(t.tenantId, actor, () => db('enrollment_sessions as s')
+    .where({ 's.tenant_id': t.tenantId, 's.id': sessionId, 's.state': 'acknowledged' })
+    .where('s.expires_at', '>', new Date())
+    .whereNotExists(function revoked() {
+      this.select(db.raw('1')).from('enrollment_tokens as t')
+        .whereRaw('t.tenant_id = s.tenant_id AND t.id = s.token_id AND t.revoked_at IS NOT NULL');
+    })
+    .whereExists(function active() {
+      this.select(db.raw('1')).from('enrollment_profiles as p')
+        .whereRaw('p.tenant_id = s.tenant_id AND p.id = s.profile_id AND p.archived_at IS NULL AND p.enabled');
+    })
     .update({ nonce_hash: nonce.hash, nonce_expires_at: new Date(Date.now() + NONCE_TTL_MS), updated_at: new Date() }));
   return Number(n) === 1 ? nonce.value : null;
 }
+
+/**
+ * The withdrawal of a link (revoked) or of a profile (archived, disabled) ends its sessions that have not reached a
+ * device yet (review of lot C1, INT-C1-R2): failed, with the code of the withdrawal; their nonce erased. An Authenticate
+ * that occurred before the withdrawal still finds such a session (findSessionForAuthenticate); a later one does not.
+ * The sessions of a profile: those of a link or an invitation only (an ADE session has no token). The ids ended.
+ */
+export async function endWithdrawnSessions(trx: Knex.Transaction, tenantId: number,
+  of: { tokenId: string } | { profileId: string }): Promise<string[]> {
+  const q = trx('enrollment_sessions').where({ tenant_id: tenantId }).whereIn('state', OPEN_SESSION_STATES as unknown as string[]);
+  if ('tokenId' in of) q.where({ token_id: of.tokenId });
+  else q.where({ profile_id: of.profileId }).whereNotNull('token_id');
+  const ids = await q.orderBy('created_at').forUpdate().pluck('id') as string[];
+  const code = 'tokenId' in of ? 'link_revoked' : 'profile_withdrawn';
+  const ended: string[] = [];
+  for (const id of ids) if (await endSession(trx, tenantId, id, 'failed', code, OPEN_SESSION_STATES)) ended.push(id);
+  return ended;
+}
+
+/** States of a session that has not reached a device (no Authenticate consumed yet). */
+export const OPEN_SESSION_STATES = ['started', 'acknowledged', 'profile_issued', 'certificate_issued'] as const;
 
 /**
  * A session ends without an enrollment (failed, expired): its state, and the use of its link given back, once
@@ -196,7 +253,8 @@ export type IssueOutcome =
   | { kind: 'profile'; body: Buffer; signed: boolean }
   | { kind: 'retry'; nonce: string | null }
   | { kind: 'not_ready'; nonce: string | null }
-  | { kind: 'signing_unavailable' };
+  | { kind: 'signing_unavailable' }
+  | { kind: 'ended' };
 
 /** Whether the platform alert signing.identity_missing is known raised (null: not known since the start). */
 let signingAlert: boolean | null = null;
@@ -271,9 +329,12 @@ export async function issueOtaProfile(t: TenantFacts, s: SessionForDownload, act
     }
     return { kind: 'retry', nonce: await renewNonce(t, s.id, actor).catch(() => null) };
   }
-  await asTenant(t.tenantId, actor, () => db('enrollment_sessions')
+  // The profile is served only if the session is still acknowledged (review of lot C1, INT-C1-R4): ended meanwhile
+  // (its link revoked, its profile withdrawn, expired), the profile is not served; its unused SCEP challenge expires.
+  const moved = await asTenant(t.tenantId, actor, () => db('enrollment_sessions')
     .where({ tenant_id: t.tenantId, id: s.id, state: 'acknowledged' })
     .update({ state: 'profile_issued', state_at: new Date(), challenge_id: challengeId.toLowerCase(), updated_at: new Date() }));
   realtime.sessionChanged(t.tenantId, s.id);
+  if (Number(moved) !== 1) return { kind: 'ended' };
   return { kind: 'profile', body, signed };
 }

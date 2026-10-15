@@ -4,6 +4,7 @@ import { db } from '../../db';
 import { forEachTenant } from '../../db/tenantContext';
 import { JobError, registerJob, type JobContext, type JobResult } from '../../jobs';
 import { realtime } from '../realtime';
+import { CERTIFIED_GRACE_MS } from '../../mdm/registry/authenticateRules';
 import { endSession } from './flow';
 
 // =============================================================================
@@ -12,12 +13,13 @@ import { endSession } from './flow';
 // (one hour for OTA) expire and give the use of their link back. A session
 // whose device got its identity (certificate_issued) is left one hour more:
 // its Authenticate may still be waiting in the outbox (an expired session
-// revived by its Authenticate takes its use again: devices/lifecycle.ts).
+// revived by an Authenticate that occurred before its expiry takes its use
+// again, refused when the use served another device: devices/lifecycle.ts).
 // Sessions that reached a device (authenticated) never expire here.
 // =============================================================================
 
 const EXPIRABLE = ['started', 'acknowledged', 'profile_issued'] as const;
-const CERTIFIED_GRACE_MS = 60 * 60_000;
+// The grace of a certified session is the one findSessionForAuthenticate honours (review of lot C1, INT-C1-R1).
 const SLICE = 500;
 
 async function expireSessions(ctx: JobContext<Record<string, never>>): Promise<JobResult> {

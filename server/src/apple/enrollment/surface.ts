@@ -143,6 +143,9 @@ export function createAppleDeviceSurface(): Router {
       case 'not_ready':
         sendPage(res, 503, messagePage(tx, tx.notReadyTitle, fill(tx.notReadyBody, { org: t.name }), retryLink(out.nonce)));
         return;
+      case 'ended':
+        invalidLink(req, res, s.locale);
+        return;
       case 'signing_unavailable':
         sendPage(res, 503, messagePage(tx, tx.signingTitle, tx.signingBody));
         return;

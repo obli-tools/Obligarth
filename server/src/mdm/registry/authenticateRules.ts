@@ -40,7 +40,25 @@ export interface SessionFacts {
    *  the serial number of the Authenticate against it). */
   machineInfoId: string | null;
   state: string;
+  /** The link or invitation of the session (null: none, e.g. ADE). */
+  tokenId: string | null;
+  /** The session had ended (expired, or failed by the withdrawal of its link or profile) when this Authenticate was
+   *  consumed, but the Authenticate occurred while it was still valid: it revives the session, taking its use again. */
+  ended: boolean;
 }
+
+/** A session that ended (its link's use given back) before the Authenticate occurred: it vouches for nothing. */
+export interface EndedSession {
+  endedSessionId: string;
+}
+
+/** A session that reached certificate_issued expires one hour after its lifetime (enrollment.sessions-expire): its
+ *  Authenticate may still wait in the outbox. */
+export const CERTIFIED_GRACE_MS = 60 * 60_000;
+
+/** Failure codes of a session ended by the withdrawal of its link (revoked) or of its profile (archived, disabled):
+ *  an Authenticate that occurred before the withdrawal still finds it (review of lot C1, INT-C1-R2). */
+export const WITHDRAWAL_CODES: readonly string[] = ['link_revoked', 'profile_withdrawn'];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA256_RE = /^[0-9a-f]{64}$/;
@@ -64,17 +82,25 @@ function sessionFactsOf(r: Record<string, any>): SessionFacts | null {
     serialNumber: typeof r.serial_number === 'string' && r.serial_number ? r.serial_number : null,
     machineInfoId: typeof r.machine_info_id === 'string' && r.machine_info_id ? r.machine_info_id : null,
     state: r.state,
+    tokenId: typeof r.token_id === 'string' && r.token_id ? r.token_id : null,
+    ended: r.state === 'expired' || r.state === 'failed',
   };
 }
 
 /**
  * The enrollment session of an Authenticate: by identity.session_ref, then by the SCEP challenge, then by
  * the fingerprint of the certificate (posed by scep.certificate_issued). Sessions of `tenantId` only; a
- * session marked failed (identity mismatch) never vouches for a device. null: no session (DM25: no record,
- * an alert, the enrollment stays at apple-edge until an operator decides).
+ * session marked failed (identity mismatch, signing unavailable) never vouches for a device. null: no session
+ * (DM25: no record, an alert, the enrollment stays at apple-edge until an operator decides).
+ * A session that ended without an enrollment gave its link's use back (enrollment.sessions-expire, the
+ * withdrawal of its link or profile): it vouches only for an Authenticate that occurred (apple-edge's
+ * occurredAt) before its end — its expiry (plus CERTIFIED_GRACE_MS once its identity was issued), the moment of
+ * the withdrawal — while its link was not revoked nor its profile archived; otherwise { endedSessionId }
+ * (review of lot C1, INT-C1-R1: a single-use link never enrolls a second device through a session revived
+ * late). onAuthenticate takes the use again and refuses the revival when it is gone.
  */
 export async function findSessionForAuthenticate(trx: Knex.Transaction, tenantId: number,
-  f: AuthenticateFacts): Promise<SessionFacts | null> {
+  f: AuthenticateFacts): Promise<SessionFacts | EndedSession | null> {
   const lookups: Array<[string, string]> = [];
   if (f.sessionRef && UUID_RE.test(f.sessionRef)) lookups.push(['s.id', f.sessionRef.toLowerCase()]);
   if (f.challengeId && UUID_RE.test(f.challengeId)) lookups.push(['s.challenge_id', f.challengeId.toLowerCase()]);
@@ -84,15 +110,45 @@ export async function findSessionForAuthenticate(trx: Knex.Transaction, tenantId
       .join('enrollment_profiles as p', function joinProfile() {
         this.on('p.id', '=', 's.profile_id').andOn('p.tenant_id', '=', 's.tenant_id');
       })
+      .leftJoin('enrollment_tokens as t', function joinToken() {
+        this.on('t.id', '=', 's.token_id').andOn('t.tenant_id', '=', 's.tenant_id');
+      })
       .where('s.tenant_id', tenantId)
       .where(column, value)
-      .whereNot('s.state', 'failed')
+      .where((q) => { q.whereNot('s.state', 'failed').orWhereIn('s.failure_code', WITHDRAWAL_CODES as string[]); })
       .orderBy('s.created_at', 'desc')
+      // The session's row only, locked: a concurrent sweep (enrollment.sessions-expire) or withdrawal either ends it
+      // before (read here as ended) or finds it authenticated after; never a use given back under a revived session.
+      // Lock order: the session, then its link (as endSession).
+      .forUpdate('s')
       .first('s.id', 's.profile_id', 's.method', 's.ownership', 's.end_user_id', 's.serial_number', 's.machine_info_id',
-        's.state', 'p.default_group_id', 'p.settings') as Record<string, any> | undefined;
-    if (row) return sessionFactsOf(row);
+        's.state', 's.state_at', 's.expires_at', 's.cert_sha256', 's.token_id', 't.revoked_at', 'p.archived_at',
+        'p.default_group_id', 'p.settings') as Record<string, any> | undefined;
+    if (!row) continue;
+    if ((row.state === 'expired' || row.state === 'failed') && !endedInTime(row, f.occurredAt)) return { endedSessionId: String(row.id) };
+    return sessionFactsOf(row);
   }
   return null;
+}
+
+const msOf = (v: unknown): number => (v instanceof Date ? v.getTime() : v ? new Date(String(v)).getTime() : Number.NaN);
+
+/** An ended session vouches for an Authenticate that occurred before its end, its link and profile still valid then. */
+function endedInTime(r: Record<string, any>, occurredAt: Date): boolean {
+  const at = occurredAt instanceof Date ? occurredAt.getTime() : Number.NaN;
+  if (!Number.isFinite(at)) return false;
+  const endedAt = msOf(r.state_at);
+  let deadline = Number.isFinite(endedAt) ? endedAt : Number.NEGATIVE_INFINITY;
+  if (r.state === 'expired') {
+    const expires = msOf(r.expires_at) + (r.cert_sha256 ? CERTIFIED_GRACE_MS : 0);
+    deadline = Math.min(deadline, Number.isFinite(expires) ? expires : Number.NEGATIVE_INFINITY);
+  }
+  if (!(at < deadline)) return false;
+  const revokedAt = msOf(r.revoked_at);
+  if (Number.isFinite(revokedAt) && revokedAt <= at) return false;
+  const archivedAt = msOf(r.archived_at);
+  if (Number.isFinite(archivedAt) && archivedAt <= at) return false;
+  return true;
 }
 
 /**

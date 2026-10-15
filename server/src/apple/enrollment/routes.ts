@@ -10,6 +10,7 @@ import { audit } from '../../audit';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
+import { realtime } from '../realtime';
 import { appleTenants } from '../tenants/registry';
 import { isMailAddress, sendEnrollmentMail } from './mail';
 import {
@@ -140,7 +141,9 @@ export function createEnrollmentRouter(): Router {
     const tenantId = req.tenantId!;
     const id = idParam(req);
     const p = checked(req.body);
-    const version = await db.transaction((trx) => updateProfile(trx, tenantId, req.session.userId!, id, p));
+    const ended: string[] = [];
+    const version = await db.transaction((trx) => updateProfile(trx, tenantId, req.session.userId!, id, p, ended));
+    realtime.sessionChanged(tenantId, ...ended);
     await audit.append({
       tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id },
       details: { method: p.method, ownership: p.ownership, version },
@@ -151,9 +154,11 @@ export function createEnrollmentRouter(): Router {
   router.post('/profiles/:id/archive', h(async (req, res) => {
     const tenantId = req.tenantId!;
     const id = idParam(req);
-    const version = await db.transaction((trx) => archiveProfile(trx, tenantId, req.session.userId!, id));
+    const ended: string[] = [];
+    const version = await db.transaction((trx) => archiveProfile(trx, tenantId, req.session.userId!, id, ended));
+    realtime.sessionChanged(tenantId, ...ended);
     await audit.append({
-      tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id }, details: { archived: true, version },
+      tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id }, details: { archived: true, version, endedSessions: ended.length },
     }, await audit.fromRequest(req, tenantId));
     res.json({ data: await getProfile(db, tenantId, id) });
   }));
@@ -218,12 +223,13 @@ export function createEnrollmentRouter(): Router {
       if (r && !r.already) {
         await audit.appendInTx(trx, {
           tenantId, action: 'apple.enrollment_token_revoked', target: { type: 'enrollment_token', id: id.toLowerCase() },
-          details: { kind: r.kind, prefix: r.prefix, profileId: r.profileId },
+          details: { kind: r.kind, prefix: r.prefix, profileId: r.profileId, endedSessions: r.endedSessions.length },
         }, auditCtx);
       }
       return r;
     });
     if (!out) throw new AppError(404, 'Not found', 'enrollmentTokenNotFound');
+    realtime.sessionChanged(tenantId, ...out.endedSessions);
     res.json({ data: { id: id.toLowerCase(), revoked: true } });
   }));
 

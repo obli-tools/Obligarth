@@ -97,6 +97,9 @@ export interface AuthenticateResult {
    *  the reverse), whose record (recordId) is not written (review of lot B2, MDM-B2-R13); the enrollment is released
    *  in both cases. */
   mismatch?: { field: 'udid'; recordId: number };
+  /** no_session: the session found had ended (its link's use given back) before the Authenticate occurred, or its use
+   *  served another device since (review of lot C1, INT-C1-R1); the enrollment is released. */
+  ended?: { sessionId: string };
 }
 
 export interface TokenUpdateFacts {
@@ -143,6 +146,16 @@ async function satelliteOf(trx: Knex.Transaction, tenantId: number, enrollmentId
  *  ordered by the event's time and id, raiseCountedInTx). */
 async function raiseUnknownSession(trx: Knex.Transaction, tenantId: number, f: AuthenticateFacts): Promise<void> {
   await raiseCountedInTx(trx, tenantId, 'enrollment.unknown_session', { at: f.occurredAt, eventId: f.eventId });
+}
+
+/** Whether the link of an ended session still has a use to give its revival (the link locked for the event). A
+ *  session without a link (ADE), or whose link no longer exists, takes none. */
+async function useAvailable(trx: Knex.Transaction, tenantId: number, tokenId: string | null): Promise<boolean> {
+  if (!tokenId) return true;
+  const t = await trx('enrollment_tokens').where({ tenant_id: tenantId, id: tokenId }).forUpdate()
+    .first('uses', 'max_uses') as { uses: number; max_uses: number } | undefined;
+  if (!t) return true;
+  return Number(t.uses) < Number(t.max_uses);
 }
 
 /** The columns of the record a new cycle writes (§4.5 rule 3, §10.4): from the session and the message. The
@@ -285,10 +298,22 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
   }
 
   // Rule 1: the session (DM25). Rule 2: barrier 2.
-  const session = await findSessionForAuthenticate(trx, tenantId, f);
-  if (!session) {
+  const found0 = await findSessionForAuthenticate(trx, tenantId, f);
+  if (!found0) {
     await raiseUnknownSession(trx, tenantId, f);
     return detached ? { deviceId: null, outcome: 'no_session', detached } : { deviceId: null, outcome: 'no_session' };
+  }
+  // A session that ended (its link's use given back) vouches only for an Authenticate that occurred while it was
+  // valid, and only if its use can be taken again (review of lot C1, INT-C1-R1): the use given back may have served
+  // another device since; a single-use link never enrolls two. Refused: no record, the alert of an unknown session,
+  // and the enrollment released at apple-edge (the device holds an identity its session no longer vouches for).
+  const session = 'endedSessionId' in found0 ? null : found0;
+  if (!session || (session.ended && !(await useAvailable(trx, tenantId, session.tokenId)))) {
+    await raiseUnknownSession(trx, tenantId, f);
+    await enrollmentReleaseJob().sendInTx(trx, { tenantId, eventId: f.eventId },
+      { id: jobIdFor('mdm.enrollment-release', f.eventId), tenantId });
+    const ended = { sessionId: session ? session.sessionId : (found0 as { endedSessionId: string }).endedSessionId };
+    return detached ? { deviceId: null, outcome: 'no_session', detached, ended } : { deviceId: null, outcome: 'no_session', ended };
   }
   const mode = managementModeFor(f, session);
   if (!mode) {
@@ -396,17 +421,16 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     enrollmentProfileId: session.profileId, enrollmentSessionId: session.sessionId, endUserId: session.endUserId,
     certSha256: f.certSha256, startedAt: f.occurredAt,
   });
-  // The session: authenticated (unless further), its device and certificate. A session expired meanwhile (its
-  // Authenticate waited in the outbox beyond its lifetime) gave its link's use back: it takes it again.
-  const revived = await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId, state: 'expired' })
-    .first('token_id') as { token_id: string | null } | undefined;
-  if (revived?.token_id) {
-    await trx('enrollment_tokens').where({ tenant_id: tenantId, id: revived.token_id }).whereRaw('uses < max_uses')
+  // The session: authenticated (unless further), its device and certificate. A session ended meanwhile (its
+  // Authenticate, occurred in time, waited in the outbox beyond its end) gave its link's use back: it takes it again
+  // (available: checked above under the lock of the link).
+  if (session.ended && session.tokenId) {
+    await trx('enrollment_tokens').where({ tenant_id: tenantId, id: session.tokenId }).whereRaw('uses < max_uses')
       .update({ uses: trx.raw('uses + 1'), last_used_at: trx.fn.now() });
   }
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .whereNotIn('state', ['authenticated', 'enrolled'])
-    .update({ state: 'authenticated', state_at: f.occurredAt, updated_at: new Date() });
+    .update({ state: 'authenticated', state_at: f.occurredAt, failure_code: null, updated_at: new Date() });
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .update({ device_id: deviceId, cert_sha256: trx.raw('COALESCE(cert_sha256, ?)', [f.certSha256]), updated_at: new Date() });
   // The device of Apple Business of the serial number: by the verified serial number only (an ADE enrollment),

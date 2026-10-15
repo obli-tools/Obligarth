@@ -7,6 +7,7 @@ import type {
 import { ENROLLMENT_LIMITS } from '@obligarth/shared';
 import { config } from '../../config';
 import { AppError } from '../../middleware/errorHandler';
+import { endWithdrawnSessions } from './flow';
 import type { CheckedProfile } from './settings';
 import { invitationTtlOf, linkDefaults } from './settings';
 import {
@@ -93,10 +94,12 @@ export async function createProfile(trx: Knex.Transaction, tenantId: number, use
   }
 }
 
-/** A change of a profile (the method never changes); version + 1. Null: not found. */
-export async function updateProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string, p: CheckedProfile): Promise<number> {
-  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forUpdate().first('id', 'method', 'archived_at', 'is_default') as
-    { id: string; method: string; archived_at: Date | null; is_default: boolean } | undefined;
+/** A change of a profile (the method never changes); version + 1. Disabled: its sessions not yet on a device end
+ *  (review of lot C1, INT-C1-R2), their ids pushed to endedSessions. */
+export async function updateProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string, p: CheckedProfile,
+  endedSessions: string[] = []): Promise<number> {
+  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forUpdate().first('id', 'method', 'archived_at', 'is_default', 'enabled') as
+    { id: string; method: string; archived_at: Date | null; is_default: boolean; enabled: boolean } | undefined;
   if (!cur) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   if (cur.archived_at) throw new AppError(409, 'This enrollment profile is archived', 'enrollmentProfileArchived');
   if (cur.method !== p.method) throw new AppError(400, 'The method of an enrollment profile cannot change', 'enrollmentMethodFixed');
@@ -114,14 +117,17 @@ export async function updateProfile(trx: Knex.Transaction, tenantId: number, use
       locale: p.locale, settings: JSON.stringify(p.settings), is_default: p.isDefault, enabled: p.enabled,
       version: trx.raw('version + 1'), updated_by: userId, updated_at: new Date(),
     }, ['version']) as Array<{ version: number }>;
+    if (!p.enabled) endedSessions.push(...await endWithdrawnSessions(trx, tenantId, { profileId: id }));
     return Number(row.version);
   } catch (err) {
     return profileDbError(err);
   }
 }
 
-/** Archives a profile (never deleted); refused for the default ADE profile while another is not designated. */
-export async function archiveProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string): Promise<number> {
+/** Archives a profile (never deleted); refused for the default ADE profile while another is not designated. Its
+ *  sessions not yet on a device end (review of lot C1, INT-C1-R2), their ids pushed to endedSessions. */
+export async function archiveProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string,
+  endedSessions: string[] = []): Promise<number> {
   const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forUpdate().first('archived_at', 'is_default', 'version') as
     { archived_at: Date | null; is_default: boolean; version: number } | undefined;
   if (!cur) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
@@ -129,6 +135,7 @@ export async function archiveProfile(trx: Knex.Transaction, tenantId: number, us
   if (cur.is_default) throw new AppError(409, 'Designate another default ADE profile first', 'enrollmentDefaultRequired');
   const [row] = await trx('enrollment_profiles').where({ tenant_id: tenantId, id })
     .update({ archived_at: new Date(), version: trx.raw('version + 1'), updated_by: userId, updated_at: new Date() }, ['version']) as Array<{ version: number }>;
+  endedSessions.push(...await endWithdrawnSessions(trx, tenantId, { profileId: id }));
   return Number(row.version);
 }
 
@@ -259,16 +266,21 @@ export async function listTokens(q: Q, tenantId: number, f: { profileId?: string
   }));
 }
 
-/** Revokes a link or an invitation (idempotent). The facts of the audit entry; null: not found. */
+/** Revokes a link or an invitation (idempotent). Its sessions not yet on a device end (review of lot C1, INT-C1-R2):
+ *  their nonce no longer serves the profile, a later Authenticate finds no session. The facts of the audit entry; null:
+ *  not found. */
 export async function revokeToken(trx: Knex.Transaction, tenantId: number, userId: number, id: string):
-  Promise<{ kind: string; prefix: string; profileId: string; already: boolean } | null> {
+  Promise<{ kind: string; prefix: string; profileId: string; already: boolean; endedSessions: string[] } | null> {
+  // The sessions first, then the link: the lock order of endSession (a session, then its link), shared with the sweep
+  // and the outbox consumer (no deadlock).
+  const endedSessions = await endWithdrawnSessions(trx, tenantId, { tokenId: id });
   const cur = await trx('enrollment_tokens').where({ tenant_id: tenantId, id }).forUpdate().first('kind', 'prefix', 'profile_id', 'revoked_at') as
     { kind: string; prefix: string; profile_id: string; revoked_at: Date | null } | undefined;
   if (!cur) return null;
   if (!cur.revoked_at) {
     await trx('enrollment_tokens').where({ tenant_id: tenantId, id }).update({ revoked_at: new Date(), revoked_by: userId });
   }
-  return { kind: cur.kind, prefix: cur.prefix, profileId: String(cur.profile_id), already: Boolean(cur.revoked_at) };
+  return { kind: cur.kind, prefix: cur.prefix, profileId: String(cur.profile_id), already: Boolean(cur.revoked_at), endedSessions };
 }
 
 const SESSION_PAGE = 100;
