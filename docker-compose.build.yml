@@ -245,6 +245,10 @@ services:
       APPLE_EDGE_DDM_HMAC_KEY_FILE: /run/secrets/apple_edge_ddm_hmac
       MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
       OUTBOX_CONSUMER: ${OUTBOX_CONSUMER:-off}
+      # Enrollment: the default employee notice and privacy rules (laboratory, until
+      # USR-01 and CNF-02), unsigned enrollment profiles until the pilot — see .env.example
+      APPLE_ALLOW_DEFAULT_NOTICE: ${APPLE_ALLOW_DEFAULT_NOTICE:-false}
+      APPLE_REQUIRE_SIGNED_PROFILES: ${APPLE_REQUIRE_SIGNED_PROFILES:-false}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}

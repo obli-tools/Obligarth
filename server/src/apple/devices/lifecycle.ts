@@ -396,7 +396,14 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     enrollmentProfileId: session.profileId, enrollmentSessionId: session.sessionId, endUserId: session.endUserId,
     certSha256: f.certSha256, startedAt: f.occurredAt,
   });
-  // The session: authenticated (unless further), its device and certificate.
+  // The session: authenticated (unless further), its device and certificate. A session expired meanwhile (its
+  // Authenticate waited in the outbox beyond its lifetime) gave its link's use back: it takes it again.
+  const revived = await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId, state: 'expired' })
+    .first('token_id') as { token_id: string | null } | undefined;
+  if (revived?.token_id) {
+    await trx('enrollment_tokens').where({ tenant_id: tenantId, id: revived.token_id }).whereRaw('uses < max_uses')
+      .update({ uses: trx.raw('uses + 1'), last_used_at: trx.fn.now() });
+  }
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .whereNotIn('state', ['authenticated', 'enrolled'])
     .update({ state: 'authenticated', state_at: f.occurredAt, updated_at: new Date() });

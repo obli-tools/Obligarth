@@ -41,6 +41,7 @@ import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
 import { createAppleDdmRouter } from '../apple/ddm/routes';
+import { createEnrollmentRouter } from '../apple/enrollment';
 import { createMdmRouter } from '../mdm';
 
 const router = Router();
@@ -94,6 +95,9 @@ tenantRouter.use('/restrictions', restrictionRoutes);
 // Guards against mass erasure (audit-durci §10.11): guarded actions, freeze,
 // settings, designated approvers.
 tenantRouter.use('/guard',       createGuardRouter());
+// Enrollment profiles, links, invitations and sessions (integration-apple-edge §10.9; apple/enrollment/routes.ts),
+// before the other /apple routers.
+tenantRouter.use('/apple/enrollment', createEnrollmentRouter());
 // The MDM command queue of the console (integration-apple-edge §8.12): actions and queue of a device, commands,
 // cancellation, relaunch, timeline (apple/commands/routes.ts).
 tenantRouter.use('/apple',       createAppleCommandsRouter());

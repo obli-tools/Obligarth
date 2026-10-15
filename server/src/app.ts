@@ -24,6 +24,7 @@ import { deviceKeySession } from './middleware/deviceKeySession';
 import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
 import { createDdmRelayRouter } from './apple/ddm/relay';
+import { createAppleDeviceSurface } from './apple/enrollment';
 import { jobs } from './jobs';
 import { logger } from './utils/logger';
 
@@ -80,6 +81,11 @@ export function createApp() {
       permittedCrossDomainPolicies: { permittedPolicies: 'none' },
     }),
   );
+  // Device surface of the brain (/t/<key>/enroll…: enrollment pages and profiles; integration-apple-edge §10.8,
+  // I5): right after helmet, before cors, the parsers, the cookies, the session, the API limiter and
+  // deviceKeySession: its own parsers, limits and limiters, no session, no cookie; it sets its own CSP on its
+  // pages. Reached through the edge proxy (mdm.<domain>) only.
+  app.use('/t/:key', createAppleDeviceSurface());
   app.use(
     cors({
       origin: config.clientOrigin,

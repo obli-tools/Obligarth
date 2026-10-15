@@ -2,7 +2,7 @@ import './env';
 import path from 'node:path';
 import { readJobsConfig } from './jobs/config';
 import { readOutboxConfig } from './jobs/outbox/config';
-import { appleStartupErrors, readAppleConfig } from './apple/config';
+import { appleStartupErrors, defaultNoticeAllowed, readAppleConfig } from './apple/config';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
 // at start when invalid (startupConfigErrors), in every environment.
@@ -269,6 +269,12 @@ export function startupConfigErrors(): string[] {
   errors.push(...jobsEnv.errors);
   errors.push(...outboxEnv.errors);
   errors.push(...appleEnv.errors, ...appleStartupErrors(config.apple));
+  // The employee notice and the privacy rules of the enrollment are the laboratory's defaults until USR-01 and
+  // CNF-02 replace them (integration-apple-edge §10.7): refused in production unless explicitly allowed.
+  if (config.apple.mode === 'on' && !defaultNoticeAllowed(config.apple, config.nodeEnv)) {
+    errors.push('APPLE_EDGE_MODE=on serves enrollments with the default employee notice and privacy rules (laboratory): ' +
+      'set APPLE_ALLOW_DEFAULT_NOTICE=true to accept them until the notice and the privacy profiles of the tenants exist.');
+  }
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
     errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
       'outside development, the migrations run in the server-migrate service.');
