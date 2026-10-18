@@ -18,6 +18,7 @@ import {
   revokeToken, surfaceBase, updateProfile,
 } from './service';
 import { checkProfile, ProfileBody, ProfileRuleError } from './settings';
+import { listAdeDevices, requestAdeProfilesSync, setWantedProfile } from './adeProfiles';
 
 // =============================================================================
 // Console API of the enrollment (docs: integration-apple-edge §10.9), mounted
@@ -31,11 +32,14 @@ import { checkProfile, ProfileBody, ProfileRuleError } from './settings';
 //   GET  /tokens                          ?profileId=&kind=&state=: prefix, uses, expiry, state; never the token
 //   POST /tokens/:id/revoke               audit apple.enrollment_token_revoked (in the transaction)
 //   GET  /sessions                        ?state=&cursor=
+//   GET  /ade-devices                     ?q=&cursor=&removed=1: the devices of Apple Business (lot C2)
+//   PUT  /ade-devices/:id/profile         { profileId | null }: the enrollment profile of the device (§10.6)
 // A Managed Apple Account is shown to the tenant's administrators only. A
 // link or an invitation is e-mailed when a recipient is given and a channel
 // is configured (decision of 15/10): its outcome is in the answer.
 // The ADE profiles are defined at Apple by enrollment.ade-profiles-sync (lot
-// C2): their version tells it what changed.
+// C2), sent after the saving or the archiving of an ADE profile and the choice
+// of a device's profile: their version tells it what changed.
 // =============================================================================
 
 const manage = requireTenantCapability('mdm.enrollment.manage');
@@ -70,6 +74,12 @@ const TokensQuery = z.object({
   state: z.enum(ENROLLMENT_TOKEN_STATES).optional(),
 }).strict();
 const SessionsQuery = z.object({ state: z.enum(ENROLLMENT_SESSION_STATES).optional(), cursor: z.string().max(40).optional() }).strict();
+const AdeDevicesQuery = z.object({
+  q: z.string().trim().max(64).optional(),
+  cursor: z.string().regex(/^[1-9][0-9]{0,17}$/).optional(),
+  removed: z.enum(['0', '1']).optional(),
+}).strict();
+const AdeDeviceProfileBody = z.object({ profileId: z.string().regex(UUID_RE).nullable() }).strict();
 
 function parse<S extends z.ZodTypeAny>(schema: S, v: unknown): z.infer<S> {
   const r = schema.safeParse(v ?? {});
@@ -134,6 +144,7 @@ export function createEnrollmentRouter(): Router {
       tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id },
       details: { created: true, method: p.method, ownership: p.ownership, version: 1 },
     }, await audit.fromRequest(req, tenantId));
+    if (p.method === 'ade') await requestAdeProfilesSync(tenantId);
     res.status(201).json({ data: await getProfile(db, tenantId, id) });
   }));
 
@@ -148,6 +159,8 @@ export function createEnrollmentRouter(): Router {
       tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id },
       details: { method: p.method, ownership: p.ownership, version },
     }, await audit.fromRequest(req, tenantId));
+    // An ADE profile changed (or another took the default role): defined again at Apple.
+    if (p.method === 'ade' || p.isDefault) await requestAdeProfilesSync(tenantId);
     res.json({ data: await getProfile(db, tenantId, id) });
   }));
 
@@ -160,6 +173,8 @@ export function createEnrollmentRouter(): Router {
     await audit.append({
       tenantId, action: 'apple.enrollment_profile_saved', target: { type: 'enrollment_profile', id }, details: { archived: true, version, endedSessions: ended.length },
     }, await audit.fromRequest(req, tenantId));
+    // The devices that wanted an archived ADE profile get the default one back.
+    await requestAdeProfilesSync(tenantId);
     res.json({ data: await getProfile(db, tenantId, id) });
   }));
 
@@ -237,6 +252,27 @@ export function createEnrollmentRouter(): Router {
     const q = parse(SessionsQuery, req.query);
     const page = await listSessions(db, req.tenantId!, q, await isTenantAdmin(req));
     res.json({ data: page.items, nextCursor: page.nextCursor });
+  }));
+
+  router.get('/ade-devices', h(async (req, res) => {
+    const q = parse(AdeDevicesQuery, req.query);
+    const page = await listAdeDevices(db, req.tenantId!, { q: q.q || undefined, cursor: q.cursor ? Number(q.cursor) : undefined, removed: q.removed === '1' });
+    res.json({ data: page.items, nextCursor: page.nextCursor });
+  }));
+
+  router.put('/ade-devices/:id/profile', h(async (req, res) => {
+    const tenantId = req.tenantId!;
+    const id = String(req.params.id ?? '');
+    if (!/^[1-9][0-9]{0,17}$/.test(id)) throw new AppError(404, 'ADE device not found', 'adeDeviceNotFound');
+    const b = parse(AdeDeviceProfileBody, req.body);
+    const profileId = b.profileId ? b.profileId.toLowerCase() : null;
+    const out = await db.transaction((trx) => setWantedProfile(trx, tenantId, Number(id), profileId));
+    await audit.append({
+      tenantId, action: 'apple.ade_device_profile_set', target: { type: 'ade_device', id },
+      details: { profileId, previousProfileId: out.previous, adeTokenId: out.adeTokenId },
+    }, await audit.fromRequest(req, tenantId));
+    await requestAdeProfilesSync(tenantId);
+    res.json({ data: { id: Number(id), wantedProfileId: profileId } });
   }));
 
   return router;

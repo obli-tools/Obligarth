@@ -121,6 +121,24 @@ async function setupTimeout(ctx: JobContext<Timeout>): Promise<JobResult> {
   return { output: { plan: outcome } };
 }
 
+/**
+ * The name the enrollment profile gives the device (settings.deviceNameTemplate, §10.1, §8.9): {serial} its
+ * serial number, {model} its model, {n} the number of its record; null without template. Control characters
+ * removed, 255 characters at most.
+ */
+export async function deviceNameOf(trx: Knex.Transaction, tenantId: number, deviceId: number, profileId: string | null): Promise<string | null> {
+  if (!profileId) return null;
+  const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id: profileId }).first('settings') as { settings: Record<string, unknown> | null } | undefined;
+  const tpl = typeof p?.settings?.deviceNameTemplate === 'string' ? p.settings.deviceNameTemplate : '';
+  if (!tpl.trim()) return null;
+  const d = await trx('devices').where({ tenant_id: tenantId, id: deviceId }).first('serial_number', 'model_name', 'model') as
+    { serial_number: string | null; model_name: string | null; model: string | null } | undefined;
+  const values: Record<string, string> = { serial: d?.serial_number ?? '', model: d?.model_name ?? d?.model ?? '', n: String(deviceId) };
+  const name = tpl.replace(/\{(serial|model|n)\}/g, (_m, k: string) => values[k] ?? '')
+    .replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 255);
+  return name || null;
+}
+
 let registered = false;
 
 /** The setup plan's runner, its hook, its core contributor and its timeout job (registerAppleModule). */
@@ -129,16 +147,24 @@ export function registerSetup(): void {
   registered = true;
   registerSetupRunner(runSetup);
   // Core: the inventory the console shows first, and for a company device the activation lock of the organisation
-  // (conception §5.4.2: allowed while supervised, then its bypass code). The device name of the enrollment profile
-  // comes with the enrollment profiles (lot C2); the first DDM synchronisation is the DDM engine's contributor.
+  // (conception §5.4.2: allowed while supervised, then its bypass code), with the device name of the enrollment
+  // profile (lot C2); the first DDM synchronisation is the DDM engine's contributor.
   registerSetupContributor({
     name: 'core',
-    async contribute(_trx, c) {
+    async contribute(trx, c) {
       const out: SetupCommand[] = [{ requestType: 'DeviceInformation' }, { requestType: 'SecurityInfo' }];
-      if (c.supervised && (c.ownership === 'corporate' || c.ownership === 'corporate_personal')) {
-        out.push({ requestType: 'Settings', params: { items: [{ item: 'MDMOptions', activationLockAllowedWhileSupervised: true }] } });
-        out.push({ requestType: 'ActivationLockBypassCode' });
+      const company = c.ownership === 'corporate' || c.ownership === 'corporate_personal';
+      // One Settings command (the bus keeps one open per type and device): the device name of the enrollment
+      // profile's template (lot C2: {serial}, {model}, {n}, never a value of the employee), then the activation
+      // lock of the organisation.
+      const items: Array<Record<string, unknown>> = [];
+      if (c.supervised && company) {
+        const name = await deviceNameOf(trx, c.tenantId, c.deviceId, c.profileId);
+        if (name) items.push({ item: 'DeviceName', deviceName: name });
+        items.push({ item: 'MDMOptions', activationLockAllowedWhileSupervised: true });
       }
+      if (items.length > 0) out.push({ requestType: 'Settings', params: { items } });
+      if (c.supervised && company) out.push({ requestType: 'ActivationLockBypassCode' });
       return out;
     },
   });

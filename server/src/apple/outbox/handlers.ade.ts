@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import { registerOutboxHandler, type OutboxHandlerContext } from '../../jobs';
 import { raiseCountedInTx, raiseInTx, resolveInTx } from '../alerts/service';
 import { privacyRulesFor } from '../devices/privacy';
+import { sendAdeProfilesSyncInTx } from '../enrollment/adeProfiles';
 import { recordDeadline } from '../integrations/deadlines';
 import { appleMetrics } from '../metrics';
 import { realtime } from '../realtime';
@@ -14,7 +15,8 @@ import { P, type PayloadOf } from './schemas';
 // with the token at apple-edge, lot C3): an event of a server the brain does
 // not mirror changes nothing (counted). The mirror is monotone by state_at:
 //   ade.token_activated     mirror 'active' (name, UUID, expiry), errors reset;
-//                           ade_token deadline; ADE alerts resolved; audit
+//                           ade_token deadline; ADE alerts resolved; audit;
+//                           enrollment.ade-profiles-sync (lot C2: §10.6)
 //   ade.devices             apple_ade_devices in one statement (the latest
 //                           op_date wins; 'deleted' → removed_at); hardware
 //                           identifiers kept per the privacy rules; the mirror's
@@ -88,6 +90,8 @@ async function handleTokenActivated(ctx: Ctx<'ade.token_activated'>): Promise<vo
   if (notAfter) await recordDeadline(trx, tenantId, { kind: 'ade_token', subjectRef: m.id, label: serverName, notAfter });
   for (const kind of ['ade.token_error', 'ade.terms_not_signed', 'ade.token_expired'] as const) await resolveInTx(trx, tenantId, kind, m.id);
   ctx.audit({ tenantId, action: 'integration.ade_token_activated', target: { type: 'ade_token', id: m.id }, details: { renewed: m.state !== 'awaiting_token' } });
+  // The ADE profiles of the tenant are defined on this server (§10.6), in the batch's transaction.
+  await sendAdeProfilesSyncInTx(trx, tenantId);
   ctx.afterCommit(() => realtime.integrationChanged(tenantId, 'ade', 'deadlines'));
 }
 

@@ -275,26 +275,47 @@ async function signingAlertState(open: boolean, actor: DbActor): Promise<void> {
   }
 }
 
+/** What the composition and the signature of a profile gave. */
+export type SignOutcome =
+  | { kind: 'ok'; body: Buffer; signed: boolean; challengeId: string }
+  | { kind: 'not_ready' }
+  | { kind: 'signing_unavailable' }
+  | { kind: 'retry'; code: string | null };
+
+/** The session a profile is composed for. */
+export interface SessionToSign {
+  id: string;
+  method: EnrollmentProfileMethod;
+  ownership: Ownership;
+  locale: SurfaceLocale;
+}
+
+/** How the profile of a session is composed: the lifetime of its SCEP challenge, the MachineInfo it is bound to
+ *  (ADE), the Managed Apple Account of an account-driven enrollment (BYOD). */
+export interface SignOptions {
+  ttlSeconds: number;
+  machineInfoId?: string;
+  byod?: { managedAppleId: string };
+}
+
 /**
- * Step 3, second part, outside any transaction: the enrollment configuration (a cached configuration without
- * topic is read again: a push certificate may have just been imported), the SCEP challenge bound to the
- * session, the composition and the signature (unsigned while no identity is imported, unless
- * APPLE_REQUIRE_SIGNED_PROFILES), then the session moves to profile_issued.
+ * Outside any transaction: the enrollment configuration (a cached configuration without topic is read again: a
+ * push certificate may have just been imported), the SCEP challenge bound to the session (and to its MachineInfo
+ * for ADE), the composition and the signature (unsigned while no identity is imported, unless
+ * APPLE_REQUIRE_SIGNED_PROFILES). The caller moves the session; nothing is written here but the alerts.
  */
-export async function issueOtaProfile(t: TenantFacts, s: SessionForDownload, actor: DbActor): Promise<IssueOutcome> {
+export async function composeSigned(t: TenantFacts, s: SessionToSign, actor: DbActor, o: SignOptions): Promise<SignOutcome> {
   const edgeActor = { actor: edgeActorOf(actor) };
-  let challengeId: string;
-  let body: Buffer;
-  let signed = false;
   try {
     let cfg = await appleTenants.enrollmentConfig(t.tenantId, actor);
     if (!cfg.topic) cfg = await appleTenants.enrollmentConfig(t.tenantId, actor, { refresh: true });
     if (!cfg.topic) {
       await raiseAlert(actor, t.tenantId, 'apns.no_certificate').catch(() => undefined);
-      return { kind: 'not_ready', nonce: await renewNonce(t, s.id, actor) };
+      return { kind: 'not_ready' };
     }
-    const challenge = await appleEdge.createScepChallenge(t.key, { session_ref: s.id, ttl_seconds: OTA_CHALLENGE_TTL_S }, edgeActor);
-    challengeId = challenge.challenge_id;
+    const challenge = await appleEdge.createScepChallenge(t.key, {
+      session_ref: s.id, ttl_seconds: o.ttlSeconds, ...(o.machineInfoId ? { machine_info_id: o.machineInfoId } : {}),
+    }, edgeActor);
     const tx = textsFor(s.locale);
     const v = { org: t.name };
     const consent: Record<string, string> = {};
@@ -305,36 +326,55 @@ export async function issueOtaProfile(t: TenantFacts, s: SessionForDownload, act
     const unsigned = composeEnrollmentProfile({
       key: t.key, config: cfg, challenge: challenge.challenge, sessionId: s.id, organization: t.name,
       displayName: fill(tx.profileName, v), description: fill(tx.profileDescription, v), scepName: tx.scepName, mdmName: tx.mdmName,
-      consent,
+      consent, ...(o.byod ? { byod: o.byod } : {}),
     });
-    body = unsigned;
+    let body = unsigned;
+    let signed = false;
     try {
       body = await appleEdge.signProfile(t.key, unsigned, edgeActor);
       signed = true;
     } catch (err) {
       if (!isAppleEdgeError(err) || (err.code !== 'signing_identity_missing' && err.code !== 'signing_identity_unusable')) throw err;
       await signingAlertState(true, actor);
-      if (config.apple.requireSignedProfiles) {
-        await asTenant(t.tenantId, actor, () => db.transaction((trx) => endSession(trx, t.tenantId, s.id, 'failed', 'signing_unavailable', ['acknowledged'])));
-        realtime.sessionChanged(t.tenantId, s.id);
-        return { kind: 'signing_unavailable' };
-      }
+      if (config.apple.requireSignedProfiles) return { kind: 'signing_unavailable' };
     }
     if (signed) await signingAlertState(false, actor);
+    return { kind: 'ok', body, signed, challengeId: challenge.challenge_id.toLowerCase() };
   } catch (err) {
     if (err instanceof ProfileCompositionError || isAppleEdgeError(err)) {
       logger.warn({ tenantId: t.tenantId, code: (err as { code?: unknown }).code }, 'enrollment profile not issued');
-    } else {
-      logger.error({ tenantId: t.tenantId, err: { message: (err as Error)?.message } }, 'enrollment profile not issued');
+      return { kind: 'retry', code: String((err as { code?: unknown }).code ?? '') || null };
     }
-    return { kind: 'retry', nonce: await renewNonce(t, s.id, actor).catch(() => null) };
+    logger.error({ tenantId: t.tenantId, err: { message: (err as Error)?.message } }, 'enrollment profile not issued');
+    return { kind: 'retry', code: null };
+  }
+}
+
+/**
+ * Step 3, second part, outside any transaction (OTA): the profile composed and signed (composeSigned), then the
+ * session moves to profile_issued. Not ready (no push certificate) or a failure of apple-edge: a new nonce for the
+ * retry page; signing required and unavailable: the session fails (signing_unavailable) and gives its use back.
+ */
+export async function issueOtaProfile(t: TenantFacts, s: SessionForDownload, actor: DbActor): Promise<IssueOutcome> {
+  const out = await composeSigned(t, s, actor, { ttlSeconds: OTA_CHALLENGE_TTL_S });
+  switch (out.kind) {
+    case 'not_ready':
+      return { kind: 'not_ready', nonce: await renewNonce(t, s.id, actor) };
+    case 'signing_unavailable':
+      await asTenant(t.tenantId, actor, () => db.transaction((trx) => endSession(trx, t.tenantId, s.id, 'failed', 'signing_unavailable', ['acknowledged'])));
+      realtime.sessionChanged(t.tenantId, s.id);
+      return { kind: 'signing_unavailable' };
+    case 'retry':
+      return { kind: 'retry', nonce: await renewNonce(t, s.id, actor).catch(() => null) };
+    default:
+      break;
   }
   // The profile is served only if the session is still acknowledged (review of lot C1, INT-C1-R4): ended meanwhile
   // (its link revoked, its profile withdrawn, expired), the profile is not served; its unused SCEP challenge expires.
   const moved = await asTenant(t.tenantId, actor, () => db('enrollment_sessions')
     .where({ tenant_id: t.tenantId, id: s.id, state: 'acknowledged' })
-    .update({ state: 'profile_issued', state_at: new Date(), challenge_id: challengeId.toLowerCase(), updated_at: new Date() }));
+    .update({ state: 'profile_issued', state_at: new Date(), challenge_id: out.challengeId, updated_at: new Date() }));
   realtime.sessionChanged(t.tenantId, s.id);
   if (Number(moved) !== 1) return { kind: 'ended' };
-  return { kind: 'profile', body, signed };
+  return { kind: 'profile', body: out.body, signed: out.signed };
 }

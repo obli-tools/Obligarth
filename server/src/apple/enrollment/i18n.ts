@@ -50,6 +50,19 @@ export interface SurfaceTexts {
   mailLinkBody: string[];
   mailInviteSubject: string;
   mailInviteBody: string[];
+  // ADE (lot C2): the web view of the setup assistant, the update it requires.
+  adeRestartTitle: string;
+  adeRestartBody: string;
+  osUpdateRequired: string;
+  // Account-driven enrollment (lot C2): the web view of the device.
+  byodTitle: string;
+  byodIntro: string;
+  byodAccount: string;
+  byodAccountHint: string;
+  byodCode: string;
+  byodCodeHint: string;
+  byodWrongCode: string;
+  byodEnroll: string;
 }
 
 const EN: SurfaceTexts = {
@@ -146,6 +159,17 @@ const EN: SurfaceTexts = {
     'The steps to follow: {url}',
     'The code expires on {expires} and can be used only once.',
   ],
+  adeRestartTitle: 'Start the setup again',
+  adeRestartBody: 'This enrollment step took too long. Go back and start the setup of the device again.',
+  osUpdateRequired: 'A newer version of the system is required to enroll this device: update it, then start again.',
+  byodTitle: 'Enroll your personal device',
+  byodIntro: 'Enter the invitation code {org} gave you, after reading what enrolling means for your device.',
+  byodAccount: 'Managed Apple Account',
+  byodAccountHint: 'The account you signed in with on this device.',
+  byodCode: 'Invitation code',
+  byodCodeHint: 'Ten characters, for example abcde-fgh23.',
+  byodWrongCode: 'This code is not valid for this account, or no longer. Check it, or ask your administrator for a new invitation.',
+  byodEnroll: 'Enroll',
 };
 
 const FR: SurfaceTexts = {
@@ -242,6 +266,17 @@ const FR: SurfaceTexts = {
     'Les étapes à suivre : {url}',
     "Le code expire le {expires} et ne sert qu'une fois.",
   ],
+  adeRestartTitle: 'Recommencer la configuration',
+  adeRestartBody: "Cette étape de l'inscription a pris trop de temps. Revenez en arrière et recommencez la configuration de l'appareil.",
+  osUpdateRequired: "Une version plus récente du système est nécessaire pour inscrire cet appareil : mettez-le à jour, puis recommencez.",
+  byodTitle: 'Inscrire votre appareil personnel',
+  byodIntro: "Saisissez le code d'invitation que {org} vous a remis, après avoir lu ce que l'inscription implique pour votre appareil.",
+  byodAccount: 'Compte Apple géré',
+  byodAccountHint: 'Le compte avec lequel vous vous êtes connecté sur cet appareil.',
+  byodCode: "Code d'invitation",
+  byodCodeHint: 'Dix caractères, par exemple abcde-fgh23.',
+  byodWrongCode: "Ce code n'est pas ou plus valide pour ce compte. Vérifiez-le, ou demandez une nouvelle invitation à votre administrateur.",
+  byodEnroll: "S'inscrire",
 };
 
 const TEXTS: Record<SurfaceLocale, SurfaceTexts> = { en: EN, fr: FR };

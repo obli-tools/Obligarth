@@ -45,6 +45,7 @@ export function registerAppleAuditActions(): void {
     { name: 'apple.enrollment_profile_saved', criticality: 'standard', label: 'Enrollment profile saved' },
     { name: 'apple.enrollment_token_created', criticality: 'standard', label: 'Enrollment link created' },
     { name: 'apple.enrollment_token_revoked', criticality: 'protective', label: 'Enrollment link revoked' },
+    { name: 'apple.ade_device_profile_set', criticality: 'standard', label: 'Enrollment profile of an ADE device chosen' },
     // Apple integrations (§11)
     { name: 'integration.push_request_created', criticality: 'standard', label: 'Push certificate request created' },
     { name: 'integration.push_vendor_file_imported', criticality: 'standard', label: 'Vendor-signed push request imported' },

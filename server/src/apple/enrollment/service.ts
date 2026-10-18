@@ -7,6 +7,7 @@ import type {
 import { ENROLLMENT_LIMITS } from '@obligarth/shared';
 import { config } from '../../config';
 import { AppError } from '../../middleware/errorHandler';
+import { bindingsByProfile } from './adeProfiles';
 import { endWithdrawnSessions } from './flow';
 import type { CheckedProfile } from './settings';
 import { invitationTtlOf, linkDefaults } from './settings';
@@ -47,17 +48,24 @@ function profilesQuery(q: Q, tenantId: number) {
       WHERE t.tenant_id = p.tenant_id AND t.profile_id = p.id AND t.revoked_at IS NULL AND t.expires_at > now() AND t.uses < t.max_uses)::int AS active_tokens`));
 }
 
+/** The ADE profiles carry where they are defined at Apple (lot C2). */
+async function withBindings(q: Q, tenantId: number, views: EnrollmentProfileView[]): Promise<EnrollmentProfileView[]> {
+  if (!views.some((v) => v.method === 'ade')) return views;
+  const b = await bindingsByProfile(q, tenantId);
+  return views.map((v) => (v.method === 'ade' ? { ...v, adeBindings: b.get(v.id) ?? [] } : v));
+}
+
 export async function listProfiles(q: Q, tenantId: number, archived: boolean): Promise<EnrollmentProfileView[]> {
   let qb = profilesQuery(q, tenantId);
   if (!archived) qb = qb.whereNull('p.archived_at');
   const rows = await qb.orderBy([{ column: 'p.archived_at', order: 'desc', nulls: 'first' }, { column: 'p.name' }]) as Array<Record<string, any>>;
-  return rows.map(profileView);
+  return withBindings(q, tenantId, rows.map(profileView));
 }
 
 export async function getProfile(q: Q, tenantId: number, id: string): Promise<EnrollmentProfileView> {
   const row = await profilesQuery(q, tenantId).where('p.id', id).first() as Record<string, any> | undefined;
   if (!row) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
-  return profileView(row);
+  return (await withBindings(q, tenantId, [profileView(row)]))[0];
 }
 
 async function checkGroup(trx: Knex.Transaction, tenantId: number, groupId: number | null): Promise<void> {
@@ -300,14 +308,15 @@ export async function listSessions(q: Q, tenantId: number, f: { state?: Enrollme
   }
   const rows = await qb.orderBy([{ column: 's.created_at', order: 'desc' }, { column: 's.id', order: 'desc' }]).limit(SESSION_PAGE + 1)
     .select('s.id', 's.profile_id', 'p.name as profile_name', 't.prefix as token_prefix', 's.method', 's.ownership', 's.state', 's.state_at',
-      's.failure_code', 's.managed_apple_account', 's.device_id', 's.locale', 's.acknowledged_at', 's.created_at', 's.expires_at') as Array<Record<string, any>>;
+      's.failure_code', 's.managed_apple_account', 's.serial_number', 's.device_id', 's.locale', 's.acknowledged_at', 's.created_at', 's.expires_at') as Array<Record<string, any>>;
   const page = rows.slice(0, SESSION_PAGE);
   const last = page[page.length - 1];
   return {
     items: page.map((r) => ({
       id: String(r.id), profileId: String(r.profile_id), profileName: String(r.profile_name), tokenPrefix: r.token_prefix ?? null,
       method: r.method, ownership: r.ownership, state: r.state, stateAt: isoReq(r.state_at), failureCode: r.failure_code ?? null,
-      managedAppleAccount: showAccounts ? (r.managed_apple_account ?? null) : null, deviceId: num(r.device_id), locale: r.locale ?? null,
+      managedAppleAccount: showAccounts ? (r.managed_apple_account ?? null) : null,
+      serialNumber: r.method === 'ade' ? (r.serial_number ?? null) : null, deviceId: num(r.device_id), locale: r.locale ?? null,
       acknowledgedAt: iso(r.acknowledged_at), createdAt: isoReq(r.created_at), expiresAt: isoReq(r.expires_at),
     })),
     nextCursor: rows.length > SESSION_PAGE && last ? String(last.id) : null,
