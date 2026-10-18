@@ -12,6 +12,7 @@ import { registerMvpResultIngestors, registerResultJobs } from '../apple/command
 import { requestResubmitAll, requestResubmitHeld } from '../apple/commands/submit';
 import { registerAppleDdm } from '../apple/ddm';
 import { registerAppleEnrollment } from '../apple/enrollment';
+import { registerAppleIntegrations } from '../apple/integrations';
 import { registerDdmSyncSender } from '../apple/ddm/sync';
 import { registerDeviceJobs } from '../apple/devices/jobs';
 import { checkEdgeAtStart, edgeKekId, onEdgeRecovered } from '../apple/edge/health';
@@ -35,8 +36,9 @@ import { appleTenants } from '../apple/tenants/registry';
 // the ingestion of the results. Lot B4: the command queue (catalogue, bus,
 // submission, relaunches, cancellation, guarded MDM actions, inventory, setup
 // plan). Lot C1: OTA enrollment (device surface mounted by app.ts, console
-// routes by routes/index.ts, enrollment.sessions-expire). The other parts of
-// the surface and the integrations of the console come with lots C2 to C4.
+// routes by routes/index.ts, enrollment.sessions-expire). Lot C3: the push
+// certificate, the ADE servers, the échéancier and the readiness of a tenant
+// (apple/integrations). Apps and Books comes with lot C4.
 // =============================================================================
 
 let registered = false;
@@ -77,6 +79,7 @@ export function registerAppleModule(): void {
   registerAppleDdm();             // §9: core provider, apple.ddm.* queues, DeclarativeManagement ingestor, onboarding step
   registerDdmSyncSender(sendDdmSyncCommand);   // §9.4: the DDM engine announces a set through the command queue
   registerAppleEnrollment();      // §10 (lot C1): enrollment.sessions-expire
+  registerAppleIntegrations();    // §11 (lot C3): integrations.* jobs, approvals of a topic change and of an ADE deletion
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
   registerAppleAuditActions();

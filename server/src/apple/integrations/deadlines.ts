@@ -15,6 +15,9 @@ import type { Knex } from 'knex';
 // =============================================================================
 
 export type DeadlineKind = 'apns_certificate' | 'ade_token' | 'vpp_token' | 'device_ca';
+/** Items of the instance (tenant_id NULL), written in the identity context (class tenant_or_global). */
+export type InstanceDeadlineKind = 'mdm_tls_certificate' | 'vendor_certificate' | 'mdm_domain' | 'profile_signing_identity'
+  | 'vault_escrow_test' | 'vault_kek_rotation' | 'vault_old_shares' | 'vault_dek_destruction';
 
 export interface DeadlineItem {
   kind: DeadlineKind;
@@ -43,4 +46,38 @@ export async function recordDeadline(trx: Knex.Transaction, tenantId: number, d:
 export async function retireDeadline(trx: Knex.Transaction, tenantId: number, kind: DeadlineKind, subjectRef: string): Promise<void> {
   await trx('integration_deadline_items').where({ tenant_id: tenantId, kind, subject_ref: subjectRef.slice(0, 100) }).whereNull('retired_at')
     .update({ retired_at: new Date(), updated_at: new Date() });
+}
+
+export interface InstanceDeadlineItem {
+  kind: InstanceDeadlineKind;
+  subjectRef: string;
+  label: string;
+  notAfter: Date | null;
+  source: 'apple-edge' | 'brain' | 'manual' | 'vault';
+  /** The expiry is what the source says now (a manual entry, a computed due date), even earlier than before. */
+  replace?: boolean;
+}
+
+/** Records an item of the instance (tenant_id NULL). The transaction's context is 'identity' (rls-tenant §5.3.1). */
+export async function recordInstanceDeadline(trx: Knex.Transaction, d: InstanceDeadlineItem): Promise<void> {
+  const notAfter = d.notAfter && !Number.isNaN(d.notAfter.getTime()) ? d.notAfter : null;
+  const values = [randomUUID(), d.kind, d.subjectRef.slice(0, 100), d.label.slice(0, 200) || d.kind, notAfter, d.source];
+  await trx.raw(d.replace ? INSTANCE_REPLACE_SQL : INSTANCE_EXTEND_SQL, values);
+}
+
+const INSTANCE_INSERT_SQL = `
+    INSERT INTO obligarth.integration_deadline_items AS i (id, tenant_id, kind, subject_ref, label, not_after, source, updated_at)
+    VALUES (?, NULL, ?, ?, ?, ?, ?, now())
+    ON CONFLICT ((coalesce(tenant_id, 0)), kind, subject_ref)
+    DO UPDATE SET label = EXCLUDED.label, source = EXCLUDED.source, retired_at = NULL, updated_at = now(), not_after = `;
+/** The expiry is what the source says now (a manual entry, a computed due date). */
+const INSTANCE_REPLACE_SQL = `${INSTANCE_INSERT_SQL}EXCLUDED.not_after`;
+/** A later expiry wins (a renewal extends). */
+const INSTANCE_EXTEND_SQL = `${INSTANCE_INSERT_SQL}CASE WHEN i.not_after IS NULL OR EXCLUDED.not_after > i.not_after THEN EXCLUDED.not_after ELSE i.not_after END`;
+
+/** Retires the items of the instance of `kind` (all, or all but `keep`). Identity context. */
+export async function retireInstanceDeadlines(trx: Knex.Transaction, kind: InstanceDeadlineKind, keep?: string): Promise<void> {
+  let q = trx('integration_deadline_items').whereNull('tenant_id').where({ kind }).whereNull('retired_at');
+  if (keep !== undefined) q = q.whereNot('subject_ref', keep.slice(0, 100));
+  await q.update({ retired_at: new Date(), updated_at: new Date() });
 }

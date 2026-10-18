@@ -56,6 +56,8 @@ export function registerAppleAuditActions(): void {
     { name: 'integration.ade_byod_discovery_declared', criticality: 'standard', label: 'Account-driven enrollment declared' },
     { name: 'integration.ade_token_uploaded', criticality: 'critical', label: 'ADE server token uploaded' },
     { name: 'integration.ade_token_deleted', criticality: 'critical', label: 'ADE server deleted' },
+    // Lot C3: a deadline of the instance typed by a platform administrator (mdm_domain, profile_signing_identity).
+    { name: 'integration.deadline_set', criticality: 'standard', label: 'Deadline of the instance typed by a platform administrator' },
     { name: 'integration.vpp_token_imported', criticality: 'critical', label: 'Apps and Books token imported' },
     { name: 'integration.vpp_token_taken_over', criticality: 'critical', label: 'Apps and Books token taken over' },
     { name: 'integration.vpp_token_removed', criticality: 'critical', label: 'Apps and Books token removed' },

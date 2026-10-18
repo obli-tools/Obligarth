@@ -260,11 +260,14 @@ function toBytes(plaintext: string | Buffer): { bytes: Buffer; own: boolean } {
 
 type Rows<T> = { rows: T[] };
 
-async function escrowCovers(q: Knex | Knex.Transaction, kekId: string): Promise<boolean> {
+/** A confirmation (or a test) of the escrow covers the brain's KEK `kekId`, and apple-edge's `edgeKekId` too when
+ *  it is known (lot C3: the push keys and ADE tokens of apple-edge are sealed under its own KEK). */
+async function escrowCovers(q: Knex | Knex.Transaction, kekId: string, edgeKekId: string | null = null): Promise<boolean> {
   const res = await q.raw(
     `SELECT 1 FROM vault_operations
       WHERE kind IN ('escrow_confirmation', 'escrow_test') AND state = 'done'
-        AND params -> 'kekIds' ->> 'server' = ? LIMIT 1`, [kekId]) as Rows<unknown>;
+        AND params -> 'kekIds' ->> 'server' = ?
+        AND (?::text IS NULL OR params -> 'kekIds' ->> 'edge' = ?::text) LIMIT 1`, [kekId, edgeKekId, edgeKekId]) as Rows<unknown>;
   return res.rows.length > 0;
 }
 
@@ -660,14 +663,41 @@ export const vault = {
   // ── Escrow guard (V14) ────────────────────────────────────────────────────
 
   /** Throws AppError(409, …, 'escrowRequired') when no escrow confirmation
-   *  covers the current kek_id, unless VAULT_ALLOW_UNESCROWED. */
+   *  covers the current kek_id — the brain's, and apple-edge's once it
+   *  announces it (coffre-secrets §8.4-1; lot C3: the guard of the escrow
+   *  covers the keys of apple-edge too) — unless VAULT_ALLOW_UNESCROWED. */
   async requireEscrow(): Promise<void> {
     requireReady();
     if (cfg?.allowUnescrowed) return;
     const kekId = keyring.provider().id;
-    if (await withVaultDb({}, (q) => escrowCovers(q, kekId))) return;
-    throw new AppError(409, 'Escrow the vault keys before connecting Apple: record the escrow confirmation of the current '
-      + 'key-encryption key in the vault panel.', 'escrowRequired');
+    const edgeKekId = edgeKekIdSource();
+    if (await withVaultDb({}, (q) => escrowCovers(q, kekId, edgeKekId))) return;
+    const serverCovered = edgeKekId !== null && await withVaultDb({}, (q) => escrowCovers(q, kekId));
+    throw new AppError(409, serverCovered
+      ? 'Escrow the key-encryption key of the device service (apple-edge) too before connecting Apple: record an escrow '
+        + 'confirmation that names both kek_ids in the vault panel.'
+      : 'Escrow the vault keys before connecting Apple: record the escrow confirmation of the current '
+        + 'key-encryption key in the vault panel.', 'escrowRequired', { missing: serverCovered ? 'edge' : 'server' });
+  },
+
+  /** What the échéancier (INT-05, coffre-secrets §11.5) computes the vault's deadlines from: dates only. */
+  async deadlineFacts(): Promise<{ kekId: string; escrowedAt: Date | null; rotatedAt: Date | null; installedAt: Date | null;
+    oldSharesDestroyedAt: Date | null; nextDekDestruction: Date | null }> {
+    requireReady();
+    const kekId = keyring.provider().id;
+    return withVaultDb({}, async (q) => {
+      const r = (await q.raw(`SELECT
+          (SELECT max(created_at) FROM vault_operations WHERE kind IN ('escrow_confirmation', 'escrow_test') AND state = 'done') AS escrowed_at,
+          (SELECT max(finished_at) FROM vault_operations WHERE kind = 'kek_rotation' AND state = 'done') AS rotated_at,
+          (SELECT max(created_at) FROM vault_operations WHERE kind = 'escrow_retirement' AND state = 'done') AS retired_at,
+          (SELECT min(created_at) FROM data_keys) AS installed_at,
+          (SELECT min(destroy_after) FROM data_keys WHERE destroy_after IS NOT NULL AND state <> 'destroyed') AS next_destruction`) as Rows<{
+          escrowed_at: Date | null; rotated_at: Date | null; retired_at: Date | null; installed_at: Date | null; next_destruction: Date | null;
+        }>).rows[0];
+      const d = (v: Date | null) => (v ? new Date(v) : null);
+      return { kekId, escrowedAt: d(r.escrowed_at), rotatedAt: d(r.rotated_at), installedAt: d(r.installed_at),
+        oldSharesDestroyedAt: d(r.retired_at), nextDekDestruction: d(r.next_destruction) };
+    });
   },
 
   // ── State ─────────────────────────────────────────────────────────────────

@@ -74,7 +74,9 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   // Publication of a policy version or a batch of assignment changes beyond the thresholds (mdm, lot B5b).
   | 'mdm_policy_publish'
   // A command of the MDM queue the tenant's matrix holds at 'restricted' (integration-apple-edge §8.11, lot B4).
-  | 'apple_action';
+  | 'apple_action'
+  // A change of push topic or the deletion of an ADE server (integration-apple-edge §11.1, §11.2, lot C3).
+  | 'apple_integration';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */

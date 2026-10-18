@@ -42,6 +42,7 @@ import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
 import { createAppleDdmRouter } from '../apple/ddm/routes';
 import { createEnrollmentRouter } from '../apple/enrollment';
+import { createAppleAdminIntegrationsRouter, createAppleIntegrationsRouter } from '../apple/integrations';
 import { createMdmRouter } from '../mdm';
 
 const router = Router();
@@ -98,6 +99,9 @@ tenantRouter.use('/guard',       createGuardRouter());
 // Enrollment profiles, links, invitations and sessions (integration-apple-edge §10.9; apple/enrollment/routes.ts),
 // before the other /apple routers.
 tenantRouter.use('/apple/enrollment', createEnrollmentRouter());
+// The Apple integrations of the console: push certificate, ADE servers, deadlines, readiness (integration-apple-edge
+// §11.6, lot C3; apple/integrations/routes.ts): its own paths only, each with its capability.
+tenantRouter.use('/apple', createAppleIntegrationsRouter());
 // The MDM command queue of the console (integration-apple-edge §8.12): actions and queue of a device, commands,
 // cancellation, relaunch, timeline (apple/commands/routes.ts).
 tenantRouter.use('/apple',       createAppleCommandsRouter());
@@ -110,6 +114,8 @@ tenantRouter.use('/admin/outbox', createOutboxAdminRouter());
 // apple-edge: its state and the tenant registry (master tenant, platform
 // administrators; apple/admin.routes.ts).
 tenantRouter.use('/admin/apple-edge', createAppleEdgeAdminRouter());
+// The deadlines of every tenant and of the instance (master tenant, platform administrators; lot C3).
+tenantRouter.use('/admin/apple', createAppleAdminIntegrationsRouter());
 // The DDM engine seen from the console: declaration set, status items, forced synchronisation of a device
 // (apple/ddm/routes.ts).
 tenantRouter.use('/apple', createAppleDdmRouter());

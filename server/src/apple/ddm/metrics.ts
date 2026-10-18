@@ -36,13 +36,20 @@ const ITEM_RE = /^[a-z][a-z0-9-]*(\.[a-z0-9-]+)+$/;
 
 export type RelayEndpointKind = 'tokens' | 'declaration-items' | 'declaration' | 'status' | 'other';
 
+/** Time of the last answered relay request (2xx), in this process: the readiness of the tenants (§11.5, lot C3). */
+let lastRelayOk: number | null = null;
+
 export const ddmMetrics = {
   relayRequest(endpoint: RelayEndpointKind, status: number, durationMs?: number): void {
     bump(relay, `${endpoint}|${status}`);
+    if (status >= 200 && status < 300) lastRelayOk = Date.now();
     if (durationMs !== undefined && Number.isFinite(durationMs)) {
       const i = BUCKETS.findIndex((b) => durationMs <= b);
       durations[i === -1 ? BUCKETS.length : i] += 1;
     }
+  },
+  lastRelayOkAt(): number | null {
+    return lastRelayOk;
   },
   relayAuthFailure(): void {
     authFailures += 1;

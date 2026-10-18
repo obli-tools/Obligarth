@@ -1,9 +1,9 @@
-import { randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import { registerOutboxHandler, type OutboxHandlerContext } from '../../jobs';
-import { raiseCountedInTx, raiseInTx, resolveInTx } from '../alerts/service';
+import { raiseCountedInTx, raiseInTx } from '../alerts/service';
 import { deviceEvents } from '../devices/events';
 import { recordDeadline } from '../integrations/deadlines';
+import { applyPushActivation } from '../integrations/push';
 import { appleMetrics } from '../metrics';
 import { realtime } from '../realtime';
 import { upsertMirror } from '../tenants/registry';
@@ -125,53 +125,15 @@ interface PushRow {
   cert_sha256: string | null;
 }
 
-/** States of a request still waiting for its certificate. */
-const OPEN_REQUEST = ['vendor_signature_pending', 'apple_upload_pending'];
-
 async function handleCertificateActivated(ctx: Ctx<'apns.certificate_activated'>): Promise<void> {
   const { trx, event } = ctx;
   const tenantId = ctx.tenantId as number;
   const p = event.payload;
-  const at = event.occurredAt;
-  const rows = await trx('tenant_apple_push').where({ tenant_id: tenantId }).forUpdate()
-    .select('id', 'state', 'state_at', 'topic', 'cert_sha256') as PushRow[];
-  const sha = p.cert_sha256 ?? null;
-  // The row of this certificate (imported by the console), else the open request of its topic, else any open request.
-  const target = (sha ? rows.find((r) => r.cert_sha256 === sha) : undefined)
-    ?? rows.find((r) => OPEN_REQUEST.includes(r.state) && r.topic === p.topic)
-    ?? rows.find((r) => OPEN_REQUEST.includes(r.state));
-  const current = rows.find((r) => r.state === 'active');
-  if (target && target === current) return;                          // already active (a replay)
-  // Monotony (occurred_at): the row already reflects this event or a newer one (expired since, superseded…).
-  if (target && new Date(target.state_at).getTime() >= at.getTime()) return;
-  if (current && new Date(current.state_at).getTime() > at.getTime()) {
-    // A newer certificate is active: this activation is older (consumed late), superseded since.
-    if (target && OPEN_REQUEST.includes(target.state)) {
-      await trx('tenant_apple_push').where({ tenant_id: tenantId, id: target.id })
-        .update({ state: 'superseded', state_at: at, topic: p.topic, cert_sha256: sha, not_after: new Date(p.not_after), closed_at: at, updated_at: new Date() });
-    }
-    return;
-  }
-  if (current) {
-    // A renewal at the same topic supersedes; a change of topic keeps the previous certificate for the devices
-    // enrolled under it (legacy).
-    await trx('tenant_apple_push').where({ tenant_id: tenantId, id: current.id })
-      .update({ state: current.topic && current.topic !== p.topic ? 'legacy' : 'superseded', state_at: at, closed_at: at, updated_at: new Date() });
-  }
-  const cols = { state: 'active', state_at: at, activated_at: at, topic: p.topic, cert_sha256: sha, not_after: new Date(p.not_after), updated_at: new Date() };
-  if (target) {
-    await trx('tenant_apple_push').where({ tenant_id: tenantId, id: target.id }).update(cols);
-  } else {
-    // Activated without a request of the console (an import of the laboratory, a restore): mirrored as an import.
-    await trx('tenant_apple_push').insert({ id: randomUUID(), tenant_id: tenantId, purpose: 'import', ...cols });
-  }
-  await upsertMirror(trx, tenantId, { enrollment_config: null });    // the enrollment configuration names the topic
-  for (const kind of ['apns.no_certificate', 'apns.circuit_open', 'apns.certificate_expired', 'apns.topic_config'] as const) {
-    await resolveInTx(trx, tenantId, kind);
-  }
-  await recordDeadline(trx, tenantId, { kind: 'apns_certificate', subjectRef: p.topic, label: p.topic, notAfter: new Date(p.not_after) });
+  // Shared with the console's import (lot C3): whichever comes first activates, the other changes nothing.
+  const r = await applyPushActivation(trx, tenantId, { topic: p.topic, certSha256: p.cert_sha256 ?? null, notAfter: new Date(p.not_after) }, event.occurredAt);
+  if (!r) return;
   ctx.audit({ tenantId, action: 'integration.push_certificate_activated', target: { type: 'tenant', id: String(tenantId) },
-    details: { topic: p.topic, notAfter: new Date(p.not_after).toISOString(), renewal: current?.topic === p.topic } });
+    details: { topic: p.topic, notAfter: new Date(p.not_after).toISOString(), renewal: r.renewal } });
   ctx.afterCommit(() => realtime.integrationChanged(tenantId, 'push', 'deadlines'));
 }
 
