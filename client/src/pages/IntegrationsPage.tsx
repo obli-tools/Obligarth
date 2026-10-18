@@ -6,6 +6,7 @@ import {
   isMasterTenant, MANUAL_DEADLINE_KINDS, SocketEvents,
   type AdeServerState, type AdeServerView, type DeadlineLevel, type DeadlineView, type IntegrationCardState, type IntegrationsSummary,
   type ManualDeadlineKind, type PushCertState, type PushOverview, type PushRequestView, type ReadinessItem, type ReadinessState,
+  type VppOperationListItem, type VppTokenState, type VppTokenView,
 } from '@obligarth/shared';
 import { integrationsApi, isPendingApproval, type Download as FileDownload } from '@/api/integrations.api';
 import { isStepUpHandled } from '@/api/client';
@@ -23,7 +24,8 @@ import { saveBlob } from '@/utils/download';
 
 // The Integrations tab (integration-apple-edge §11.7, INT-04, lot C3): the readiness checklist of the tenant
 // (§11.5), then five cards: the device service, the push certificate (its five steps with the vendor's offline
-// signing tool and Apple's portal, opened in a new tab), the ADE servers of Apple Business, Apps and Books (lot C4)
+// signing tool and Apple's portal, opened in a new tab), the ADE servers of Apple Business, Apps and Books (lot C4:
+// content tokens, takeover of a token another MDM uses under guard, recent licence operations)
 // and the deadlines (INT-05; for the platform administrators in the master tenant, every tenant's and the
 // instance's, with the deadlines typed by hand). Reading: 'settings' or mdm.integrations.manage; writing:
 // mdm.integrations.manage. No device data on these cards.
@@ -111,7 +113,7 @@ export function IntegrationsPage() {
       {summary && <EdgeCard s={summary} />}
       {summary && <PushCard state={summary.push.state} onChange={load} />}
       {summary && <AdeCard state={summary.ade.state} onChange={load} />}
-      {summary && <VppCard s={summary} />}
+      {summary && <VppCard s={summary} onChange={load} />}
       {summary && <DeadlinesCard state={summary.deadlines.state} />}
     </PageContainer>
   );
@@ -442,18 +444,161 @@ function AddAdeModal({ onClose, onAdd }: { onClose: () => void; onAdd: (label: s
   );
 }
 
-// ── Apps and Books (lot C4) ─────────────────────────────────────────────────────
+// ── Apps and Books (§11.3, lot C4) ──────────────────────────────────────────────
 
-function VppCard({ s }: { s: IntegrationsSummary }) {
+const VPP_TONE: Record<VppTokenState, 'green' | 'gray' | 'amber' | 'red'> = {
+  active: 'green', foreign_mdm: 'amber', expired: 'red', invalid: 'red', removed: 'gray',
+};
+
+function VppCard({ s, onChange }: { s: IntegrationsSummary; onChange: () => void }) {
   const { t } = useTranslation();
+  const confirm = useConfirm();
+  const [rows, setRows] = useState<VppTokenView[] | null>(null);
+  const [ops, setOps] = useState<VppOperationListItem[]>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [adding, setAdding] = useState(false);
+  const [takeover, setTakeover] = useState<VppTokenView | null>(null);
+  const load = useCallback(() => {
+    integrationsApi.vppTokens().then(setRows).catch(errorToast);
+    integrationsApi.vppOperations().then((o) => setOps(o.slice(0, 10))).catch(() => setOps([]));
+  }, []);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => registerSocketListener(SocketEvents.INTEGRATION_CHANGED, () => { load(); }), [load]);
+  const run = async (id: string, fn: () => Promise<unknown>, done?: string) => {
+    setBusy(id);
+    try {
+      const r = await fn();
+      if (isPendingApproval(r)) toast.success(t('apple.integrations.vpp.takeoverPending') || 'A second approver must approve the takeover');
+      else if (done) toast.success(done);
+      load();
+      onChange();
+    } catch (err) { errorToast(err); } finally { setBusy(null); }
+  };
   return (
-    <Card title={t('apple.integrations.vpp.title') || 'Apps and Books'} icon={<KeyRound className="w-5 h-5 text-accent" />} state={s.vpp.state}>
-      <p className="text-sm text-text-muted">
-        {s.vpp.tokens > 0
-          ? (t('apple.integrations.vpp.tokens', { count: s.vpp.tokens, active: s.vpp.active }) || `${s.vpp.tokens} content token(s), ${s.vpp.active} active.`)
-          : (t('apple.integrations.vpp.none') || 'The content tokens of Apps and Books are connected in a later version of the console.')}
+    <Card title={t('apple.integrations.vpp.title') || 'Apps and Books'} icon={<KeyRound className="w-5 h-5 text-accent" />} state={s.vpp.state}
+      action={<Button size="sm" onClick={() => setAdding(true)}><Plus className="w-4 h-4 mr-1" />{t('apple.integrations.vpp.add') || 'Connect a content token'}</Button>}>
+      <p className="text-xs text-text-muted">
+        {t('apple.integrations.vpp.help') || 'In Apple Business (Preferences, Payments and Billing), download the content token (.vpptoken) of the location whose apps this tenant installs, and import it here. The token is kept encrypted by the console; the licences are synchronised every hour.'}{' '}
+        <a href={APPLE_BUSINESS_PORTAL} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">{t('apple.integrations.ade.openPortal') || 'Open Apple Business'}</a>
       </p>
+      {rows && rows.length === 0 && <p className="text-sm text-text-muted">{t('apple.integrations.vpp.noneYet') || 'No content token yet.'}</p>}
+      <ul className="space-y-2">
+        {rows?.map((v) => (
+          <li key={v.id} className="rounded border border-border p-3 text-sm space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-text-primary">{v.label}</span>
+              {v.locationName && <span className="text-text-muted">({v.locationName})</span>}
+              <StateBadge tone={VPP_TONE[v.state]} label={trCode(`apple.integrations.vpp.state.${v.state}`, v.state)} />
+            </div>
+            <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-4 text-xs">
+              <div><dt className="text-text-muted">{t('apple.integrations.vpp.expires') || 'Token expires'}</dt><dd>{dateOf(v.expDate)}</dd></div>
+              <div><dt className="text-text-muted">{t('apple.integrations.vpp.lastSync') || 'Last synchronisation'}</dt><dd>{dateOf(v.lastSyncAt)}</dd></div>
+              <div><dt className="text-text-muted">{t('apple.integrations.vpp.licences') || 'Licences'}</dt>
+                <dd>{t('apple.integrations.vpp.assetsCount', { count: v.assets }) || `${v.assets} app(s)`}{v.pendingOperations > 0 ? ` · ${t('apple.integrations.vpp.pendingOps', { count: v.pendingOperations }) || `${v.pendingOperations} operation(s) in progress`}` : ''}</dd></div>
+              <div><dt className="text-text-muted">{t('apple.integrations.vpp.notifications') || 'Notifications of Apple'}</dt>
+                <dd>{v.testNotificationAt ? (t('apple.integrations.vpp.notificationsOk') || 'Received') : (t('apple.integrations.vpp.notificationsNone') || 'Not received yet')}</dd></div>
+            </dl>
+            {v.state === 'foreign_mdm' && (
+              <p className="text-xs text-amber-500">{t('apple.integrations.vpp.foreignHelp') || 'Another MDM uses this content token. Taking it over moves the management of the licences of this location here: that MDM can no longer install them.'}</p>
+            )}
+            {v.state === 'invalid' && <p className="text-xs text-status-down">{t('apple.integrations.vpp.invalidHelp') || 'Apple no longer accepts this content token: download a new one from Apple Business and replace it.'}</p>}
+            {v.state === 'expired' && <p className="text-xs text-status-down">{t('apple.integrations.vpp.expiredHelp') || 'This content token is expired: download a new one from Apple Business and replace it.'}</p>}
+            {v.lastErrorCode && v.state === 'active' && v.consecutiveErrors > 0 && (
+              <p className="text-xs text-status-down">{t('apple.integrations.vpp.lastError', { code: v.lastErrorCode }) || `Last error: ${v.lastErrorCode}`}</p>
+            )}
+            <div className="flex flex-wrap gap-2">
+              {v.state === 'foreign_mdm' && (
+                <Button size="sm" disabled={busy === v.id} onClick={() => setTakeover(v)}>{t('apple.integrations.vpp.takeover') || 'Take over the token'}</Button>
+              )}
+              {v.state === 'active' && (
+                <Button size="sm" variant="ghost" disabled={busy === v.id} onClick={() => run(v.id, () => integrationsApi.syncVppToken(v.id), t('apple.integrations.vpp.syncRequested') || 'Synchronisation requested')}>
+                  <RefreshCw className="w-4 h-4 mr-1" />{t('apple.integrations.vpp.sync') || 'Synchronise now'}</Button>
+              )}
+              <FilePicker label={t('apple.integrations.vpp.replace') || 'Replace the token'} accept=".vpptoken" disabled={busy === v.id}
+                onFile={(b) => run(v.id, () => integrationsApi.replaceVppToken(v.id, b), t('apple.integrations.vpp.replaced') || 'Content token replaced')} />
+              <Button size="sm" variant="ghost" disabled={busy === v.id}
+                onClick={async () => {
+                  if (await confirm({ message: t('apple.integrations.vpp.confirmRemove', { name: v.label }) || `Remove the content token ${v.label}? Its licences are no longer managed by this tenant.`, danger: true })) {
+                    await run(v.id, () => integrationsApi.removeVppToken(v.id), t('apple.integrations.vpp.removed') || 'Content token removed');
+                  }
+                }}><Trash2 className="w-4 h-4 mr-1" />{t('common.delete') || 'Delete'}</Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {ops.length > 0 && (
+        <div className="space-y-1">
+          <h3 className="text-xs font-semibold text-text-secondary">{t('apple.integrations.vpp.operations') || 'Recent licence operations'}</h3>
+          <ul className="divide-y divide-border/50 rounded border border-border text-xs">
+            {ops.map((o) => (
+              <li key={o.id} className="flex flex-wrap items-center gap-2 px-2 py-1.5">
+                <span className="text-text-primary">{trCode(`apple.integrations.vpp.kind.${o.kind}`, o.kind)}</span>
+                <span className="text-text-muted">{t('apple.integrations.vpp.opTargets', { assets: o.assets, targets: o.serialNumbers + o.clientUserIds }) || `${o.assets} app(s), ${o.serialNumbers + o.clientUserIds} target(s)`}</span>
+                <StateBadge tone={o.state === 'complete' ? 'green' : o.state === 'failed' ? 'red' : o.state === 'abandoned' ? 'gray' : 'blue'}
+                  label={trCode(`apple.integrations.vpp.opState.${o.state}`, o.state)} />
+                <span className="ml-auto text-text-muted">{dateOf(o.completedAt ?? o.createdAt)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {adding && <AddVppModal onClose={() => setAdding(false)} onAdd={(label, hint, file) => run('new', async () => {
+        const r = await integrationsApi.importVppToken(label, file, hint || null);
+        setAdding(false);
+        if (r.outcome === 'foreign_mdm') toast(t('apple.integrations.vpp.importedForeign') || 'Content token connected, but another MDM uses it: take it over to manage its licences here.', { duration: 9000 });
+      }, t('apple.integrations.vpp.imported') || 'Content token connected')} />}
+      {takeover && <TakeoverModal token={takeover} onClose={() => setTakeover(null)} onConfirm={() => run(takeover.id, async () => {
+        const r = await integrationsApi.takeOverVppToken(takeover.id);
+        setTakeover(null);
+        return r;
+      }, t('apple.integrations.vpp.takenOver') || 'Content token taken over')} />}
     </Card>
+  );
+}
+
+function AddVppModal({ onClose, onAdd }: { onClose: () => void; onAdd: (label: string, hint: string, file: ArrayBuffer) => void }) {
+  const { t } = useTranslation();
+  const [label, setLabel] = useState('');
+  const [hint, setHint] = useState('');
+  const [file, setFile] = useState<ArrayBuffer | null>(null);
+  return (
+    <Modal open onClose={onClose} title={t('apple.integrations.vpp.addTitle') || 'Connect a content token'}
+      footer={<Button size="sm" disabled={!label.trim() || !file} onClick={() => onAdd(label.trim(), hint.trim(), file!)}>{t('apple.integrations.vpp.add') || 'Connect a content token'}</Button>}>
+      <div className="space-y-3 text-sm">
+        <label className="block">{t('apple.integrations.vpp.labelLabel') || 'Name (the location in Apple Business)'}
+          <input className={fieldCls} maxLength={100} value={label} onChange={(e) => setLabel(e.target.value)} />
+        </label>
+        <label className="block">{t('apple.integrations.ade.accountLabel') || 'Apple account of the client in Apple Business (a hint, never a password)'}
+          <input className={fieldCls} maxLength={200} value={hint} onChange={(e) => setHint(e.target.value)} placeholder="it-admin@example.net" />
+        </label>
+        <div className="flex items-center gap-2">
+          <FilePicker label={t('apple.integrations.vpp.chooseFile') || 'Choose the .vpptoken file'} accept=".vpptoken" onFile={setFile} />
+          {file && <span className="text-xs text-text-muted">{t('apple.integrations.vpp.fileChosen') || 'File chosen'}</span>}
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** The takeover of a token another MDM uses (decision of 15/10): a warning to acknowledge, then the second factor
+ *  (asked by the console when the server requires it) or a second approver. */
+function TakeoverModal({ token, onClose, onConfirm }: { token: VppTokenView; onClose: () => void; onConfirm: () => void }) {
+  const { t } = useTranslation();
+  const [ack, setAck] = useState(false);
+  return (
+    <Modal open onClose={onClose} title={t('apple.integrations.vpp.takeoverTitle') || 'Take over a content token'}
+      footer={<Button size="sm" variant="danger" disabled={!ack} onClick={onConfirm}>{t('apple.integrations.vpp.takeover') || 'Take over the token'}</Button>}>
+      <div className="space-y-3 text-sm">
+        <p className="text-amber-500">
+          {t('apple.integrations.vpp.takeoverWarning', { name: token.label }) || `The content token ${token.label} is used by another MDM. Taking it over writes this console as its MDM at Apple: the other MDM can no longer assign nor reclaim the licences of this location, and the apps it installed may stop updating. Do it only if that MDM is being replaced.`}
+        </p>
+        <p className="text-text-muted">{t('apple.integrations.vpp.takeoverGuard') || 'Your second factor is asked (or a second approver, depending on the restrictions of the tenant); the takeover is written in the audit log as a critical action.'}</p>
+        <label className="flex items-start gap-2">
+          <input type="checkbox" className="mt-1" checked={ack} onChange={(e) => setAck(e.target.checked)} />
+          <span>{t('apple.integrations.vpp.takeoverAck') || 'I understand that the other MDM loses the licences of this location.'}</span>
+        </label>
+      </div>
+    </Modal>
   );
 }
 

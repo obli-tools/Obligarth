@@ -1,6 +1,7 @@
 import apiClient from './client';
 import type {
-  AdeServerView, DeadlineView, IntegrationsSummary, ManualDeadlineKind, PushOverview, PushRequestView, ReadinessItem,
+  AdeServerView, DeadlineView, IntegrationsSummary, ManualDeadlineKind, PushOverview, PushRequestView, ReadinessItem, VppAssetView,
+  VppOperationListItem, VppTokenView,
 } from '@obligarth/shared';
 
 // =============================================================================
@@ -94,6 +95,38 @@ export const integrationsApi = {
   async deleteAdeServer(id: string): Promise<PendingApproval | null> {
     const res = await apiClient.delete<ApiResponse<PendingApproval>>(`/apple/ade-tokens/${id}`);
     return res.data.data ?? null;
+  },
+  // ── Apps and Books (lot C4) ─────────────────────────────────────────────────
+  async vppTokens(): Promise<VppTokenView[]> {
+    const res = await apiClient.get<ApiResponse<VppTokenView[]>>('/apple/vpp-tokens');
+    return res.data.data ?? [];
+  },
+  async importVppToken(label: string, file: ArrayBuffer, appleAccountHint?: string | null): Promise<{ view: VppTokenView; outcome: string }> {
+    const res = await apiClient.post<ApiResponse<VppTokenView> & { outcome?: string }>('/apple/vpp-tokens', file,
+      { ...RAW, params: { label, ...(appleAccountHint ? { appleAccountHint } : {}) } });
+    return { view: res.data.data!, outcome: res.data.outcome ?? 'active' };
+  },
+  async replaceVppToken(id: string, file: ArrayBuffer): Promise<VppTokenView> {
+    const res = await apiClient.put<ApiResponse<VppTokenView>>(`/apple/vpp-tokens/${id}/token`, file, RAW);
+    return res.data.data!;
+  },
+  async syncVppToken(id: string): Promise<void> {
+    await apiClient.post(`/apple/vpp-tokens/${id}/sync`);
+  },
+  async takeOverVppToken(id: string): Promise<VppTokenView | PendingApproval> {
+    const res = await apiClient.post<ApiResponse<VppTokenView | PendingApproval>>(`/apple/vpp-tokens/${id}/takeover`, { acknowledgeWarning: true });
+    return res.data.data!;
+  },
+  async removeVppToken(id: string): Promise<void> {
+    await apiClient.delete(`/apple/vpp-tokens/${id}`);
+  },
+  async vppAssets(tokenId?: string): Promise<VppAssetView[]> {
+    const res = await apiClient.get<ApiResponse<VppAssetView[]>>(tokenId ? `/apple/vpp-tokens/${tokenId}/assets` : '/apple/vpp-assets');
+    return res.data.data ?? [];
+  },
+  async vppOperations(state?: string): Promise<VppOperationListItem[]> {
+    const res = await apiClient.get<ApiResponse<VppOperationListItem[]>>('/apple/vpp-operations', { params: state ? { state } : {} });
+    return res.data.data ?? [];
   },
   // ── Platform administrators ──────────────────────────────────────────────────
   async allDeadlines(retired = false): Promise<DeadlineView[]> {

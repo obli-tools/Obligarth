@@ -3,7 +3,7 @@ import type {
   Assignment, AssignmentChange, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
   DeviceFacets, DeviceProfileView, DeviceSummary, EndUser, EndUserImportReport, EnrollmentEpisode, GuardOutcome,
   ImpactDevicesPage, MdmFleetPoint, MdmFleetSummary, Policy, PolicyConflict, PolicyContentV1, PolicyImpact,
-  PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome,
+  PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome, AppCatalogEntry, AppDetail,
 } from '@obligarth/shared';
 
 // =============================================================================
@@ -256,6 +256,28 @@ export const mdmApi = {
   },
   async changeAssignments(changes: AssignmentChange[]): Promise<SubmitOutcome> {
     const res = await apiClient.post<ApiResponse<SubmitOutcome>>('/mdm/assignments/changes', { changes });
+    return res.data.data!;
+  },
+
+  // ── Catalog of apps (lot C4) ───────────────────────────────────────────────
+  async listApps(params?: { archived?: boolean; q?: string }): Promise<AppCatalogEntry[]> {
+    const res = await apiClient.get<ApiResponse<AppCatalogEntry[]>>('/mdm/apps', { params: query({ archived: params?.archived ? 1 : undefined, q: params?.q }) });
+    return res.data.data ?? [];
+  },
+  async getApp(id: number): Promise<AppDetail> {
+    const res = await apiClient.get<ApiResponse<AppDetail>>(`/mdm/apps/${id}`);
+    return res.data.data!;
+  },
+  async createApp(body: { kind: 'app_store' | 'custom'; storeId: string; identifier: string; name: string; publisher?: string | null; iconUrl?: string | null }): Promise<AppCatalogEntry> {
+    const res = await apiClient.post<ApiResponse<AppCatalogEntry>>('/mdm/apps', body);
+    return res.data.data!;
+  },
+  async updateApp(id: number, body: { name?: string; publisher?: string | null; iconUrl?: string | null; minimumOsVersion?: string | null }): Promise<AppCatalogEntry> {
+    const res = await apiClient.patch<ApiResponse<AppCatalogEntry>>(`/mdm/apps/${id}`, body);
+    return res.data.data!;
+  },
+  async archiveApp(id: number): Promise<AppCatalogEntry> {
+    const res = await apiClient.post<ApiResponse<AppCatalogEntry>>(`/mdm/apps/${id}/archive`);
     return res.data.data!;
   },
 

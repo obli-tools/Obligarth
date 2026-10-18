@@ -4,8 +4,8 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import toast from 'react-hot-toast';
 import { Building2, FolderOpen, Minus, Plus, Smartphone, Trash2 } from 'lucide-react';
-import type { Assignment, AssignmentChange, AssignmentMode, AssignmentTargetScope, DeviceSummary, Policy, SubmitOutcome } from '@obligarth/shared';
-import { ASSIGNMENT_PRIORITY } from '@obligarth/shared';
+import type { AppleAppOptions, Assignment, AssignmentChange, AssignmentMode, AssignmentTargetScope, DeviceSummary, JsonValue, Policy, SubmitOutcome } from '@obligarth/shared';
+import { APPLE_APP_OPTION_DEFAULTS, ASSIGNMENT_PRIORITY } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
 import { isStepUpHandled } from '@/api/client';
 import { Modal } from '@/components/common/Modal';
@@ -18,6 +18,46 @@ import { apiErrorMessage } from '@/utils/apiError';
 // Assignments of the policies (modele-donnees-mdm §7.5): a policy applies to the whole tenant, to a group (and its
 // subgroups) or to a device, as an inclusion or an exclusion, with a priority that breaks ties (smaller is
 // stronger). Every change goes through the impact preview, then the second factor or a second approver.
+// An app (lot C4, modele §8.2) is assigned the same way, with its options (removable, removed with the management,
+// no backup, takeover of an app the user installed, managed configuration without secret).
+
+export type AssignableResource = { id: number; tenantId: number; name: string; type?: 'policy' | 'app' };
+
+/** The options of an app assignment (AppleAppOptions), edited in place. */
+export function AppOptionsFields({ value, onChange, configText, onConfigText }: {
+  value: AppleAppOptions; onChange: (v: AppleAppOptions) => void; configText: string; onConfigText: (s: string) => void;
+}) {
+  const { t } = useTranslation();
+  const box = (key: 'removable' | 'removeOnUnenroll' | 'preventBackup' | 'takeOver', label: string, hint: string) => (
+    <label className="flex items-start gap-2">
+      <input type="checkbox" className="mt-1" checked={value[key]} onChange={(e) => onChange({ ...value, [key]: e.target.checked })} />
+      <span><span className="text-text-primary">{label}</span><span className="block text-[11px] text-text-muted">{hint}</span></span>
+    </label>
+  );
+  return (
+    <div className="space-y-2 rounded border border-border p-2">
+      <p className="text-xs font-semibold text-text-secondary">{t('apps.options.title') || 'Options of the app'}</p>
+      {box('removable', t('apps.options.removable') || 'The user may delete the app', t('apps.options.removableHint') || 'Always allowed on a personal device.')}
+      {box('removeOnUnenroll', t('apps.options.removeOnUnenroll') || 'Removed with the management', t('apps.options.removeOnUnenrollHint') || 'The app leaves the device when it leaves management.')}
+      {box('preventBackup', t('apps.options.preventBackup') || 'No backup of its data', t('apps.options.preventBackupHint') || 'The data of the app are not saved in the backups of the device.')}
+      {box('takeOver', t('apps.options.takeOver') || 'Take over the app if the user installed it', t('apps.options.takeOverHint') || 'Never on a personal device enrolled with User Enrollment.')}
+      <label className="block">
+        <span className="text-xs text-text-muted">{t('apps.options.config') || 'Managed configuration (JSON, optional, no secret)'}</span>
+        <textarea value={configText} onChange={(e) => onConfigText(e.target.value)} spellCheck={false}
+          className="mt-1 w-full h-24 rounded border border-border bg-bg-secondary px-2 py-1.5 font-mono text-xs text-text-primary" placeholder='{"ServerURL": "https://example.net"}' />
+      </label>
+    </div>
+  );
+}
+
+/** The managed configuration typed as JSON: an object, or nothing; undefined when it is not valid JSON. */
+export function parseAppConfig(text: string): Record<string, JsonValue> | null | undefined {
+  if (!text.trim()) return null;
+  try {
+    const v = JSON.parse(text) as unknown;
+    return v && typeof v === 'object' && !Array.isArray(v) ? v as Record<string, JsonValue> : undefined;
+  } catch { return undefined; }
+}
 
 /** Tells the user what a guarded write of the configuration did. */
 export function announceSubmitOutcome(t: TFunction, outcome: SubmitOutcome): void {
@@ -97,7 +137,7 @@ function DevicePicker({ value, onChange }: { value: DeviceSummary | null; onChan
 export function AssignmentCreateDialog({ open, onClose, resource, targets, onDone }: {
   open: boolean;
   onClose: () => void;
-  resource?: { id: number; tenantId: number; name: string };
+  resource?: AssignableResource;
   targets?: AssignmentTarget[];
   onDone?: (outcome: SubmitOutcome) => void;
 }) {
@@ -110,11 +150,14 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
   const [mode, setMode] = useState<AssignmentMode>('include');
   const [priority, setPriority] = useState<number>(ASSIGNMENT_PRIORITY.default);
   const [previewing, setPreviewing] = useState(false);
+  const [appOptions, setAppOptions] = useState<AppleAppOptions>({ ...APPLE_APP_OPTION_DEFAULTS });
+  const [configText, setConfigText] = useState('');
+  const isApp = resource?.type === 'app';
 
   useEffect(() => {
     if (!open) return;
     setPolicyId(''); setScope('group'); setGroupId(null); setDevice(null); setMode('include');
-    setPriority(ASSIGNMENT_PRIORITY.default); setPreviewing(false);
+    setPriority(ASSIGNMENT_PRIORITY.default); setPreviewing(false); setAppOptions({ ...APPLE_APP_OPTION_DEFAULTS }); setConfigText('');
     if (!resource) mdmApi.listPolicies({ state: 'published' }).then(setPolicies).catch(() => setPolicies([]));
   }, [open, resource]);
 
@@ -128,12 +171,15 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
     if (scope === 'group') return groupId ? [{ scope, id: groupId }] : [];
     return device ? [{ scope, id: device.id, name: device.label }] : [];
   }, [targets, scope, groupId, device]);
+  const config = isApp ? parseAppConfig(configText) : null;
   // An exclusion of the whole tenant is refused by the model (assignments_no_tenant_exclude).
   const invalid = !chosen || chosenTargets.length === 0 || (mode === 'exclude' && chosenTargets.some((x) => x.scope === 'tenant'))
-    || !Number.isInteger(priority) || priority < ASSIGNMENT_PRIORITY.min || priority > ASSIGNMENT_PRIORITY.max;
+    || !Number.isInteger(priority) || priority < ASSIGNMENT_PRIORITY.min || priority > ASSIGNMENT_PRIORITY.max
+    || (isApp && mode === 'include' && config === undefined);
+  const options = isApp && mode === 'include' ? { ...appOptions, ...(config ? { config } : {}) } as unknown as Record<string, JsonValue> : undefined;
   const changes: AssignmentChange[] = chosen ? chosenTargets.map((x) => ({
-    op: 'create', resourceType: 'policy', resourceId: chosen.id, resourceTenantId: chosen.tenantId,
-    targetScope: x.scope, targetId: x.id, mode, priority,
+    op: 'create', resourceType: isApp ? 'app' : 'policy', resourceId: chosen.id, resourceTenantId: chosen.tenantId,
+    targetScope: x.scope, targetId: x.id, mode, priority, ...(options ? { options } : {}),
   })) : [];
 
   const field = 'mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary';
@@ -143,7 +189,7 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
         open={open && !previewing}
         onClose={onClose}
         size="md"
-        title={t('mdm.assignments.addTitle') || 'Assign a policy'}
+        title={isApp ? (t('apps.assignTitle') || 'Assign an app') : (t('mdm.assignments.addTitle') || 'Assign a policy')}
         footer={(
           <>
             <Button variant="secondary" onClick={onClose}>{t('common.cancel') || 'Cancel'}</Button>
@@ -153,7 +199,7 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
       >
         <div className="space-y-3 text-sm">
           {resource ? (
-            <p className="text-text-secondary">{t('mdm.assignments.policy') || 'Policy'}: <span className="font-medium text-text-primary">{resource.name}</span></p>
+            <p className="text-text-secondary">{isApp ? (t('apps.app') || 'App') : (t('mdm.assignments.policy') || 'Policy')}: <span className="font-medium text-text-primary">{resource.name}</span></p>
           ) : (
             <label className="block">
               <span className="text-xs text-text-muted">{t('mdm.assignments.policy') || 'Policy'}</span>
@@ -208,6 +254,12 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
             </label>
           </div>
           <p className="text-[11px] text-text-muted">{t('mdm.assignments.priorityHint') || 'Priority: 0 to 1000, smaller is stronger; it only breaks ties between policies assigned at the same level.'}</p>
+          {isApp && mode === 'include' && (
+            <>
+              <AppOptionsFields value={appOptions} onChange={setAppOptions} configText={configText} onConfigText={setConfigText} />
+              {config === undefined && <p className="text-xs text-red-400">{t('apps.options.configInvalid') || 'The managed configuration must be a JSON object.'}</p>}
+            </>
+          )}
           {mode === 'exclude' && chosenTargets.some((x) => x.scope === 'tenant') && (
             <p className="text-xs text-red-400">{t('mdm.assignments.noTenantExclude') || 'A policy cannot be excluded from the whole tenant: remove its assignment instead.'}</p>
           )}
@@ -236,7 +288,7 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
 
 /** The assignments of a policy (`resource`) or those that target a group or a device (`target`). */
 export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
-  resource?: { id: number; tenantId: number; name: string; published: boolean };
+  resource?: AssignableResource & { published: boolean };
   target?: AssignmentTarget;
   canManage: boolean;
   onChanged?: () => void;
@@ -248,7 +300,7 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
 
   const load = useCallback(() => {
     const params = resource
-      ? { resourceType: 'policy' as const, resourceId: resource.id }
+      ? { resourceType: (resource.type ?? 'policy') as 'policy' | 'app', resourceId: resource.id }
       : target && target.scope !== 'tenant' && target.id !== null
         ? { targetScope: target.scope, targetId: target.id }
         : { targetScope: 'tenant' as const };
@@ -269,7 +321,7 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
           </Button>
         )}
       </div>
-      {resource && !resource.published && (
+      {resource && !resource.published && resource.type !== 'app' && (
         <p className="text-xs text-text-muted">{t('mdm.assignments.publishFirst') || 'A policy is assigned once it has a published version.'}</p>
       )}
       {items === null ? (
@@ -290,7 +342,8 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
                   ) : <span className="truncate">{targetLabel(t, a)}</span>}
                 </span>
               ) : (
-                <Link to={`/policies/${a.resourceId}`} className="min-w-0 flex-1 truncate text-text-primary hover:text-accent">
+                <Link to={a.resourceType === 'app' ? `/apps?app=${a.resourceId}` : `/policies/${a.resourceId}`} className="min-w-0 flex-1 truncate text-text-primary hover:text-accent">
+                  {a.resourceType === 'app' && <span className="mr-1 text-[10px] uppercase px-1 py-0.5 rounded bg-blue-400/10 text-blue-400">{t('apps.app') || 'App'}</span>}
                   {a.resourceName || `#${a.resourceId}`}
                 </Link>
               )}
@@ -318,7 +371,7 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
       <AssignmentCreateDialog
         open={adding}
         onClose={() => setAdding(false)}
-        resource={resource ? { id: resource.id, tenantId: resource.tenantId, name: resource.name } : undefined}
+        resource={resource ? { id: resource.id, tenantId: resource.tenantId, name: resource.name, type: resource.type } : undefined}
         targets={target ? [target] : undefined}
         onDone={() => { load(); onChanged?.(); }}
       />

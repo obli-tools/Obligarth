@@ -70,7 +70,8 @@
     "administration": "Administration",
     "endUsers": "End users",
     "deviceEnrollment": "Enrollment",
-    "integrations": "Integrations"
+    "integrations": "Integrations",
+    "apps": "Apps"
   },
   "login": {
     "title": "Sign in to your account",
@@ -1611,7 +1612,8 @@
       "approvals_review": "Approvals · Review requests",
       "mdm_policies_manage": "Policies · Edit, assign and publish",
       "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations",
-      "mdm_integrations_manage": "Apple integrations · Push certificate, ADE servers"
+      "mdm_integrations_manage": "Apple integrations · Push certificate, ADE servers, Apps and Books",
+      "mdm_apps_manage": "Apps · Catalog and assignments"
     }
   },
   "notificationCenter": {
@@ -2890,7 +2892,65 @@
       "vpp": {
         "title": "Apps and Books",
         "tokens": "{{count}} content token(s), {{active}} active.",
-        "none": "The content tokens of Apps and Books are connected in a later version of the console."
+        "none": "No content token of Apps and Books yet.",
+        "noneYet": "No content token yet.",
+        "add": "Connect a content token",
+        "addTitle": "Connect a content token",
+        "help": "In Apple Business (Preferences, Payments and Billing), download the content token (.vpptoken) of the location whose apps this tenant installs, and import it here. The token is kept encrypted by the console; the licences are synchronised every hour.",
+        "labelLabel": "Name (the location in Apple Business)",
+        "chooseFile": "Choose the .vpptoken file",
+        "fileChosen": "File chosen",
+        "imported": "Content token connected",
+        "importedForeign": "Content token connected, but another MDM uses it: take it over to manage its licences here.",
+        "expires": "Token expires",
+        "lastSync": "Last synchronisation",
+        "licences": "Licences",
+        "assetsCount": "{{count}} app(s)",
+        "pendingOps": "{{count}} operation(s) in progress",
+        "notifications": "Notifications of Apple",
+        "notificationsOk": "Received",
+        "notificationsNone": "Not received yet",
+        "foreignHelp": "Another MDM uses this content token. Taking it over moves the management of the licences of this location here: that MDM can no longer install them.",
+        "invalidHelp": "Apple no longer accepts this content token: download a new one from Apple Business and replace it.",
+        "expiredHelp": "This content token is expired: download a new one from Apple Business and replace it.",
+        "lastError": "Last error: {{code}}",
+        "takeover": "Take over the token",
+        "takeoverTitle": "Take over a content token",
+        "takeoverWarning": "The content token {{name}} is used by another MDM. Taking it over writes this console as its MDM at Apple: the other MDM can no longer assign nor reclaim the licences of this location, and the apps it installed may stop updating. Do it only if that MDM is being replaced.",
+        "takeoverGuard": "Your second factor is asked (or a second approver, depending on the restrictions of the tenant); the takeover is written in the audit log as a critical action.",
+        "takeoverAck": "I understand that the other MDM loses the licences of this location.",
+        "takeoverPending": "A second approver must approve the takeover",
+        "takenOver": "Content token taken over",
+        "sync": "Synchronise now",
+        "syncRequested": "Synchronisation requested",
+        "replace": "Replace the token",
+        "replaced": "Content token replaced",
+        "confirmRemove": "Remove the content token {{name}}? Its licences are no longer managed by this tenant.",
+        "removed": "Content token removed",
+        "operations": "Recent licence operations",
+        "opTargets": "{{assets}} app(s), {{targets}} target(s)",
+        "state": {
+          "active": "Active",
+          "foreign_mdm": "Used by another MDM",
+          "expired": "Expired",
+          "invalid": "Refused by Apple",
+          "removed": "Removed"
+        },
+        "kind": {
+          "associate": "Licences assigned",
+          "disassociate": "Licences reclaimed",
+          "revoke": "Licences revoked",
+          "users_create": "Users created",
+          "users_update": "Users updated",
+          "users_retire": "Users retired"
+        },
+        "opState": {
+          "requested": "Requested",
+          "pending": "At Apple",
+          "complete": "Done",
+          "failed": "Failed",
+          "abandoned": "Abandoned"
+        }
       },
       "deadlines": {
         "title": "Deadlines",
@@ -3403,7 +3463,24 @@
     "fileTooLarge": "The file is too large.",
     "approvalRequired": "This action needs a second approver.",
     "deadlineKindNotManual": "This deadline is not typed by hand.",
-    "instanceIdMissing": "The instance has no identifier."
+    "instanceIdMissing": "The instance has no identifier.",
+    "vppTokenNotFound": "Content token not found",
+    "vppTokenFileInvalid": "This file is not a content token of Apps and Books (.vpptoken)",
+    "vppTokenExpired": "This content token is expired: download a new one from Apple Business",
+    "vppTokenAlreadyUsed": "This content token is already connected",
+    "vppTokenRejected": "Apple refused this content token",
+    "vppTokenNotForeign": "This content token is not used by another MDM",
+    "vppTokenNotActive": "This content token is not active",
+    "vppTokenOtherLocation": "This content token belongs to another location of Apple Business",
+    "vppRateLimited": "Apps and Books asks to wait: try again in a few minutes",
+    "vppUnavailable": "Apps and Books could not be reached or refused the request",
+    "tenantNotProvisioned": "The tenant is not provisioned at the device service yet",
+    "appNotFound": "App not found",
+    "appArchived": "This app is archived",
+    "appIdentifierExists": "An app of the catalog already has this identifier",
+    "appHasAssignments": "Remove the assignments of this app before archiving it",
+    "appConfigSecretUnsupported": "A managed app configuration carries no secret at this stage",
+    "licenseModeUnsupported": "An app without a licence of Apps and Books comes in a later version"
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -3545,5 +3622,70 @@
     "adeRegionHint": "Two letters (FR by default).",
     "skipSetupItems": "Setup assistant panes skipped",
     "skipSetupItemsHint": "Keys of Apple, separated by commas (Location, Siri, Privacy…); empty: the recommended list."
+  },
+  "apps": {
+    "title": "Apps",
+    "subtitle": "The apps of the tenant, licensed by Apps and Books, and the devices they are installed on.",
+    "search": "Search an app…",
+    "showArchived": "Show the archived apps",
+    "add": "Add an app",
+    "empty": "No app yet",
+    "emptyHint": "Connect a content token of Apps and Books in the Integrations tab, then add the apps whose licences the tenant holds.",
+    "name": "Name",
+    "identifier": "Identifier",
+    "licences": "Licences",
+    "assignments": "Assignments",
+    "updated": "Updated",
+    "archived": "Archived",
+    "licenceCounts": "{{available}} available of {{total}}",
+    "licenceDetail": "{{available}} available, {{assigned}} assigned, {{total}} in all",
+    "noLicence": "No licence",
+    "detailTitle": "App",
+    "app": "App",
+    "created": "App added to the catalog",
+    "fromLicence": "From a licence of the tenant",
+    "pickLicence": "Pick a licence…",
+    "noFreeLicence": "No licence without an app of the catalog",
+    "storeId": "App Store id",
+    "kind": "Kind",
+    "kindAppStore": "App Store",
+    "kindCustom": "Custom App (Apple Business)",
+    "kinds": {
+      "app_store": "App Store",
+      "custom": "Custom App",
+      "enterprise": "In-house app"
+    },
+    "publisher": "Publisher",
+    "addHelp": "The identifier is the bundle identifier of the app; it must match what the devices report. Without a licence, the app is listed but not installed.",
+    "platforms": "Platforms",
+    "metadataRefreshed": "Synchronised",
+    "inventory": "On the devices",
+    "installCounts": "{{installed}} device(s), {{managed}} managed, {{failed}} in error",
+    "delivery": {
+      "applied": "Installed",
+      "pending": "Waiting",
+      "delivering": "Being installed",
+      "error": "Error",
+      "not_applicable": "Not applicable (licence)",
+      "removing": "Being removed"
+    },
+    "archive": "Archive",
+    "archiveBlocked": "Remove the assignments of this app first",
+    "confirmArchive": "Archive the app {{name}}?",
+    "archivedDone": "App archived",
+    "assignTitle": "Assign an app",
+    "options": {
+      "title": "Options of the app",
+      "removable": "The user may delete the app",
+      "removableHint": "Always allowed on a personal device.",
+      "removeOnUnenroll": "Removed with the management",
+      "removeOnUnenrollHint": "The app leaves the device when it leaves management.",
+      "preventBackup": "No backup of its data",
+      "preventBackupHint": "The data of the app are not saved in the backups of the device.",
+      "takeOver": "Take over the app if the user installed it",
+      "takeOverHint": "Never on a personal device enrolled with User Enrollment.",
+      "config": "Managed configuration (JSON, optional, no secret)",
+      "configInvalid": "The managed configuration must be a JSON object."
+    }
   }
 }

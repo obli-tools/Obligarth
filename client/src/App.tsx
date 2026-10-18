@@ -13,6 +13,7 @@ import { DashboardPage } from '@/pages/DashboardPage';
 import { DeviceListPage } from '@/pages/DeviceListPage';
 import { DeviceSummaryPage } from '@/pages/DeviceSummaryPage';
 import { PoliciesPage } from '@/pages/PoliciesPage';
+import { AppsPage } from '@/pages/AppsPage';
 import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
 import { EndUsersPage } from '@/pages/EndUsersPage';
 import { DeviceEnrollmentPage } from '@/pages/DeviceEnrollmentPage';
@@ -60,6 +61,8 @@ export default function App() {
  {/* Policies: any member reads them; writing needs mdm.policies.manage (checked by the pages and the server). */}
  <Route path="/policies" element={<PoliciesPage />} />
  <Route path="/policies/:id" element={<PolicyEditorPage />} />
+ {/* Apps (lot C4): any member reads the catalog; writing needs mdm.apps.manage (checked by the page and the server). */}
+ <Route path="/apps" element={<AppsPage />} />
  {/* Groups */}
  <Route path="/group/:id" element={<GroupDetailPage />} />
  <Route path="/group/:id/edit" element={<GroupEditPage />} />

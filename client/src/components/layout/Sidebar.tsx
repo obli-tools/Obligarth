@@ -22,6 +22,7 @@ import {
   Contact,
   QrCode,
   Plug,
+  AppWindow,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -484,6 +485,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // Policies: any member reads them (writing needs mdm.policies.manage); the Notifications tab of the page
     // stays for administrators.
     { label: t('nav.policies'),                   path: '/policies',   icon: <ScrollText size={18} /> },
+    // Apps (lot C4): any member reads the catalog (writing needs mdm.apps.manage).
+    { label: t('nav.apps', 'Apps'),               path: '/apps',       icon: <AppWindow size={18} /> },
     // End users: the reader gate of the routes (users.manage or devices.manage).
     ...(admin || hasEndUsersCap
       ? [{ label: t('nav.endUsers', 'End users'), path: '/end-users',  icon: <Contact size={18} /> } as NavItem]

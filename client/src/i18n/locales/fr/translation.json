@@ -70,7 +70,8 @@
     "administration": "Administration",
     "endUsers": "Utilisateurs finaux",
     "deviceEnrollment": "Inscription",
-    "integrations": "Intégrations"
+    "integrations": "Intégrations",
+    "apps": "Apps"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -1611,7 +1612,8 @@
       "approvals_review": "Approbations · Examiner les demandes",
       "mdm_policies_manage": "Politiques · Modifier, affecter et publier",
       "mdm_enrollment_manage": "Inscription · Profils, liens et invitations",
-      "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE"
+      "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE, Apps and Books",
+      "mdm_apps_manage": "Apps · Catalogue et affectations"
     }
   },
   "notificationCenter": {
@@ -2890,7 +2892,65 @@
       "vpp": {
         "title": "Apps and Books",
         "tokens": "{{count}} jeton(s) de contenu, {{active}} actif(s).",
-        "none": "Les jetons de contenu d'Apps and Books se connectent dans une prochaine version de la console."
+        "none": "Aucun jeton de contenu Apps and Books pour l’instant.",
+        "noneYet": "Aucun jeton de contenu pour l’instant.",
+        "add": "Connecter un jeton de contenu",
+        "addTitle": "Connecter un jeton de contenu",
+        "help": "Dans Apple Business (Préférences, Paiements et facturation), téléchargez le jeton de contenu (.vpptoken) du site dont ce tenant installe les apps, puis importez-le ici. La console garde le jeton chiffré ; les licences sont synchronisées toutes les heures.",
+        "labelLabel": "Nom (le site dans Apple Business)",
+        "chooseFile": "Choisir le fichier .vpptoken",
+        "fileChosen": "Fichier choisi",
+        "imported": "Jeton de contenu connecté",
+        "importedForeign": "Jeton de contenu connecté, mais un autre MDM l’utilise : reprenez-le pour gérer ses licences ici.",
+        "expires": "Expiration du jeton",
+        "lastSync": "Dernière synchronisation",
+        "licences": "Licences",
+        "assetsCount": "{{count}} app(s)",
+        "pendingOps": "{{count}} opération(s) en cours",
+        "notifications": "Notifications d’Apple",
+        "notificationsOk": "Reçues",
+        "notificationsNone": "Pas encore reçues",
+        "foreignHelp": "Un autre MDM utilise ce jeton de contenu. Le reprendre déplace ici la gestion des licences de ce site : cet MDM ne pourra plus les installer.",
+        "invalidHelp": "Apple n’accepte plus ce jeton de contenu : téléchargez-en un nouveau dans Apple Business et remplacez-le.",
+        "expiredHelp": "Ce jeton de contenu est échu : téléchargez-en un nouveau dans Apple Business et remplacez-le.",
+        "lastError": "Dernière erreur : {{code}}",
+        "takeover": "Reprendre le jeton",
+        "takeoverTitle": "Reprendre un jeton de contenu",
+        "takeoverWarning": "Le jeton de contenu {{name}} est utilisé par un autre MDM. Le reprendre inscrit cette console comme son MDM chez Apple : l’autre MDM ne pourra plus attribuer ni récupérer les licences de ce site, et les apps qu’il a installées pourraient ne plus se mettre à jour. Ne le faites que si cet MDM est en cours de remplacement.",
+        "takeoverGuard": "Votre second facteur est demandé (ou un second approbateur, selon les restrictions du tenant) ; la reprise est inscrite au journal d’audit comme action critique.",
+        "takeoverAck": "Je comprends que l’autre MDM perd les licences de ce site.",
+        "takeoverPending": "Un second approbateur doit valider la reprise",
+        "takenOver": "Jeton de contenu repris",
+        "sync": "Synchroniser maintenant",
+        "syncRequested": "Synchronisation demandée",
+        "replace": "Remplacer le jeton",
+        "replaced": "Jeton de contenu remplacé",
+        "confirmRemove": "Supprimer le jeton de contenu {{name}} ? Ses licences ne seront plus gérées par ce tenant.",
+        "removed": "Jeton de contenu supprimé",
+        "operations": "Opérations récentes sur les licences",
+        "opTargets": "{{assets}} app(s), {{targets}} cible(s)",
+        "state": {
+          "active": "Actif",
+          "foreign_mdm": "Utilisé par un autre MDM",
+          "expired": "Échu",
+          "invalid": "Refusé par Apple",
+          "removed": "Supprimé"
+        },
+        "kind": {
+          "associate": "Licences attribuées",
+          "disassociate": "Licences récupérées",
+          "revoke": "Licences révoquées",
+          "users_create": "Utilisateurs créés",
+          "users_update": "Utilisateurs modifiés",
+          "users_retire": "Utilisateurs retirés"
+        },
+        "opState": {
+          "requested": "Demandée",
+          "pending": "Chez Apple",
+          "complete": "Terminée",
+          "failed": "En échec",
+          "abandoned": "Abandonnée"
+        }
       },
       "deadlines": {
         "title": "Échéances",
@@ -3403,7 +3463,24 @@
     "fileTooLarge": "Le fichier est trop volumineux.",
     "approvalRequired": "Cette action exige un second approbateur.",
     "deadlineKindNotManual": "Cette échéance ne se saisit pas à la main.",
-    "instanceIdMissing": "L'instance n'a pas d'identifiant."
+    "instanceIdMissing": "L'instance n'a pas d'identifiant.",
+    "vppTokenNotFound": "Jeton de contenu introuvable",
+    "vppTokenFileInvalid": "Ce fichier n’est pas un jeton de contenu Apps and Books (.vpptoken)",
+    "vppTokenExpired": "Ce jeton de contenu est échu : téléchargez-en un nouveau dans Apple Business",
+    "vppTokenAlreadyUsed": "Ce jeton de contenu est déjà connecté",
+    "vppTokenRejected": "Apple a refusé ce jeton de contenu",
+    "vppTokenNotForeign": "Ce jeton de contenu n’est pas utilisé par un autre MDM",
+    "vppTokenNotActive": "Ce jeton de contenu n’est pas actif",
+    "vppTokenOtherLocation": "Ce jeton de contenu appartient à un autre site d’Apple Business",
+    "vppRateLimited": "Apps and Books demande d’attendre : réessayez dans quelques minutes",
+    "vppUnavailable": "Apps and Books est injoignable ou a refusé la demande",
+    "tenantNotProvisioned": "Le tenant n’est pas encore provisionné auprès du service des appareils",
+    "appNotFound": "App introuvable",
+    "appArchived": "Cette app est archivée",
+    "appIdentifierExists": "Une app du catalogue a déjà cet identifiant",
+    "appHasAssignments": "Retirez les affectations de cette app avant de l’archiver",
+    "appConfigSecretUnsupported": "Une configuration gérée d’app ne porte aucun secret à ce stade",
+    "licenseModeUnsupported": "Une app sans licence Apps and Books viendra dans une version ultérieure"
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -3545,5 +3622,70 @@
     "adeRegionHint": "Deux lettres (FR par défaut).",
     "skipSetupItems": "Écrans de l'assistant ignorés",
     "skipSetupItemsHint": "Clés d'Apple séparées par des virgules (Location, Siri, Privacy…) ; vide : la liste recommandée."
+  },
+  "apps": {
+    "title": "Apps",
+    "subtitle": "Les apps du tenant, licenciées par Apps and Books, et les appareils où elles sont installées.",
+    "search": "Chercher une app…",
+    "showArchived": "Afficher les apps archivées",
+    "add": "Ajouter une app",
+    "empty": "Aucune app pour l’instant",
+    "emptyHint": "Connectez un jeton de contenu Apps and Books dans l’onglet Intégrations, puis ajoutez les apps dont le tenant détient des licences.",
+    "name": "Nom",
+    "identifier": "Identifiant",
+    "licences": "Licences",
+    "assignments": "Affectations",
+    "updated": "Modifiée",
+    "archived": "Archivée",
+    "licenceCounts": "{{available}} disponible(s) sur {{total}}",
+    "licenceDetail": "{{available}} disponible(s), {{assigned}} attribuée(s), {{total}} au total",
+    "noLicence": "Aucune licence",
+    "detailTitle": "App",
+    "app": "App",
+    "created": "App ajoutée au catalogue",
+    "fromLicence": "À partir d’une licence du tenant",
+    "pickLicence": "Choisir une licence…",
+    "noFreeLicence": "Aucune licence sans app du catalogue",
+    "storeId": "Identifiant App Store",
+    "kind": "Type",
+    "kindAppStore": "App Store",
+    "kindCustom": "App personnalisée (Apple Business)",
+    "kinds": {
+      "app_store": "App Store",
+      "custom": "App personnalisée",
+      "enterprise": "App interne"
+    },
+    "publisher": "Éditeur",
+    "addHelp": "L’identifiant est l’identifiant de bundle de l’app ; il doit correspondre à ce que signalent les appareils. Sans licence, l’app est listée mais pas installée.",
+    "platforms": "Plateformes",
+    "metadataRefreshed": "Synchronisée",
+    "inventory": "Sur les appareils",
+    "installCounts": "{{installed}} appareil(s), {{managed}} gérée(s), {{failed}} en erreur",
+    "delivery": {
+      "applied": "Installée",
+      "pending": "En attente",
+      "delivering": "En cours d’installation",
+      "error": "Erreur",
+      "not_applicable": "Non applicable (licence)",
+      "removing": "En cours de retrait"
+    },
+    "archive": "Archiver",
+    "archiveBlocked": "Retirez d’abord les affectations de cette app",
+    "confirmArchive": "Archiver l’app {{name}} ?",
+    "archivedDone": "App archivée",
+    "assignTitle": "Affecter une app",
+    "options": {
+      "title": "Options de l’app",
+      "removable": "L’utilisateur peut supprimer l’app",
+      "removableHint": "Toujours permis sur un appareil personnel.",
+      "removeOnUnenroll": "Retirée avec la gestion",
+      "removeOnUnenrollHint": "L’app quitte l’appareil quand il sort de gestion.",
+      "preventBackup": "Pas de sauvegarde de ses données",
+      "preventBackupHint": "Les données de l’app ne sont pas incluses dans les sauvegardes de l’appareil.",
+      "takeOver": "Prendre en gestion l’app si l’utilisateur l’a installée",
+      "takeOverHint": "Jamais sur un appareil personnel inscrit en User Enrollment.",
+      "config": "Configuration gérée (JSON, facultative, sans secret)",
+      "configInvalid": "La configuration gérée doit être un objet JSON."
+    }
   }
 }
