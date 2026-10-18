@@ -303,15 +303,25 @@ export async function completeSignin(t: TenantFacts, a: { state: unknown; code: 
   }
   const url = created.payload.form === 'signin' ? created.payload.url : '';
   if (!url.startsWith(`${ENROLL_URL}?et=`)) return fail('token_refused');
-  await asTenant(t.tenantId, SIGNIN_ACTOR, () => db.transaction(async (trx) => {
-    await trx('android_signin_sessions').where({ tenant_id: t.tenantId, id: session.id, state: 'authenticated' })
+  // The session must still be authenticated: the hourly sweep may have expired it during the call to Google. A token
+  // whose session is not issued never reaches the device (its enrollment would be quarantined anyway): the device goes
+  // to the invalid page, the token (single use, 15 minutes) stays unused at Google.
+  const issued = await asTenant(t.tenantId, SIGNIN_ACTOR, () => db.transaction(async (trx): Promise<boolean> => {
+    const n = await trx('android_signin_sessions').where({ tenant_id: t.tenantId, id: session.id, state: 'authenticated' })
+      .where('expires_at', '>', trx.fn.now())
       .update({ state: 'issued', token_id: created.id, issued_at: trx.fn.now(), updated_at: trx.fn.now() });
+    if (Number(n) !== 1) {
+      await burn(trx, t, session, 'expired');
+      return false;
+    }
     await audit.appendInTx(trx, {
       tenantId: t.tenantId, action: 'android.signin_completed', target: { type: 'android_signin_session', id: session.id },
       details: { sessionId: session.id, profileId: String(session.profile_id), endUserId: auth.endUserId, tokenId: created.id,
         ownership: ownershipOfFacts(factsOfRow(session)) },
     }, signinAuditCtx());
+    return true;
   }));
+  if (!issued) return { kind: 'invalid', reason: 'expired' };
   return { kind: 'redirect', url, sessionId: session.id };
 }
 

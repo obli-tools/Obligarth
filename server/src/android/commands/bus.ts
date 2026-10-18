@@ -280,7 +280,7 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
     // Lot AN-F1 (EX-A7): a personal device never takes a WIPE with a wipe data flag (they act on the whole device).
     if (t!.ownership === 'personal' && byodCommandRefusal(body)) { out.refused.push({ deviceId, code: 'ownership' }); continue; }
     if (Number(t!.enterprise_id) !== e.id) { out.refused.push({ deviceId, code: 'not_amapi' }); continue; }
-    if (lostModeBlock.has(deviceId)) { out.refused.push({ deviceId, code: 'lost_mode_recent' }); continue; }
+    if (lostModeBlock.has(deviceId)) { out.refused.push({ deviceId, code: 'lost_mode_cooldown' }); continue; }
     const id = (req.commandIdFor?.(deviceId) ?? randomUUID()).toLowerCase();
     let secretEnc: string | null = null;
     if (newPassword !== null) {
