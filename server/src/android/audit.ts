@@ -50,6 +50,10 @@ export function registerAndroidAuditActions(): void {
     // Review AN-G1 (G1-R1): the end of an exit is not the return of the lock, audited once Google accepted it.
     { name: 'android.kiosk_exit_ended', criticality: 'standard', label: 'Android: kiosk exit ended' },
     { name: 'android.kiosk_lock_restored', criticality: 'standard', label: 'Android: kiosk lock back on the device policy' },
+    // Second review AN-G1 (G1-S1, G1-S2): the lock restored under a freeze without the wipe-capable settings of the
+    // policy (the paths withheld, never their values), then the full policy back after the unfreeze.
+    { name: 'android.kiosk_wipe_settings_withheld', criticality: 'critical', label: 'Android: kiosk lock restored under a freeze without its wipe-capable settings' },
+    { name: 'android.kiosk_wipe_settings_applied', criticality: 'standard', label: 'Android: withheld wipe-capable settings of a kiosk applied' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

@@ -22,6 +22,14 @@
 //   - the end of an exit is not the return of the lock: lock_restored_at (audit android.kiosk_lock_restored) is set
 //     when Google accepted the policy that holds the lock again (push.ts); until then readKioskState says the lock
 //     pending, and android.maintenance sends the push again every 15 minutes.
+// Second review AN-G1 (G1-S1, G1-S2): the return of the lock is never blocked by a freeze. A wipe-capable setting can
+// still reach the policy of a kiosk whose lock is pending (a publication or an assignment, neither looks at the
+// freeze; or a push still queued when the freeze came): under a freeze, push.ts then pushes the locked policy without
+// its wipe-capable paths, which passes the freeze lock of AN15 without easing it (kioskLockPendingUnderFreeze is the
+// only gate of that degraded rendering); markKioskLockRestored records it (wipe_withheld_at, audit
+// android.kiosk_wipe_settings_withheld, critical, the paths only), readKioskState says wipeSettingsWithheld, and
+// after the unfreeze android.maintenance sends the push of the full policy again every 15 minutes until Google
+// accepts it (markKioskWipeSettingsApplied, audit android.kiosk_wipe_settings_applied).
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
@@ -165,7 +173,7 @@ export async function endKioskExit(tenantId: number, userId: number, deviceId: n
 /** Ends the exits of a tenant past their end, those of devices that left management and, the tenant frozen, all its
  *  running exits; sends the push of the locks still pending (job and maintenance). */
 export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_EXIT_ACTOR):
-  Promise<{ expired: number; left: number; frozen: number; lockRetried: number }> {
+  Promise<{ expired: number; left: number; frozen: number; lockRetried: number; wipeRetried: number }> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
     const ctx = audit.fromJob({ name: 'android.kiosk-exit-end', requestId: `android-kiosk-${tenantId}-${Date.now()}` });
     const due = await trx('android_kiosk_exits as k')
@@ -195,10 +203,24 @@ export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_
       await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: p.id }).update({ lock_retry_at: trx.raw("now() + interval '15 minutes'") });
       devices.add(Number(p.device_id));
     }
+    // G1-S1: locks restored under a freeze without their wipe-capable settings, the tenant no longer frozen: the push
+    // of the full policy again (every 15 minutes until Google accepts it).
+    let wipeRetried = 0;
+    if (!(await readSettings(tenantId, trx)).frozen_at) {
+      const withheld = await trx('android_kiosk_exits as k')
+        .join('android_devices as a', function j() { this.on('a.device_id', '=', 'k.device_id').andOn('a.tenant_id', '=', 'k.tenant_id'); })
+        .where('k.tenant_id', tenantId).whereNotNull('k.wipe_withheld_at').whereNull('a.released_at')
+        .whereRaw('COALESCE(k.lock_retry_at, k.wipe_withheld_at) <= now()')
+        .forUpdate('k').select('k.id', 'k.device_id') as Array<{ id: string; device_id: number }>;
+      for (const w of withheld) {
+        await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: w.id }).update({ lock_retry_at: trx.raw("now() + interval '15 minutes'") });
+        if (!devices.has(Number(w.device_id))) { devices.add(Number(w.device_id)); wipeRetried += 1; }
+      }
+    }
     for (const d of devices) {
       if (!(await runningKioskExit(trx, tenantId, d))) await androidSenders.push(trx, { tenantId, deviceId: d });
     }
-    return { expired: expired.length, left: left.length, frozen, lockRetried: devices.size };
+    return { expired: expired.length, left: left.length, frozen, lockRetried: devices.size - wipeRetried, wipeRetried };
   }));
 }
 
@@ -239,10 +261,30 @@ export async function endKioskExitForWipePolicy(tenantId: number, deviceId: numb
 }
 
 /**
- * Google accepted (or already holds) the device's policy with its kiosk lock: the ended exits whose lock was pending
- * are restored (lock_restored_at, audit android.kiosk_lock_restored). Tenant context of the caller (push.ts).
+ * Is the kiosk lock of a device pending under a freeze of its tenant (second review AN-G1, G1-S1)? The tenant frozen
+ * (read now, in a short transaction of its own, as the gateway does), an ended exit of the device whose lock Google has
+ * not accepted yet, and no running exit. The only gate of the degraded rendering of push.ts (the locked policy
+ * without its wipe-capable paths). Tenant context of the caller.
  */
-export async function markKioskLockRestored(tenantId: number, deviceId: number): Promise<number> {
+export async function kioskLockPendingUnderFreeze(tenantId: number, deviceId: number): Promise<boolean> {
+  return db.transaction(async (trx) => {
+    if (!(await readSettings(tenantId, trx)).frozen_at) return false;
+    const pending = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('ended_at')
+      .whereNull('lock_restored_at').whereNot('end_reason', 'device_left').first('id');
+    if (!pending) return false;
+    return !(await runningKioskExit(trx, tenantId, deviceId));
+  });
+}
+
+/**
+ * Google accepted (or already holds) the device's policy with its kiosk lock: the ended exits whose lock was pending
+ * are restored (lock_restored_at, audit android.kiosk_lock_restored). `wipeWithheld`: the paths of the wipe-capable
+ * settings left out of that policy under a freeze (G1-S1): wipe_withheld_at is set (the full policy is pushed again
+ * after the unfreeze) and audited android.kiosk_wipe_settings_withheld (the paths, never their values). Tenant context
+ * of the caller (push.ts).
+ */
+export async function markKioskLockRestored(tenantId: number, deviceId: number, o: { wipeWithheld?: readonly string[] } = {}): Promise<number> {
+  const withheld = o.wipeWithheld && o.wipeWithheld.length ? [...o.wipeWithheld] : null;
   return db.transaction(async (trx) => {
     const rows = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('ended_at')
       .whereNull('lock_restored_at').whereNot('end_reason', 'device_left').forUpdate()
@@ -252,10 +294,40 @@ export async function markKioskLockRestored(tenantId: number, deviceId: number):
     if (await runningKioskExit(trx, tenantId, deviceId)) return 0;
     const ctx = audit.fromJob({ name: 'android.policies.push-device', requestId: 'android-kiosk-lock-' + tenantId + '-' + deviceId + '-' + Date.now() });
     for (const r of rows) {
-      await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: r.id }).update({ lock_restored_at: trx.fn.now(), lock_retry_at: null });
+      await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: r.id }).update({
+        lock_restored_at: trx.fn.now(), lock_retry_at: withheld ? trx.fn.now() : null, ...(withheld ? { wipe_withheld_at: trx.fn.now() } : {}),
+      });
       await audit.appendInTx(trx, {
         tenantId, action: 'android.kiosk_lock_restored', target: { type: 'device', id: String(deviceId), device: deviceId },
-        details: { exitId: r.id, reason: r.end_reason, channel: 'amapi' },
+        details: { exitId: r.id, reason: r.end_reason, channel: 'amapi', ...(withheld ? { wipeSettingsWithheld: true } : {}) },
+      }, ctx, { onFailure: 'spool' });
+      if (withheld) {
+        await audit.appendInTx(trx, {
+          tenantId, action: 'android.kiosk_wipe_settings_withheld', target: { type: 'device', id: String(deviceId), device: deviceId },
+          details: { exitId: r.id, reason: r.end_reason, paths: withheld, channel: 'amapi' },
+        }, ctx, { onFailure: 'spool' });
+      }
+    }
+    return rows.length;
+  });
+}
+
+/**
+ * Google accepted (or already holds) the device's full policy, rendered without any degradation: the wipe-capable
+ * settings withheld under a freeze are applied (wipe_withheld_at back to null, audit
+ * android.kiosk_wipe_settings_applied). Tenant context of the caller (push.ts).
+ */
+export async function markKioskWipeSettingsApplied(tenantId: number, deviceId: number): Promise<number> {
+  return db.transaction(async (trx) => {
+    const rows = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('wipe_withheld_at').forUpdate()
+      .select('id') as Array<{ id: string }>;
+    if (!rows.length) return 0;
+    const ctx = audit.fromJob({ name: 'android.policies.push-device', requestId: 'android-kiosk-wipe-applied-' + tenantId + '-' + deviceId + '-' + Date.now() });
+    for (const r of rows) {
+      await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: r.id }).update({ wipe_withheld_at: null, lock_retry_at: null });
+      await audit.appendInTx(trx, {
+        tenantId, action: 'android.kiosk_wipe_settings_applied', target: { type: 'device', id: String(deviceId), device: deviceId },
+        details: { exitId: r.id, channel: 'amapi' },
       }, ctx, { onFailure: 'spool' });
     }
     return rows.length;
@@ -275,8 +347,10 @@ const view = (r: Record<string, unknown>): AndroidKioskExitView => ({
   startedAt: new Date(r.started_at as string).toISOString(), expiresAt: new Date(r.expires_at as string).toISOString(),
   endedAt: r.ended_at ? new Date(r.ended_at as string).toISOString() : null, endReason: (r.end_reason as AndroidKioskExitEndReason | null) ?? null,
   lockRestoredAt: r.lock_restored_at ? new Date(r.lock_restored_at as string).toISOString() : null,
+  wipeWithheldAt: r.wipe_withheld_at ? new Date(r.wipe_withheld_at as string).toISOString() : null,
 });
-const VIEW_COLUMNS = ['id', 'device_id', 'guard_action_uuid', 'requested_by', 'started_at', 'expires_at', 'ended_at', 'end_reason', 'lock_restored_at'];
+const VIEW_COLUMNS = ['id', 'device_id', 'guard_action_uuid', 'requested_by', 'started_at', 'expires_at', 'ended_at', 'end_reason', 'lock_restored_at',
+  'wipe_withheld_at'];
 
 /** The kiosk state of a device of the tenant (route GET /devices/:id/kiosk); null when the device is unknown. */
 export async function readKioskState(tenantId: number, userId: number, deviceId: number): Promise<AndroidKioskState | null> {
@@ -291,9 +365,12 @@ export async function readKioskState(tenantId: number, userId: number, deviceId:
         .orWhere((w) => w.whereNull('ended_at').where('expires_at', '<=', db.fn.now())))
       .orderBy('started_at', 'desc').first(VIEW_COLUMNS);
     const managed = r.enrollment_state === 'enrolled' && !r.released_at;
+    // G1-S1: the lock back under a freeze without the policy's wipe-capable settings (withheld until the unfreeze).
+    const withheld = managed
+      ? await db('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('wipe_withheld_at').first('id') : undefined;
     return {
       deviceId, dedicated: r.usage === 'kiosk' && r.management_mode === 'dedicated', exit: exit ? view(exit) : null,
-      lockPending: !!pending && managed, lockPendingExit: pending && managed ? view(pending) : null,
+      lockPending: !!pending && managed, lockPendingExit: pending && managed ? view(pending) : null, wipeSettingsWithheld: !!withheld,
     };
   });
 }

@@ -10,10 +10,14 @@ import type { Knex } from 'knex';
 //     device (unique partial index). Review AN-G1 (G1-R1): an exit also ends when the tenant is frozen (the safest
 //     state first) or when the device's policy comes to carry a wipe-capable setting; the end of an exit is not the
 //     return of the lock: lock_restored_at is set when Google accepts the policy that holds the lock again, and the
-//     push is sent again (lock_retry_at, every 15 minutes) until it is;
+//     push is sent again (lock_retry_at, every 15 minutes) until it is. Second review AN-G1 (G1-S1, G1-S2): the
+//     return of the lock is never blocked by a freeze: under a freeze the lock is pushed back without the
+//     wipe-capable settings of the policy (wipe_withheld_at), and the full policy is pushed again after the unfreeze
+//     (lock_retry_at, every 15 minutes) until Google holds it (wipe_withheld_at back to null);
 //   - function android_kiosk_due() (SECURITY DEFINER, context none of android.maintenance): the tenants with a
 //     running exit past its end, whose device left management, or of a frozen tenant (the lock is then pushed back),
-//     and the tenants with an ended exit whose lock is still pending (its push sent again).
+//     the tenants with an ended exit whose lock is still pending (its push sent again), and the tenants no longer
+//     frozen with a lock restored without its wipe-capable settings (the full policy pushed again).
 // New table and function only. Runs as obligarth_owner (server-migrate); ends with obligarth.rls_assert_clean(). No
 // question mark in the SQL.
 
@@ -46,6 +50,7 @@ CREATE TABLE obligarth.android_kiosk_exits (
   ended_by           integer       REFERENCES obligarth.users (id) ON DELETE SET NULL,
   lock_restored_at   timestamptz,                          -- Google accepted the policy with the lock again
   lock_retry_at      timestamptz,                          -- next push of the lock while it is pending
+  wipe_withheld_at   timestamptz,                          -- lock restored under a freeze without the wipe-capable settings
   created_at         timestamptz   NOT NULL DEFAULT now(),
   CONSTRAINT android_kiosk_exits_pkey PRIMARY KEY (id),
   CONSTRAINT android_kiosk_exits_tenant_id_id_unique UNIQUE (tenant_id, id),
@@ -57,7 +62,8 @@ CREATE TABLE obligarth.android_kiosk_exits (
   CONSTRAINT android_kiosk_exits_end_check CHECK ((ended_at IS NULL) = (end_reason IS NULL)
     AND (end_reason IS NULL OR end_reason IN (${list(END_REASONS)}))),
   CONSTRAINT android_kiosk_exits_ended_after_check CHECK (ended_at IS NULL OR ended_at >= started_at),
-  CONSTRAINT android_kiosk_exits_lock_check CHECK (lock_restored_at IS NULL OR ended_at IS NOT NULL)
+  CONSTRAINT android_kiosk_exits_lock_check CHECK (lock_restored_at IS NULL OR ended_at IS NOT NULL),
+  CONSTRAINT android_kiosk_exits_wipe_withheld_check CHECK (wipe_withheld_at IS NULL OR lock_restored_at IS NOT NULL)
 );
 CREATE UNIQUE INDEX android_kiosk_exits_open ON obligarth.android_kiosk_exits (tenant_id, device_id) WHERE ended_at IS NULL;
 CREATE UNIQUE INDEX android_kiosk_exits_action ON obligarth.android_kiosk_exits (tenant_id, guard_action_uuid, device_id);
@@ -65,10 +71,13 @@ CREATE INDEX android_kiosk_exits_due ON obligarth.android_kiosk_exits (expires_a
 CREATE INDEX android_kiosk_exits_device ON obligarth.android_kiosk_exits (tenant_id, device_id, started_at);
 CREATE INDEX android_kiosk_exits_lock_pending ON obligarth.android_kiosk_exits (lock_retry_at)
   WHERE ended_at IS NOT NULL AND lock_restored_at IS NULL AND end_reason <> 'device_left';
+CREATE INDEX android_kiosk_exits_wipe_withheld ON obligarth.android_kiosk_exits (lock_retry_at)
+  WHERE wipe_withheld_at IS NOT NULL;
 SELECT obligarth_private.rls_apply('obligarth.android_kiosk_exits', 'tenant', 'android: kiosk exits of dedicated devices (lot AN-G1)');
 
 -- Tenants with a running kiosk exit past its end, whose device left management or of a frozen tenant, and tenants
--- with an ended exit whose lock is still pending past its retry time (context 'none'; tenant ids only).
+-- with an ended exit whose lock is still pending past its retry time, or whose lock came back under a freeze without
+-- the wipe-capable settings while the tenant is no longer frozen (context 'none'; tenant ids only).
 CREATE FUNCTION obligarth.android_kiosk_due()
   RETURNS TABLE (tenant_id integer)
   LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $$
@@ -89,6 +98,10 @@ BEGIN
       OR (k.ended_at IS NOT NULL AND k.lock_restored_at IS NULL AND k.end_reason <> 'device_left'
           AND a.device_id IS NOT NULL AND a.released_at IS NULL
           AND COALESCE(k.lock_retry_at, k.ended_at + interval '10 minutes') <= now())
+      OR (k.wipe_withheld_at IS NOT NULL AND a.device_id IS NOT NULL AND a.released_at IS NULL
+          AND COALESCE(k.lock_retry_at, k.wipe_withheld_at) <= now()
+          AND NOT EXISTS (SELECT 1 FROM obligarth.tenant_guard_settings g
+                           WHERE g.tenant_id = k.tenant_id AND g.frozen_at IS NOT NULL))
    ORDER BY 1;
 END $$;
 REVOKE ALL ON FUNCTION obligarth.android_kiosk_due() FROM PUBLIC;

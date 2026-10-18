@@ -17,6 +17,13 @@
 // policy of a kiosk profile (its app, never an exit). Review AN-G1 (G1-R1): an exit is never applied to a policy that
 // carries a wipe-capable setting (the compiler keeps the lock, the exit ends as wipe_policy), and the lock of an ended
 // exit is said restored only once Google accepted the policy that holds it (markKioskLockRestored).
+// Second review AN-G1 (G1-S1, G1-S2): the return of the lock is never blocked by a freeze. When the lock of a kiosk is
+// pending under a freeze of its tenant (kioskLockPendingUnderFreeze, read just before the call) and its locked policy
+// carries a wipe-capable setting, that policy is pushed without its wipe-capable paths (withoutWipeSettings,
+// module-private): it passes the freeze lock of AN15 without easing it, and Google holds no wipe-capable setting for
+// the device that the push would add (an unlocked policy never carries one, G1-R1). The degraded rendering is audited
+// (android.kiosk_wipe_settings_withheld) and the full policy follows after the unfreeze (android.maintenance; audit
+// android.kiosk_wipe_settings_applied once Google accepts it). No other case, no option of a caller, reaches it.
 // No call to Google inside a transaction (G-A1).
 import type { Knex } from 'knex';
 import { POLICY_VARIABLES, type JsonValue, type PolicyVariable } from '@obligarth/shared';
@@ -36,8 +43,10 @@ import { parseOwnedName } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { DEFAULT_PRIVACY } from '../inventory/privacy';
 import { kioskAppInCatalog, readAndroidProfile, snapshotOf } from '../enrollment/profiles';
-import { endKioskExitForWipePolicy, markKioskLockRestored, runningKioskExit } from '../kiosk/exits';
-import { policyHasWipeSettings } from '../../mdm/android/overlay';
+import {
+  endKioskExitForWipePolicy, kioskLockPendingUnderFreeze, markKioskLockRestored, markKioskWipeSettingsApplied, runningKioskExit,
+} from '../kiosk/exits';
+import { policyHasWipeSettings, PRIVATE_SPACE_DISALLOWED } from '../../mdm/android/overlay';
 import { androidSenders } from '../enrollment/senders';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
@@ -118,6 +127,54 @@ async function setPolicyError(tenantId: number, deviceId: number, reasons: strin
   }));
 }
 
+const isObject = (v: unknown): v is Record<string, JsonValue> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+/**
+ * The locked policy of a kiosk without its wipe-capable settings (the closed list of WIPE_CAPABLE_PATHS, §22.4), and
+ * the paths left out (second review AN-G1, G1-S1). Module-private on purpose: pushDevicePolicy alone calls it, behind
+ * kioskLockPendingUnderFreeze, and checks the result with policyHasWipeSettings (fail closed).
+ */
+function withoutWipeSettings(body: Record<string, JsonValue>): { body: Record<string, JsonValue>; paths: string[] } {
+  const out = structuredClone(body);
+  const paths: string[] = [];
+  const rules = out.policyEnforcementRules;
+  if (Array.isArray(rules) && rules.some((r) => isObject(r) && r.wipeAction !== undefined)) {
+    paths.push('policyEnforcementRules[].wipeAction');
+    // A rule keeps its blockAction (AMAPI requires one with a wipeAction); a rule left with no action goes.
+    const kept = rules.map((r) => {
+      if (!isObject(r)) return r;
+      const { wipeAction: _w, ...rest } = r;
+      return rest;
+    }).filter((r) => isObject(r) && r.blockAction !== undefined);
+    if (kept.length) out.policyEnforcementRules = kept; else delete out.policyEnforcementRules;
+  }
+  const pp = out.passwordPolicies;
+  if (Array.isArray(pp) && pp.some((r) => isObject(r) && r.maximumFailedPasswordsForWipe !== undefined)) {
+    paths.push('passwordPolicies[].maximumFailedPasswordsForWipe');
+    out.passwordPolicies = pp.map((r) => {
+      if (!isObject(r)) return r;
+      const { maximumFailedPasswordsForWipe: _m, ...rest } = r;
+      return rest;
+    });
+  }
+  const pr = out.passwordRequirements;
+  if (isObject(pr) && pr.maximumFailedPasswordsForWipe !== undefined) {
+    paths.push('passwordRequirements.maximumFailedPasswordsForWipe');
+    const { maximumFailedPasswordsForWipe: _m, ...rest } = pr;
+    out.passwordRequirements = rest;
+  }
+  for (const k of ['frpAdminEmails', 'setupActions', 'wipeDataFlags'] as const) {
+    if (out[k] !== undefined) { paths.push(k); delete out[k]; }
+  }
+  const pu = out.personalUsagePolicies;
+  if (isObject(pu) && pu.privateSpacePolicy === PRIVATE_SPACE_DISALLOWED) {
+    paths.push(`personalUsagePolicies.privateSpacePolicy=${PRIVATE_SPACE_DISALLOWED}`);
+    const { privateSpacePolicy: _p, ...rest } = pu;
+    if (Object.keys(rest).length) out.personalUsagePolicies = rest; else delete out.personalUsagePolicies;
+  }
+  return { body: out, paths };
+}
+
 /**
  * android.policies.push-device for one device (section 9.4). `onboard`: the first push after the enrollment or the
  * approval (devices.patch policyName, and state ACTIVE for a device approved while DISABLED).
@@ -169,25 +226,47 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     }
     // G1-R1: the exit is ended before the push of the locked policy (never an unlocked policy with a wipe-capable setting).
     if (compiled.kioskExitWithheld) await endKioskExitForWipePolicy(tenantId, deviceId);
+    // The lock of a kiosk is on Google's side as compiled: an ended exit's lock is restored (G1-R1).
+    const lockHeld = !!compiled.kioskLock && !compiled.kioskExit;
+    // G1-S1, G1-S2: the return of the lock is never blocked by the freeze. The lock pending under a freeze and the
+    // locked policy carrying a wipe-capable setting: that policy goes without its wipe-capable paths (the only case).
+    let body = compiled.body;
+    let wipeWithheld: string[] | null = null;
+    if (lockHeld && policyHasWipeSettings(compiled.body) && await kioskLockPendingUnderFreeze(tenantId, deviceId)) {
+      const stripped = withoutWipeSettings(compiled.body);
+      if (!stripped.paths.length || policyHasWipeSettings(stripped.body)) {
+        await setPolicyError(tenantId, deviceId, ['kiosk_wipe_withhold_failed'], false);
+        return 'error';
+      }
+      body = stripped.body;
+      wipeWithheld = stripped.paths;
+    }
     // The secrets of the tenant, read in the job (never another tenant's: readTenantSecret refuses it).
     const secrets = new Map<string, Buffer>();
     let rendered;
     try {
       for (const ref of compiled.secretRefs) secrets.set(ref, await vault.readTenantSecret(tenantId, ref));
-      rendered = renderAndroidPolicy(compiled.body, desired.variables, secrets);
+      rendered = renderAndroidPolicy(body, desired.variables, secrets);
     } catch (err) {
       await setPolicyError(tenantId, deviceId, [`render:${err instanceof RenderError ? err.code : 'secret_unavailable'}`], false);
       return 'error';
     } finally {
       for (const b of secrets.values()) b.fill(0);
     }
+    // The degraded rendering is checked once more after the rendering (fail closed).
+    if (wipeWithheld && policyHasWipeSettings(rendered.policy as Record<string, unknown>)) {
+      await setPolicyError(tenantId, deviceId, ['kiosk_wipe_withhold_failed'], false);
+      return 'error';
+    }
+    const lockAccepted = async () => {
+      if (lockHeld) await markKioskLockRestored(tenantId, deviceId, wipeWithheld ? { wipeWithheld } : {});
+    };
     const sameRender = rendered.renderedHash === row.pushed_rendered_hash && row.pushed_policy_version !== null;
     const attach = row.policy_name !== compiled.policyId;
     const activate = row.approval_state === 'approved' && row.state === 'DISABLED' && !prep.operatorDisabled;
-    // The lock of a kiosk is on Google's side as compiled: an ended exit's lock is restored (G1-R1).
-    const lockHeld = !!compiled.kioskLock && !compiled.kioskExit;
     if (sameRender && !attach && !activate) {
-      if (lockHeld) await markKioskLockRestored(tenantId, deviceId);
+      await lockAccepted();
+      if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
       return 'unchanged';
     }
     const p = parseOwnedName(e, row.amapi_name);
@@ -216,8 +295,11 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       }
       await db.transaction((trx) => trx('android_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({
         pushed_policy_version: Number(version) || null, pushed_rendered_hash: rendered.renderedHash, pushed_at: trx.fn.now(),
-        policy_state: 'delivering', policy_state_reasons: '[]', policy_push_failures: 0, updated_at: trx.fn.now(),
+        policy_state: 'delivering', policy_state_reasons: wipeWithheld ? JSON.stringify(['kiosk_wipe_withheld']) : '[]', policy_push_failures: 0,
+        updated_at: trx.fn.now(),
       }));
+      // The device already holds this policy: its lock is back now (an activation refused under a freeze waits alone).
+      if (!attach) await lockAccepted();
     }
     if (attach || activate) {
       const patched = await gw.patchDevice(e, p.deviceId, { policyName: compiled.policyId, ...(activate ? { state: 'ACTIVE' as const } : {}) });
@@ -225,7 +307,8 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
         policy_name: compiled.policyId, ...(activate ? { state: typeof patched?.state === 'string' ? patched.state : 'ACTIVE' } : {}), updated_at: trx.fn.now(),
       }));
     }
-    if (lockHeld) await markKioskLockRestored(tenantId, deviceId);
+    await lockAccepted();
+    if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
     return 'pushed';
   });
 }

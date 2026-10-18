@@ -49,6 +49,12 @@ export interface AndroidKioskExitView {
   endReason: AndroidKioskExitEndReason | null;
   /** When Google accepted the policy that holds the lock again (null: not yet, or the exit still runs). */
   lockRestoredAt: string | null;
+  /**
+   * When the lock came back under a freeze without the wipe-capable settings of the policy (second review AN-G1,
+   * G1-S1): the return of the lock is never blocked by a freeze; the full policy follows after the unfreeze. Null: the
+   * full policy holds the lock (or the lock is not back yet).
+   */
+  wipeWithheldAt: string | null;
 }
 
 /** The kiosk state of a device for the console. */
@@ -62,6 +68,11 @@ export interface AndroidKioskState {
    */
   lockPending: boolean;
   lockPendingExit: AndroidKioskExitView | null;
+  /**
+   * The lock is back on the device but its policy was pushed under a freeze without its wipe-capable settings: those
+   * settings are withheld until the unfreeze, when the full policy is pushed again (second review AN-G1).
+   */
+  wipeSettingsWithheld: boolean;
 }
 
 /** Refusal of a kiosk exit whose device's policy carries a wipe-capable setting (review AN-G1, G1-R1). */
