@@ -1,6 +1,7 @@
 import { logger } from '../utils/logger';
 import { registerStartTask, registerStopTask } from '../lifecycle';
-import { registerInstanceSecretName } from '../vault';
+import { registerInstanceSecretName, registerSecretReferenceHolder } from '../vault';
+import { db } from '../db';
 import { raiseAndroidPlatformAlert } from '../android/alerts';
 import { registerAndroidAuditActions } from '../android/audit';
 import { androidConfig } from '../android/config';
@@ -12,6 +13,9 @@ import { freezeAndroidEventHandlers } from '../android/inbox/handlers';
 import { registerEnterpriseHandlers } from '../android/inbox/handlers.enterprise';
 import { registerAndroidJobs } from '../android/jobs';
 import { AndroidPullLoop } from '../android/link/pull';
+import { registerEnrollmentHandler } from '../android/enrollment/handler';
+import { registerStatusReportHandler } from '../android/inventory/statusReport';
+import { setAndroidDeviceCounter } from '../android/gateway/google';
 
 // =============================================================================
 // ANDROID (Android Management API, called directly by the instance) — its hooks into the core's registries,
@@ -35,6 +39,19 @@ export function registerAndroidModule(): void {
   registerInstanceSecretName(GOOGLE_CREDENTIALS_SECRET, 'JSON key of the Google service account of the Android integration (vault_key mode)');
   registerAndroidAuditActions();
   registerEnterpriseHandlers();
+  // Lot AN-C1b: the enrollment and inventory handlers; the sealed values of the enrollment tokens are referenced by
+  // android_enrollment_tokens.value_ref (the garbage collection of the vault never destroys the value of a token
+  // that still holds it: AN17, §22.3); the device count of the last-resort caps (AN47).
+  registerEnrollmentHandler();
+  registerStatusReportHandler();
+  registerSecretReferenceHolder({
+    table: 'android_enrollment_tokens', column: 'value_ref', tenantColumn: 'tenant_id',
+    refs: (v) => (typeof v === 'string' && /^[0-9a-f-]{36}$/.test(v) ? [v] : []),
+  });
+  setAndroidDeviceCounter(async (tenantId) => {
+    const r = await db('android_devices').where({ tenant_id: tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
+    return Number(r[0]?.n ?? 0);
+  });
 
   const cfg = androidConfig();
   if (cfg.mode === 'off') return;

@@ -10,17 +10,21 @@ import { db } from '../db';
 import { asNone, asTenant } from '../db/context';
 import { raiseAndroidTenantAlert } from './alerts';
 import { checkProjectEnterprises, MAINTENANCE_ACTOR } from './enterprises/orphans';
+import { expireEnrollmentTokens } from './enrollment/tokens';
 import type { AndroidGateway } from './gateway/types';
 
 type DrainWaker = (tenantId: number) => Promise<unknown>;
 let wakeDrain: DrainWaker = async () => undefined;
 export function setMaintenanceDrainWaker(fn: DrainWaker): void { wakeDrain = fn; }
+/** android.tokens-recover of a tenant (AN50 recovery and garbage collection at Google: network, hence a job). */
+let recoverTokens: DrainWaker = async () => undefined;
+export function setTokenRecoverySender(fn: DrainWaker): void { recoverTokens = fn; }
 
-export interface MaintenanceResult { drains: number; interrupted: number; expired: number; purged: number; orphans: number | null }
+export interface MaintenanceResult { drains: number; interrupted: number; expired: number; purged: number; orphans: number | null; tokensExpired: number }
 
 export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean } = {}): Promise<MaintenanceResult> {
   const now = o.now ?? new Date();
-  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null };
+  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0 };
   const due = await asNone(MAINTENANCE_ACTOR, async () => {
     const r = await db.raw('SELECT tenant_id, inbox_due, signups_due, purge_due FROM obligarth.android_maintenance_due()') as
       { rows: Array<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }> };
@@ -51,11 +55,25 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
         n += await trx('android_inbox').where({ state: 'dead' })
           .where('received_at', '<', trx.raw("now() - interval '30 days'")).delete();
         n += await trx('android_destructive_events').where('at', '<', trx.raw("now() - interval '2 hours'")).delete();
+        n += await trx('android_enrollment_tokens').whereIn('state', ['used', 'expired', 'revoked', 'failed'])
+          .where('ended_at', '<', trx.raw("now() - interval '90 days'")).delete();
         n += await trx('android_signups').whereIn('state', ['completed', 'failed', 'expired', 'cancelled'])
           .where('created_at', '<', trx.raw("now() - interval '30 days'")).delete();
         return n;
       }));
     }
+  }
+  // Enrollment tokens (lot AN-C1b): active ones past their end expire here (their value destroyed); interrupted
+  // creations (creating for 15 minutes and more) go to android.tokens-recover.
+  const tokenDue = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw('SELECT tenant_id FROM obligarth.android_enrollment_due()') as { rows: Array<{ tenant_id: number }> };
+    return r.rows.map((x) => Number(x.tenant_id));
+  });
+  for (const tenantId of tokenDue) {
+    out.tokensExpired += await expireEnrollmentTokens(tenantId, MAINTENANCE_ACTOR);
+    const stale = await asTenant(tenantId, MAINTENANCE_ACTOR, () => db('android_enrollment_tokens').where({ state: 'creating' })
+      .where('created_at', '<', db.raw("now() - interval '15 minutes'")).first('id'));
+    if (stale) await recoverTokens(tenantId);
   }
   const weekly = o.weekly ?? (now.getUTCDay() === 1 && now.getUTCHours() === 4 && now.getUTCMinutes() === 0);
   if (weekly && o.gateway?.mode !== 'off') {

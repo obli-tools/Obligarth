@@ -36,6 +36,14 @@ export const ANDROID_ALERTS: readonly AndroidAlertDefinition[] = [
   { key: 'android.signup_failed', scope: 'tenant', severity: sev('medium'), title: 'Android: enterprise signup failed' },
   { key: 'android.signup_interrupted', scope: 'tenant', severity: sev('medium'), title: 'Android: enterprise signup interrupted' },
   { key: 'android.gateway_cap_reached', scope: 'both', severity: sev('critical'), title: 'Android: last-resort cap of destructive operations reached' },
+  // Enrollment, policies, inventory (lot AN-C1b). enrollment.* reuse the keys of the existing tenant alerts.
+  { key: 'enrollment.unknown_session', scope: 'tenant', severity: sev('medium'), title: 'Enrollments without a token of this tenant' },
+  { key: 'enrollment.ownership_mismatch', scope: 'tenant', severity: sev('high'), title: 'Ownership or mode differs from the enrollment profile' },
+  { key: 'enrollment.duplicate_serial', scope: 'tenant', severity: sev('medium'), title: 'Serial number held by a device under management' },
+  { key: 'android.device_api_too_low', scope: 'tenant', severity: sev('medium'), title: 'Android: device below the minimum API level of its profile' },
+  { key: 'android.enrollment_spike', scope: 'tenant', severity: sev('high'), title: 'Android: enrollment spike on a long token' },
+  { key: 'android.policy_push_failed', scope: 'tenant', severity: sev('high'), title: 'Android: policy refused by Google' },
+  { key: 'android.integrity_compromised', scope: 'tenant', severity: sev('critical'), title: 'Android: device integrity at risk' },
 ];
 
 const byKey = new Map(ANDROID_ALERTS.map((a) => [a.key, a]));
