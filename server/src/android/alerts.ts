@@ -3,10 +3,13 @@
 // Texts carry an i18n key and identifiers only (never a device datum, a name nor an e-mail). The generic alert
 // catalogue opened to modules (registerAlertDefinitions) arrives with the channel generalisation; until then the
 // definitions live here.
+import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { db } from '../db';
 import { asTenant, type DbActor } from '../db/context';
 import { raiseJobAlert } from '../jobs/alerts';
 import { liveAlertService, type LiveAlertSeverity } from '../services/liveAlert.service';
 import { logger } from '../utils/logger';
+import { ANDROID_LOG_FORBIDDEN_KEYS } from './gateway/redact';
 
 export interface AndroidAlertDefinition {
   key: string;
@@ -44,20 +47,58 @@ export const ANDROID_ALERTS: readonly AndroidAlertDefinition[] = [
   { key: 'android.enrollment_spike', scope: 'tenant', severity: sev('high'), title: 'Android: enrollment spike on a long token' },
   { key: 'android.policy_push_failed', scope: 'tenant', severity: sev('high'), title: 'Android: policy refused by Google' },
   { key: 'android.integrity_compromised', scope: 'tenant', severity: sev('critical'), title: 'Android: device integrity at risk' },
+  // Lot AN-H1: operation (annex E, the catalogue made complete): approvals, quarantines, silent disappearances, deadlines.
+  { key: 'android.device_pending_approval', scope: 'tenant', severity: sev('medium'), title: 'Android: devices waiting for their approval' },
+  { key: 'android.quarantine_cap_reached', scope: 'tenant', severity: sev('critical'), title: 'Android: cap of quarantined enrollments reached' },
+  { key: 'android.device_offline_long', scope: 'tenant', severity: sev('medium'), title: 'Android: devices without contact for 240 days' },
+  { key: 'android.device_presumed_gone', scope: 'tenant', severity: sev('low'), title: 'Android: devices presumed gone' },
+  { key: 'android.token_expiring', scope: 'tenant', severity: sev('low'), title: 'Android: long enrollment tokens to renew' },
 ];
 
 const byKey = new Map(ANDROID_ALERTS.map((a) => [a.key, a]));
 const PLATFORM_ACTOR: DbActor = { type: 'job', name: 'android.alerts' };
 
+/**
+ * The parameters of an alert text, reduced to identifiers and counts (criterion 13, G-A4, I11: no datum of the
+ * extended T-5 list in an alert text). Kept: a key of letters only, and a value that is either an integer of at most
+ * 12 digits (an internal identifier, a count; never an IMEI) or a lowercase code (reason, kind, hash, uuid) without '@'
+ * that is not a long run of digits (a serial, an IMEI, a phone number). Anything else is dropped, its key logged.
+ */
+export function alertParams(params: Record<string, unknown>): Record<string, string | number> {
+  const out: Record<string, string | number> = {};
+  const dropped: string[] = [];
+  for (const [k, v] of Object.entries(params ?? {})) {
+    if (!/^[A-Za-z]{1,32}$/.test(k)) { dropped.push('?'); continue; }
+    if (FORBIDDEN_KEYS.has(k.toLowerCase())) { dropped.push(k); continue; }
+    if (typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) < 1e12) { out[k] = v; continue; }
+    if (typeof v === 'string' && /^obg[0-9]*:/i.test(v)) { dropped.push(k); continue; }   // additionalData of a token (enrollmentTokenData)
+    if (typeof v === 'string' && /^[a-z0-9][a-z0-9_.:-]{0,63}$/.test(v) && !/[0-9]{8,}/.test(v.replace(/[-_.:]/g, ''))
+      || (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v))) { out[k] = v; continue; }
+    dropped.push(k);
+  }
+  if (dropped.length) logger.warn({ alertParamsDropped: dropped.slice(0, 10) }, 'android: alert parameters dropped (not an identifier)');
+  return out;
+}
+
+const FORBIDDEN_KEYS = new Set([...ANDROID_LOG_FORBIDDEN_KEYS, 'serial', 'phone', 'email', 'name', 'tokendata'].map((k) => k.toLowerCase()));
+
+const suffixOf = (s: string): string => (/^[A-Za-z0-9:_-]{1,64}$/.test(s) ? s : '');
+
+/** The text of an Android alert: the i18n key and the reduced parameters (the console translates alerts.<key>). */
+export function alertMessage(key: string, params: Record<string, unknown>): string {
+  return `i18n:alerts.${key} ${JSON.stringify(alertParams(params)).slice(0, 400)}`;
+}
+
 /** Raises a platform alert (master tenant); never throws. `params`: identifiers and counts only. */
 export async function raiseAndroidPlatformAlert(key: string, params: Record<string, string | number> = {}, dedupSuffix = ''): Promise<void> {
   const def = byKey.get(key);
   if (!def || def.scope === 'tenant') { logger.error({ alert: key }, 'android: undeclared platform alert'); return; }
+  const suffix = suffixOf(dedupSuffix);
   await raiseJobAlert(PLATFORM_ACTOR, {
-    stableKey: `${key}${dedupSuffix ? `:${dedupSuffix}` : ''}`,
+    stableKey: `${key}${suffix ? `:${suffix}` : ''}`,
     severity: def.severity,
     title: def.title,
-    message: `i18n:alerts.${key} ${JSON.stringify(params).slice(0, 400)}`,
+    message: alertMessage(key, params),
   });
 }
 
@@ -67,10 +108,43 @@ export async function raiseAndroidTenantAlert(tenantId: number, key: string, par
   if (!def || def.scope === 'platform') { logger.error({ alert: key }, 'android: undeclared tenant alert'); return; }
   try {
     await asTenant(tenantId, PLATFORM_ACTOR, () => liveAlertService.add(tenantId, {
-      severity: def.severity, title: def.title, message: `i18n:alerts.${key} ${JSON.stringify(params).slice(0, 400)}`,
+      severity: def.severity, title: def.title, message: alertMessage(key, params),
       navigateTo: null, stableKey: key,
     }));
   } catch (err) {
     logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: tenant alert not written');
+  }
+}
+
+/**
+ * The definitions of the Android alerts in the shape of the alert catalogue opened to modules (registerAlertDefinitions,
+ * junction AN-P): key, scope, severity, title (English), i18n key of the text. Until then they live in this module.
+ */
+export function androidAlertDefinitions(): Array<AndroidAlertDefinition & { i18nKey: string }> {
+  return ANDROID_ALERTS.map((a) => ({ ...a, i18nKey: `alerts.${a.key}` }));
+}
+
+/** Resolves a platform alert (master tenant; the stable key with its suffix); never throws. */
+export async function resolveAndroidPlatformAlert(key: string, dedupSuffix = ''): Promise<void> {
+  const def = byKey.get(key);
+  if (!def || def.scope === 'tenant') return;
+  const suffix = suffixOf(dedupSuffix);
+  try {
+    await asTenant(MASTER_TENANT_ID, PLATFORM_ACTOR, () => db('live_alerts').where({ tenant_id: MASTER_TENANT_ID, stable_key: `${key}${suffix ? `:${suffix}` : ''}` })
+      .whereNull('resolved_at').update({ resolved_at: db.fn.now() }));
+  } catch (err) {
+    logger.error({ alert: key, err: (err as Error)?.name }, 'android: platform alert not resolved');
+  }
+}
+
+/** Resolves an alert of a tenant (the condition is gone: contact again, renewal…); never throws. */
+export async function resolveAndroidTenantAlert(tenantId: number, key: string): Promise<void> {
+  const def = byKey.get(key);
+  if (!def || def.scope === 'platform') return;
+  try {
+    await asTenant(tenantId, PLATFORM_ACTOR, () => db('live_alerts').where({ tenant_id: tenantId, stable_key: key }).whereNull('resolved_at')
+      .update({ resolved_at: db.fn.now() }));
+  } catch (err) {
+    logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: tenant alert not resolved');
   }
 }

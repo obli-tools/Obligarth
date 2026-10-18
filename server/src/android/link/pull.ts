@@ -35,6 +35,8 @@ const FOREIGN_ALERT_PER_HOUR = 10;
 type DrainSender = (trx: Knex.Transaction, tenantId: number) => Promise<unknown>;
 let drainSender: DrainSender = async () => undefined;
 export function setDrainSender(fn: DrainSender): void { drainSender = fn; }
+/** Sends the android.inbox-drain of a tenant in `trx` (the reconciliation writes reports to the inbox too: lot AN-H1). */
+export function sendDrainInTx(trx: Knex.Transaction, tenantId: number): Promise<unknown> { return drainSender(trx, tenantId); }
 
 export interface PullOutcome {
   received: number;

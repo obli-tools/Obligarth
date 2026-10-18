@@ -5,8 +5,13 @@
 //     past their hour → expired;
 //   - purges: payload emptied 24 h after application, applied and skipped rows deleted after 7 days, dead letters after
 //     30 days, destructive counter after 2 hours, finished signups after 30 days.
-// Weekly (Monday 04:00 UTC): the check of the project's enterprises (AN51).
+// Weekly (Monday 04:00 UTC): the check of the project's enterprises (AN51) and the recount of the quota (AN49).
+// Lot AN-H1 (operation): android_operations_due() finds the tenants whose reconciliation is due (daily slot, or asked),
+// whose devices presumed gone reach 270 days (the forget runs in the reconciliation), whose offboarding has a step due,
+// or whose operation rows are to purge (400 days); hourly (minute 0): the quota of the project; daily (04:10 UTC):
+// the age of the service account key.
 import { db } from '../db';
+import { logger } from '../utils/logger';
 import { asNone, asTenant } from '../db/context';
 import { raiseAndroidTenantAlert } from './alerts';
 import { checkProjectEnterprises, MAINTENANCE_ACTOR } from './enterprises/orphans';
@@ -14,6 +19,8 @@ import { expireEnrollmentTokens } from './enrollment/tokens';
 import type { AndroidGateway } from './gateway/types';
 import { resubmitStaleCommands, resumeHeldCommands, sweepResetPasswordSecrets } from './commands/submit';
 import { expireKioskExits } from './kiosk/exits';
+import { checkKeyDeadline } from './operations/deadlines';
+import { checkProjectQuota, recountQuota, type QuotaLevel, type QuotaRecount } from './operations/quota';
 
 type DrainWaker = (tenantId: number) => Promise<unknown>;
 let wakeDrain: DrainWaker = async () => undefined;
@@ -27,6 +34,12 @@ export function setOperationsPollSender(fn: DrainWaker): void { pollOperations =
 /** android.app-metadata of a tenant (lot AN-E1: metadata of its Android apps read at Google again: network, hence a job). */
 let refreshApps: DrainWaker = async () => undefined;
 export function setAppMetadataSender(fn: DrainWaker): void { refreshApps = fn; }
+/** android.reconcile-tenant of a tenant (lot AN-H1: devices.list and the forgets: network, hence a job). */
+let reconcileTenantJob: DrainWaker = async () => undefined;
+export function setReconcileSender(fn: DrainWaker): void { reconcileTenantJob = fn; }
+/** android.offboard-tenant of a tenant (lot AN-H1: a step due again, or waiting for the devices left). */
+let offboardTenantJob: DrainWaker = async () => undefined;
+export function setOffboardingSender(fn: DrainWaker): void { offboardTenantJob = fn; }
 
 export interface MaintenanceResult {
   drains: number; interrupted: number; expired: number; purged: number; orphans: number | null; tokensExpired: number;
@@ -36,11 +49,23 @@ export interface MaintenanceResult {
   apps: number;
   /** Lot AN-G1: tenants whose kiosk exits past their end (or of devices that left management) were ended. */
   kiosk: number;
+  /** Lot AN-H1: reconciliations sent (due, asked, forgets due), offboarding steps sent, tenants purged. */
+  reconciles: number;
+  offboardings: number;
+  operationsPurged: number;
+  /** Hourly: the level of the quota of the project (null: not this run). Weekly: the recount (null: not this run). */
+  quota: QuotaLevel | null;
+  recount: QuotaRecount | null;
+  /** Daily: the status of the service account key deadline (null: not this run, or no key). */
+  key: string | null;
 }
 
-export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean } = {}): Promise<MaintenanceResult> {
+export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean; hourly?: boolean; daily?: boolean } = {}): Promise<MaintenanceResult> {
   const now = o.now ?? new Date();
-  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0, apps: 0, kiosk: 0 };
+  const out: MaintenanceResult = {
+    drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0, apps: 0, kiosk: 0,
+    reconciles: 0, offboardings: 0, operationsPurged: 0, quota: null, recount: null, key: null,
+  };
   const due = await asNone(MAINTENANCE_ACTOR, async () => {
     const r = await db.raw('SELECT tenant_id, inbox_due, signups_due, purge_due FROM obligarth.android_maintenance_due()') as
       { rows: Array<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }> };
@@ -118,9 +143,37 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     return r.rows.map((x) => Number(x.tenant_id));
   });
   for (const tenantId of kioskDue) { await expireKioskExits(tenantId, MAINTENANCE_ACTOR); out.kiosk += 1; }
+  // Operation (lot AN-H1): reconciliations, forgets at 270 days, offboarding steps, purge of the operation rows.
+  const opsDue = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw('SELECT tenant_id, reconcile_due, forget_due, offboarding_due, purge_due FROM obligarth.android_operations_due()') as
+      { rows: Array<{ tenant_id: number; reconcile_due: boolean; forget_due: boolean; offboarding_due: boolean; purge_due: boolean }> };
+    return r.rows;
+  });
+  for (const t of opsDue) {
+    const tenantId = Number(t.tenant_id);
+    // A send that fails (queue unavailable) never stops the sweep of the other tenants: the next minute tries again.
+    try {
+      if (t.reconcile_due || t.forget_due) { await reconcileTenantJob(tenantId); out.reconciles += 1; }
+      if (t.offboarding_due) { await offboardTenantJob(tenantId); out.offboardings += 1; }
+    } catch (err) {
+      logger.warn({ android: { maintenance: 'operations', tenantId, code: (err as { code?: string })?.code ?? 'error' } }, 'android: operation job not sent');
+    }
+    if (t.purge_due) {
+      await asTenant(tenantId, MAINTENANCE_ACTOR, () => db.transaction(async (trx) => {
+        await trx('android_presumed_gone').whereNot('state', 'open').where('ended_at', '<', trx.raw("now() - interval '400 days'")).delete();
+        await trx('android_offboardings').whereNotNull('finished_at').where('finished_at', '<', trx.raw("now() - interval '400 days'")).delete();
+      }));
+      out.operationsPurged += 1;
+    }
+  }
+  const hourly = o.hourly ?? now.getUTCMinutes() === 0;
+  if (hourly) out.quota = (await checkProjectQuota()).level;
+  const daily = o.daily ?? (now.getUTCHours() === 4 && now.getUTCMinutes() === 10);
+  if (daily) out.key = (await checkKeyDeadline(now))?.status ?? null;
   const weekly = o.weekly ?? (now.getUTCDay() === 1 && now.getUTCHours() === 4 && now.getUTCMinutes() === 0);
   if (weekly && o.gateway?.mode !== 'off') {
     out.orphans = (await checkProjectEnterprises(o.gateway)).length;
+    out.recount = await recountQuota();
   }
   return out;
 }

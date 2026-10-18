@@ -17,6 +17,9 @@ import { pollAndroidOperations, submitAndroidCommand } from './commands/submit';
 import { setOperationsPollSender, setAppMetadataSender } from './maintenance';
 import { refreshDueAndroidApps } from './apps/catalog';
 import { expireKioskExits, setKioskExitEndSender } from './kiosk/exits';
+import { setOffboardingSender, setReconcileSender } from './maintenance';
+import { runOffboarding, setOffboardSender } from './operations/offboarding';
+import { reconcileTenant } from './operations/reconcile';
 
 const tenantPayload = z.object({ tenantId: z.number().int().positive() }).strict();
 const devicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
@@ -176,6 +179,31 @@ export function registerAndroidJobs(): void {
       { singletonKey: `t:${p.tenantId}:k:${p.exitId}`, tenantId: p.tenantId, startAfter: p.expiresAt }));
   };
 
+  // ── Operation (lot AN-H1, sections 6.5 and 13.1) ────────────────────────────
+  // The reconciliation of a tenant (stately t:<tenant>: one at a time, never two passes of devices.list at once) and
+  // the offboarding of a client (stately t:<tenant>; android.maintenance sends it again while a step waits).
+  const reconcile = registerJob({
+    name: 'android.reconcile-tenant', scope: 'tenant', description: 'Reconciles the Android devices of a tenant with Google (silent disappearances, quota)',
+    payload: tenantPayload, policy: 'stately', retry: { limit: 3, delaySeconds: 60, backoff: true, maxDelaySeconds: 1800 },
+    async handler(ctx) {
+      const r = await reconcileTenant(ctx.payload.tenantId);
+      const output: Record<string, string | number> = typeof r === 'string' ? { result: r }
+        : { listed: r.listed, missing: r.missing, presumedGone: r.presumedGone, forgotten: r.forgotten, unknown: r.unknown };
+      return { output };
+    },
+  });
+  const offboard = registerJob({
+    name: 'android.offboard-tenant', scope: 'tenant', description: 'Offboards the Android enterprise of a tenant, step by step',
+    payload: tenantPayload, policy: 'stately', notify: true, retry: { limit: 3, delaySeconds: 60, backoff: true, maxDelaySeconds: 900 },
+    async handler(ctx) { return { output: { result: await runOffboarding(ctx.payload.tenantId) } }; },
+  });
+  const bindOperations = () => {
+    setReconcileSender((tenantId) => reconcile.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
+    const sendOffboard = (tenantId: number) => offboard.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId });
+    setOffboardingSender(sendOffboard);
+    setOffboardSender(sendOffboard);
+  };
+
   bind = () => {
     setDrainSender((trx, tenantId) => drain.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setMaintenanceDrainWaker((tenantId) => drain.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
@@ -185,6 +213,7 @@ export function registerAndroidJobs(): void {
     bindCommands();
     bindApps();
     bindKiosk();
+    bindOperations();
   };
   bind();
 
@@ -197,7 +226,8 @@ export function registerAndroidJobs(): void {
     schedule: { cron: '* * * * *' },
     async handler() {
       const r = await runAndroidMaintenance();
-      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands, apps: r.apps, kiosk: r.kiosk } };
+      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands, apps: r.apps, kiosk: r.kiosk,
+        reconciles: r.reconciles, offboardings: r.offboardings, quota: r.quota, key: r.key } };
     },
   });
 }

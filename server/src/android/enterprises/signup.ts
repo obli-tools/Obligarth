@@ -251,3 +251,5 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
 type SetupSender = (trx: Knex.Transaction, tenantId: number) => Promise<unknown>;
 let setupSender: SetupSender = async () => undefined;
 export function setSetupSender(fn: SetupSender): void { setupSender = fn; }
+/** Sends android.enterprise-setup of a tenant in `trx` (the adoption of an orphan enterprise binds too: lot AN-H1). */
+export function sendSetupInTx(trx: Knex.Transaction, tenantId: number): Promise<unknown> { return setupSender(trx, tenantId); }

@@ -3,6 +3,9 @@ import { registerStartTask, registerStopTask } from '../lifecycle';
 import { findSecretRefs, registerInstanceSecretName, registerSecretColumn, registerSecretReferenceHolder } from '../vault';
 import { registerAndroidGuardedActions } from '../android/commands/guarded';
 import { registerAndroidKioskActions } from '../android/kiosk/exits';
+import { registerAndroidAdoptionApprovals } from '../android/operations/adoption';
+import { registerAndroidForgetAction } from '../android/operations/forget';
+import { registerAndroidOffboardingApprovals } from '../android/operations/offboarding';
 import { registerCommandHandler } from '../android/commands/submit';
 import { db } from '../db';
 import { raiseAndroidPlatformAlert } from '../android/alerts';
@@ -64,6 +67,11 @@ export function registerAndroidModule(): void {
   registerAndroidGuardedActions();
   // Lot AN-G1: the temporary exit of a kiosk (guarded action mdm.android_kiosk_exit, new restriction key).
   registerAndroidKioskActions();
+  // Lot AN-H1: the operator's forget of a device presumed gone (guarded action android.device_forget), the restricted
+  // requests of the unlink, of its forced end and of the adoption of an orphan enterprise (approval request types).
+  registerAndroidForgetAction();
+  registerAndroidOffboardingApprovals();
+  registerAndroidAdoptionApprovals();
   setAndroidDeviceCounter(async (tenantId) => {
     const r = await db('android_devices').where({ tenant_id: tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
     return Number(r[0]?.n ?? 0);

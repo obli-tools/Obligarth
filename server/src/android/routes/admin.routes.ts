@@ -14,7 +14,7 @@ import { androidHealth } from '../health';
 import { depositServiceAccountKey } from '../identity';
 import { toRouteError } from './enterprise.routes';
 
-function masterPlatformAdmin(req: Request, _res: Response, next: NextFunction): void {
+export function masterPlatformAdmin(req: Request, _res: Response, next: NextFunction): void {
   if (!isMasterTenant(req.tenantId)) { next(new AppError(404, 'Not found')); return; }
   if (req.session?.role !== 'admin') { next(new AppError(403, 'Insufficient permissions')); return; }
   next();
