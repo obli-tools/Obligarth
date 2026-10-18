@@ -3171,7 +3171,8 @@
     "mdmRemovableCorporate": "The management profile of a corporate device cannot be removable.",
     "appleTenantNotProvisioned": "This tenant is not provisioned at the device service yet.",
     "groupNotFound": "Group not found.",
-    "endUserNotFound": "End user not found."
+    "endUserNotFound": "End user not found.",
+    "adeDeviceNotFound": "Device of Apple Business not found."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -3179,7 +3180,8 @@
     "tabs": {
       "profiles": "Profiles",
       "tokens": "Links and invitations",
-      "sessions": "Sessions"
+      "sessions": "Sessions",
+      "ade": "Apple Business devices"
     },
     "method": {
       "ota": "Link or QR code (OTA)",
@@ -3219,7 +3221,9 @@
     },
     "failure": {
       "signing_unavailable": "Profile not signed",
-      "identity_mismatch": "Identity mismatch"
+      "identity_mismatch": "Identity mismatch",
+      "profile_withdrawn": "Profile withdrawn",
+      "link_revoked": "Link revoked"
     },
     "confirmArchive": "Archive the profile {{name}}? Its links and invitations stop working.",
     "archived": "Profile archived",
@@ -3280,6 +3284,35 @@
     "noSession": "No enrollment session.",
     "started": "Started",
     "device": "Device",
-    "more": "More"
+    "more": "More",
+    "adeNoServer": "No active ADE server yet",
+    "adeDefined": "Defined at Apple on {{count}} server(s)",
+    "adeDefineFailed": "Not defined at Apple on {{count}} server(s)",
+    "adePending": "Being defined at Apple ({{done}}/{{total}})",
+    "adeProfileChosen": "Enrollment profile chosen: it is assigned at Apple shortly",
+    "adeIntro": "Devices assigned to this tenant in Apple Business. Without a choice, a device receives the default ADE profile.",
+    "adeSearch": "Serial number",
+    "adeNoDevice": "No device of Apple Business yet.",
+    "adeSerial": "Serial number",
+    "adeModel": "Model",
+    "adeServer": "ADE server",
+    "adeApplied": "Profile at Apple",
+    "adeWanted": "Enrollment profile",
+    "adeDefault": "Default ADE profile",
+    "adeStatus": {
+      "empty": "No profile",
+      "assigned": "Assigned",
+      "pushed": "Sent to the device",
+      "removed": "Removed"
+    },
+    "minOsIos": "Minimum iOS version",
+    "minOsIpados": "Minimum iPadOS version",
+    "minOsHint": "For example 17.6; older devices are asked to update in the setup assistant.",
+    "adeLanguage": "Language of the setup assistant",
+    "adeLanguageHint": "Two letters (fr by default).",
+    "adeRegion": "Region of the setup assistant",
+    "adeRegionHint": "Two letters (FR by default).",
+    "skipSetupItems": "Setup assistant panes skipped",
+    "skipSetupItemsHint": "Keys of Apple, separated by commas (Location, Siri, Privacy…); empty: the recommended list."
   }
 }

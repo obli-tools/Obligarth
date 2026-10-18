@@ -3171,7 +3171,8 @@
     "mdmRemovableCorporate": "Le profil de gestion d'un appareil de l'entreprise ne peut pas être amovible.",
     "appleTenantNotProvisioned": "Ce tenant n'est pas encore provisionné auprès du service des appareils.",
     "groupNotFound": "Groupe introuvable.",
-    "endUserNotFound": "Utilisateur final introuvable."
+    "endUserNotFound": "Utilisateur final introuvable.",
+    "adeDeviceNotFound": "Appareil d'Apple Business introuvable."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -3179,7 +3180,8 @@
     "tabs": {
       "profiles": "Profils",
       "tokens": "Liens et invitations",
-      "sessions": "Sessions"
+      "sessions": "Sessions",
+      "ade": "Appareils Apple Business"
     },
     "method": {
       "ota": "Lien ou QR code (OTA)",
@@ -3219,7 +3221,9 @@
     },
     "failure": {
       "signing_unavailable": "Profil non signé",
-      "identity_mismatch": "Identité contredite"
+      "identity_mismatch": "Identité contredite",
+      "profile_withdrawn": "Profil retiré",
+      "link_revoked": "Lien révoqué"
     },
     "confirmArchive": "Archiver le profil {{name}} ? Ses liens et invitations cessent de fonctionner.",
     "archived": "Profil archivé",
@@ -3280,6 +3284,35 @@
     "noSession": "Aucune session d'inscription.",
     "started": "Commencée le",
     "device": "Appareil",
-    "more": "Plus"
+    "more": "Plus",
+    "adeNoServer": "Aucun serveur ADE actif pour le moment",
+    "adeDefined": "Défini chez Apple sur {{count}} serveur(s)",
+    "adeDefineFailed": "Non défini chez Apple sur {{count}} serveur(s)",
+    "adePending": "En cours de définition chez Apple ({{done}}/{{total}})",
+    "adeProfileChosen": "Profil d'inscription choisi : il sera affecté chez Apple sous peu",
+    "adeIntro": "Appareils affectés à ce tenant dans Apple Business. Sans choix, un appareil reçoit le profil ADE par défaut.",
+    "adeSearch": "Numéro de série",
+    "adeNoDevice": "Aucun appareil d'Apple Business pour le moment.",
+    "adeSerial": "Numéro de série",
+    "adeModel": "Modèle",
+    "adeServer": "Serveur ADE",
+    "adeApplied": "Profil chez Apple",
+    "adeWanted": "Profil d'inscription",
+    "adeDefault": "Profil ADE par défaut",
+    "adeStatus": {
+      "empty": "Aucun profil",
+      "assigned": "Affecté",
+      "pushed": "Envoyé à l'appareil",
+      "removed": "Retiré"
+    },
+    "minOsIos": "Version minimale d’iOS",
+    "minOsIpados": "Version minimale d’iPadOS",
+    "minOsHint": "Par exemple 17.6 ; les appareils plus anciens sont invités à se mettre à jour pendant l'assistant.",
+    "adeLanguage": "Langue de l'assistant de configuration",
+    "adeLanguageHint": "Deux lettres (fr par défaut).",
+    "adeRegion": "Région de l'assistant de configuration",
+    "adeRegionHint": "Deux lettres (FR par défaut).",
+    "skipSetupItems": "Écrans de l'assistant ignorés",
+    "skipSetupItemsHint": "Clés d'Apple séparées par des virgules (Location, Siri, Privacy…) ; vide : la liste recommandée."
   }
 }

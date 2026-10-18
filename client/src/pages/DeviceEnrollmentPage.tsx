@@ -2,11 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { Archive, Copy, Link2, Mail, Pencil, Plus, RefreshCw, Ticket, XCircle } from 'lucide-react';
+import { Archive, Copy, Link2, Mail, Pencil, Plus, RefreshCw, Search, Ticket, XCircle } from 'lucide-react';
 import {
   ENROLLMENT_LIMITS, ENROLLMENT_METHOD_OWNERSHIPS, ENROLLMENT_PROFILE_METHODS, ENROLLMENT_SESSION_STATES, ENROLLMENT_TOKEN_STATES,
   SocketEvents,
-  type DeviceGroup, type EnrollmentInvitationCreated, type EnrollmentLinkCreated, type EnrollmentMailOutcome, type EnrollmentProfileInput,
+  type AdeDeviceView, type DeviceGroup, type EnrollmentInvitationCreated, type EnrollmentLinkCreated, type EnrollmentMailOutcome, type EnrollmentProfileInput,
   type EnrollmentProfileMethod, type EnrollmentProfileSettings, type EnrollmentProfileView, type EnrollmentSessionState,
   type EnrollmentSessionView, type EnrollmentTokenKind, type EnrollmentTokenState, type EnrollmentTokenView, type Ownership,
 } from '@obligarth/shared';
@@ -25,9 +25,11 @@ import { apiErrorMessage, trCode } from '@/utils/apiError';
 
 // Device enrollment (integration-apple-edge §10.9, lot C1): enrollment profiles, OTA links (URL and QR code
 // shown once), invitations of an account-driven enrollment (code and link shown once, e-mailed when a channel is
-// configured), revocation, sessions. Tenant capability mdm.enrollment.manage.
+// configured), revocation, sessions. Lot C2: the ADE settings of a profile and where it is defined at Apple, the
+// devices of Apple Business and the enrollment profile chosen for each (§10.6). Tenant capability
+// mdm.enrollment.manage.
 
-type Tab = 'profiles' | 'tokens' | 'sessions';
+type Tab = 'profiles' | 'tokens' | 'sessions' | 'ade';
 const METHOD_FALLBACK: Record<EnrollmentProfileMethod, string> = { ota: 'Link or QR code (OTA)', ade: 'Automated (ADE)', byod_account: 'Personal device (account)' };
 const OWNERSHIP_FALLBACK: Record<Ownership, string> = { corporate: 'Corporate', corporate_personal: 'Corporate, personal use', personal: 'Personal' };
 const TOKEN_TONE: Record<EnrollmentTokenState, 'green' | 'gray' | 'amber' | 'red'> = { active: 'green', exhausted: 'gray', expired: 'amber', revoked: 'red' };
@@ -68,18 +70,20 @@ export function DeviceEnrollmentPage() {
         </p>
       </div>
       <div className="flex gap-1 border-b border-border">
-        {(['profiles', 'tokens', 'sessions'] as const).map((k) => (
+        {(['profiles', 'tokens', 'sessions', 'ade'] as const).map((k) => (
           <button key={k} type="button" onClick={() => setTab(k)}
             className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px coarse:min-h-10 ${tab === k ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'}`}>
             {k === 'profiles' ? (t('deviceEnrollment.tabs.profiles') || 'Profiles')
               : k === 'tokens' ? (t('deviceEnrollment.tabs.tokens') || 'Links and invitations')
-                : (t('deviceEnrollment.tabs.sessions') || 'Sessions')}
+                : k === 'sessions' ? (t('deviceEnrollment.tabs.sessions') || 'Sessions')
+                  : (t('deviceEnrollment.tabs.ade') || 'Apple Business devices')}
           </button>
         ))}
       </div>
       {tab === 'profiles' && <ProfilesTab />}
       {tab === 'tokens' && <TokensTab />}
       {tab === 'sessions' && <SessionsTab />}
+      {tab === 'ade' && <AdeDevicesTab />}
     </PageContainer>
   );
 }
@@ -158,6 +162,7 @@ function ProfilesTab() {
                     <td className="px-4 py-2.5 text-text-primary">
                       {p.name}
                       <span className="block text-[10px] text-text-muted">v{p.version}{p.usage ? ` · ${p.usage}` : ''}{p.isDefault ? ` · ${t('deviceEnrollment.isDefault') || 'default'}` : ''}</span>
+                      {p.method === 'ade' && !p.archivedAt && <AdeBindingLine profile={p} />}
                     </td>
                     <td className="px-3 py-2.5 text-text-secondary">{L.method(p.method)}</td>
                     <td className="px-3 py-2.5 text-text-secondary">{L.ownership(p.ownership)}</td>
@@ -224,6 +229,11 @@ interface ProfileForm {
   supportPhone: string;
   supportEmail: string;
   department: string;
+  minOsIos: string;
+  minOsIpados: string;
+  skipSetupItems: string;
+  adeLanguage: string;
+  adeRegion: string;
 }
 
 function formOf(p: EnrollmentProfileView | null): ProfileForm {
@@ -237,6 +247,8 @@ function formOf(p: EnrollmentProfileView | null): ProfileForm {
     linkMaxUses: String(s.linkMaxUses ?? ENROLLMENT_LIMITS.linkMaxUses.default),
     invitationTtlHours: String(s.invitationTtlHours ?? ENROLLMENT_LIMITS.invitationTtlHours.default),
     webAuth: s.webAuth ?? true, supportPhone: s.supportPhone ?? '', supportEmail: s.supportEmail ?? '', department: s.department ?? '',
+    minOsIos: s.minOsVersion?.ios ?? '', minOsIpados: s.minOsVersion?.ipados ?? '',
+    skipSetupItems: s.skipSetupItems ? s.skipSetupItems.join(', ') : '', adeLanguage: s.language ?? '', adeRegion: s.region ?? '',
   };
 }
 
@@ -256,6 +268,13 @@ function inputOf(f: ProfileForm, existing: EnrollmentProfileView | null): Enroll
     set('supportPhone', f.supportPhone.trim() || undefined);
     set('supportEmail', f.supportEmail.trim() || undefined);
     set('department', f.department.trim() || undefined);
+    const ios = f.minOsIos.trim();
+    const ipados = f.minOsIpados.trim();
+    set('minOsVersion', ios || ipados ? { ...(ios ? { ios } : {}), ...(ipados ? { ipados } : {}) } : undefined);
+    const items = f.skipSetupItems.split(/[\s,;]+/).map((x) => x.trim()).filter(Boolean);
+    set('skipSetupItems', f.skipSetupItems.trim() ? items : undefined);
+    set('language', f.adeLanguage.trim().toLowerCase() || undefined);
+    set('region', f.adeRegion.trim().toUpperCase() || undefined);
   }
   return {
     name: f.name.trim(), method: f.method, ownership: f.ownership, usage: f.method === 'ade' ? (f.usage.trim() || null) : null,
@@ -301,7 +320,8 @@ function ProfileDialog({ target, onClose, onSaved }: { target: EnrollmentProfile
       {hint && <span className="text-[11px] text-text-muted">{hint}</span>}
     </label>
   );
-  const text = (k: 'name' | 'usage' | 'deviceNameTemplate' | 'supportPhone' | 'supportEmail' | 'department', label: string, max: number, hint?: string) => (
+  const text = (k: 'name' | 'usage' | 'deviceNameTemplate' | 'supportPhone' | 'supportEmail' | 'department' | 'minOsIos' | 'minOsIpados'
+    | 'skipSetupItems' | 'adeLanguage' | 'adeRegion', label: string, max: number, hint?: string) => (
     <label className="block">
       <span className="text-xs text-text-muted">{label}</span>
       <input type="text" value={f[k]} maxLength={max} onChange={(e) => up(k, e.target.value)} autoCapitalize="off" spellCheck={false} className={fieldCls} />
@@ -364,6 +384,14 @@ function ProfileDialog({ target, onClose, onSaved }: { target: EnrollmentProfile
             {text('supportPhone', t('deviceEnrollment.supportPhone') || 'Support phone', 40)}
             {text('supportEmail', t('deviceEnrollment.supportEmail') || 'Support e-mail', 320)}
             {text('department', t('deviceEnrollment.department') || 'Department', 100)}
+            {text('minOsIos', t('deviceEnrollment.minOsIos') || 'Minimum iOS version', 8, t('deviceEnrollment.minOsHint') || 'For example 17.6; older devices are asked to update in the setup assistant.')}
+            {text('minOsIpados', t('deviceEnrollment.minOsIpados') || 'Minimum iPadOS version', 8)}
+            {text('adeLanguage', t('deviceEnrollment.adeLanguage') || 'Language of the setup assistant', 2, t('deviceEnrollment.adeLanguageHint') || 'Two letters (fr by default).')}
+            {text('adeRegion', t('deviceEnrollment.adeRegion') || 'Region of the setup assistant', 2, t('deviceEnrollment.adeRegionHint') || 'Two letters (FR by default).')}
+            <div className="sm:col-span-2">
+              {text('skipSetupItems', t('deviceEnrollment.skipSetupItems') || 'Setup assistant panes skipped', 1200,
+                t('deviceEnrollment.skipSetupItemsHint') || 'Keys of Apple, separated by commas (Location, Siri, Privacy…); empty: the recommended list.')}
+            </div>
             <label className="flex items-center gap-2 text-xs text-text-secondary">
               <input type="checkbox" checked={f.noticeRequired} onChange={(e) => up('noticeRequired', e.target.checked)} />
               {t('deviceEnrollment.noticeRequired') || 'Show the employee notice (turn off for kiosks only)'}
@@ -695,6 +723,7 @@ function SessionsTab() {
                       <td className="px-3 py-2.5 text-text-secondary">
                         {s.profileName}
                         {s.managedAppleAccount && <span className="block text-[11px] text-text-muted break-all">{anonymize(s.managedAppleAccount)}</span>}
+                        {s.serialNumber && <span className="block text-[11px] text-text-muted font-mono">{anonymize(s.serialNumber)}</span>}
                       </td>
                       <td className="px-3 py-2.5 text-text-secondary">{L.method(s.method)}</td>
                       <td className="px-3 py-2.5">
@@ -704,6 +733,130 @@ function SessionsTab() {
                       <td className="px-3 py-2.5 font-mono text-xs text-text-muted">{s.tokenPrefix ? `${s.tokenPrefix}…` : '—'}</td>
                       <td className="px-3 py-2.5">
                         {s.deviceId ? <Link to={`/devices/${s.deviceId}`} className="text-accent hover:underline">#{s.deviceId}</Link> : <span className="text-text-muted">—</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+      {cursor && (
+        <div className="flex justify-end">
+          <Button size="sm" variant="secondary" onClick={() => load(cursor)}>{t('deviceEnrollment.more') || 'More'}</Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── ADE: where a profile is defined at Apple ──────────────────────────────────────
+
+function AdeBindingLine({ profile }: { profile: EnrollmentProfileView }) {
+  const { t } = useTranslation();
+  const list = profile.adeBindings ?? [];
+  if (list.length === 0) {
+    return <span className="block text-[10px] text-text-muted">{t('deviceEnrollment.adeNoServer') || 'No active ADE server yet'}</span>;
+  }
+  const ok = list.filter((b) => b.upToDate).length;
+  const errors = list.filter((b) => !b.upToDate && b.lastErrorCode);
+  const tone = errors.length ? 'text-red-400' : ok === list.length ? 'text-green-400' : 'text-amber-400';
+  return (
+    <span className={`block text-[10px] ${tone}`} title={errors.map((b) => `${b.serverName}: ${b.lastErrorCode}`).join('\n') || undefined}>
+      {ok === list.length
+        ? (t('deviceEnrollment.adeDefined', { count: list.length }) || `Defined at Apple on ${list.length} server(s)`)
+        : errors.length
+          ? (t('deviceEnrollment.adeDefineFailed', { count: errors.length }) || `Not defined at Apple on ${errors.length} server(s)`)
+          : (t('deviceEnrollment.adePending', { done: ok, total: list.length }) || `Being defined at Apple (${ok}/${list.length})`)}
+    </span>
+  );
+}
+
+// ── ADE devices (Apple Business) ──────────────────────────────────────────────────
+
+function AdeDevicesTab() {
+  const { t } = useTranslation();
+  const [q, setQ] = useState('');
+  const [query, setQuery] = useState('');
+  const [rows, setRows] = useState<AdeDeviceView[] | null>(null);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [profiles, setProfiles] = useState<EnrollmentProfileView[]>([]);
+  const [busy, setBusy] = useState<number | null>(null);
+  const load = useCallback((after: string | null = null) => {
+    enrollmentApi.adeDevices({ q: query || undefined, cursor: after })
+      .then((r) => { setRows((prev) => (after ? [...(prev ?? []), ...r.items] : r.items)); setCursor(r.nextCursor); setError(null); })
+      .catch((err) => { setRows((prev) => prev ?? []); setError(apiErrorMessage(err)); });
+  }, [query]);
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    enrollmentApi.profiles().then((r) => setProfiles(r.filter((p) => p.method === 'ade'))).catch(() => setProfiles([]));
+  }, []);
+  const choose = async (d: AdeDeviceView, value: string) => {
+    setBusy(d.id);
+    try {
+      await enrollmentApi.setAdeDeviceProfile(d.id, value || null);
+      toast.success(t('deviceEnrollment.adeProfileChosen') || 'Enrollment profile chosen: it is assigned at Apple shortly');
+      load();
+    } catch (err) {
+      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+    } finally {
+      setBusy(null);
+    }
+  };
+  return (
+    <div className="space-y-3">
+      <p className="text-xs text-text-muted">
+        {t('deviceEnrollment.adeIntro') || 'Devices assigned to this tenant in Apple Business. Without a choice, a device receives the default ADE profile.'}
+      </p>
+      <form className="flex flex-wrap items-center gap-2" onSubmit={(e) => { e.preventDefault(); setQuery(q.trim()); }}>
+        <input value={q} maxLength={64} onChange={(e) => setQ(e.target.value)} autoCapitalize="off" spellCheck={false}
+          placeholder={t('deviceEnrollment.adeSearch') || 'Serial number'} aria-label={t('deviceEnrollment.adeSearch') || 'Serial number'}
+          className="rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm" />
+        <button type="submit" aria-label={t('common.search') || 'Search'}
+          className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-tertiary coarse:min-h-10 coarse:min-w-10">
+          <Search className="w-4 h-4" />
+        </button>
+        <button type="button" onClick={() => load()} aria-label={t('common.refresh') || 'Refresh'}
+          className="p-2 rounded-lg text-text-muted hover:text-text-primary hover:bg-bg-tertiary coarse:min-h-10 coarse:min-w-10">
+          <RefreshCw className="w-4 h-4" />
+        </button>
+      </form>
+      {error && <p className="text-sm text-red-400">{error}</p>}
+      {rows === null ? <p className="text-sm text-text-muted italic">{t('common.loading') || 'Loading…'}</p>
+        : rows.length === 0 ? <div className="p-10 text-center bg-bg-secondary rounded-xl text-text-muted">{t('deviceEnrollment.adeNoDevice') || 'No device of Apple Business yet.'}</div>
+          : (
+            <div className="overflow-x-auto rounded-xl bg-bg-secondary">
+              <table className="w-full text-sm">
+                <thead className="text-xs text-text-muted">
+                  <tr className="text-left">
+                    <th className="font-medium px-4 py-2">{t('deviceEnrollment.adeSerial') || 'Serial number'}</th>
+                    <th className="font-medium px-3 py-2">{t('deviceEnrollment.adeModel') || 'Model'}</th>
+                    <th className="font-medium px-3 py-2">{t('deviceEnrollment.adeServer') || 'ADE server'}</th>
+                    <th className="font-medium px-3 py-2">{t('deviceEnrollment.adeApplied') || 'Profile at Apple'}</th>
+                    <th className="font-medium px-3 py-2">{t('deviceEnrollment.adeWanted') || 'Enrollment profile'}</th>
+                    <th className="font-medium px-3 py-2">{t('deviceEnrollment.device') || 'Device'}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((d) => (
+                    <tr key={d.id} className="border-t border-border/50">
+                      <td className="px-4 py-2.5 font-mono text-xs text-text-primary">{anonymize(d.serialNumber)}</td>
+                      <td className="px-3 py-2.5 text-text-secondary">{d.description ?? d.model ?? <span className="text-text-muted">—</span>}</td>
+                      <td className="px-3 py-2.5 text-text-secondary">{d.serverName}</td>
+                      <td className="px-3 py-2.5 text-text-secondary">
+                        {d.appliedProfileName ?? <span className="text-text-muted">—</span>}
+                        {d.profileStatus && <span className="block text-[11px] text-text-muted">{trCode(`deviceEnrollment.adeStatus.${d.profileStatus}`, d.profileStatus)}</span>}
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <select value={d.wantedProfileId ?? ''} disabled={busy === d.id} onChange={(e) => { void choose(d, e.target.value); }}
+                          aria-label={t('deviceEnrollment.adeWanted') || 'Enrollment profile'}
+                          className="rounded border border-border bg-bg-secondary px-2 py-1 text-sm">
+                          <option value="">{t('deviceEnrollment.adeDefault') || 'Default ADE profile'}</option>
+                          {profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                        </select>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        {d.deviceId ? <Link to={`/devices/${d.deviceId}`} className="text-accent hover:underline">#{d.deviceId}</Link> : <span className="text-text-muted">—</span>}
                       </td>
                     </tr>
                   ))}

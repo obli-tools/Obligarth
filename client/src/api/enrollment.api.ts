@@ -1,13 +1,15 @@
 import apiClient from './client';
 import type {
-  EnrollmentInvitationCreated, EnrollmentLinkCreated, EnrollmentProfileInput, EnrollmentProfileView, EnrollmentSessionState,
+  AdeDevicePage, EnrollmentInvitationCreated, EnrollmentLinkCreated, EnrollmentProfileInput, EnrollmentProfileView, EnrollmentSessionState,
   EnrollmentSessionView, EnrollmentTokenKind, EnrollmentTokenState, EnrollmentTokenView,
 } from '@obligarth/shared';
 
 // =============================================================================
 // Console API of the enrollment (/api/apple/enrollment, integration-apple-edge
-// §10.9): profiles, links (OTA), invitations (account-driven), sessions. A
-// link's token and an invitation's code come back once, at their creation.
+// §10.9): profiles, links (OTA), invitations (account-driven), sessions, and
+// the devices of Apple Business with the enrollment profile chosen for each
+// (§10.6, lot C2). A link's token and an invitation's code come back once, at
+// their creation.
 // =============================================================================
 
 interface ApiResponse<T> { data?: T; nextCursor?: string | null }
@@ -50,5 +52,14 @@ export const enrollmentApi = {
       params: { ...(f.state ? { state: f.state } : {}), ...(f.cursor ? { cursor: f.cursor } : {}) },
     });
     return { items: res.data.data ?? [], nextCursor: res.data.nextCursor ?? null };
+  },
+  async adeDevices(f: { q?: string; cursor?: string | null; removed?: boolean } = {}): Promise<AdeDevicePage> {
+    const res = await apiClient.get<ApiResponse<AdeDevicePage['items']>>(`/apple/enrollment/ade-devices`, {
+      params: { ...(f.q ? { q: f.q } : {}), ...(f.cursor ? { cursor: f.cursor } : {}), ...(f.removed ? { removed: '1' } : {}) },
+    });
+    return { items: res.data.data ?? [], nextCursor: res.data.nextCursor ?? null };
+  },
+  async setAdeDeviceProfile(id: number, profileId: string | null): Promise<void> {
+    await apiClient.put(`/apple/enrollment/ade-devices/${id}/profile`, { profileId });
   },
 };
