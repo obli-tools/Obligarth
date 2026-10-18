@@ -33,6 +33,7 @@ import { readAndroidProfile, readSnapshot } from './profiles';
 import { androidSenders } from './senders';
 import { endToken } from './tokens';
 import { invitationForEnrollment, markInvitationUsed } from '../byod/enrollmentGuard';
+import { markSigninSessionUsed, signinSessionForEnrollment } from '../signin/guard';
 import type { z } from 'zod';
 
 type Device = z.infer<typeof DeviceSchema>;
@@ -154,6 +155,13 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
     invitation = await invitationForEnrollment(trx, tenantId, token.id);
     if (!invitation) return notAccepted(ctx, d, 'unknown_token', token);
   }
+  // Lot AN-F2: a sign-in token enrolls a device only through its session of the device surface, issued after Obligate
+  // authenticated an end user of the tenant (not used): otherwise an unknown enrollment, quarantined.
+  let signinSession: { id: string } | null = null;
+  if (token.kind === 'signin') {
+    signinSession = await signinSessionForEnrollment(trx, tenantId, token.id);
+    if (!signinSession) return notAccepted(ctx, d, 'unknown_token', token);
+  }
 
   // 5. Approval (AN17), and the hourly cap of a long token that forces it.
   // A kiosk token always requires it (lot AN-G1, AN17), whatever its row says (a token written before the rule, or by
@@ -272,6 +280,14 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
     ctx.audit({
       tenantId, action: 'android.byod_invitation_used', target: { type: 'android_byod_invitation', id: invitation.id },
       details: { invitationId: invitation.id, deviceId, noticeVersionId: invitation.noticeVersionId },
+    });
+  }
+
+  if (signinSession) {
+    await markSigninSessionUsed(trx, tenantId, signinSession.id, deviceId);
+    ctx.audit({
+      tenantId, action: 'android.signin_session_used', target: { type: 'android_signin_session', id: signinSession.id },
+      details: { sessionId: signinSession.id, deviceId },
     });
   }
 

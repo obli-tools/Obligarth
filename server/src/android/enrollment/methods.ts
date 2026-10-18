@@ -3,6 +3,7 @@
 // snapshot of a profile frozen in a token, the checks of an enrolled Device against that snapshot (never against the
 // current profile), the additionalData of a token, the approval of a long token, the hourly caps, the payload shown
 // to the administrator. No database, no logger: the unit tests load it (U-A09).
+import { androidProvisioningExtras } from '@obligarth/shared/dist/android/enrollment.js';
 
 export const ANDROID_METHODS = [
   'android_qr', 'android_token', 'android_afw', 'android_nfc', 'android_zero_touch', 'android_kme',
@@ -221,7 +222,7 @@ export const ENROLL_URL = 'https://enterprise.google.com/android/enroll';
 
 /** The payload of a token (never logged): QR content and typed value (afw#setup), link, KME JSON, zero-touch extras. */
 export function tokenPayload(kind: AndroidTokenKind, value: string, qrCode: string | undefined): TokenPayload {
-  const extras = JSON.stringify({ 'com.google.android.apps.work.clouddpc.EXTRA_ENROLLMENT_TOKEN': value });
+  const extras = androidProvisioningExtras(value);
   switch (kind) {
     case 'qr': return { form: 'qr', qrCode: qrCode ?? '', value };
     case 'byod_link': return { form: 'link', url: `${ENROLL_URL}?et=${encodeURIComponent(value)}` };

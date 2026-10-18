@@ -16,6 +16,7 @@ import { asNone, asTenant } from '../db/context';
 import { raiseAndroidTenantAlert } from './alerts';
 import { checkProjectEnterprises, MAINTENANCE_ACTOR } from './enterprises/orphans';
 import { expireEnrollmentTokens } from './enrollment/tokens';
+import { expireSigninSessions } from './signin/flow';
 import type { AndroidGateway } from './gateway/types';
 import { resubmitStaleCommands, resumeHeldCommands, sweepResetPasswordSecrets } from './commands/submit';
 import { expireKioskExits } from './kiosk/exits';
@@ -45,6 +46,8 @@ export interface MaintenanceResult {
   drains: number; interrupted: number; expired: number; purged: number; orphans: number | null; tokensExpired: number;
   /** Lot AN-D1: tenants whose commands were followed up (polls sent, submissions sent again, held resumed, secrets swept). */
   commands: number;
+  /** Lot AN-F2: sign-in sessions past their end marked expired (old failed or expired ones purged). */
+  signins: number;
   /** Lot AN-E1: tenants whose Android apps' metadata were sent to android.app-metadata. */
   apps: number;
   /** Lot AN-G1: tenants whose kiosk exits past their end (or of devices that left management) were ended. */
@@ -63,7 +66,7 @@ export interface MaintenanceResult {
 export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean; hourly?: boolean; daily?: boolean } = {}): Promise<MaintenanceResult> {
   const now = o.now ?? new Date();
   const out: MaintenanceResult = {
-    drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0, apps: 0, kiosk: 0,
+    drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, signins: 0, commands: 0, apps: 0, kiosk: 0,
     reconciles: 0, offboardings: 0, operationsPurged: 0, quota: null, recount: null, key: null,
   };
   const due = await asNone(MAINTENANCE_ACTOR, async () => {
@@ -116,6 +119,12 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
       .where('created_at', '<', db.raw("now() - interval '15 minutes'")).first('id'));
     if (stale) await recoverTokens(tenantId);
   }
+  // Sign-in sessions (lot AN-F2): past their end without a token → expired; failed and expired ones purged after 30 days.
+  const signinDue = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw('SELECT tenant_id FROM obligarth.android_signin_due()') as { rows: Array<{ tenant_id: number }> };
+    return r.rows.map((x) => Number(x.tenant_id));
+  });
+  for (const tenantId of signinDue) out.signins += await expireSigninSessions(tenantId, MAINTENANCE_ACTOR);
   // Commands (lot AN-D1, section 11.3): operations to poll and commands past their end (android.operations-poll),
   // submissions lost or interrupted (their job again), held commands to resume, reset-password secrets to sweep.
   const commandDue = await asNone(MAINTENANCE_ACTOR, async () => {

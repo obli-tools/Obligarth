@@ -15,6 +15,7 @@ import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert } from '../alerts';
 import { byodCommandRefusal, byodPolicyViolations } from '../byod/policy';
+import { ANDROID_ZERO_TOUCH_PAGE as ZERO_TOUCH_PAGE } from '@obligarth/shared/dist/android/enrollment.js';
 import type { AndroidConfig } from '../config';
 import { amapiClient, type AmapiClient } from '../google/amapi';
 import { GoogleHttp } from '../google/http';
@@ -531,6 +532,13 @@ export class GoogleGateway implements AndroidGateway {
     if (!Array.isArray(w.enabledFeatures) || w.enabledFeatures.length === 0 || w.enabledFeatures.some((f) => !IFRAME_FEATURES.has(f))) {
       throw new AndroidRequestError('enabledFeatures must list known features');
     }
+    // Lot AN-F2: the zero-touch feature alone, for the zero-touch page only (a Play screen never opens the customer
+    // management of zero-touch, and the zero-touch iframe never opens Play).
+    const zeroTouch = w.enabledFeatures.includes('ZERO_TOUCH_CUSTOMER_MANAGEMENT');
+    if (zeroTouch && (w.enabledFeatures.length !== 1 || !w.parentFrameUrl.endsWith(ZERO_TOUCH_PAGE))) {
+      throw new AndroidRequestError('the zero-touch feature is opened alone, by the zero-touch page');
+    }
+    if (!zeroTouch && w.parentFrameUrl.endsWith(ZERO_TOUCH_PAGE)) throw new AndroidRequestError('the zero-touch page opens the zero-touch feature only');
     await this.limit('webtoken', e, null, 'interactive');
     const r = await this.amapi.createWebToken(names.enterprise(e), { parentFrameUrl: w.parentFrameUrl, enabledFeatures: w.enabledFeatures });
     if (typeof r?.value !== 'string') throw new AndroidRequestError('unexpected web token answer');

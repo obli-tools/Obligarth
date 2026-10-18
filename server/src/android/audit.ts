@@ -59,6 +59,15 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.byod_invitation_revoked', criticality: 'standard', label: 'Android: BYOD invitation revoked' },
     { name: 'android.byod_notice_acknowledged', criticality: 'standard', label: 'Android: notice of a personal device acknowledged' },
     { name: 'android.byod_invitation_used', criticality: 'standard', label: 'Android: BYOD invitation used by an enrollment' },
+    // Lot AN-F2: the sign-in URL (signinDetails), its sessions on the device surface (ids only: never the state, the
+    // code, the e-mail nor the token), the zero-touch iframe and the KME configuration (the token's id, never its value).
+    { name: 'android.signin_configured', criticality: 'critical', label: 'Android: sign-in URL of the enterprise set' },
+    { name: 'android.signin_notice_acknowledged', criticality: 'standard', label: 'Android: notice of a personal device acknowledged before a sign-in' },
+    { name: 'android.signin_completed', criticality: 'standard', label: 'Android: sign-in of a device completed (token created)' },
+    { name: 'android.signin_refused', criticality: 'standard', label: 'Android: sign-in of a device refused' },
+    { name: 'android.signin_session_used', criticality: 'standard', label: 'Android: sign-in session used by an enrollment' },
+    { name: 'android.zero_touch_iframe_opened', criticality: 'critical', label: 'Android: zero-touch iframe opened with a long token' },
+    { name: 'android.kme_configuration_shown', criticality: 'critical', label: 'Android: Knox Mobile Enrollment configuration shown' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

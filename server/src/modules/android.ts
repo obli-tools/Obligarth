@@ -21,6 +21,7 @@ import { registerAndroidJobs } from '../android/jobs';
 import { AndroidPullLoop } from '../android/link/pull';
 import { registerEnrollmentHandler } from '../android/enrollment/handler';
 import { registerStatusReportHandler } from '../android/inventory/statusReport';
+import { registerUsageLogsHandler } from '../android/inventory/usageLogs';
 import { setAndroidDeviceCounter } from '../android/gateway/google';
 
 // =============================================================================
@@ -50,6 +51,8 @@ export function registerAndroidModule(): void {
   // that still holds it: AN17, §22.3); the device count of the last-resort caps (AN47).
   registerEnrollmentHandler();
   registerStatusReportHandler();
+  // Lot AN-F2: the USAGE_LOGS of the lost mode (positions of company devices only, user exits).
+  registerUsageLogsHandler();
   registerSecretReferenceHolder({
     table: 'android_enrollment_tokens', column: 'value_ref', tenantColumn: 'tenant_id',
     refs: (v) => (typeof v === 'string' && /^[0-9a-f-]{36}$/.test(v) ? [v] : []),

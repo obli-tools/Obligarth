@@ -22,6 +22,7 @@ import { readEnterprise } from '../enterprises/registry';
 import { tokenData, tokenIdOf, tokenPayload, tokenPlan, type AndroidTokenKind, type TokenPayload } from './methods';
 import { readAndroidProfile, requiresApproval, snapshotOf } from './profiles';
 import { checkInvitationIssuing } from '../byod/enrollmentGuard';
+import { checkSigninSessionAuthenticated } from '../signin/guard';
 
 export const TOKEN_SECRET_PURPOSE = 'android.enrollment_token';
 export const TOKENS_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.tokens' }) as DbActor;
@@ -94,10 +95,11 @@ export async function endToken(trx: Knex.Transaction, row: { id: string; value_r
  * minutes, section 10.7): 409 androidEnrollmentPolicyMissing otherwise. A BYOD link token (personal device) is created only by
  * the invitation flow (lot AN-F1, byod/invitations.ts), once the notice is acknowledged: `byodInvitation` names the
  * invitation, which must be issuing for this profile and this end user; without it 409 androidByodByInvitation (the
- * console's route never hands a personal device a Google link before the notice).
+ * console's route never hands a personal device a Google link before the notice). A sign-in token (lot AN-F2) is created
+ * only by the sign-in flow: `signinSession` names its authenticated session, for this profile and this end user.
  */
 export async function createEnrollmentToken(tenantId: number, userId: number | null, req: CreateTokenRequest, auditCtx: AuditWriteContext,
-  o: { gateway?: AndroidGateway; actor?: DbActor; byodInvitation?: string } = {}): Promise<CreatedToken> {
+  o: { gateway?: AndroidGateway; actor?: DbActor; byodInvitation?: string; signinSession?: string } = {}): Promise<CreatedToken> {
   const gw = o.gateway ?? androidGateway();
   const actor: DbActor = o.actor ?? (userId ? { type: 'user', userId } : TOKENS_ACTOR);
   return asTenant(tenantId, actor, async () => {
@@ -109,7 +111,11 @@ export async function createEnrollmentToken(tenantId: number, userId: number | n
       const snapshot = snapshotOf(profile);
       let plan;
       try { plan = tokenPlan(snapshot, req.expiresInSeconds); } catch (err) { throw new TokenError(422, (err as { code?: string }).code ?? 'invalidInput'); }
-      if (plan.kind === 'signin') throw new TokenError(422, 'androidSigninTokenByFlow', 'sign-in tokens are created by the sign-in flow');
+      // Lot AN-F2: a sign-in token is created by the sign-in flow only, for the end user Obligate just authenticated in a
+      // session of the device surface (signin/flow.ts): never by the console's route.
+      if (plan.kind === 'signin' && !(req.endUserId && await checkSigninSessionAuthenticated(trx, tenantId, o.signinSession, profile.id, req.endUserId))) {
+        throw new TokenError(422, 'androidSigninTokenByFlow', 'sign-in tokens are created by the sign-in flow');
+      }
       if (plan.kind === 'byod_link' && !req.endUserId) throw new TokenError(422, 'androidEndUserRequired', 'a BYOD link is bound to an end user');
       if (plan.kind === 'byod_link' && !(await checkInvitationIssuing(trx, tenantId, o.byodInvitation, profile.id, req.endUserId))) {
         throw new TokenError(409, 'androidByodByInvitation', 'a BYOD link token is created by an invitation whose notice was acknowledged');
@@ -171,6 +177,8 @@ export async function revealEnrollmentToken(tenantId: number, userId: number, id
     }
     // Lot AN-F1: the Google link of a personal device is handed by the device surface only, after the notice.
     if (row.kind === 'byod_link') throw new TokenError(409, 'androidByodByInvitation', 'the link of a BYOD token is handed by its invitation');
+    // Lot AN-F2: a sign-in token belongs to the device of its session (the user Obligate authenticated), nobody else.
+    if (row.kind === 'signin') throw new TokenError(409, 'androidSigninTokenByFlow', 'a sign-in token is handed to the device of its session only');
     const value = await vault.readTenantSecret(tenantId, row.value_ref, { trx });
     try {
       await audit.appendInTx(trx, {

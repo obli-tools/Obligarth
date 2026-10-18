@@ -154,6 +154,21 @@ async function targetRows(trx: Knex.Transaction, tenantId: number, deviceIds: nu
   return new Map(rows.map((r) => [Number(r.id), r]));
 }
 
+/** Lost mode refused before any call for 12 hours after a successful user exit (USAGE_LOGS StopLostModeUserAttemptEvent)
+ *  or a password reset by the IT acknowledged by the device (§11.2; Google answers USER_EXIT_LOST_MODE_RECENTLY or
+ *  RESET_PASSWORD_RECENTLY otherwise). Lot AN-F2. */
+export const LOST_MODE_BLOCK_MS = 12 * 3_600_000;
+
+async function lostModeBlocked(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): Promise<Set<number>> {
+  if (!deviceIds.length) return new Set();
+  const since = new Date(Date.now() - LOST_MODE_BLOCK_MS);
+  const exits = await trx('android_lost_mode_exits').where({ tenant_id: tenantId }).whereIn('device_id', deviceIds)
+    .where('exited_at', '>', since).pluck('device_id') as number[];
+  const resets = await trx('android_commands').where({ tenant_id: tenantId, request_type: 'RESET_PASSWORD', state: 'acknowledged' })
+    .whereIn('device_id', deviceIds).where('completed_at', '>', since).pluck('device_id') as number[];
+  return new Set([...exits, ...resets].map(Number));
+}
+
 // ── Enqueue ───────────────────────────────────────────────────────────────────
 
 export interface EnqueueAndroidCommands {
@@ -248,6 +263,7 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
   const frozen = spec.destructive && !!(await readSettings(tenantId, trx)).frozen_at;
 
   const targets = await targetRows(trx, tenantId, deviceIds);
+  const lostModeBlock = req.type === 'START_LOST_MODE' ? await lostModeBlocked(trx, tenantId, deviceIds) : new Set<number>();
   const batchId = randomUUID();
   const out: EnqueueOutcome = { batchId, commandIds: [], byDevice: new Map(), refused: [], held: 0, replayed: 0 };
   const now = Date.now();
@@ -264,6 +280,7 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
     // Lot AN-F1 (EX-A7): a personal device never takes a WIPE with a wipe data flag (they act on the whole device).
     if (t!.ownership === 'personal' && byodCommandRefusal(body)) { out.refused.push({ deviceId, code: 'ownership' }); continue; }
     if (Number(t!.enterprise_id) !== e.id) { out.refused.push({ deviceId, code: 'not_amapi' }); continue; }
+    if (lostModeBlock.has(deviceId)) { out.refused.push({ deviceId, code: 'lost_mode_recent' }); continue; }
     const id = (req.commandIdFor?.(deviceId) ?? randomUUID()).toLowerCase();
     let secretEnc: string | null = null;
     if (newPassword !== null) {

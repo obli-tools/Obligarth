@@ -119,9 +119,10 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
   // Apps: the whole set replaced (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
   // device keeps the apps of the tenant's catalog only (lot AN-F1, criterion 6): never a personal app, whatever the
-  // report carries.
+  // report carries. A COPE device (work profile on a company device) too (lot AN-F2, section 10.5: « apps
+  // personnelles jamais inventoriées »): its personal profile is the employee's.
   let apps = inv.apps;
-  if (ownership === 'personal' && apps.length) {
+  if ((ownership === 'personal' || ownership === 'corporate_personal') && apps.length) {
     const catalog = new Set(await trx('apps').where({ tenant_id: tenantId, platform_family: 'android' }).whereNull('archived_at')
       .whereIn('identifier', apps.map((a) => a.identifier)).pluck('identifier') as string[]);
     apps = byodApps(apps, catalog);
