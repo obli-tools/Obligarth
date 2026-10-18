@@ -36,23 +36,31 @@ const deviceIdOf = (e: AndroidEnterpriseRef, amapiName: string): string => {
 
 interface QuarantineRow { id: number; amapi_name: string; token_id: string | null; decision: string; state: string; enrollment_time: Date | null; created_at: Date }
 
-/** The minimal policy of a quarantined device: its token's enrollment policy, else 'default'. */
-async function minimalPolicyOf(tokenId: string | null): Promise<string> {
+/** The minimal policy of a quarantined device: its token's enrollment policy, else 'default'. A device not known to
+ *  be COMPANY_OWNED (a personal device on a company token: review of lot AN-F1) takes the enrollment policy of a
+ *  personal profile only, never the settings nor the reports of a company profile. */
+async function minimalPolicyOf(tokenId: string | null, amapiOwnership: string | null): Promise<string> {
   if (!tokenId) return 'default';
-  const r = await db('android_enrollment_tokens as t').join('android_enrollment_policies as p', function j() {
+  const q = db('android_enrollment_tokens as t').join('android_enrollment_policies as p', function j() {
     this.on('p.profile_id', '=', 't.profile_id').andOn('p.tenant_id', '=', 't.tenant_id');
-  }).where('t.id', tokenId).where('p.state', 'pushed').first('p.policy_id') as { policy_id: string } | undefined;
+  }).where('t.id', tokenId).where('p.state', 'pushed');
+  if (amapiOwnership !== 'COMPANY_OWNED') {
+    q.join('enrollment_profiles as ep', function j() { this.on('ep.id', '=', 't.profile_id').andOn('ep.tenant_id', '=', 't.tenant_id'); })
+      .where('ep.ownership', 'personal');
+  }
+  const r = await q.first('p.policy_id') as { policy_id: string } | undefined;
   return r?.policy_id ?? 'default';
 }
 
 export async function quarantineDevice(tenantId: number, quarantineId: number, o: { gateway?: AndroidGateway; actor?: DbActor } = {}): Promise<'done' | 'gone' | 'not_open'> {
   const gw = o.gateway ?? androidGateway();
   return asTenant(tenantId, o.actor ?? DECISIONS_ACTOR, async () => {
-    const q = await db('android_quarantine').where({ id: quarantineId }).first('id', 'amapi_name', 'token_id', 'decision', 'state') as QuarantineRow | undefined;
+    const q = await db('android_quarantine').where({ id: quarantineId }).first('id', 'amapi_name', 'token_id', 'decision', 'state', 'amapi_ownership') as
+      (QuarantineRow & { amapi_ownership: string | null }) | undefined;
     if (!q || q.state !== 'open') return 'not_open';
     const e = await readEnterprise();
     if (!e) return 'not_open';
-    const policyName = await minimalPolicyOf(q.token_id);
+    const policyName = await minimalPolicyOf(q.token_id, q.amapi_ownership);
     try {
       await gw.patchDevice(e, deviceIdOf(e, q.amapi_name), { state: 'DISABLED', disabledReason: { ...DISABLED_MESSAGES.quarantine }, policyName });
     } catch (err) {

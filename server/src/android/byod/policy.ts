@@ -101,9 +101,12 @@ export function byodCommandRefusal(body: { type?: unknown; [k: string]: unknown 
   const type = typeof body?.type === 'string' ? body.type : '';
   if (!BYOD_COMMAND_TYPES.has(type)) return 'personal_command';
   if (type === 'WIPE') {
+    // Any value other than an empty list is a flag (a scalar or an object as well: review of lot AN-F1).
+    const flagged = (v: unknown): boolean => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0);
     const wp = body.wipeParams;
-    if (isObj(wp) && Array.isArray(wp.wipeDataFlags) && wp.wipeDataFlags.length) return 'personal_full_wipe';
-    if (Array.isArray(body.wipeDataFlags) && body.wipeDataFlags.length) return 'personal_full_wipe';
+    if (wp !== undefined && wp !== null && !isObj(wp)) return 'personal_full_wipe';
+    if (isObj(wp) && flagged(wp.wipeDataFlags)) return 'personal_full_wipe';
+    if (flagged(body.wipeDataFlags)) return 'personal_full_wipe';
   }
   return null;
 }
