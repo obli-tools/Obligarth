@@ -39,6 +39,8 @@ export function registerAndroidAuditActions(): void {
     // Lot AN-D1: the operator's disabling of a device (mdm.android_disable, AN30).
     { name: 'android.device_disabled', criticality: 'critical', label: 'Android: device disabled' },
     { name: 'android.device_enabled', criticality: 'standard', label: 'Android: device enabled again' },
+    // Review AN-D1: a command held by the last-resort cap (gateway_cap), released by the operator.
+    { name: 'android.command_released', criticality: 'critical', label: 'Android: command held by the last-resort cap released' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

@@ -19,6 +19,7 @@
 //     transaction; an operation not yet recorded while a submission of the device is in flight: missing prerequisite
 //     (retried), any other unknown operation: nothing.
 import type { Knex } from 'knex';
+import { audit } from '../../audit';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { readSettings } from '../../guard/settings';
@@ -301,6 +302,14 @@ export async function releaseHeldCommand(tenantId: number, commandId: string, ac
       .update({ submit_state: 'pending', hold_reason: null, updated_at: trx.fn.now() });
     if (n !== 1) return 'not_held' as const;
     await commandSenders.submit(trx, { tenantId, commandId: commandId.toLowerCase() });
+    // Review AN-D1: the release of a command the last-resort cap held is traced (who, which command).
+    const c = await trx('android_commands').where({ tenant_id: tenantId, id: commandId.toLowerCase() }).first('device_id', 'request_type', 'guard_action_uuid') as
+      { device_id: number; request_type: string; guard_action_uuid: string | null };
+    await audit.appendInTx(trx, {
+      tenantId, action: 'android.command_released', target: { type: 'device', id: String(c.device_id), device: Number(c.device_id) },
+      links: { command: commandId.toLowerCase(), ...(c.guard_action_uuid ? { action: c.guard_action_uuid } : {}) },
+      details: { channel: 'amapi', requestType: c.request_type, holdReason: 'gateway_cap' },
+    }, await audit.fromDbActor(actor, tenantId), { onFailure: 'spool' });
     return 'released' as const;
   }));
 }

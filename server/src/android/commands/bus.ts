@@ -32,6 +32,11 @@ import {
 } from './catalog';
 
 export const COMMAND_SECRET_COLUMN = { table: 'android_commands', column: 'secret_enc' } as const;
+/** The guarded command types each guarded action key dispatches (table of §11.4). */
+const GUARDED_TYPES_OF_KEY: Readonly<Record<string, readonly AndroidCommandType[]>> = Object.freeze({
+  'mdm.erase_device': ['WIPE'], 'mdm.remove_management': ['WIPE', 'RELINQUISH_OWNERSHIP'], 'mdm.device_lock': ['LOCK'],
+  'mdm.lost_mode_enable': ['START_LOST_MODE'], 'mdm.reset_password': ['RESET_PASSWORD'], 'mdm.relinquish_ownership': ['RELINQUISH_OWNERSHIP'],
+});
 export const COMMANDS_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.commands' }) as DbActor;
 
 export class AndroidCommandError extends Error {
@@ -215,10 +220,16 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
   // A guarded action whose late cancellation was asked dispatches nothing more (the engine writes the mark under the
   // lock of the row; this read waits for it).
   if (req.guardActionUuid) {
-    const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: req.guardActionUuid }).forShare().first('state', 'result') as
-      { state: string; result: unknown } | undefined;
+    const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: req.guardActionUuid }).forShare().first('state', 'result', 'action_key') as
+      { state: string; result: unknown; action_key: string } | undefined;
     if (!action) throw new AndroidCommandError(409, 'guardActionUnknown', 'unknown guarded action');
     if (lateCancelOf(action.result)) throw new AndroidCommandError(409, 'guardActionCancelled', 'the late cancellation of the action was asked');
+    // Review AN-D1: only an action the engine is executing dispatches, and only the types of its key (§11.4): an
+    // action awaiting approval, refused or of a lighter key (mdm.device_lock) never carries a WIPE.
+    if (action.state !== 'executing') throw new AndroidCommandError(409, 'guardActionNotExecuting', 'the guarded action is not executing');
+    if (spec.guarded && !(GUARDED_TYPES_OF_KEY[action.action_key] ?? []).includes(req.type)) {
+      throw new AndroidCommandError(409, 'guardActionMismatch', `${req.type} is not dispatched by ${String(action.action_key).slice(0, 60)}`);
+    }
   }
   const e = await readEnterprise(trx);
   if (!e || e.state !== 'linked') throw new AndroidCommandError(409, 'androidNotLinked', 'no linked Android enterprise');
@@ -378,16 +389,15 @@ export async function cancelAndroidCommand(tenantId: number, commandId: string, 
 export async function cancelSent(tenantId: number, row: CommandRow, actor: string, gw: AndroidGateway): Promise<CancelResult> {
   const e = await readEnterprise();
   if (!e || !row.amapi_operation) throw new AndroidCommandError(409, 'androidNotLinked', 'no linked Android enterprise');
-  const r = await gw.cancelOperation(e, row.amapi_operation);
-  if (r === 'cancelled') {
-    const changed = await db.transaction((trx) => finalizeCommand(trx, { ...row, actor }, { state: 'cancelled' }));
-    return changed ? 'cancelled' : 'already_final';
-  }
-  // already done at Google: its final state wins
+  await gw.cancelOperation(e, row.amapi_operation);
+  // Accepted or already done, the operation tells the outcome: Google cancels asynchronously and on a best-effort
+  // basis (google.longrunning: an operation cancelled ends done with error code 1; it may complete despite the
+  // cancellation). Not finished yet: the command stays 'sent' with its cancellation asked, the polling or the COMMAND
+  // notification gives its final state (review AN-D1: never 'cancelled' before Google says so).
   let op = null;
   try { op = await gw.getOperation(e, row.amapi_operation); } catch (err) { if (!(err instanceof AndroidError)) throw err; }
   const final = finalStateOf(op, { cancelRequested: true });
   if (!final) return 'cancel_requested';
-  const changed = await db.transaction((trx) => finalizeCommand(trx, row, { state: final.state, errorCode: final.errorCode }));
+  const changed = await db.transaction((trx) => finalizeCommand(trx, { ...row, actor }, { state: final.state, errorCode: final.errorCode }));
   return changed ? (final.state === 'cancelled' ? 'cancelled' : 'completed') : 'already_final';
 }

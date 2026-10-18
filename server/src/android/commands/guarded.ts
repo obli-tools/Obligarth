@@ -242,8 +242,13 @@ async function executeState(ctx: GuardExecutionContext<Record<string, unknown>>,
   if (!e || e.state !== 'linked') { for (const d of deviceIds) out.set(d, { status: 'skipped', code: 'androidNotLinked' }); return out; }
   const rows = await facts(ctx.tenantId, deviceIds);
   const message = typeof ctx.params?.message === 'string' ? { defaultMessage: ctx.params.message } : DISABLED_REASON;
+  // Review AN-D1: an execution run again (a device of the batch out of reach) never disables twice the devices this
+  // action already disabled: each devices.patch DISABLED counts in the last-resort cap, which freezes the tenant (A1).
+  const done = enable ? new Set<number>() : new Set((await db('android_device_controls').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid })
+    .whereIn('device_id', deviceIds).pluck('device_id') as number[]).map(Number));
   for (const id of deviceIds) {
     const r = rows.get(id);
+    if (done.has(id)) { out.set(id, { status: 'done' }); continue; }
     if (!r?.amapi_name || r.released_at) { out.set(id, { status: 'skipped', code: 'not_enrolled' }); continue; }
     const p = parseOwnedName(e, r.amapi_name);
     if (p.kind !== 'device') { out.set(id, { status: 'skipped', code: 'not_amapi' }); continue; }
