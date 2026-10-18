@@ -25,7 +25,8 @@ import { registerIntegrationJobs } from './schedule';
 export { createAppleIntegrationsRouter, createAppleAdminIntegrationsRouter } from './routes';
 
 const Payload = z.discriminatedUnion('op', [
-  z.object({ action: z.literal('apple_integration'), op: z.literal('push_topic_change'), requestId: z.string().uuid() }).passthrough(),
+  z.object({ action: z.literal('apple_integration'), op: z.literal('push_topic_change'), requestId: z.string().uuid(), topic: z.string().min(1).max(255) })
+    .passthrough(),
   z.object({ action: z.literal('apple_integration'), op: z.literal('ade_token_delete'), serverId: z.string().uuid() }).passthrough(),
 ]);
 
@@ -40,7 +41,7 @@ async function executeIntegration(x: ApprovalExecution): Promise<string | void> 
     if (p.op === 'push_topic_change') {
       await withAuditAs(x.tenantId, x.requesterId, 'integration.push_certificate_imported',
         { resourceType: 'push_request', resourcePath: p.requestId, details: { purpose: 'topic_change', approvalId: x.approvalId ?? null } },
-        () => executeTopicChange(x.tenantId, p.requestId.toLowerCase(), actor), (o) => ({ topic: o.topic, previousTopic: o.previousTopic, notAfter: o.notAfter }));
+        () => executeTopicChange(x.tenantId, p.requestId.toLowerCase(), actor, { approvalId: x.approvalId ?? null, topic: p.topic }), (o) => ({ topic: o.topic, previousTopic: o.previousTopic, notAfter: o.notAfter }));
       return undefined;
     }
     await withAuditAs(x.tenantId, x.requesterId, 'integration.ade_token_deleted',

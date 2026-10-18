@@ -177,7 +177,12 @@ export function createAppleIntegrationsRouter(): Router {
   router.post('/push/requests/:id/certificate', manage, raw, h(async (req, res) => {
     const tenantId = req.tenantId!;
     const id = requestId(req.params.id);
-    await getPushRequest(db, tenantId, id);
+    const current = await getPushRequest(db, tenantId, id);
+    // A change of topic already waits for its approval: the kept certificate is the one the approver is shown; another
+    // one would replace it under the same approval (review of lot C3, R1). Abandon the request to start again.
+    if (current.topicChangePending) {
+      throw new AppError(409, 'A change of topic of this request already waits for its approval', 'pushTopicChangePending');
+    }
     const pem = fileBody(req, INTEGRATION_LIMITS.certificateBytes).toString('utf8');
     // Every check before a second factor or a second approver is asked (the request of another tenant: 404 first).
     const c = await checkCertificateForRequest(db, tenantId, id, pem);

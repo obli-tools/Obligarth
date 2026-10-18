@@ -291,13 +291,22 @@ export async function holdTopicChange(trx: Knex.Transaction, tenantId: number, i
     .update({ pending_cert_pem: certPem, approval_id: approvalId, updated_at: new Date() });
 }
 
-/** The approved change of topic (executor): the kept certificate checked again, imported, activated. */
-export async function executeTopicChange(tenantId: number, id: string, actor: DbActor): Promise<{ topic: string; notAfter: string; previousTopic: string | null }> {
+/** The approved change of topic (executor): the kept certificate checked again, imported, activated. The approval must
+ *  be the one the certificate was kept with, and the certificate's topic the one the approver was shown (review of lot
+ *  C3, R1: a certificate posted after the approval request never rides on it). */
+export async function executeTopicChange(tenantId: number, id: string, actor: DbActor,
+  approved: { approvalId: number | null; topic: string }): Promise<{ topic: string; notAfter: string; previousTopic: string | null }> {
   const r = await rowOf(db, tenantId, id);
   if (r.purpose !== 'topic_change' || r.state !== 'apple_upload_pending' || !r.pending_cert_pem) {
     throw new AppError(409, 'This request no longer waits for its change of topic', 'pushRequestState');
   }
+  if (approved.approvalId === null || r.approval_id === null || Number(r.approval_id) !== Number(approved.approvalId)) {
+    throw new AppError(409, 'The kept certificate is not the one this approval was asked for', 'pushTopicChangeMismatch');
+  }
   const c = await checkCertificateForRequest(db, tenantId, id, r.pending_cert_pem);
+  if (c.check.topic !== approved.topic) {
+    throw new AppError(409, 'The kept certificate is not the one this approval was asked for', 'pushTopicChangeMismatch');
+  }
   await importAndActivate(tenantId, id, c.check, actor, { allowTopicChange: true });
   return { topic: c.check.topic, notAfter: c.check.notAfter.toISOString(), previousTopic: c.activeTopic };
 }

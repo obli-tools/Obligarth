@@ -3383,6 +3383,8 @@
     "pushCertificateMissing": "Ce tenant n'a aucun certificat push actif à renouveler.",
     "pushRequestNotFound": "Cette demande de certificat push n'existe pas.",
     "pushRequestState": "Cette demande n'en est pas à cette étape.",
+    "pushTopicChangePending": "Une bascule de topic de cette demande attend déjà son approbation : abandonnez la demande pour importer un autre certificat.",
+    "pushTopicChangeMismatch": "Le certificat gardé sur cette demande n'est pas celui pour lequel cette approbation a été demandée.",
     "vendorFileInvalid": "Le fichier de l'éditeur est refusé ({{reason}}).",
     "pushTopicMismatch": "Ce certificat a été créé avec un autre compte Apple (un autre topic) : les appareils devraient être réinscrits. Créez une demande de bascule de topic si c'est voulu.",
     "pushCertificateNotForRequest": "Ce certificat n'a pas été délivré pour la demande de ce tenant : le client a déposé un autre fichier chez Apple.",

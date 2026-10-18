@@ -3383,6 +3383,8 @@
     "pushCertificateMissing": "This tenant has no active push certificate to renew.",
     "pushRequestNotFound": "This push certificate request does not exist.",
     "pushRequestState": "This request is not at this step.",
+    "pushTopicChangePending": "A change of topic of this request already waits for its approval: abandon the request to import another certificate.",
+    "pushTopicChangeMismatch": "The certificate kept on this request is not the one this approval was asked for.",
     "vendorFileInvalid": "The vendor's file is refused ({{reason}}).",
     "pushTopicMismatch": "This certificate was created with another Apple account (another topic): the devices would have to enroll again. Create a request for a change of topic if that is intended.",
     "pushCertificateNotForRequest": "This certificate was not issued for the request of this tenant: the client uploaded another file at Apple.",
