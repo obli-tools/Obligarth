@@ -6,7 +6,7 @@ import { POLICY_STATES, type ImpactDevicesPage } from '@obligarth/shared';
 import { db } from '../../db';
 import { audit } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
-import { requireTenantCapability } from '../../middleware/rbac';
+import { requireAnyTenantCapability, requireTenantCapability } from '../../middleware/rbac';
 import { permissionService } from '../../services/permission.service';
 import { appleCatalog } from '../apple/catalog';
 import { listAssignments } from '../policies/assignments';
@@ -28,6 +28,8 @@ import { changeAssignments, emitPolicyChanged, submitVersion, versionImpact, typ
 
 const router = Router();
 const manage = requireTenantCapability('mdm.policies.manage');
+/** A batch of assignment changes: either capability here; each change is checked against its kind (lot C4). */
+const manageAssignments = requireAnyTenantCapability('mdm.policies.manage', 'mdm.apps.manage');
 /** A .mobileconfig, in memory: 1 MiB at most, one file. */
 const profileUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 1024 * 1024, files: 1, fields: 4, parts: 6 } }).single('file');
 const uploadProfile = (req: Request, res: Response, next: NextFunction): void => {
@@ -254,7 +256,7 @@ router.get('/assignments', async (req, res, next) => {
 });
 
 // POST /api/mdm/assignments/changes?dryRun=true — { changes: [...] }: a batch (preview, step-up, or approval).
-router.post('/assignments/changes', manage, async (req, res, next) => {
+router.post('/assignments/changes', manageAssignments, async (req, res, next) => {
   try {
     const dryRun = req.query.dryRun === 'true' || req.query.dryRun === '1';
     send(res, await changeAssignments(req, req.tenantId!, req.body, dryRun));

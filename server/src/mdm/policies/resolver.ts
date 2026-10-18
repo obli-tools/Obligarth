@@ -66,7 +66,7 @@ export interface ResolvedResource {
   name: string;
   /** A policy's contributions (an app's are built per assignment, its options being the value). */
   contributions: Contribution[];
-  app?: { identifier: string; supportedPlatforms: string[] };
+  app?: { identifier: string; supportedPlatforms: string[]; storeId: string | null };
 }
 
 export interface ResolutionInput {
@@ -90,6 +90,8 @@ export interface ResolvedSetting extends EffectiveSetting {
   /** The winning value (secrets as references, variables as templates); absent for a tombstone. For the
    *  compilation (section 7.9): never written with the effective state. */
   value?: JsonValue;
+  /** An app: its App Store id (the compilation's iTunesStoreID / AppStoreID). */
+  app?: { storeId: string | null };
 }
 
 export interface DeviceResolution { deviceId: number; settings: ResolvedSetting[] }
@@ -253,6 +255,7 @@ export function resolveDevice(input: ResolutionInput, d: ResolutionDevice, byTar
       key: w.c.key,
       instance: w.c.instance,
       ...(w.c.value !== undefined && !w.c.removed ? { value: w.c.value } : {}),
+      ...(w.c.app ? { app: { storeId: w.c.app.storeId } } : {}),
     });
   }
   settings.sort((x, y) => (x.settingKey < y.settingKey ? -1 : x.settingKey > y.settingKey ? 1 : 0));

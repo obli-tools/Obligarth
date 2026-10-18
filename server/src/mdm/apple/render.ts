@@ -58,6 +58,7 @@ const isObject = (v: unknown): v is Record<string, JsonValue> => !!v && typeof v
 export function renderBody(a: StoredArtifact, vars: VariableValues): Record<string, JsonValue> {
   if (a.channel === 'ddm') return { ...a.body, Payload: renderVariables(a.body.Payload ?? {}, vars) };
   if (a.channel === 'setting') return { ...a.body, values: renderVariables(a.body.values ?? {}, vars) };
+  if (a.channel === 'app') return a.body.Configuration !== undefined ? { ...a.body, Configuration: renderVariables(a.body.Configuration, vars) } : a.body;
   if (a.channel === 'profile') {
     const content = Array.isArray(a.body.PayloadContent) ? a.body.PayloadContent : [];
     return {

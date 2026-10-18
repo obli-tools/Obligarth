@@ -80,7 +80,7 @@ export function registerAppleCommands(): void {
   // recommended level is stored with its routes (lot C3).
   registerRestrictableActions(APPLE_RESTRICTABLE_ACTIONS, {}, {
     'mdm.clear_passcode': { level: 'sensitive' }, 'mdm.lost_mode': { level: 'sensitive' }, 'apple.push_topic_change': { level: 'restricted' },
-    'apple.ade_token_delete': { level: 'restricted' }, 'apple.vpp_token_takeover': { level: 'sensitive' }, 'apple.device_transfer': { level: 'restricted' },
+    'apple.ade_token_delete': { level: 'restricted' }, 'apple.vpp_token_takeover': { level: 'sensitive', strictStepUp: true }, 'apple.device_transfer': { level: 'restricted' },
     'apple.device_identity_revoke': { level: 'sensitive' },
   });
   // A command the matrix holds at 'restricted': a second person approves it (the guard's examination policy: a

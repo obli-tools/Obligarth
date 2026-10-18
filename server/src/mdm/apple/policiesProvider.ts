@@ -52,7 +52,8 @@ export async function desiredDdmArtifacts(trx: Knex | Knex.Transaction, tenantId
     .where({ 'x.tenant_id': tenantId, 'x.device_id': deviceId, 'x.channel': 'ddm' }).whereNotNull('x.desired_hash')
     .orderBy('x.artifact_key')
     .select('x.artifact_key', 'x.state', 'x.state_reasons', 'm.channel', 'm.artifact_type', 'm.identifier', 'm.body', 'm.has_variables', 'm.encrypt') as DesiredRow[];
-  return rows.filter((r) => r.channel === 'ddm' && !isCompileError(r));
+  // An app's declaration waits for its licence (section 8.3): never served before.
+  return rows.filter((r) => r.channel === 'ddm' && !isCompileError(r) && r.state !== 'not_applicable' && !reasonsOf(r).includes('license_pending'));
 }
 
 export const policiesDeclarationProvider: DeclarationProvider = {

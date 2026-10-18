@@ -29,6 +29,7 @@ import {
 } from './publishGuard';
 import type { ResolutionAssignment } from './resolver';
 import { requestTenantResolution } from './triggers';
+import { assignableApp, normalizeAppOptions } from '../apps/appCatalogService';
 
 // =============================================================================
 // Submission, publication and approval (docs: modele-donnees-mdm §7.11,
@@ -63,6 +64,7 @@ import { requestTenantResolution } from './triggers';
 export { emitPolicyChanged, type RouteOutcome };
 
 const POLICY_MANAGE = 'mdm.policies.manage' as const;
+const APPS_MANAGE = 'mdm.apps.manage' as const;
 
 /** The preview as stored with a version, read by every member of the tenant and shown to the approver: its counters,
  *  keys and conflicts. The sample of devices and the token of their list are the requester's (their scopes, their
@@ -255,25 +257,39 @@ async function canWriteTarget(r: Requester, tenantId: number, scope: string, id:
 
 /**
  * The changes of a batch against the tenant as it is (rights of the requester re-checked): each one as the
- * assignment before and after it. Policies only at the MVP (an app's assignment comes with the catalog of apps).
+ * assignment before and after it. A policy's assignment needs mdm.policies.manage and has no options; an app's (lot C4,
+ * section 8.2) needs mdm.apps.manage and carries its options (AppleAppOptionsSchema, defaults filled).
  */
 export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: number, changes: AssignmentChange[], r: Requester): Promise<AssignmentDelta[]> {
   const deltas: AssignmentDelta[] = [];
   const touchedIds = new Set<number>();
   let next = -1;
+  // The capability of each kind of resource of the batch, read once.
+  const held = new Map<string, boolean>();
+  const requireCapabilityFor = async (type: 'policy' | 'app'): Promise<void> => {
+    if (r.isPlatformAdmin) return;
+    const cap = type === 'app' ? APPS_MANAGE : POLICY_MANAGE;
+    if (!held.has(cap)) held.set(cap, await permissionService.userHasTenantCapability(r.userId, tenantId, cap));
+    if (!held.get(cap)) throw new AppError(403, 'Insufficient permissions');
+  };
   for (const [i, ch] of changes.entries()) {
     const bad = (message: string, field?: string): never => {
       throw new AppError(400, message, 'invalidRequest', { index: i, ...(field ? { field } : {}) });
     };
     if (ch.op === 'create') {
       if (ch.id !== undefined) bad('A new assignment has no id', 'id');
-      if ((ch.resourceType ?? 'policy') !== 'policy') bad('Only policies are assigned at this stage', 'resourceType');
+      const resourceType = ch.resourceType ?? 'policy';
       if (!ch.resourceId) bad('resourceId required', 'resourceId');
       if (!ch.targetScope) bad('targetScope required', 'targetScope');
+      await requireCapabilityFor(resourceType);
       const resourceTenantId = ch.resourceTenantId ?? tenantId;
-      const policy = await q('policies').where({ id: ch.resourceId, tenant_id: resourceTenantId }).first('id', 'state') as { id: number; state: string } | undefined;
-      if (!policy) throw new AppError(404, 'Policy not found');
-      if (policy.state === 'archived') throw new AppError(409, 'An archived policy is not assigned', 'policyArchived');
+      if (resourceType === 'policy') {
+        const policy = await q('policies').where({ id: ch.resourceId, tenant_id: resourceTenantId }).first('id', 'state') as { id: number; state: string } | undefined;
+        if (!policy) throw new AppError(404, 'Policy not found');
+        if (policy.state === 'archived') throw new AppError(409, 'An archived policy is not assigned', 'policyArchived');
+      } else {
+        await assignableApp(q, tenantId, resourceTenantId, ch.resourceId!);
+      }
       const scope = ch.targetScope!;
       const targetId = scope === 'tenant' ? null : (ch.targetId ?? null);
       if (scope !== 'tenant' && targetId === null) bad('targetId required', 'targetId');
@@ -282,17 +298,19 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
       if (scope === 'device' && !(await q('devices').where({ tenant_id: tenantId, id: targetId }).first('id'))) throw new AppError(404, 'Device not found');
       const mode = ch.mode ?? 'include';
       if (scope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
-      if (ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
+      if (resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
+      if (resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
+      const options = resourceType === 'app' && mode === 'include' ? normalizeAppOptions(ch.options ?? {}) : {};
       const exists = await q('assignments').where({
-        tenant_id: tenantId, resource_type: 'policy', resource_tenant_id: resourceTenantId, resource_id: ch.resourceId, target_scope: scope,
+        tenant_id: tenantId, resource_type: resourceType, resource_tenant_id: resourceTenantId, resource_id: ch.resourceId, target_scope: scope,
       }).where((w) => (targetId === null ? w.whereNull('target_id') : w.where({ target_id: targetId }))).first('id');
       if (exists) throw new AppError(409, 'This resource is already assigned to this target', 'assignmentExists', { id: Number(exists.id) });
       if (!(await canWriteTarget(r, tenantId, scope, targetId))) throw new AppError(403, 'No write permission on the target');
       const after: ResolutionAssignment = {
-        id: next--, resourceType: 'policy', resourceId: ch.resourceId!, resourceTenantId, targetScope: scope, targetId, mode,
-        priority: ch.priority ?? ASSIGNMENT_PRIORITY.default, options: {},
+        id: next--, resourceType, resourceId: ch.resourceId!, resourceTenantId, targetScope: scope, targetId, mode,
+        priority: ch.priority ?? ASSIGNMENT_PRIORITY.default, options,
       };
-      if (deltas.some((d) => d.after && d.after.resourceId === after.resourceId && d.after.resourceTenantId === after.resourceTenantId
+      if (deltas.some((d) => d.after && d.after.resourceType === after.resourceType && d.after.resourceId === after.resourceId && d.after.resourceTenantId === after.resourceTenantId
         && d.after.targetScope === after.targetScope && d.after.targetId === after.targetId)) bad('The same assignment twice in a batch');
       deltas.push({ before: null, after });
       continue;
@@ -303,6 +321,7 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
     const row = await q('assignments').where({ tenant_id: tenantId, id: ch.id }).first() as Record<string, unknown> | undefined;
     if (!row) throw new AppError(404, 'Assignment not found');
     const before = rowToAssignment(row);
+    await requireCapabilityFor(before.resourceType);
     if (!(await canWriteTarget(r, tenantId, before.targetScope, before.targetId))) throw new AppError(403, 'No write permission on the target');
     if (ch.op === 'delete') {
       deltas.push({ before, after: null });
@@ -315,8 +334,11 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
     }
     const mode = ch.mode ?? before.mode;
     if (before.targetScope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
-    if (ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
-    deltas.push({ before, after: { ...before, mode, priority: ch.priority ?? before.priority, options: before.options } });
+    if (before.resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
+    if (before.resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
+    const options = before.resourceType !== 'app' || mode === 'exclude' ? (mode === 'exclude' ? {} : before.options)
+      : ch.options !== undefined ? normalizeAppOptions(ch.options) : Object.keys(before.options ?? {}).length ? before.options : normalizeAppOptions({});
+    deltas.push({ before, after: { ...before, mode, priority: ch.priority ?? before.priority, options } });
   }
   return deltas;
 }
@@ -367,7 +389,8 @@ export async function applyChangesInTx(trx: Knex.Transaction, tenantId: number, 
       out.deleted++;
     } else if (d.before && d.after) {
       const n = await trx('assignments').where({ tenant_id: tenantId, id: d.before.id, mode: d.before.mode, priority: d.before.priority })
-        .update({ mode: d.after.mode, priority: d.after.priority, updated_at: now });
+        .whereRaw('options = ?::jsonb', [JSON.stringify(d.before.options ?? {})])
+        .update({ mode: d.after.mode, priority: d.after.priority, options: JSON.stringify(d.after.options ?? {}), updated_at: now });
       if (!n) throw new AppError(409, 'An assignment of the batch changed meanwhile', 'assignmentChanged', { id: d.before.id });
       out.updated++;
     } else if (d.after) {
@@ -385,12 +408,15 @@ export async function applyChangesInTx(trx: Knex.Transaction, tenantId: number, 
     }
   }
   await requestTenantResolution(trx, tenantId);
-  const resources = [...new Set(deltas.map((d) => (d.after ?? d.before)!.resourceId))].sort((a, b) => a - b);
+  const idsOf = (type: 'policy' | 'app'): number[] => [...new Set(deltas.map((d) => (d.after ?? d.before)!).filter((a) => a.resourceType === type)
+    .map((a) => a.resourceId))].sort((a, b) => a - b);
+  const policies = idsOf('policy');
+  const apps = idsOf('app');
   await audit.appendInTx(trx, {
     tenantId, action: 'assignment.changed',
-    target: resources.length === 1 ? { type: 'policy', id: String(resources[0]) } : { type: 'assignment', id: 'batch' },
+    target: policies.length + apps.length === 1 ? { type: policies.length ? 'policy' : 'app', id: String(policies[0] ?? apps[0]) } : { type: 'assignment', id: 'batch' },
     approvalIds: o.approvalId ? [o.approvalId] : undefined,
-    details: { ...out, policies: resources.slice(0, 50), approvalId: o.approvalId ?? null, impact: impactSummary(o.impact) },
+    details: { ...out, policies: policies.slice(0, 50), ...(apps.length ? { apps: apps.slice(0, 50) } : {}), approvalId: o.approvalId ?? null, impact: impactSummary(o.impact) },
   }, ctx);
   return out;
 }
@@ -522,7 +548,10 @@ function approvedBaseOf(p: PublishPayload): Map<string, number | null> | null {
  * had published: a policy published again since then is not assigned by this approval (DM10; MDM-B5b-C3).
  */
 async function executeAssignmentChanges(x: ApprovalExecution, p: PublishPayload): Promise<void> {
-  const r = await requireTenantCapability(x.requesterId, x.tenantId, POLICY_MANAGE);
+  // The capability of the batch's first kind of resource here (and the requester's state); normalizeChanges reads
+  // the capability of every kind it meets again.
+  const firstType = Array.isArray(p.changes) && p.changes.length && p.changes.every((c) => c.op === 'create' && c.resourceType === 'app') ? 'app' : 'policy';
+  const r = await requireTenantCapability(x.requesterId, x.tenantId, firstType === 'app' ? APPS_MANAGE : POLICY_MANAGE);
   const approved = approvedImpactOf(p);
   const approvedBase = approvedBaseOf(p);
   const changes = ChangesBody.safeParse({ changes: p.changes });

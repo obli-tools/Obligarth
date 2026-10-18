@@ -1,7 +1,7 @@
 import { raw as expressRaw, Router, type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { INTEGRATION_LIMITS, isMasterTenant, MANUAL_DEADLINE_KINDS } from '@obligarth/shared';
+import { INTEGRATION_LIMITS, isMasterTenant, MANUAL_DEADLINE_KINDS, VPP_LIMITS, VPP_OPERATION_STATES } from '@obligarth/shared';
 import { audit } from '../../audit';
 import { config } from '../../config';
 import { db } from '../../db';
@@ -23,6 +23,10 @@ import {
   importWithKey, pushAppleFile, pushOverview, pushVendorFile, requestId,
 } from './push';
 import { recordVendorDeadline } from './vendor';
+import {
+  checkTakeover, decodeVppTokenFile, getVppToken, importVppToken, listVppAssets, listVppOperations, listVppTokens, removeVppToken, replaceVppToken,
+  requestVppSync, takeOverVppToken, vppTokenId,
+} from './vpp.service';
 
 // =============================================================================
 // Console API of the Apple integrations (docs: integration-apple-edge §11.6),
@@ -43,6 +47,13 @@ import { recordVendorDeadline } from './vendor';
 //   /ade-tokens/:id/token (.p7m, raw, 64 KiB); POST /ade-tokens/:id/sync
 //   (once a minute); PUT /ade-tokens/:id/account-driven-enrollment; DELETE
 //   /ade-tokens/:id
+//   GET /vpp-tokens; POST /vpp-tokens?label= (.vpptoken, raw, 16 KiB); GET
+//   /vpp-tokens/:id/assets; GET /vpp-assets; GET /vpp-operations; POST
+//   /vpp-tokens/:id/sync (once a minute); PUT /vpp-tokens/:id/token (the
+//   renewal, same location); POST /vpp-tokens/:id/takeover (a token another
+//   MDM uses: warning acknowledged, strict second factor or second approver,
+//   critical entry; restriction apple.vpp_token_takeover); DELETE
+//   /vpp-tokens/:id (lot C4)
 // /api/admin/apple (master tenant, platform administrators): GET /deadlines
 // (every tenant's and the instance's, context 'platform' under the
 // administrator's grant), PUT /deadlines/:kind (mdm_domain,
@@ -66,6 +77,8 @@ const HINT = z.string().trim().max(INTEGRATION_LIMITS.accountHint).nullable().op
 const PushRequestBody = z.object({ purpose: z.enum(['initial', 'renewal', 'topic_change']), appleAccountHint: HINT }).strict();
 const PushImportBody = z.object({ certPem: z.string().min(1).max(INTEGRATION_LIMITS.certificateBytes), keyPem: z.string().min(1).max(INTEGRATION_LIMITS.certificateBytes) }).strict();
 const AdeServerBody = z.object({ label: z.string().trim().min(1).max(INTEGRATION_LIMITS.label), appleAccountHint: HINT }).strict();
+const VppImportQuery = z.object({ label: z.string().trim().min(1).max(VPP_LIMITS.label), appleAccountHint: HINT }).strict();
+const TakeoverBody = z.object({ acknowledgeWarning: z.literal(true) }).strict();
 const ManualDeadlineBody = z.object({ notAfter: z.string().datetime({ offset: true }).nullable(), label: z.string().trim().min(1).max(200).optional() }).strict();
 
 function parse<S extends z.ZodTypeAny>(schema: S, v: unknown): z.infer<S> {
@@ -113,6 +126,23 @@ const syncLimiter = rateLimit({
   keyGenerator: (req) => `${req.tenantId ?? 0}:${String(req.params.id ?? '').toLowerCase()}`,
   handler: (_q, res) => { res.status(429).json({ success: false, error: 'This server was synchronised less than a minute ago', code: 'rateLimited' }); },
 });
+
+/** 'Synchroniser maintenant' of a content token: once a minute and per token. */
+const vppSyncLimiter = rateLimit({
+  windowMs: 60_000, limit: 1, standardHeaders: true, legacyHeaders: false,
+  keyGenerator: (req) => `vpp:${req.tenantId ?? 0}:${String(req.params.id ?? '').toLowerCase()}`,
+  handler: (_q, res) => { res.status(429).json({ success: false, error: 'This content token was synchronised less than a minute ago', code: 'rateLimited' }); },
+});
+
+/** The raw body of a .vpptoken (16 KiB at most). */
+const vppRawParser = expressRaw({ type: () => true, limit: VPP_LIMITS.tokenFileBytes });
+function vppRaw(req: Request, res: Response, next: NextFunction): void {
+  vppRawParser(req, res, (err?: unknown) => {
+    if (!err) { next(); return; }
+    const type = (err as { type?: string }).type;
+    next(type === 'entity.too.large' ? new AppError(413, 'The file is too large', 'fileTooLarge') : new AppError(400, 'The file cannot be read', 'fileMissing'));
+  });
+}
 
 export function createAppleIntegrationsRouter(): Router {
   const router = Router();
@@ -315,6 +345,99 @@ export function createAppleIntegrationsRouter(): Router {
     });
     if (!ok) return;
     throw new AppError(403, 'The deletion of an ADE server needs a second approver', 'approvalRequired');
+  }));
+
+  // ── Apps and Books (§11.3) ──────────────────────────────────────────────────
+  router.get('/vpp-tokens', read, h(async (req, res) => {
+    res.json({ data: await listVppTokens(db, req.tenantId!) });
+  }));
+
+  router.get('/vpp-tokens/:id/assets', read, h(async (req, res) => {
+    const id = vppTokenId(req.params.id);
+    await getVppToken(db, req.tenantId!, id);
+    res.json({ data: await listVppAssets(db, req.tenantId!, id) });
+  }));
+
+  router.get('/vpp-assets', read, h(async (req, res) => {
+    res.json({ data: await listVppAssets(db, req.tenantId!) });
+  }));
+
+  router.get('/vpp-operations', read, h(async (req, res) => {
+    const state = typeof req.query.state === 'string' && (VPP_OPERATION_STATES as readonly string[]).includes(req.query.state) ? req.query.state : undefined;
+    res.json({ data: await listVppOperations(db, req.tenantId!, { state }) });
+  }));
+
+  router.post('/vpp-tokens', manage, vppRaw, h(async (req, res) => {
+    requireOn();
+    const tenantId = req.tenantId!;
+    const q = parse(VppImportQuery, { label: req.query.label, ...(req.query.appleAccountHint !== undefined ? { appleAccountHint: req.query.appleAccountHint } : {}) });
+    await vault.requireEscrow();                                       // V14 first (INT-RC7)
+    // The file read before anything is asked or written (a file that is not a token leaves no entry).
+    const file = decodeVppTokenFile(fileBody(req, VPP_LIMITS.tokenFileBytes));
+    if (!(await integrationsAllowed(req, res, `Connect the Apps and Books content token ${q.label}`))) return;
+    const out = await audit.withIntent({
+      tenantId, action: 'integration.vpp_token_imported', target: { type: 'vpp_token', id: 'new' }, details: { label: q.label },
+    }, await audit.fromRequest(req, tenantId), () => importVppToken(tenantId, req.session.userId!, q, file, userActor(req.session.userId!)),
+    { resultDetails: (o) => ({ id: o.view.id, outcome: o.outcome, expDate: o.view.expDate }) });
+    res.status(201).json({ data: out.view, outcome: out.outcome });
+  }));
+
+  router.post('/vpp-tokens/:id/sync', manage, vppSyncLimiter, h(async (req, res) => {
+    const tenantId = req.tenantId!;
+    const id = vppTokenId(req.params.id);
+    await requestVppSync(tenantId, id);
+    await audit.append({ tenantId, action: 'integration.vpp_sync_requested', target: { type: 'vpp_token', id }, details: {} }, await audit.fromRequest(req, tenantId));
+    res.status(202).json({ data: { id, requested: true } });
+  }));
+
+  router.put('/vpp-tokens/:id/token', manage, vppRaw, h(async (req, res) => {
+    const tenantId = req.tenantId!;
+    const id = vppTokenId(req.params.id);
+    const before = await getVppToken(db, tenantId, id);
+    const file = decodeVppTokenFile(fileBody(req, VPP_LIMITS.tokenFileBytes));
+    requireOn();
+    await vault.requireEscrow();
+    if (!(await integrationsAllowed(req, res, `Replace the Apps and Books content token ${before.label}`))) return;
+    const view = await audit.withIntent({
+      tenantId, action: 'integration.vpp_token_replaced', target: { type: 'vpp_token', id }, details: { label: before.label },
+    }, await audit.fromRequest(req, tenantId), () => replaceVppToken(tenantId, id, file, userActor(req.session.userId!)),
+    { resultDetails: (v) => ({ state: v.state, expDate: v.expDate }) });
+    res.json({ data: view });
+  }));
+
+  router.post('/vpp-tokens/:id/takeover', manage, h(async (req, res) => {
+    const tenantId = req.tenantId!;
+    const id = vppTokenId(req.params.id);
+    await getVppToken(db, tenantId, id);                               // another tenant's: 404 first
+    parse(TakeoverBody, req.body);                                     // the warning, acknowledged by the user
+    const facts = await checkTakeover(db, tenantId, id);
+    requireOn();
+    await vault.requireEscrow();
+    // Decision of 15/10: never without a second factor (floor 'sensitive', no trusted-IP shortcut), or a second
+    // approver when the tenant's matrix holds it at 'restricted'; the entry is critical.
+    const ok = await applyRestriction(res, {
+      req, actionKey: 'apple.vpp_token_takeover', approvalRequestType: 'apple_integration',
+      approvalDescription: `Take over the Apps and Books content token ${facts.label} from the MDM that uses it: that MDM loses the licences of this location`,
+      approvalPayload: { action: 'apple_integration', op: 'vpp_token_takeover', vppId: id, label: facts.label },
+    });
+    if (!ok) return;
+    const view = await audit.withIntent({
+      tenantId, action: 'integration.vpp_token_taken_over', target: { type: 'vpp_token', id },
+      details: { label: facts.label, warningAcknowledged: true, stepUpVia: req.stepUpVia ?? null },
+    }, await audit.fromRequest(req, tenantId), () => takeOverVppToken(tenantId, id, userActor(req.session.userId!)),
+    { resultDetails: (v) => ({ state: v.state }) });
+    res.json({ data: view });
+  }));
+
+  router.delete('/vpp-tokens/:id', manage, h(async (req, res) => {
+    const tenantId = req.tenantId!;
+    const id = vppTokenId(req.params.id);
+    const before = await getVppToken(db, tenantId, id);
+    if (!(await integrationsAllowed(req, res, `Remove the Apps and Books content token ${before.label}`))) return;
+    await audit.withIntent({
+      tenantId, action: 'integration.vpp_token_removed', target: { type: 'vpp_token', id }, details: { label: before.label },
+    }, await audit.fromRequest(req, tenantId), () => removeVppToken(tenantId, id));
+    res.json({ data: { id, removed: true } });
   }));
 
   return router;

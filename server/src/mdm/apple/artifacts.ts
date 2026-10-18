@@ -29,6 +29,10 @@ import { RenderError, type VariableValues } from './variables';
 // command result all hold the device's row before they reach an artifact.
 // A setting has no removal (the Settings command sets a value, nothing unsets
 // it): a setting no longer desired is simply 'removed'.
+// An app (lot C4) waits for its licence: the licence gate registered by the
+// delivery of the apps (mdm/apps/licensing.ts) puts its artifact 'pending'
+// with the reason license_pending (or 'not_applicable', license_unavailable)
+// and asks Apps and Books for the licence, in the same transaction.
 // =============================================================================
 
 export interface DeliveryContext {
@@ -137,6 +141,14 @@ export async function loadRenderContext(trx: Knex | Knex.Transaction, tenantId: 
   return { device, vars: variablesFor(device, { name: t?.name ?? '', slug: t?.slug ?? '' }) };
 }
 
+/** The licence gate of the apps (section 8.3): called with the devices one of whose app artifacts was written. */
+export type AppLicenseGate = (trx: Knex.Transaction, tenantId: number, deviceIds: number[]) => Promise<void>;
+let licenseGate: AppLicenseGate | null = null;
+export function registerAppLicenseGate(fn: AppLicenseGate): void { licenseGate = fn; }
+
+/** Is this artifact an app's (its command, or its declaration app.managed)? */
+export const isAppArtifactKey = (key: string): boolean => key.startsWith('app:') || key.startsWith('ddm:obg.cfg.pol-app.managed.');
+
 const sameList = (a: string[], b: string[]): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 const BATCH = 500;
 
@@ -162,7 +174,7 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
     const mine = new Map<string, { a: CompiledArtifact; rendered: string | null; problems: string[] }>();
     wanted.set(d.deviceId, mine);
     let vars: VariableValues | null = null;
-    for (const a of compileApple(d.settings, ctx.catalog, { organization: ctx.tenant.name })) {
+    for (const a of compileApple(d.settings, ctx.catalog, { organization: ctx.tenant.name, device: { ownership: device.ownership, mode: device.mode } })) {
       if (!bodies.has(a.hash)) bodies.set(a.hash, a);
       const problems = [...a.problems];
       let rendered: string | null = null;
@@ -221,8 +233,9 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
   const touch = (deviceId: number, channel: string): void => {
     changed.add(deviceId);
     if (channel === 'ddm') ddm.add(deviceId);
-    else if (channel === 'profile' || channel === 'setting') command.add(deviceId);
+    else if (channel === 'profile' || channel === 'setting' || channel === 'app') command.add(deviceId);
   };
+  const apps = new Set<number>();
   for (const d of out.devices) {
     const mine = wanted.get(d.deviceId);
     if (!mine) continue;
@@ -231,6 +244,7 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
       const row = before.get(key);
       const base = { tenant_id: tenantId, device_id: d.deviceId, artifact_key: key, channel: w.a.channel, desired_hash: w.a.hash,
         sources: JSON.stringify(w.a.sources) };
+      if (isAppArtifactKey(key)) apps.add(d.deviceId);
       if (w.problems.length > 0) {
         // Recorded, never sent: the artifact is in error until what it is made of changes.
         const same = row && row.state === 'error' && hashOf(row.desired_hash) === w.a.hash && sameList(reasonsOf(row), w.problems);
@@ -250,8 +264,7 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
       }
     }
     for (const [key, row] of before) {
-      // The apps have their own writer (lot C4).
-      if (mine.has(key) || row.channel === 'app' || row.state === 'removing' || row.state === 'removed') continue;
+      if (mine.has(key) || row.state === 'removing' || row.state === 'removed') continue;
       if (row.desired_hash === null) continue;          // an error left by a removal: the reconciliation's
       const onDevice = row.delivered_hash !== null || row.state === 'delivering';
       if (!onDevice) deleting.push({ deviceId: d.deviceId, key });
@@ -285,6 +298,9 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
        WHERE a.tenant_id = ? AND a.device_id = k.device_id AND a.artifact_key = k.artifact_key`,
     [s.map((x) => x.deviceId), s.map((x) => x.key), tenantId]);
   }
+
+  // The licences of the apps (section 8.3).
+  if (apps.size && licenseGate) await licenseGate(trx, tenantId, [...apps].sort((a, b) => a - b));
 
   // 4. The aggregate state: the devices whose artifacts changed, and those resolved for the first time.
   await rollupConfigState(trx, [...new Set([...changed, ...locked.filter((r) => r.config_state === 'unknown').map((r) => r.id)])]);

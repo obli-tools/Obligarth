@@ -1,5 +1,5 @@
 import {
-  RAW_PROFILE_TYPE, SETTING_TYPE_PREFIX, identifierFits, isSecretRef, variablesOf,
+  APP_MANAGED_DECLARATION, APPLE_APP_OPTION_DEFAULTS, RAW_PROFILE_TYPE, SETTING_TYPE_PREFIX, identifierFits, isSecretRef, variablesOf,
   type ArtifactChannel, type JsonValue,
 } from '@obligarth/shared';
 import { canonicalize, sha256Hex } from '../../apple/ddm/canonical';
@@ -26,7 +26,14 @@ import type { AppleCatalogView } from './catalog';
 // again here). What cannot be delivered as compiled is returned with its
 // problems (a required key no policy brings, an identifier out of bounds): the
 // artifact is then recorded in error, never sent.
-// The apps (apple:app[…]) are compiled with their catalog (lot C4).
+// An app (apple:app[<identifier>], section 8.3, lot C4) is one artifact of its
+// own: 'app:<identifier>' (the command InstallApplication: iTunesStoreID,
+// ManagementFlags, Attributes, PurchaseMethod 1, the licence's kind, the managed
+// configuration with its variables) or the declaration app.managed
+// 'ddm:obg.cfg.pol-app.managed.<h12>' (AppStoreID, InstallBehavior with the
+// licence's kind, IncludeInBackup, Attributes); the device's ownership and mode
+// decide the licence (device or user), Removable (always true on a personal
+// device) and the takeover (never in User Enrollment).
 // Pure: no database, no logger; the unit tests load it.
 // =============================================================================
 
@@ -52,7 +59,12 @@ export interface CompiledArtifact {
 export interface CompileOptions {
   /** PayloadOrganization of the profiles: the tenant's name. */
   organization: string;
+  /** The device's ownership and management mode (the apps' licence, Removable, takeover); a company device by default. */
+  device?: { ownership: string; mode: string };
 }
+
+/** The artifact type of the app channel (mdm_artifacts.artifact_type). */
+export const APP_ARTIFACT_TYPE = 'app.install';
 
 const MAX_DEPTH = 64;
 
@@ -82,12 +94,17 @@ export function artifactHash(a: Pick<CompiledArtifact, 'channel' | 'artifactType
  */
 export function compileApple(effective: ResolvedSetting[], catalog: AppleCatalogView, options: CompileOptions): CompiledArtifact[] {
   const groups = new Map<string, ResolvedSetting[]>();
+  const out: CompiledArtifact[] = [];
   for (const s of effective) {
-    if (s.removed || s.availability.status !== 'available' || !s.artifactKey || s.kind === 'app') continue;
+    if (s.removed || s.availability.status !== 'available' || !s.artifactKey) continue;
+    if (s.kind === 'app') {
+      const a = compileApp(s, options);
+      if (a) out.push(a);
+      continue;
+    }
     const g = groups.get(s.artifactKey);
     if (g) g.push(s); else groups.set(s.artifactKey, [s]);
   }
-  const out: CompiledArtifact[] = [];
   for (const artifactKey of [...groups.keys()].sort()) {
     const settings = groups.get(artifactKey)!.sort((a, b) => (a.settingKey < b.settingKey ? -1 : a.settingKey > b.settingKey ? 1 : 0));
     const first = settings[0];
@@ -135,7 +152,7 @@ export function compileApple(effective: ResolvedSetting[], catalog: AppleCatalog
     } else if (channel === 'setting') {
       body = { Item: type.startsWith(SETTING_TYPE_PREFIX) ? type.slice(SETTING_TYPE_PREFIX.length) : type, values };
     } else {
-      continue;                                         // 'app': compiled with the catalog of apps (lot C4)
+      continue;                                         // 'app': compileApp
     }
     if (!identifierFits(channel, identifier)) problems.push('compile:identifier');
     const secretRefs = [...secretRefsOf(valuesPart)].sort();
@@ -154,5 +171,63 @@ export function compileApple(effective: ResolvedSetting[], catalog: AppleCatalog
       problems,
     });
   }
-  return out;
+  return out.sort((a, b) => (a.artifactKey < b.artifactKey ? -1 : a.artifactKey > b.artifactKey ? 1 : 0));
+}
+
+const bool = (v: JsonValue | undefined, d: boolean): boolean => (typeof v === 'boolean' ? v : d);
+
+/** The artifact of an app retained for a device (section 8.3); null when its key is not an app's. */
+export function compileApp(s: ResolvedSetting, options: CompileOptions): CompiledArtifact | null {
+  const artifactKey = s.artifactKey!;
+  const sep = artifactKey.indexOf(':');
+  const channel = artifactKey.slice(0, sep) as ArtifactChannel;
+  const identifier = artifactKey.slice(sep + 1);
+  const appId = s.instance ?? '';
+  const o = asObject(s.value);
+  const personal = options.device?.ownership === 'personal';
+  const userEnrollment = options.device?.mode === 'user_enrollment';
+  const removable = personal ? true : bool(o.removable, APPLE_APP_OPTION_DEFAULTS.removable);
+  const removeOnUnenroll = bool(o.removeOnUnenroll, APPLE_APP_OPTION_DEFAULTS.removeOnUnenroll);
+  const preventBackup = bool(o.preventBackup, APPLE_APP_OPTION_DEFAULTS.preventBackup);
+  const takeOver = !userEnrollment && bool(o.takeOver, APPLE_APP_OPTION_DEFAULTS.takeOver);
+  const config = o.config && typeof o.config === 'object' && !Array.isArray(o.config) ? o.config as Record<string, JsonValue> : null;
+  const storeId = s.app?.storeId ?? null;
+  const problems: string[] = [];
+  if (!storeId || !/^[0-9]{1,20}$/.test(storeId)) problems.push('compile:store_id');
+  if (config && secretRefsOf(config).size > 0) problems.push('compile:secret_in_app_config');
+  const license = personal ? 'user' : 'device';
+  let body: Record<string, JsonValue>;
+  let artifactType: string;
+  if (channel === 'app') {
+    artifactType = APP_ARTIFACT_TYPE;
+    body = {
+      Identifier: appId, iTunesStoreID: storeId && /^[0-9]{1,15}$/.test(storeId) ? Number(storeId) : 0,
+      ManagementFlags: (removeOnUnenroll ? 1 : 0) | (preventBackup ? 4 : 0), Attributes: { Removable: removable }, PurchaseMethod: 1,
+      LicenseAssignment: license, ...(takeOver ? { ChangeManagementState: 'Managed' } : {}), ...(config ? { Configuration: config } : {}),
+    };
+    if (!identifierFits('app', identifier) || identifier !== appId) problems.push('compile:identifier');
+  } else if (channel === 'ddm') {
+    artifactType = APP_MANAGED_DECLARATION;
+    body = {
+      Type: APP_MANAGED_DECLARATION, Identifier: identifier,
+      Payload: {
+        AppStoreID: storeId ?? '', InstallBehavior: { Install: 'Required', License: { Assignment: license === 'user' ? 'User' : 'Device' } },
+        IncludeInBackup: !preventBackup, Attributes: { Hideable: false, Lockable: false },
+      },
+    };
+    if (!identifierFits('ddm', identifier)) problems.push('compile:identifier');
+  } else {
+    return null;
+  }
+  const encrypt = false;
+  let hash: string;
+  try {
+    hash = artifactHash({ channel, artifactType, identifier, body, encrypt });
+  } catch {
+    return null;
+  }
+  return {
+    artifactKey, channel, artifactType, identifier, body, hash, secretRefs: [], encrypt,
+    hasVariables: config ? variablesOf(config).length > 0 : false, sources: [s.settingKey], problems,
+  };
 }

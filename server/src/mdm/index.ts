@@ -32,6 +32,14 @@ import { changeOwnership } from './registry/ownership';
 import deviceRoutes from './routes/devices.routes';
 import endUserRoutes from './routes/endUsers.routes';
 import policyRoutes from './routes/policies.routes';
+import appRoutes from './routes/apps.routes';
+import { onOperationFinal, onTokenSynced } from '../apple/integrations/vpp.service';
+import { onManagedAppsIngested } from './inventory/ingestors';
+import { registerAppLicenseGate } from './apple/artifacts';
+import { registerAppRemovedHook } from './apple/reconcile';
+import { applyManagedApps } from './apps/delivery';
+import { licenseGate, onLicenseOperationFinal, onLicenseTokenSynced, releaseDeviceLicenses } from './apps/licensing';
+import { onUnenrollCleanup } from '../apple/devices/jobs';
 
 // =============================================================================
 // MDM DATA MODEL — its hooks into the core's registries (docs:
@@ -111,6 +119,15 @@ export function registerMdmModule(): void {
   registerCommandResultIngestor({ requestType: 'Settings', mode: 'inline', apply: ingestSettingsResult });
   // An ADE device leaves the setup assistant with its profiles and settings installed.
   registerSetupContributor(policiesSetupContributor);
+  // ── Apps (§8.3, lot C4): the licence gate of the writer, the ends of the operations of Apps and Books and the
+  //    synchronisations of its tokens, the state of an app from the inventory, the licence given back when the app
+  //    leaves a device or the device leaves management.
+  registerAppLicenseGate(licenseGate);
+  onOperationFinal(onLicenseOperationFinal);
+  onTokenSynced(onLicenseTokenSynced);
+  onManagedAppsIngested(applyManagedApps);
+  registerAppRemovedHook(async (trx, tenantId, deviceId, identifier) => { await releaseDeviceLicenses(trx, tenantId, deviceId, identifier); });
+  onUnenrollCleanup(async (trx, tenantId, deviceId) => { await releaseDeviceLicenses(trx, tenantId, deviceId); });
   // A new catalog, overlay or compiler: every tenant is resolved again (after jobs.start(): the task enqueues).
   registerBootTask('mdm.catalog-release', async () => { await resolveOnCatalogChange(); });
 
@@ -165,6 +182,7 @@ export function createMdmRouter(): Router {
   const router = Router();
   router.use('/end-users', endUserRoutes);
   router.use('/', policyRoutes);
+  router.use('/', appRoutes);
   router.use('/', deviceRoutes);
   return router;
 }

@@ -8,7 +8,7 @@ import {
   REMOVED, hashOf, isCompileError, loadRenderContext, lockDeviceRows, reasonsOf, rollupConfigState, storedArtifactOf, type ArtifactRow,
 } from './artifacts';
 import { parseProfileRef, profileRefOf } from './profileSource';
-import { profileUuid, settingsItem } from './render';
+import { profileUuid, renderBody, settingsItem } from './render';
 import { requestArtifactReconcile, requestComplianceEvaluation } from './requests';
 import { RenderError } from './variables';
 
@@ -39,11 +39,28 @@ import { RenderError } from './variables';
 // any profile outside the two prefixes of the policies, is never touched.
 // Locks, in this order: the open targets of the device's policy commands, the
 // device's row, the rows of its artifacts (artifacts.ts).
+// The apps (channel 'app', section 8.3, lot C4): InstallApplication (policyRef
+// '<artifact key>@<hash>', iTunesStoreID, PurchaseMethod 1) once the licence is
+// associated (an artifact 'pending' with license_pending waits); acknowledged,
+// the artifact stays 'delivering' (awaiting_inventory) until the inventory shows
+// the app managed (ManagedApplicationList, asked here; mdm/apps/delivery.ts);
+// removal: RemoveApplication, then the licence is given back (the hook of the
+// delivery of the apps).
 // =============================================================================
 
 export const RECONCILE_QUEUE = 'apple.artifacts.reconcile-device';
 const ACTOR = `j:${RECONCILE_QUEUE}`;
-const POLICY_REQUEST_TYPES = ['InstallProfile', 'RemoveProfile', 'Settings'];
+const POLICY_REQUEST_TYPES = ['InstallProfile', 'RemoveProfile', 'Settings', 'InstallApplication', 'RemoveApplication'];
+/** Why an app waits: its licence (the gate of the delivery of the apps). */
+export const LICENSE_PENDING = 'license_pending';
+/** An app acknowledged by the device, not yet seen managed by its inventory. */
+export const AWAITING_INVENTORY = 'awaiting_inventory';
+/** One ManagedApplicationList per device and per window after an installation of an app. */
+const APP_LIST_WINDOW_MS = 10 * 60_000;
+/** What the delivery of the apps does once an app left a device (its licence given back). */
+export type AppRemovedHook = (trx: Knex.Transaction, tenantId: number, deviceId: number, identifier: string) => Promise<void>;
+let appRemovedHook: AppRemovedHook | null = null;
+export function registerAppRemovedHook(fn: AppRemovedHook): void { appRemovedHook = fn; }
 const OPEN_STATES = ['pending', 'queued', 'sent', 'notnow'];
 /** Attempts per desired version, then an intervention is needed (section 7.10). */
 export const MAX_ATTEMPTS = 3;
@@ -124,6 +141,14 @@ export function artifactOfCommand(requestType: string, params: Record<string, un
     const m = typeof params.policyRef === 'string' ? /^(setting:[a-z][a-z0-9_]{0,63})@([0-9a-f]{64})$/.exec(params.policyRef) : null;
     return m ? { key: m[1], hash: m[2], removal: false } : null;
   }
+  if (requestType === 'InstallApplication') {
+    const m = typeof params.policyRef === 'string' ? /^(app:[A-Za-z0-9][A-Za-z0-9._-]{0,199})@([0-9a-f]{64})$/.exec(params.policyRef) : null;
+    return m ? { key: m[1], hash: m[2], removal: false } : null;
+  }
+  if (requestType === 'RemoveApplication') {
+    return typeof params.identifier === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(params.identifier)
+      ? { key: `app:${params.identifier}`, hash: null, removal: true } : null;
+  }
   return null;
 }
 
@@ -132,7 +157,7 @@ export function artifactOfCommand(requestType: string, params: Record<string, un
 const versionTag = (row: Pick<ArtifactRow, 'desired_hash' | 'rendered_hash'>): string => h16(`${hashOf(row.desired_hash) ?? ''}:${hashOf(row.rendered_hash) ?? ''}`);
 
 /** The version tag in the idempotency key of a command of the reconciliation; null for a command of another origin. */
-const tagOfKey = (key: string | null): string | null => /^pol:[0-9]+:[0-9a-f]{16}:([0-9a-f]{16}):(?:install|settings)(?::[0-9]+)?$/.exec(key ?? '')?.[1] ?? null;
+const tagOfKey = (key: string | null): string | null => /^pol:[0-9]+:[0-9a-f]{16}:([0-9a-f]{16}):(?:install|settings|app)(?::[0-9]+)?$/.exec(key ?? '')?.[1] ?? null;
 
 /** Does a command deliver the version of the artifact the device wants now? */
 function deliversCurrent(row: ArtifactRow, hash: string | null, key: string | null): boolean {
@@ -166,7 +191,11 @@ async function settle(trx: Knex.Transaction, row: ArtifactRow, cmd: LinkedComman
       return { changed: true, retry: true, installed: false };
     }
     if (row.state !== 'removing' && row.state !== 'error') return none;
-    if (cmd.state === 'acknowledged') { await set({ ...REMOVED }); return { ...none, changed: true }; }
+    if (cmd.state === 'acknowledged') {
+      await set({ ...REMOVED });
+      if (row.channel === 'app' && appRemovedHook) await appRemovedHook(trx, row.tenant_id, row.device_id, row.artifact_key.slice('app:'.length));
+      return { ...none, changed: true };
+    }
     if (cmd.state === 'error') {
       const codes = errorCodes(cmd.errorChain);
       if (codes.some((c) => PROFILE_ABSENT_CODES.has(c))) await set({ ...REMOVED });
@@ -185,7 +214,10 @@ async function settle(trx: Knex.Transaction, row: ArtifactRow, cmd: LinkedComman
     return { changed: true, retry: true, installed: false };
   }
   if (cmd.state === 'acknowledged') {
-    await set({ state: 'applied', state_reasons: '[]', delivered_hash: hashOf(row.rendered_hash) ?? hashOf(row.desired_hash), delivered_at: cmd.completedAt ?? now });
+    // An app is applied once the inventory shows it managed (section 8.3): until then it is on its way.
+    const app = row.channel === 'app';
+    await set({ state: app ? 'delivering' : 'applied', state_reasons: app ? JSON.stringify([AWAITING_INVENTORY]) : '[]',
+      delivered_hash: hashOf(row.rendered_hash) ?? hashOf(row.desired_hash), delivered_at: cmd.completedAt ?? now });
     return { changed: true, retry: false, installed: true };
   }
   if (cmd.state === 'error') {
@@ -196,12 +228,37 @@ async function settle(trx: Knex.Transaction, row: ArtifactRow, cmd: LinkedComman
   return { changed: true, retry: cmd.state === 'expired', installed: false };
 }
 
+/** The parameters of the command InstallApplication of an app's rendered body (compile.ts, compileApp). */
+export function installApplicationParams(b: Record<string, JsonValue>, policyRef: string): Record<string, unknown> {
+  const flags = typeof b.ManagementFlags === 'number' ? b.ManagementFlags & 5 : 1;
+  const attributes = b.Attributes && typeof b.Attributes === 'object' && !Array.isArray(b.Attributes) ? b.Attributes : undefined;
+  const configuration = b.Configuration && typeof b.Configuration === 'object' && !Array.isArray(b.Configuration) ? b.Configuration : undefined;
+  return {
+    iTunesStoreID: typeof b.iTunesStoreID === 'number' ? b.iTunesStoreID : 0, managementFlags: flags, purchaseMethod: 1,
+    ...(attributes ? { attributes } : {}), ...(configuration ? { configuration } : {}),
+    ...(b.ChangeManagementState === 'Managed' ? { changeManagementState: 'Managed' } : {}), policyRef,
+  };
+}
+
 /** A ProfileList of the device after an installation, one per window (the drift is read from it). Never fails the caller. */
 async function requestProfileList(trx: Knex.Transaction, tenantId: number, deviceId: number): Promise<void> {
   try {
     await mdmCommands.enqueue(trx, {
       tenantId, requestType: 'ProfileList', deviceIds: [deviceId], origin: 'policy', actor: ACTOR,
       idempotencyKey: `pol:${deviceId}:profilelist:${Math.floor(Date.now() / PROFILE_LIST_WINDOW_MS)}`,
+    });
+  } catch (err) {
+    if (!(err instanceof AppError)) throw err;
+  }
+}
+
+/** A ManagedApplicationList of the device after the installation of an app, one per window (the app's state is read
+ *  from it). Never fails the caller. */
+export async function requestManagedAppList(trx: Knex.Transaction, tenantId: number, deviceId: number): Promise<void> {
+  try {
+    await mdmCommands.enqueue(trx, {
+      tenantId, requestType: 'ManagedApplicationList', deviceIds: [deviceId], origin: 'policy', actor: ACTOR,
+      idempotencyKey: `pol:${deviceId}:applist:${Math.floor(Date.now() / APP_LIST_WINDOW_MS)}`,
     });
   } catch (err) {
     if (!(err instanceof AppError)) throw err;
@@ -244,6 +301,7 @@ export async function onPolicyTargetFinal(ctx: TargetFinalContext): Promise<void
   await requestComplianceEvaluation(trx, tenantId, [deviceId]);
   if (r.retry) await requestArtifactReconcile(trx, tenantId, [deviceId]);
   if (r.installed && cmd.requestType === 'InstallProfile') await requestProfileList(trx, tenantId, deviceId);
+  if (r.installed && cmd.requestType === 'InstallApplication') await requestManagedAppList(trx, tenantId, deviceId);
 }
 
 /**
@@ -317,7 +375,8 @@ async function attemptsOf(x: Run, prefix: string, since: Date): Promise<{ free: 
 async function openDelivery(x: Run, row: ArtifactRow, ref: string): Promise<string | null> {
   const q = x.trx('mdm_command_targets as t')
     .join('mdm_commands as c', function joinCommand() { this.on('c.id', '=', 't.command_id').andOn('c.tenant_id', '=', 't.tenant_id'); })
-    .where({ 't.tenant_id': x.tenantId, 't.device_id': x.deviceId, 'c.request_type': row.channel === 'profile' ? 'InstallProfile' : 'Settings' })
+    .where({ 't.tenant_id': x.tenantId, 't.device_id': x.deviceId,
+      'c.request_type': row.channel === 'profile' ? 'InstallProfile' : row.channel === 'app' ? 'InstallApplication' : 'Settings' })
     .whereIn('t.state', OPEN_STATES);
   if (row.channel === 'profile') q.whereRaw("c.params->>'profileRef' = ?", [ref]);
   else q.whereRaw("c.params->>'policyRef' = ?", [ref]);
@@ -343,6 +402,8 @@ async function enqueue(x: Run, requestType: string, params: Record<string, unkno
 }
 
 async function install(x: Run, row: ArtifactRow): Promise<void> {
+  // An app waits for its licence (the gate of the delivery of the apps lifts the reason and asks for a run).
+  if (row.channel === 'app' && reasonsOf(row).includes(LICENSE_PENDING)) return;
   const desired = hashOf(row.desired_hash) as string;
   const ref = profileRefOf(row.artifact_key, desired);
   const adopted = await openDelivery(x, row, ref);
@@ -351,7 +412,7 @@ async function install(x: Run, row: ArtifactRow): Promise<void> {
     x.out.adopted++;
     return;
   }
-  const op = row.channel === 'profile' ? 'install' : 'settings';
+  const op = row.channel === 'profile' ? 'install' : row.channel === 'app' ? 'app' : 'settings';
   const attempts = await attemptsOf(x, `pol:${x.deviceId}:${h16(row.artifact_key)}:${versionTag(row)}:${op}`, new Date(row.desired_at));
   if (attempts.recent >= MAX_ATTEMPTS || attempts.free === null) {
     if (row.state !== 'error') await setRow(x, row, { state: 'error', state_reasons: JSON.stringify(['attempts_exhausted']) });
@@ -362,6 +423,22 @@ async function install(x: Run, row: ArtifactRow): Promise<void> {
   let params: Record<string, unknown>;
   if (row.channel === 'profile') {
     params = { source: 'policy', profileRef: ref };
+  } else if (row.channel === 'app') {
+    const body = await x.trx('mdm_artifacts').where({ tenant_id: x.tenantId, hash: desired })
+      .first('channel', 'artifact_type', 'identifier', 'body', 'encrypt', 'has_variables') as
+      { channel: string; artifact_type: string; identifier: string; body: unknown; encrypt: boolean; has_variables: boolean } | undefined;
+    if (!body) return;
+    let rendered: Record<string, JsonValue>;
+    try {
+      const vars = body.has_variables ? (await loadRenderContext(x.trx, x.tenantId, x.deviceId))?.vars : {};
+      if (!vars) return;
+      rendered = renderBody(storedArtifactOf(body), vars);
+    } catch (err) {
+      if (!(err instanceof RenderError)) throw err;
+      await setRow(x, row, { state: 'error', state_reasons: JSON.stringify([`render:${err.code}`]) });
+      return;
+    }
+    params = installApplicationParams(rendered, ref);
   } else {
     const body = await x.trx('mdm_artifacts').where({ tenant_id: x.tenantId, hash: desired })
       .first('channel', 'artifact_type', 'identifier', 'body', 'encrypt') as
@@ -378,7 +455,7 @@ async function install(x: Run, row: ArtifactRow): Promise<void> {
     }
     params = { items: [item], policyRef: ref };
   }
-  const r = await enqueue(x, row.channel === 'profile' ? 'InstallProfile' : 'Settings', params, attempts.free);
+  const r = await enqueue(x, row.channel === 'profile' ? 'InstallProfile' : row.channel === 'app' ? 'InstallApplication' : 'Settings', params, attempts.free);
   if ('commandId' in r) {
     await setRow(x, row, { state: 'delivering', state_reasons: '[]', last_command_id: r.commandId });
     x.out.installs++;
@@ -396,20 +473,22 @@ async function install(x: Run, row: ArtifactRow): Promise<void> {
 }
 
 async function remove(x: Run, row: ArtifactRow, linked: LinkedCommand | null): Promise<void> {
-  if (row.channel !== 'profile' || !isPolicyProfileKey(row.artifact_key)) {
+  const app = row.channel === 'app';
+  if (!app && (row.channel !== 'profile' || !isPolicyProfileKey(row.artifact_key))) {
     // Nothing unsets a setting: it is simply no longer managed.
     await setRow(x, row, { ...REMOVED });
     return;
   }
   if (linked && OPEN_STATES.includes(linked.state)) {
-    if (linked.requestType === 'RemoveProfile') return;  // its removal waits for the device
+    if (linked.requestType === 'RemoveProfile' || linked.requestType === 'RemoveApplication') return;  // its removal waits for the device
     // An installation still waiting is withdrawn; one that never left the brain installed nothing.
     await mdmCommands.cancel(x.trx, x.tenantId, linked.id, [x.deviceId], x.actor, { silent: true });
     if (linked.state === 'pending' && row.delivered_hash === null) {
       await setRow(x, row, { ...REMOVED });
+      if (app && appRemovedHook) await appRemovedHook(x.trx, x.tenantId, x.deviceId, row.artifact_key.slice('app:'.length));
       return;
     }
-  } else if (x.listed && !x.listed.keys.has(row.artifact_key) && x.listed.at > new Date(row.state_at).getTime()) {
+  } else if (!app && x.listed && !x.listed.keys.has(row.artifact_key) && x.listed.at > new Date(row.state_at).getTime()) {
     // A ProfileList later than the request of the removal no longer shows it (and no installation may still land).
     await setRow(x, row, { ...REMOVED });
     return;
@@ -421,7 +500,9 @@ async function remove(x: Run, row: ArtifactRow, linked: LinkedCommand | null): P
     if (row.state !== 'error') await setRow(x, row, { state: 'error', state_reasons: JSON.stringify(['attempts_exhausted']) });
     return;
   }
-  const r = await enqueue(x, 'RemoveProfile', { identifier: row.artifact_key.slice('profile:'.length) }, attempts.free);
+  const r = app
+    ? await enqueue(x, 'RemoveApplication', { identifier: row.artifact_key.slice('app:'.length) }, attempts.free)
+    : await enqueue(x, 'RemoveProfile', { identifier: row.artifact_key.slice('profile:'.length) }, attempts.free);
   if ('commandId' in r) {
     await x.trx('device_artifacts').where({ tenant_id: x.tenantId, device_id: x.deviceId, artifact_key: row.artifact_key })
       .update({ state: 'removing', state_reasons: '[]', last_command_id: r.commandId });
@@ -499,13 +580,19 @@ export async function reconcileDevice(trx: Knex.Transaction, tenantId: number, d
   const [device] = await lockDeviceRows(trx, tenantId, [deviceId]);
   if (!device || (device.enrollment_state !== 'enrolled' && device.enrollment_state !== 'awaiting_configuration')) return { ...x.out, outcome: 'not_managed' };
   await applyDrift(x);
-  const rows = await trx('device_artifacts').where({ tenant_id: tenantId, device_id: deviceId }).whereIn('channel', ['profile', 'setting'])
+  const rows = await trx('device_artifacts').where({ tenant_id: tenantId, device_id: deviceId }).whereIn('channel', ['profile', 'setting', 'app'])
     .whereIn('state', ['pending', 'delivering', 'error', 'removing']).orderBy('artifact_key').forUpdate().select('*') as ArtifactRow[];
+  let appList = false;
   for (let row of rows) {
     if (isCompileError(row)) continue;
     let linked = row.last_command_id ? await linkedCommand(trx, tenantId, String(row.last_command_id), deviceId) : null;
     if (row.state === 'delivering') {
       if (linked && OPEN_STATES.includes(linked.state)) continue;
+      if (row.channel === 'app' && reasonsOf(row).includes(AWAITING_INVENTORY)) {
+        // Acknowledged, not yet seen by the inventory: its list is asked again (one per window).
+        if (!appList) { await requestManagedAppList(trx, tenantId, deviceId); appList = true; }
+        continue;
+      }
       // Its command ended without its hook (a target closed by a direct statement), or is gone (purged).
       if (linked && (await settle(trx, row, linked, now)).changed) x.out.changed = true;
       else await setRow(x, row, { state: row.desired_hash === null ? 'removing' : 'pending', state_reasons: '[]' });
@@ -529,8 +616,10 @@ export async function reconcileDevice(trx: Knex.Transaction, tenantId: number, d
  *  whose attempts are exhausted, an error of its compilation or of its rendering: both wait for a change of what
  *  the device wants) does not count: a fleet in such an error would otherwise fill every page. */
 export async function stuckDevices(q: Knex | Knex.Transaction, tenantId: number, limit: number, after = 0): Promise<number[]> {
-  const rows = await q('device_artifacts').where({ tenant_id: tenantId }).whereIn('channel', ['profile', 'setting'])
+  const rows = await q('device_artifacts').where({ tenant_id: tenantId }).whereIn('channel', ['profile', 'setting', 'app'])
     .whereIn('state', ['pending', 'error', 'removing', 'delivering']).whereRaw("state_at < now() - interval '1 hour'")
+    // An app waiting for its licence is the licence gate's (the synchronisation of Apps and Books looks again).
+    .whereRaw("NOT (channel = 'app' AND state = 'pending' AND jsonb_exists(state_reasons, 'license_pending'))")
     .whereRaw(`NOT (state = 'error' AND desired_hash IS NOT NULL
                     AND (state_reasons->>0 = 'attempts_exhausted' OR state_reasons->>0 LIKE 'compile:%' OR state_reasons->>0 LIKE 'render:%'))`)
     .where('device_id', '>', after)

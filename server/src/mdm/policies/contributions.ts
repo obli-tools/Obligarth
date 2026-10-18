@@ -37,7 +37,7 @@ export interface Contribution {
   /** A declaration key referencing an asset (refused at the MVP). */
   requiresAsset: boolean;
   /** Apps: the identifier and the options of the assignment. */
-  app?: { identifier: string; config: boolean; takeOver: boolean; supportedPlatforms: string[] };
+  app?: { identifier: string; config: boolean; takeOver: boolean; supportedPlatforms: string[]; storeId: string | null };
 }
 
 const REMOVED_HASH = createHash('sha256').update('{"$remove":true}').digest('hex');
@@ -87,7 +87,7 @@ export function policyContributions(content: PolicyContentV1, catalog: AppleCata
 }
 
 /** The contribution of an app assignment (section 8.2): apple:app[<identifier>], its options as the value. */
-export function appContribution(app: { identifier: string; supportedPlatforms: string[] }, options: Record<string, JsonValue>): Contribution {
+export function appContribution(app: { identifier: string; supportedPlatforms: string[]; storeId?: string | null }, options: Record<string, JsonValue>): Contribution {
   const d: MergeDescriptor = { kind: 'app', merge: 'atomic' };
   return {
     settingKey: settingKeyOf('app', d, { instance: app.identifier }),
@@ -106,6 +106,7 @@ export function appContribution(app: { identifier: string; supportedPlatforms: s
       config: options.config !== undefined && options.config !== null,
       takeOver: options.takeOver === true,
       supportedPlatforms: app.supportedPlatforms,
+      storeId: app.storeId ?? null,
     },
   };
 }

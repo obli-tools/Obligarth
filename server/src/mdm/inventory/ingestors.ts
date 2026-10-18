@@ -310,6 +310,11 @@ export async function ingestInstalledApplicationList(trx: Knex.Transaction, tena
   return 'applied';
 }
 
+/** What the delivery of the apps reads from a managed list once it is written (mdm/apps/delivery.ts, lot C4). */
+export type ManagedAppsHook = (trx: Knex.Transaction, tenantId: number, deviceId: number) => Promise<void>;
+const managedAppsHooks: ManagedAppsHook[] = [];
+export function onManagedAppsIngested(fn: ManagedAppsHook): void { if (!managedAppsHooks.includes(fn)) managedAppsHooks.push(fn); }
+
 /**
  * ManagedApplicationList (§5.3, deferred): managed, management status and configuration of each managed
  * app; a managed app not installed yet gets a 'managed_list' row. An app that is no longer managed is
@@ -337,6 +342,7 @@ export async function ingestManagedApplicationList(trx: Knex.Transaction, tenant
   if (rules.installedApps === 'managed_only') await gone.del();
   else await gone.update({ managed: false, management_status: null });
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
+  for (const fn of managedAppsHooks) await fn(trx, tenantId, deviceId);
   return 'applied';
 }
 

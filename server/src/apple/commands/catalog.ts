@@ -168,6 +168,9 @@ const InstallApplication = z.object({
   /** 0: legacy licence; 1: Apps and Books. */
   purchaseMethod: z.union([z.literal(0), z.literal(1)]).optional(),
   changeManagementState: z.literal('Managed').optional(),
+  /** The app of the policies this command delivers ('app:<identifier>@<hash>', lot C4): its reconciliation finds it again.
+   *  Never in the plist; reserved to the system origins. */
+  policyRef: z.string().regex(/^app:[A-Za-z0-9][A-Za-z0-9._-]{0,199}@[0-9a-f]{64}$/).optional(),
 }).strict().refine((p) => [p.iTunesStoreID, p.identifier, p.manifestURL].filter((v) => v !== undefined).length === 1,
   'exactly one of iTunesStoreID, identifier and manifestURL');
 
@@ -298,6 +301,7 @@ export function registerMvpCommandSpecs(): void {
     requestType: 'InstallApplication', restrictionKey: 'mdm.apps', capability: 'mdm:apps', supervised: 'no', ownership: E_C_B,
     enrollmentStates: BOTH, perDevice: false, maxTargets: 10_000, expiresInSeconds: 14 * DAY, guardedBy: null, reasonRequired: false,
     params: InstallApplication,
+    systemOnly: (p) => p.policyRef !== undefined,
     build: (p) => {
       const out: Record<string, PlistValue> = {};
       if (p.iTunesStoreID !== undefined) out.iTunesStoreID = p.iTunesStoreID;

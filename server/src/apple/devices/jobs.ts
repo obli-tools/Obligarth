@@ -183,6 +183,12 @@ async function awaitConfiguration(ctx: JobContext<DeviceJob>): Promise<JobResult
 const DEVICE_PROBLEM_ALERTS = ['enrollment.setup_timeout', 'device.serial_changed', 'security.identity_mismatch',
   'enrollment.reenrolled_without_proof'] as const;
 
+/** What another module does at the cleanup of a departure, in its transaction (the licences of Apps and Books given
+ *  back, lot C4). */
+export type UnenrollCleanupStep = (trx: Knex.Transaction, tenantId: number, deviceId: number) => Promise<void>;
+const cleanupSteps: UnenrollCleanupStep[] = [];
+export function onUnenrollCleanup(fn: UnenrollCleanupStep): void { if (!cleanupSteps.includes(fn)) cleanupSteps.push(fn); }
+
 /** devices.unenroll-cleanup (§13.3; modele §5.5, §10.4). */
 async function cleanup(ctx: JobContext<DeviceJob>): Promise<JobResult> {
   const tenantId = ctx.tenantId as number;
@@ -197,6 +203,7 @@ async function cleanup(ctx: JobContext<DeviceJob>): Promise<JobResult> {
     await trx('apple_setup_plans').where({ tenant_id: tenantId, device_id: deviceId, state: 'running' })
       .update({ state: 'cancelled', completed_at: new Date(), outcome_code: 'unenrolled' });
     for (const kind of DEVICE_PROBLEM_ALERTS) await resolveInTx(trx, tenantId, kind, deviceId);
+    for (const step of cleanupSteps) await step(trx, tenantId, deviceId);
     return r;
   });
   if (!done) return { output: { skipped: 'not_unenrolled' } };

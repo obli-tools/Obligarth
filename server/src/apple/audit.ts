@@ -61,6 +61,9 @@ export function registerAppleAuditActions(): void {
     { name: 'integration.vpp_token_imported', criticality: 'critical', label: 'Apps and Books token imported' },
     { name: 'integration.vpp_token_taken_over', criticality: 'critical', label: 'Apps and Books token taken over' },
     { name: 'integration.vpp_token_removed', criticality: 'critical', label: 'Apps and Books token removed' },
+    // Lot C4: the renewal of a content token, a synchronisation asked from the console.
+    { name: 'integration.vpp_token_replaced', criticality: 'critical', label: 'Apps and Books token replaced' },
+    { name: 'integration.vpp_sync_requested', criticality: 'standard', label: 'Apps and Books synchronisation requested' },
     // Retirement, transfer, recovery, support (§13, §11.6)
     { name: 'apple.device_identity_revoked', criticality: 'critical', label: 'Device identity revoked' },
     { name: 'apple.device_transfer_executed', criticality: 'critical', label: 'Device transfer executed' },

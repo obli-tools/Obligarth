@@ -19,6 +19,7 @@ import {
 import { byodAuthenticate, byodEnroll, byodNotice, byodServes, checkFormToken, newFormToken, normalizeAccount } from './byod';
 import { db } from '../../db';
 import { asTenant } from '../../db/context';
+import { vppNotifyHandlers } from '../integrations/vpp.routes.public';
 
 // =============================================================================
 // Device surface of the brain (docs: integration-apple-edge §10.8, I5),
@@ -36,7 +37,7 @@ import { asTenant } from '../../db/context';
 //   GET  /t/:key/byod/discovery                BYOD: Apple-hosted discovery (JSON)
 //   POST /t/:key/byod/enroll                   BYOD: 401 (sign in) or, with the bearer, the profile
 //   GET  /t/:key/byod/auth, POST               BYOD: web view of the device (notice, invitation code) → 303
-// The Apps and Books routes come with lot C4.
+//   POST /t/:key/vpp/:ref/notify              Apps and Books: notifications (lot C4, vpp.routes.public.ts)
 // Common rules: a key out of the alphabet or unknown, an unknown route, a
 // method not allowed → the same 404, no body; an invalid link of the tenant →
 // the same translated page (404), whatever the reason (unknown, another
@@ -380,6 +381,9 @@ export function createAppleDeviceSurface(): Router {
     res.status(303).setHeader('Location', `apple-remotemanagement-user-login://authentication-results?access-token=${encodeURIComponent(out.accessToken)}`);
     res.end();
   }));
+
+  // ── Apps and Books: the notifications of Apple (lot C4) ───────────────────
+  router.post('/vpp/:ref/notify', route('POST /t/:key/vpp/:ref/notify'), ...vppNotifyHandlers((res) => locals(res).tenant.tenantId));
 
   // Anything else (route, method): the uniform 404.
   router.use((_req: Request, res: Response) => { notFound(res); });
