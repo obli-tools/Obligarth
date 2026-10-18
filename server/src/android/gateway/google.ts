@@ -20,7 +20,7 @@ import { pubsubClient, type PubsubClient } from '../google/pubsub';
 import { GoogleTokenProvider, type SealedKeyLoader } from '../google/token';
 import {
   AndroidDestructiveCapError, AndroidError, AndroidFrozenError, AndroidNotFoundError, AndroidOwnershipError,
-  AndroidRequestError,
+  AndroidQuotaError, AndroidRequestError,
 } from './errors';
 import { takeTokens } from './limiter';
 import { checkId, checkPolicyId, enterpriseIdOf, names, parseOwnedName, type AndroidEnterpriseRef, type PolicyId } from './names';
@@ -45,6 +45,13 @@ type DestructiveKind = 'wipe' | 'relinquish' | 'delete' | 'disable' | 'cleanup';
 /** Does a policy body carry a wipe-capable setting (section 22.4: the closed list of JSON paths of the overlay, one
  *  list for the validation and the freeze lock)? */
 export { policyHasWipeSettings };
+
+/** Quota of the project and limit of the tenant (AN49, section 13.3): the platform settings androidProjectDeviceQuota
+ *  and androidDeviceLimit, read by the source the module installs (the platform settings arrive at the junction
+ *  AN-A2: shared/src/settings is an existing file). null: no quota known, nothing refused. */
+export interface AndroidQuota { projectQuota: number | null; tenantLimit: number | null }
+let quotaOf: (tenantId: number) => Promise<AndroidQuota | null> = async () => null;
+export function setAndroidQuotaSource(fn: (tenantId: number) => Promise<AndroidQuota | null>): void { quotaOf = fn; }
 
 /** Android devices of the tenant not released (AN47 cap base). Replaced at lot AN-C1 (android_devices). */
 let deviceCountOf: (tenantId: number) => Promise<number> = async () => 0;
@@ -96,8 +103,33 @@ export class GoogleGateway implements AndroidGateway {
 
   /** Step 2: freeze lock (AN15), read in a short transaction of its own just before the call. */
   private async freezeLock(e: AndroidEnterpriseRef, op: string): Promise<void> {
-    const frozen = await db.transaction(async (trx) => !!(await readSettings(e.tenantId, trx)).frozen_at);
-    if (frozen) throw new AndroidFrozenError(op);
+    if (await this.frozen(e)) throw new AndroidFrozenError(op);
+  }
+
+  private frozen(e: AndroidEnterpriseRef): Promise<boolean> {
+    return db.transaction(async (trx) => {
+      const s = await readSettings(e.tenantId, trx);
+      return !!s.frozen_at;
+    });
+  }
+
+  /**
+   * AN15 (contre-revue AN-C1a, REV-C1a-S2): under a freeze, attaching a device to a policy (devices.patch of
+   * policyName) is refused when that policy carries a wipe-capable setting (policyHasWipeSettings, the list of the
+   * validation and of putPolicy): otherwise a device would receive the wipe-capable settings of a policy already
+   * published (another device's, an e-*) without any policies.patch. The policy is read at Google (the truth,
+   * whoever wrote it); an unreadable or absent policy is refused too (fail closed). Not frozen: nothing read.
+   */
+  private async policyAttachLock(e: AndroidEnterpriseRef, policyName: string): Promise<void> {
+    if (!(await this.frozen(e))) return;
+    await this.limit('policy', e, policyName);
+    let policy: AmapiPolicy | null;
+    try {
+      policy = await this.amapi.getPolicy(policyName);
+    } catch {
+      throw new AndroidFrozenError('devices.patch (policyName: policy unreadable under a freeze)');
+    }
+    if (!policy || policyHasWipeSettings(policy)) throw new AndroidFrozenError('devices.patch (policyName to a wipe-capable policy)');
   }
 
   /** Step 3: last-resort cap (AN47), counted and compared in one short transaction. */
@@ -120,6 +152,23 @@ export class GoogleGateway implements AndroidGateway {
       void raiseAndroidTenantAlert(e.tenantId, 'android.gateway_cap_reached', { kind, count });
       throw new AndroidDestructiveCapError(kind, count, cap);
     }
+  }
+
+  /** Step 4: quota of the project (android_project_device_count, all tenants: a number only) and limit of the tenant. */
+  private async quotaCheck(e: AndroidEnterpriseRef): Promise<void> {
+    const q = await quotaOf(e.tenantId);
+    if (!q || (q.projectQuota === null && q.tenantLimit === null)) return;
+    const { project, tenant } = await db.transaction(async (trx) => {
+      const r = await trx.raw('SELECT obligarth.android_project_device_count() AS n');
+      const t = await trx('android_devices').where({ tenant_id: e.tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
+      return { project: Number(r.rows?.[0]?.n ?? 0), tenant: Number(t[0]?.n ?? 0) };
+    });
+    if (q.projectQuota !== null && project >= q.projectQuota) {
+      void raiseAndroidPlatformAlert('android.quota_exhausted', { count: project }, 'project');
+      throw new AndroidQuotaError();
+    }
+    if (q.projectQuota !== null && project >= Math.floor(q.projectQuota * 0.8)) void raiseAndroidPlatformAlert('android.quota_warning', { count: project }, 'project');
+    if (q.tenantLimit !== null && tenant >= q.tenantLimit) throw new AndroidQuotaError('device limit of the tenant reached');
   }
 
   /** Step 5: limiter. */
@@ -247,7 +296,7 @@ export class GoogleGateway implements AndroidGateway {
     if (typeof t.additionalData !== 'string' || !/^obg1:[0-9a-f-]{36}$/.test(t.additionalData)) throw new AndroidRequestError('invalid additionalData');
     const policyName = t.policyId ? names.policy(e, checkPolicyId(t.policyId)) : undefined;
     await this.freezeLock(e, 'enrollmentTokens.create');
-    // Quota of the project (AN49): wired with android_project_device_count at lot AN-C1 (migration 3).
+    await this.quotaCheck(e);
     await this.limit('token', e, null, 'interactive');
     const r = await this.amapi.createEnrollmentToken(names.enterprise(e), {
       duration: t.duration, additionalData: t.additionalData,
@@ -318,6 +367,7 @@ export class GoogleGateway implements AndroidGateway {
     }
     if (!mask.length) throw new AndroidRequestError('empty device patch');
     if (patch.state !== undefined) await this.freezeLock(e, 'devices.patch (state)');
+    if (patch.policyName !== undefined) await this.policyAttachLock(e, String(body.policyName));
     if (patch.state === 'DISABLED') await this.destructiveCap(e, 'disable');
     await this.limit('device', e, deviceId);
     const r = await this.amapi.patchDevice(name, body, mask);

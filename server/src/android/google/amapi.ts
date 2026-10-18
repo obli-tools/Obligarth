@@ -9,7 +9,7 @@ import type { GoogleHttp } from './http';
 
 export type AmapiOp =
   | 'signupUrls.create' | 'enterprises.create' | 'enterprises.list' | 'enterprises.get' | 'enterprises.patch'
-  | 'enterprises.generateEnterpriseUpgradeUrl' | 'policies.patch' | 'policies.delete' | 'enrollmentTokens.create'
+  | 'enterprises.generateEnterpriseUpgradeUrl' | 'policies.get' | 'policies.patch' | 'policies.delete' | 'enrollmentTokens.create'
   | 'enrollmentTokens.delete' | 'enrollmentTokens.list' | 'enrollmentTokens.get' | 'devices.get' | 'devices.list'
   | 'devices.patch' | 'devices.delete' | 'devices.issueCommand' | 'operations.list' | 'operations.get'
   | 'operations.cancel' | 'webTokens.create' | 'applications.get' | 'provisioningInfo.get';
@@ -17,7 +17,7 @@ export type AmapiOp =
 /** Every operation the instance can reach (essai 197: nothing else is reachable). */
 export const AMAPI_OPERATIONS: readonly AmapiOp[] = [
   'signupUrls.create', 'enterprises.create', 'enterprises.list', 'enterprises.get', 'enterprises.patch',
-  'enterprises.generateEnterpriseUpgradeUrl', 'policies.patch', 'policies.delete', 'enrollmentTokens.create',
+  'enterprises.generateEnterpriseUpgradeUrl', 'policies.get', 'policies.patch', 'policies.delete', 'enrollmentTokens.create',
   'enrollmentTokens.delete', 'enrollmentTokens.list', 'enrollmentTokens.get', 'devices.get', 'devices.list',
   'devices.patch', 'devices.delete', 'devices.issueCommand', 'operations.list', 'operations.get', 'operations.cancel',
   'webTokens.create', 'applications.get', 'provisioningInfo.get',
@@ -62,6 +62,10 @@ export function amapiClient(http: GoogleHttp, base: string) {
         op: 'enterprises.generateEnterpriseUpgradeUrl', method: 'POST', scope: 'enterprise', idempotent: false, body: {},
         url: url(`${enterprise}:generateEnterpriseUpgradeUrl`),
       }),
+    // policies.get: read only by the freeze lock of devices.patch (AN15: is the policy a device is attached to
+    // wipe-capable?).
+    getPolicy: (policy: string) =>
+      http.call<AmapiPolicy>({ op: 'policies.get', method: 'GET', scope: 'enterprise', idempotent: true, read: true, url: url(policy) }),
     patchPolicy: (policy: string, body: AmapiPolicy) =>
       http.call<AmapiPolicy>({ op: 'policies.patch', method: 'PATCH', scope: 'enterprise', idempotent: true, body, url: url(policy) }),
     deletePolicy: (policy: string) =>
