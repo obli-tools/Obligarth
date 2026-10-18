@@ -72,6 +72,7 @@ export function alertParams(params: Record<string, unknown>): Record<string, str
     if (FORBIDDEN_KEYS.has(k.toLowerCase())) { dropped.push(k); continue; }
     if (typeof v === 'number' && Number.isSafeInteger(v) && Math.abs(v) < 1e12) { out[k] = v; continue; }
     if (typeof v === 'string' && /^obg[0-9]*:/i.test(v)) { dropped.push(k); continue; }   // additionalData of a token (enrollmentTokenData)
+    if (typeof v === 'string' && /^[0-9a-f]{2}([:-])[0-9a-f]{2}(\1[0-9a-f]{2}){4}$/i.test(v)) { dropped.push(k); continue; }   // a MAC address (T-5; review AN-H1)
     if (typeof v === 'string' && /^[a-z0-9][a-z0-9_.:-]{0,63}$/.test(v) && !/[0-9]{8,}/.test(v.replace(/[-_.:]/g, ''))
       || (typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v))) { out[k] = v; continue; }
     dropped.push(k);

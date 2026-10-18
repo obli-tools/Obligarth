@@ -82,7 +82,7 @@ const lastSegment = (name: unknown): string | null => (typeof name === 'string' 
 
 interface KnownDevice {
   device_id: number; amapi_name: string; state: string | null; applied_state: string | null; policy_name: string | null; policy_state: string;
-  approval_state: string; last_status_report_at: Date | null; enrolled_at: Date; ownership: string; uuid: string;
+  approval_state: string; last_status_report_at: Date | null; enrolled_at: Date; created_at: Date; ownership: string; uuid: string;
 }
 
 /** Asks an extra reconciliation of a tenant (operator, absence of the instance, restore); picked up within the minute. */
@@ -130,6 +130,9 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       forgetDeferred: 0, policiesDeleted: 0, tokensCollected: 0, googleCount: 0, googleStale: 0, complete: true,
     };
     let listed: { devices: AmapiDevice[]; complete: boolean };
+    // Review AN-H1 (R1): a device enrolled (or renewed) while devices.list is read is absent from the list yet known by
+    // the base when both are compared; only a record created (or enrolled again) before the listing may be missing.
+    const listStartedAt = Date.now() - 1000;
     try {
       listed = await listAll(gw, e);
     } catch (err) {
@@ -149,7 +152,7 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
     const known = await db('android_devices as a').join('devices as d', function j() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
       .where({ 'a.tenant_id': tenantId, 'a.enterprise_id': e.id }).whereNull('a.released_at')
       .select('a.device_id', 'a.amapi_name', 'a.state', 'a.applied_state', 'a.policy_name', 'a.policy_state', 'a.approval_state',
-        'a.last_status_report_at', 'a.enrolled_at', 'd.ownership', 'd.uuid') as KnownDevice[];
+        'a.last_status_report_at', 'a.enrolled_at', 'a.created_at', 'd.ownership', 'd.uuid') as KnownDevice[];
     const staleByOwnership = new Map<string, number>();
     const staleDays = async (ownership: string) => {
       if (!staleByOwnership.has(ownership)) staleByOwnership.set(ownership, clampStale(await staleDaysOf(tenantId, ownership)));
@@ -161,6 +164,7 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       const deviceId = Number(k.device_id);
       if (!g) {
         if (!listed.complete) continue;
+        if ([k.created_at, k.enrolled_at].some((t) => t && new Date(t).getTime() >= listStartedAt)) continue;   // written during the listing
         const removed = await db('android_commands').where({ tenant_id: tenantId, device_id: deviceId })
           .whereIn('request_type', ['WIPE', 'RELINQUISH_OWNERSHIP']).whereIn('state', ['sent', 'acknowledged']).first('id');
         const left = await db.transaction((trx) => exitManagement(trx, tenantId, deviceId, removed ? 'removed_by_command' : 'missing_in_provider'));
