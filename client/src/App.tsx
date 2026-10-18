@@ -16,6 +16,7 @@ import { PoliciesPage } from '@/pages/PoliciesPage';
 import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
 import { EndUsersPage } from '@/pages/EndUsersPage';
 import { DeviceEnrollmentPage } from '@/pages/DeviceEnrollmentPage';
+import { IntegrationsPage } from '@/pages/IntegrationsPage';
 import { SupervisionPage } from '@/pages/SupervisionPage';
 import { GroupDetailPage } from '@/pages/GroupDetailPage';
 import { GroupEditPage } from '@/pages/GroupEditPage';
@@ -97,6 +98,10 @@ export default function App() {
  <Route path="/end-users" element={<EndUsersPage />} />
  </Route>
 
+ {/* Apple integrations: push certificate, ADE servers, deadlines, readiness (settings or mdm.integrations.manage). */}
+ <Route element={<ProtectedRoute requiredCapabilities={['settings', 'mdm.integrations.manage']} />}>
+  <Route path="/integrations" element={<IntegrationsPage />} />
+ </Route>
  {/* Device enrollment: profiles, links, invitations, sessions (mdm.enrollment.manage). */}
  <Route element={<ProtectedRoute requiredCapabilities={['mdm.enrollment.manage']} />}>
   <Route path="/device-enrollment" element={<DeviceEnrollmentPage />} />

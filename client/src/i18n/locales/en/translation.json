@@ -35,7 +35,8 @@
     "confirmDelete": "Are you sure?",
     "requiredField": "This field is required",
     "device": "Device",
-    "clear": "Clear"
+    "clear": "Clear",
+    "import": "Import"
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -68,7 +69,8 @@
     "expandAdmin": "Expand administration",
     "administration": "Administration",
     "endUsers": "End users",
-    "deviceEnrollment": "Enrollment"
+    "deviceEnrollment": "Enrollment",
+    "integrations": "Integrations"
   },
   "login": {
     "title": "Sign in to your account",
@@ -1608,7 +1610,8 @@
       "audit_read": "Audit · Read the tenant's log",
       "approvals_review": "Approvals · Review requests",
       "mdm_policies_manage": "Policies · Edit, assign and publish",
-      "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations"
+      "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations",
+      "mdm_integrations_manage": "Apple integrations · Push certificate, ADE servers"
     }
   },
   "notificationCenter": {
@@ -2765,6 +2768,208 @@
         "preserveDataPlan": "Keep the cellular plan (eSIM)",
         "disallowProximitySetup": "Disallow the quick start by proximity after the erase"
       }
+    },
+    "integrations": {
+      "title": "Integrations",
+      "subtitle": "Apple certificates and tokens of this tenant, their renewals, and what remains to do before enrolling devices.",
+      "cardState": {
+        "ready": "Ready",
+        "todo": "To do",
+        "attention": "Attention",
+        "error": "Error"
+      },
+      "edge": {
+        "title": "Device service",
+        "state": "State",
+        "key": "MDM key",
+        "frozen": "Commands",
+        "commandsFrozen": "Frozen",
+        "commandsLive": "Running",
+        "unreachable": "The device service does not answer.",
+        "edgeState": {
+          "unprovisioned": "Not created yet",
+          "provisioning": "Being created",
+          "active": "Active",
+          "suspended": "Suspended",
+          "retiring": "Being retired",
+          "retired": "Retired",
+          "load_failed": "Not loaded",
+          "missing": "Missing",
+          "error": "Error"
+        }
+      },
+      "push": {
+        "title": "Push certificate",
+        "help": "Apple issues the push certificate of this tenant to an Apple account of the client: always use the same service account, and « Renew » (never « Create ») at each renewal, or every device must enroll again.",
+        "create": "Create a request",
+        "renew": "Renew",
+        "createTitle": "New push certificate request",
+        "created": "Request created",
+        "topic": "Topic",
+        "notAfter": "Expires",
+        "account": "Apple account",
+        "devices": "Devices on this topic",
+        "legacy": "{{count}} device(s) still on the previous topic {{topic}}: they must enroll again.",
+        "abandon": "Abandon",
+        "confirmAbandon": "Abandon this request?",
+        "abandoned": "Request abandoned",
+        "step1": "Request created (the key stays in the device service)",
+        "step2": "Send the request file to the vendor, then import the file it signed",
+        "step3": "Signed request checked",
+        "step4": "Upload the file for Apple on Apple's portal with the client's service account",
+        "step5": "Import the certificate Apple issued (.pem)",
+        "downloadVendorFile": "Download the request for the vendor",
+        "importVendorFile": "Import the signed request",
+        "vendorImported": "Signed request imported",
+        "downloadAppleFile": "Download the file for Apple",
+        "openPortal": "Open Apple's push certificates portal",
+        "importCertificate": "Import the certificate of Apple",
+        "activated": "Push certificate active",
+        "topicChangePending": "A second approver must approve the change of topic",
+        "history": "History",
+        "purposeLabel": "Purpose",
+        "topicChangeWarning": "A new topic means that every device enrolled under the current one must enroll again; a second approver must agree.",
+        "accountLabel": "Apple account of the client used at Apple (a hint, never a password)",
+        "labImport": "Import a certificate with its key (laboratory)",
+        "labHelp": "Laboratory only: the key goes to the device service once and is never kept by the console.",
+        "purpose": {
+          "initial": "First certificate",
+          "renewal": "Renewal (same Apple account)",
+          "topic_change": "Change of topic",
+          "import": "Import"
+        },
+        "state": {
+          "vendor_signature_pending": "Waiting for the vendor's signature",
+          "apple_upload_pending": "Waiting for Apple's certificate",
+          "active": "Active",
+          "legacy": "Previous topic",
+          "superseded": "Replaced",
+          "expired": "Expired",
+          "revoked": "Revoked",
+          "abandoned": "Abandoned"
+        }
+      },
+      "ade": {
+        "title": "Apple Business: ADE servers",
+        "add": "Add a server",
+        "addTitle": "New ADE server",
+        "help": "In Apple Business (Preferences, device management servers), add a server, upload its public key, then download its server token (.p7m) and import it here. An organisation holds 250 keys at most.",
+        "openPortal": "Open Apple Business",
+        "none": "No ADE server yet.",
+        "byodDeclared": "Account-driven enrollment",
+        "notAfter": "Token expires",
+        "lastSync": "Last synchronisation",
+        "devices": "Devices",
+        "enrolled": "{{count}} enrolled",
+        "account": "Apple account",
+        "termsHelp": "New terms must be accepted in Apple Business by the client.",
+        "lastError": "Last error: {{code}}",
+        "publicKey": "Public key for Apple Business",
+        "importToken": "Import the server token",
+        "renewToken": "Renew the token",
+        "tokenImported": "Server token imported",
+        "sync": "Synchronise now",
+        "syncRequested": "Synchronisation requested",
+        "declareByod": "Enable account-driven enrollment",
+        "byodDone": "Account-driven enrollment declared",
+        "deleteBlocked": "Devices enrolled from this server are still managed",
+        "confirmDelete": "Delete the ADE server {{name}}?",
+        "deletePending": "A second approver must approve the deletion",
+        "added": "Server added: upload its public key into Apple Business",
+        "labelLabel": "Name (as in Apple Business)",
+        "accountLabel": "Apple account of the client in Apple Business (a hint, never a password)",
+        "state": {
+          "awaiting_token": "Waiting for its token",
+          "active": "Active",
+          "terms_not_signed": "Terms to accept",
+          "expired": "Token expired",
+          "error": "Error",
+          "removed": "Removed"
+        }
+      },
+      "vpp": {
+        "title": "Apps and Books",
+        "tokens": "{{count}} content token(s), {{active}} active.",
+        "none": "The content tokens of Apps and Books are connected in a later version of the console."
+      },
+      "deadlines": {
+        "title": "Deadlines",
+        "allTenants": "Every tenant and the instance",
+        "none": "No deadline yet.",
+        "tenant": "Tenant",
+        "instance": "Instance",
+        "kindHeader": "Subject",
+        "label": "Label",
+        "notAfter": "Expires",
+        "daysLeft": "Days left",
+        "clear": "Remove",
+        "kind": {
+          "apns_certificate": "Push certificate",
+          "ade_token": "ADE server token",
+          "vpp_token": "Content token",
+          "device_ca": "Device CA",
+          "mdm_tls_certificate": "TLS certificate",
+          "vendor_certificate": "MDM Vendor certificate",
+          "mdm_domain": "Domain name",
+          "profile_signing_identity": "Profile signing identity",
+          "vault_escrow_test": "Escrow test",
+          "vault_kek_rotation": "Key rotation",
+          "vault_old_shares": "Old escrow shares",
+          "vault_dek_destruction": "Data key destruction"
+        },
+        "level": {
+          "ok": "OK",
+          "warning": "Soon",
+          "critical": "Urgent",
+          "expired": "Expired",
+          "unknown": "Unknown",
+          "retired": "Retired"
+        }
+      }
+    },
+    "readiness": {
+      "title": "Readiness of the tenant",
+      "key": {
+        "tenant_provisioned": "Device service of the tenant",
+        "push_active": "Push certificate",
+        "enrollment_profile": "Enrollment profile",
+        "ade_server": "ADE server (Apple Business)",
+        "byod_discovery": "Account-driven enrollment declared",
+        "vpp_token": "Apps and Books token",
+        "signing_identity": "Signing of the enrollment profiles",
+        "notice_custom": "Notice of the employees",
+        "privacy_profile": "Privacy rules",
+        "ddm_relay": "Declarative management relay"
+      },
+      "state": {
+        "ready": "Ready",
+        "todo": "To do",
+        "warning": "Attention",
+        "error": "Error",
+        "not_applicable": "Not needed"
+      },
+      "reason": {
+        "integration_off": "The Apple integration is turned off on this instance",
+        "provisioning": "Device service being created",
+        "no_certificate": "Create the push certificate",
+        "expiring": "Expires in {{daysLeft}} day(s): renew it",
+        "no_profile": "Create an enrollment profile",
+        "terms_not_signed": "Terms to accept in Apple Business",
+        "server_not_active": "No active ADE server",
+        "no_server": "Add an ADE server",
+        "not_declared": "Enable it on an ADE server",
+        "no_active_token": "No active content token",
+        "unsigned_profiles": "Profiles not signed",
+        "default_notice": "Default notice, for trials only",
+        "default_rules": "Default privacy rules, for trials only",
+        "relay_idle": "Declarative management relay without activity",
+        "suspended": "Suspended at the device service",
+        "retiring": "Being retired",
+        "retired": "Retired",
+        "load_failed": "Not loaded by the device service",
+        "missing": "Missing at the device service",
+        "error": "Error at the device service"
+      }
     }
   },
   "endUsers": {
@@ -3172,7 +3377,31 @@
     "appleTenantNotProvisioned": "This tenant is not provisioned at the device service yet.",
     "groupNotFound": "Group not found.",
     "endUserNotFound": "End user not found.",
-    "adeDeviceNotFound": "Device of Apple Business not found."
+    "adeDeviceNotFound": "Device of Apple Business not found.",
+    "pushRequestOpen": "A push certificate request is already open: finish it or abandon it first.",
+    "pushCertificateExists": "This tenant has a push certificate: renew it with the same Apple account instead.",
+    "pushCertificateMissing": "This tenant has no active push certificate to renew.",
+    "pushRequestNotFound": "This push certificate request does not exist.",
+    "pushRequestState": "This request is not at this step.",
+    "vendorFileInvalid": "The vendor's file is refused ({{reason}}).",
+    "pushTopicMismatch": "This certificate was created with another Apple account (another topic): the devices would have to enroll again. Create a request for a change of topic if that is intended.",
+    "pushCertificateNotForRequest": "This certificate was not issued for the request of this tenant: the client uploaded another file at Apple.",
+    "pushCertificateExpired": "The certificate is expired or not yet valid.",
+    "pushCertificateNoTopic": "The certificate carries no MDM push topic.",
+    "pushCertificateInvalid": "The file is not a certificate of Apple (one PEM certificate, without its key).",
+    "pushNoPendingKey": "The device service no longer holds the key of this request: create a new request.",
+    "adeServerNotFound": "This ADE server does not exist.",
+    "adeServerLimit": "This tenant has reached the number of ADE servers the device service allows.",
+    "adeTokenFileInvalid": "This file is not a server token of Apple Business for this server: download it again after uploading this server's public key.",
+    "adeTokenFileExpired": "This server token is expired: download a new one from Apple Business.",
+    "adeTokenRejected": "Apple refused this server token.",
+    "adeServerHasDevices": "{{devices}} device(s) enrolled from this server are still managed: unenroll them first.",
+    "escrowRequired": "Escrow the vault keys before connecting Apple: record the escrow confirmation in the vault panel.",
+    "fileMissing": "The file is missing.",
+    "fileTooLarge": "The file is too large.",
+    "approvalRequired": "This action needs a second approver.",
+    "deadlineKindNotManual": "This deadline is not typed by hand.",
+    "instanceIdMissing": "The instance has no identifier."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",

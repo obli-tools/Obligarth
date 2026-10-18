@@ -22,6 +22,9 @@ import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { registerSocketListener } from '@/socket/socketListeners';
 import { anonymize } from '@/utils/anonymize';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { integrationsApi } from '@/api/integrations.api';
+import { ReadinessPanel } from '@/pages/IntegrationsPage';
+import type { ReadinessItem } from '@obligarth/shared';
 
 // Device enrollment (integration-apple-edge §10.9, lot C1): enrollment profiles, OTA links (URL and QR code
 // shown once), invitations of an account-driven enrollment (code and link shown once, e-mailed when a channel is
@@ -61,6 +64,9 @@ async function copy(text: string, done: string): Promise<void> {
 export function DeviceEnrollmentPage() {
   const { t } = useTranslation();
   const [tab, setTab] = useState<Tab>('profiles');
+  // The readiness of the tenant (§11.5, lot C3): what is not ready yet, when the user may read it.
+  const [readiness, setReadiness] = useState<ReadinessItem[] | null>(null);
+  useEffect(() => { integrationsApi.readiness().then(setReadiness).catch(() => setReadiness(null)); }, []);
   return (
     <PageContainer className="space-y-5">
       <div>
@@ -69,6 +75,7 @@ export function DeviceEnrollmentPage() {
           {t('deviceEnrollment.subtitle') || 'Enrollment profiles, links and invitations, and the enrollments in progress.'}
         </p>
       </div>
+      {readiness && <ReadinessPanel items={readiness} compact />}
       <div className="flex gap-1 border-b border-border">
         {(['profiles', 'tokens', 'sessions', 'ade'] as const).map((k) => (
           <button key={k} type="button" onClick={() => setTab(k)}

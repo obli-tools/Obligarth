@@ -21,6 +21,7 @@ import {
   ScrollText,
   Contact,
   QrCode,
+  Plug,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -260,6 +261,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const hasEndUsersCap = tenantCaps.has('users.manage') || tenantCaps.has('devices.manage');
   //   - mdm.enrollment.manage → Device enrollment (profiles, links, invitations)
   const hasEnrollmentCap = tenantCaps.has('mdm.enrollment.manage');
+  //   - settings / mdm.integrations.manage → Apple integrations (push certificate, ADE servers, deadlines)
+  const hasIntegrationsCap = tenantCaps.has('settings') || tenantCaps.has('mdm.integrations.manage');
   //   - audit.read / approvals.review / devices.manage → Security (the
   //     journal; the approvals; the guarded actions)
   const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review') || tenantCaps.has('devices.manage');
@@ -487,6 +490,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
       : []),
     ...(admin || hasEnrollmentCap
       ? [{ label: t('nav.deviceEnrollment', 'Enrollment'), path: '/device-enrollment', icon: <QrCode size={18} /> } as NavItem]
+      : []),
+    ...(admin || hasIntegrationsCap
+      ? [{ label: t('nav.integrations', 'Integrations'), path: '/integrations', icon: <Plug size={18} /> } as NavItem]
       : []),
   ];
 

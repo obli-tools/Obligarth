@@ -35,7 +35,8 @@
     "confirmDelete": "Êtes-vous sûr ?",
     "requiredField": "Ce champ est obligatoire",
     "device": "Appareil",
-    "clear": "Effacer"
+    "clear": "Effacer",
+    "import": "Importer"
   },
   "nav": {
     "dashboard": "Tableau de bord",
@@ -68,7 +69,8 @@
     "expandAdmin": "Déplier l'administration",
     "administration": "Administration",
     "endUsers": "Utilisateurs finaux",
-    "deviceEnrollment": "Inscription"
+    "deviceEnrollment": "Inscription",
+    "integrations": "Intégrations"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -1608,7 +1610,8 @@
       "audit_read": "Audit · Lire le journal du tenant",
       "approvals_review": "Approbations · Examiner les demandes",
       "mdm_policies_manage": "Politiques · Modifier, affecter et publier",
-      "mdm_enrollment_manage": "Inscription · Profils, liens et invitations"
+      "mdm_enrollment_manage": "Inscription · Profils, liens et invitations",
+      "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE"
     }
   },
   "notificationCenter": {
@@ -2765,6 +2768,208 @@
         "preserveDataPlan": "Conserver le forfait cellulaire (eSIM)",
         "disallowProximitySetup": "Interdire le démarrage rapide par proximité après l'effacement"
       }
+    },
+    "integrations": {
+      "title": "Intégrations",
+      "subtitle": "Certificats et jetons Apple de ce tenant, leurs renouvellements, et ce qu'il reste à faire avant d'inscrire des appareils.",
+      "cardState": {
+        "ready": "Prêt",
+        "todo": "À faire",
+        "attention": "Attention",
+        "error": "Erreur"
+      },
+      "edge": {
+        "title": "Service des appareils",
+        "state": "État",
+        "key": "Clé MDM",
+        "frozen": "Commandes",
+        "commandsFrozen": "Gelées",
+        "commandsLive": "En service",
+        "unreachable": "Le service des appareils ne répond pas.",
+        "edgeState": {
+          "unprovisioned": "Pas encore créé",
+          "provisioning": "En cours de création",
+          "active": "Actif",
+          "suspended": "Suspendu",
+          "retiring": "En cours de retrait",
+          "retired": "Retiré",
+          "load_failed": "Non chargé",
+          "missing": "Absent",
+          "error": "Erreur"
+        }
+      },
+      "push": {
+        "title": "Certificat push",
+        "help": "Apple délivre le certificat push de ce tenant à un compte Apple du client : utilisez toujours le même compte de service, et « Renew » (jamais « Create ») à chaque renouvellement, sinon tous les appareils devront être réinscrits.",
+        "create": "Créer une demande",
+        "renew": "Renouveler",
+        "createTitle": "Nouvelle demande de certificat push",
+        "created": "Demande créée",
+        "topic": "Topic",
+        "notAfter": "Échéance",
+        "account": "Compte Apple",
+        "devices": "Appareils sur ce topic",
+        "legacy": "{{count}} appareil(s) encore sur l'ancien topic {{topic}} : ils doivent être réinscrits.",
+        "abandon": "Abandonner",
+        "confirmAbandon": "Abandonner cette demande ?",
+        "abandoned": "Demande abandonnée",
+        "step1": "Demande créée (la clé reste dans le service des appareils)",
+        "step2": "Envoyer le fichier de demande à l'éditeur, puis importer le fichier qu'il a signé",
+        "step3": "Demande signée vérifiée",
+        "step4": "Déposer le fichier pour Apple sur le portail d'Apple avec le compte de service du client",
+        "step5": "Importer le certificat délivré par Apple (.pem)",
+        "downloadVendorFile": "Télécharger la demande pour l'éditeur",
+        "importVendorFile": "Importer la demande signée",
+        "vendorImported": "Demande signée importée",
+        "downloadAppleFile": "Télécharger le fichier pour Apple",
+        "openPortal": "Ouvrir le portail des certificats push d'Apple",
+        "importCertificate": "Importer le certificat d'Apple",
+        "activated": "Certificat push actif",
+        "topicChangePending": "Un second approbateur doit valider la bascule de topic",
+        "history": "Historique",
+        "purposeLabel": "Objet",
+        "topicChangeWarning": "Un nouveau topic oblige à réinscrire tous les appareils inscrits sous le topic actuel ; un second approbateur doit donner son accord.",
+        "accountLabel": "Compte Apple du client utilisé chez Apple (une indication, jamais un mot de passe)",
+        "labImport": "Importer un certificat avec sa clé (laboratoire)",
+        "labHelp": "Laboratoire seulement : la clé part une fois vers le service des appareils et n'est jamais gardée par la console.",
+        "purpose": {
+          "initial": "Premier certificat",
+          "renewal": "Renouvellement (même compte Apple)",
+          "topic_change": "Bascule de topic",
+          "import": "Import"
+        },
+        "state": {
+          "vendor_signature_pending": "En attente de la signature de l'éditeur",
+          "apple_upload_pending": "En attente du certificat d'Apple",
+          "active": "Actif",
+          "legacy": "Ancien topic",
+          "superseded": "Remplacé",
+          "expired": "Échu",
+          "revoked": "Révoqué",
+          "abandoned": "Abandonné"
+        }
+      },
+      "ade": {
+        "title": "Apple Business : serveurs ADE",
+        "add": "Ajouter un serveur",
+        "addTitle": "Nouveau serveur ADE",
+        "help": "Dans Apple Business (Préférences, serveurs de gestion des appareils), ajoutez un serveur, déposez sa clé publique, puis téléchargez son jeton serveur (.p7m) et importez-le ici. Une organisation compte 250 clés au plus.",
+        "openPortal": "Ouvrir Apple Business",
+        "none": "Aucun serveur ADE pour l'instant.",
+        "byodDeclared": "Enrôlement par compte",
+        "notAfter": "Échéance du jeton",
+        "lastSync": "Dernière synchronisation",
+        "devices": "Appareils",
+        "enrolled": "{{count}} inscrit(s)",
+        "account": "Compte Apple",
+        "termsHelp": "De nouvelles conditions doivent être acceptées par le client dans Apple Business.",
+        "lastError": "Dernière erreur : {{code}}",
+        "publicKey": "Clé publique pour Apple Business",
+        "importToken": "Importer le jeton serveur",
+        "renewToken": "Renouveler le jeton",
+        "tokenImported": "Jeton serveur importé",
+        "sync": "Synchroniser maintenant",
+        "syncRequested": "Synchronisation demandée",
+        "declareByod": "Activer l'enrôlement par compte",
+        "byodDone": "Enrôlement par compte déclaré",
+        "deleteBlocked": "Des appareils inscrits par ce serveur sont encore gérés",
+        "confirmDelete": "Supprimer le serveur ADE {{name}} ?",
+        "deletePending": "Un second approbateur doit valider la suppression",
+        "added": "Serveur ajouté : déposez sa clé publique dans Apple Business",
+        "labelLabel": "Nom (comme dans Apple Business)",
+        "accountLabel": "Compte Apple du client dans Apple Business (une indication, jamais un mot de passe)",
+        "state": {
+          "awaiting_token": "En attente de son jeton",
+          "active": "Actif",
+          "terms_not_signed": "Conditions à accepter",
+          "expired": "Jeton échu",
+          "error": "Erreur",
+          "removed": "Supprimé"
+        }
+      },
+      "vpp": {
+        "title": "Apps and Books",
+        "tokens": "{{count}} jeton(s) de contenu, {{active}} actif(s).",
+        "none": "Les jetons de contenu d'Apps and Books se connectent dans une prochaine version de la console."
+      },
+      "deadlines": {
+        "title": "Échéances",
+        "allTenants": "Tous les tenants et l'instance",
+        "none": "Aucune échéance pour l'instant.",
+        "tenant": "Tenant",
+        "instance": "Instance",
+        "kindHeader": "Objet",
+        "label": "Libellé",
+        "notAfter": "Échéance",
+        "daysLeft": "Jours restants",
+        "clear": "Retirer",
+        "kind": {
+          "apns_certificate": "Certificat push",
+          "ade_token": "Jeton de serveur ADE",
+          "vpp_token": "Jeton de contenu",
+          "device_ca": "AC des appareils",
+          "mdm_tls_certificate": "Certificat TLS",
+          "vendor_certificate": "Certificat « MDM Vendor »",
+          "mdm_domain": "Nom de domaine",
+          "profile_signing_identity": "Identité de signature des profils",
+          "vault_escrow_test": "Test du séquestre",
+          "vault_kek_rotation": "Rotation de la clé",
+          "vault_old_shares": "Anciennes parts du séquestre",
+          "vault_dek_destruction": "Destruction de clés de données"
+        },
+        "level": {
+          "ok": "OK",
+          "warning": "Bientôt",
+          "critical": "Urgent",
+          "expired": "Échu",
+          "unknown": "Inconnue",
+          "retired": "Retirée"
+        }
+      }
+    },
+    "readiness": {
+      "title": "Préparation du tenant",
+      "key": {
+        "tenant_provisioned": "Service des appareils du tenant",
+        "push_active": "Certificat push",
+        "enrollment_profile": "Profil d'inscription",
+        "ade_server": "Serveur ADE (Apple Business)",
+        "byod_discovery": "Enrôlement par compte déclaré",
+        "vpp_token": "Jeton Apps and Books",
+        "signing_identity": "Signature des profils d'inscription",
+        "notice_custom": "Notice des salariés",
+        "privacy_profile": "Règles de confidentialité",
+        "ddm_relay": "Relais de la gestion déclarative"
+      },
+      "state": {
+        "ready": "Prêt",
+        "todo": "À faire",
+        "warning": "Attention",
+        "error": "Erreur",
+        "not_applicable": "Sans objet"
+      },
+      "reason": {
+        "integration_off": "L'intégration Apple est désactivée sur cette instance",
+        "provisioning": "Service des appareils en cours de création",
+        "no_certificate": "Créez le certificat push",
+        "expiring": "Échéance dans {{daysLeft}} jour(s) : renouvelez-le",
+        "no_profile": "Créez un profil d'inscription",
+        "terms_not_signed": "Conditions à accepter dans Apple Business",
+        "server_not_active": "Aucun serveur ADE actif",
+        "no_server": "Ajoutez un serveur ADE",
+        "not_declared": "Activez-le sur un serveur ADE",
+        "no_active_token": "Aucun jeton de contenu actif",
+        "unsigned_profiles": "Profils non signés",
+        "default_notice": "Notice par défaut, réservée aux essais",
+        "default_rules": "Règles de confidentialité par défaut, réservées aux essais",
+        "relay_idle": "Relais de la gestion déclarative sans activité",
+        "suspended": "Suspendu au service des appareils",
+        "retiring": "En cours de retrait",
+        "retired": "Retiré",
+        "load_failed": "Non chargé par le service des appareils",
+        "missing": "Absent du service des appareils",
+        "error": "Erreur au service des appareils"
+      }
     }
   },
   "endUsers": {
@@ -3172,7 +3377,31 @@
     "appleTenantNotProvisioned": "Ce tenant n'est pas encore provisionné auprès du service des appareils.",
     "groupNotFound": "Groupe introuvable.",
     "endUserNotFound": "Utilisateur final introuvable.",
-    "adeDeviceNotFound": "Appareil d'Apple Business introuvable."
+    "adeDeviceNotFound": "Appareil d'Apple Business introuvable.",
+    "pushRequestOpen": "Une demande de certificat push est déjà ouverte : terminez-la ou abandonnez-la d'abord.",
+    "pushCertificateExists": "Ce tenant a un certificat push : renouvelez-le plutôt, avec le même compte Apple.",
+    "pushCertificateMissing": "Ce tenant n'a aucun certificat push actif à renouveler.",
+    "pushRequestNotFound": "Cette demande de certificat push n'existe pas.",
+    "pushRequestState": "Cette demande n'en est pas à cette étape.",
+    "vendorFileInvalid": "Le fichier de l'éditeur est refusé ({{reason}}).",
+    "pushTopicMismatch": "Ce certificat a été créé avec un autre compte Apple (un autre topic) : les appareils devraient être réinscrits. Créez une demande de bascule de topic si c'est voulu.",
+    "pushCertificateNotForRequest": "Ce certificat n'a pas été délivré pour la demande de ce tenant : le client a déposé un autre fichier chez Apple.",
+    "pushCertificateExpired": "Le certificat est échu ou pas encore valide.",
+    "pushCertificateNoTopic": "Le certificat ne porte aucun topic push MDM.",
+    "pushCertificateInvalid": "Le fichier n'est pas un certificat d'Apple (un seul certificat PEM, sans sa clé).",
+    "pushNoPendingKey": "Le service des appareils ne détient plus la clé de cette demande : créez une nouvelle demande.",
+    "adeServerNotFound": "Ce serveur ADE n'existe pas.",
+    "adeServerLimit": "Ce tenant a atteint le nombre de serveurs ADE permis par le service des appareils.",
+    "adeTokenFileInvalid": "Ce fichier n'est pas un jeton serveur d'Apple Business pour ce serveur : téléchargez-le de nouveau après avoir déposé la clé publique de ce serveur.",
+    "adeTokenFileExpired": "Ce jeton serveur est échu : téléchargez-en un nouveau dans Apple Business.",
+    "adeTokenRejected": "Apple a refusé ce jeton serveur.",
+    "adeServerHasDevices": "{{devices}} appareil(s) inscrit(s) par ce serveur sont encore gérés : désinscrivez-les d'abord.",
+    "escrowRequired": "Séquestrez les clés du coffre avant de connecter Apple : enregistrez la confirmation du séquestre dans le panneau du coffre.",
+    "fileMissing": "Le fichier manque.",
+    "fileTooLarge": "Le fichier est trop volumineux.",
+    "approvalRequired": "Cette action exige un second approbateur.",
+    "deadlineKindNotManual": "Cette échéance ne se saisit pas à la main.",
+    "instanceIdMissing": "L'instance n'a pas d'identifiant."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
