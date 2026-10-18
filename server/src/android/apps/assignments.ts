@@ -63,7 +63,8 @@ export function holdsSecretValue(v: unknown, depth = 0): boolean {
 
 /** The checks of an assignment of the Android app `appId` of the tenant (the app of another tenant: not found). */
 export async function checkAndroidAppAssignment(q: Knex | Knex.Transaction, tenantId: number, appId: number, options: unknown): Promise<AndroidAppAssignmentCheck | null> {
-  const app = await readAndroidApp(q, tenantId, appId);
+  // Shared lock (in the batch's transaction): an archive of the app waits for the batch, then sees its assignment.
+  const app = await readAndroidApp(q, tenantId, appId, { forShare: true });
   if (!app) return null;
   const check = checkAndroidAppOptions({ packageName: app.identifier, kind: app.kind, metadata: metadataOf(app.metadata) }, options);
   const issues: AndroidAppAssignmentIssue[] = [...check.issues];

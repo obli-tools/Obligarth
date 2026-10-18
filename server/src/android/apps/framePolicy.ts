@@ -38,16 +38,21 @@ export function parseCsp(value: string): Array<[string, string[]]> {
  */
 export function androidFrameCsp(base: string | null | undefined): string {
   const directives = parseCsp(base ?? "default-src 'self'");
-  const fallback = directives.find(([n]) => n === 'default-src')?.[1] ?? ["'self'"];
-  const add = (name: string, sources: readonly string[]): void => {
+  const sourcesOf = (name: string): string[] | undefined => directives.find(([n]) => n === name)?.[1];
+  const fallback = sourcesOf('default-src') ?? ["'self'"];
+  // Review AN-E1: frame-src falls back on child-src before default-src (CSP level 3); a frame-src created from
+  // default-src beside a narrower child-src would widen the base.
+  const add = (name: string, sources: readonly string[], base: string[] = fallback): void => {
     const d = directives.find(([n]) => n === name);
-    const current = d ? d[1] : [...fallback];
+    const current = d ? d[1] : [...base];
     const kept = current.filter((s) => s !== "'none'");
     const next = [...kept, ...sources.filter((s) => !kept.includes(s))];
     if (d) d[1] = next; else directives.push([name, next]);
   };
-  add('frame-src', ANDROID_FRAME_SOURCES);
+  add('frame-src', ANDROID_FRAME_SOURCES, sourcesOf('child-src') ?? fallback);
   add('script-src', ANDROID_SCRIPT_SOURCES);
+  // script-src-elem, when the base sets it, governs <script> elements instead of script-src: gapi goes there too.
+  if (sourcesOf('script-src-elem')) add('script-src-elem', ANDROID_SCRIPT_SOURCES);
   return directives.map(([n, s]) => [n, ...s].join(' ')).join('; ');
 }
 

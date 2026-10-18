@@ -154,7 +154,7 @@ export function registerAndroidJobs(): void {
     async handler(ctx) {
       const r = await refreshDueAndroidApps(ctx.payload.tenantId);
       if (r.remaining) await appMetadata.send({ tenantId: ctx.payload.tenantId }, { singletonKey: `t:${ctx.payload.tenantId}`, tenantId: ctx.payload.tenantId });
-      return { output: { refreshed: r.refreshed, unavailable: r.unavailable, remaining: r.remaining } };
+      return { output: { refreshed: r.refreshed, unavailable: r.unavailable, failed: r.failed, remaining: r.remaining } };
     },
   });
   const bindApps = () => {

@@ -86,10 +86,12 @@ export function appView(r: AndroidAppRow): AndroidAppView {
 }
 
 /** A live Android app of the tenant's own catalog (context tenant), by id or uuid; null otherwise. */
-export async function readAndroidApp(q: Knex | Knex.Transaction, tenantId: number, ref: number | string, o: { forUpdate?: boolean } = {}): Promise<AndroidAppRow | null> {
+/** forShare: the batch of assignments holds the app live until it commits (archiveAndroidApp waits for it, then sees
+ *  the assignment: review AN-E1, never an assignment to an archived app). */
+export async function readAndroidApp(q: Knex | Knex.Transaction, tenantId: number, ref: number | string, o: { forUpdate?: boolean; forShare?: boolean } = {}): Promise<AndroidAppRow | null> {
   const b = q('apps').where({ tenant_id: tenantId, platform_family: 'android' }).whereNull('archived_at');
   if (typeof ref === 'number') b.where({ id: ref }); else if (UUID_RE.test(ref)) b.where({ uuid: ref }); else return null;
-  if (o.forUpdate) b.forUpdate();
+  if (o.forUpdate) b.forUpdate(); else if (o.forShare) b.forShare();
   return (await b.first(COLUMNS) as AndroidAppRow | undefined) ?? null;
 }
 
@@ -204,16 +206,35 @@ export async function refreshAndroidAppMetadata(tenantId: number, appId: number,
   });
 }
 
-/** android.app-metadata of a tenant: the apps whose metadata are a day old or never read, 50 at a time. */
-export async function refreshDueAndroidApps(tenantId: number, o: { gateway?: AndroidGateway; limit?: number } = {}): Promise<{ refreshed: number; unavailable: number; remaining: boolean }> {
+/** After a failed read at Google (other than 404), an app is read again an hour later, not at the next minute. */
+export const METADATA_RETRY_MS = 3_600_000;
+
+/**
+ * android.app-metadata of a tenant: the apps whose metadata are a day old or never read, 50 at a time. Review AN-E1: an
+ * app whose read fails (anything but a 404 and Google's quota) is put off for an hour (metadata_refreshed_at moved so
+ * that it is due again in METADATA_RETRY_MS) and the run goes on with the next apps: the maintenance sends the job
+ * again each minute while an app is due, and one app in error would otherwise be read every minute and keep the apps
+ * after it from ever being read. Google's quota (rate_limited) stops the run without putting anything off.
+ */
+export async function refreshDueAndroidApps(tenantId: number, o: { gateway?: AndroidGateway; limit?: number } = {}): Promise<{ refreshed: number; unavailable: number; failed: number; remaining: boolean }> {
   const limit = Math.max(1, Math.min(o.limit ?? 50, 200));
   const due = await asTenant(tenantId, APPS_ACTOR, () => db('apps').where({ tenant_id: tenantId, platform_family: 'android' })
     .whereNull('archived_at')
     .where((w) => w.whereNull('metadata_refreshed_at').orWhere('metadata_refreshed_at', '<', db.raw("now() - interval '24 hours'")))
     .orderByRaw('metadata_refreshed_at ASC NULLS FIRST, id').limit(limit + 1).pluck('id')) as number[];
-  const out = { refreshed: 0, unavailable: 0, remaining: due.length > limit };
+  const out = { refreshed: 0, unavailable: 0, failed: 0, remaining: due.length > limit };
   for (const id of due.slice(0, limit)) {
-    const r = await refreshAndroidAppMetadata(tenantId, Number(id), { gateway: o.gateway });
+    let r: Awaited<ReturnType<typeof refreshAndroidAppMetadata>>;
+    try {
+      r = await refreshAndroidAppMetadata(tenantId, Number(id), { gateway: o.gateway });
+    } catch (err) {
+      if (err instanceof AndroidError && err.kind === 'rate_limited') throw err;
+      out.failed++;
+      await asTenant(tenantId, APPS_ACTOR, () => db('apps').where({ tenant_id: tenantId, id: Number(id) }).whereNull('archived_at').update({
+        metadata_refreshed_at: db.raw("now() - interval '1 millisecond' * ?", [METADATA_TTL_MS - METADATA_RETRY_MS]),
+      }));
+      continue;
+    }
     if (r === 'refreshed') out.refreshed++;
     if (r === 'unavailable') out.unavailable++;
   }
