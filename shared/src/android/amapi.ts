@@ -87,7 +87,31 @@ export interface AmapiPolicy extends AmapiPassthrough {
   version?: string;
 }
 
-export interface AmapiApplication extends AmapiPassthrough { name: string; title?: string }
+/** One property of an app's managed configuration schema (Application.managedProperties). */
+export interface AmapiManagedProperty extends AmapiPassthrough {
+  key?: string;
+  type?: 'MANAGED_PROPERTY_TYPE_UNSPECIFIED' | 'BOOL' | 'STRING' | 'INTEGER' | 'CHOICE' | 'MULTISELECT' | 'HIDDEN' | 'BUNDLE' | 'BUNDLE_ARRAY';
+  title?: string;
+  description?: string;
+  entries?: Array<{ name?: string; value?: string }>;
+  defaultValue?: unknown;
+  nestedProperties?: AmapiManagedProperty[];
+}
+
+/** enterprises.applications.get (lot AN-E1): what the catalog keeps of it is minimized (apps/metadata.ts). */
+export interface AmapiApplication extends AmapiPassthrough {
+  name: string;
+  title?: string;
+  author?: string;
+  iconUrl?: string;
+  smallIconUrl?: string;
+  distributionChannel?: 'DISTRIBUTION_CHANNEL_UNSPECIFIED' | 'PUBLIC_GOOGLE_HOSTED' | 'PRIVATE_GOOGLE_HOSTED' | 'PRIVATE_SELF_HOSTED';
+  minAndroidSdkVersion?: number;
+  managedProperties?: AmapiManagedProperty[];
+  permissions?: Array<{ permissionId?: string; name?: string; description?: string }>;
+  appTracks?: Array<{ trackId?: string; trackAlias?: string }>;
+  features?: string[];
+}
 
 /** provisioningInfo reduced by the gateway: never imei, meid nor serialNumber. */
 export interface AmapiProvisioningInfoMin {
