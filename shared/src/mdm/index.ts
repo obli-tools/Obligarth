@@ -19,3 +19,5 @@ export * from './ddm';
 export * from './enrollment';
 // Apple integrations (lot C3, integration-apple-edge §11): push certificate, ADE servers, deadlines, readiness.
 export * from './integrations';
+// Catalog of apps and Apps and Books (lot C4, modele §8, integration-apple-edge §11.3).
+export * from './apps';
