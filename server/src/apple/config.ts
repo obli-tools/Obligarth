@@ -31,6 +31,10 @@ export interface AppleConfig {
   /** APPLE_ALLOW_DEFAULT_NOTICE: the default notice and privacy rules, outside development and test. */
   allowDefaultNotice: boolean;
   allowPushKeyImport: boolean;
+  /** APPLE_MDM_VENDOR_CERT_SHA256: SHA-256 fingerprints (lower-case hex) of the instance's "MDM Vendor" certificates,
+   *  the only ones a signed push request may carry (the vendor is the single operator). Empty: none pinned, refused
+   *  with NODE_ENV=production, accepted elsewhere without any deadline of the instance (vendorPinRequired). */
+  vendorCertPins: string[];
   vppBaseUrl: string;
   setupTimeoutS: number;
   /** Push relaunch steps, seconds, increasing (4 at most). */
@@ -88,6 +92,18 @@ export function parseRelaunchSteps(text: string): number[] | null {
     out.push(s);
   }
   return out;
+}
+
+/** APPLE_MDM_VENDOR_CERT_SHA256 → fingerprints (lower-case, no colon, no duplicate); [] when empty; null when malformed. */
+export function parseVendorPins(text: string): string[] | null {
+  const parts = text.split(',').map((p) => p.trim().replace(/:/g, '').toLowerCase()).filter(Boolean);
+  if (parts.length > 8 || parts.some((p) => !/^[0-9a-f]{64}$/.test(p))) return null;
+  return [...new Set(parts)];
+}
+
+/** Must a signed push request carry a pinned vendor certificate even when none is configured (production)? */
+export function vendorPinRequired(nodeEnv: string): boolean {
+  return nodeEnv === 'production';
 }
 
 /** MDM_PUBLIC_BASE: https, a host, no credentials, no path (but '/'), no query nor fragment, no trailing slash. */
@@ -167,6 +183,9 @@ export function readAppleConfig(env: Env = process.env, nodeEnv = env.NODE_ENV ?
     pushRelaunchSteps = parseRelaunchSteps(APPLE_DEFAULTS.pushRelaunchSteps) as number[];
   }
 
+  const vendorCertPins = parseVendorPins(env.APPLE_MDM_VENDOR_CERT_SHA256 ?? '');
+  if (!vendorCertPins) errors.push('APPLE_MDM_VENDOR_CERT_SHA256 must list 1 to 8 SHA-256 fingerprints (64 hexadecimal digits, colons allowed), separated by commas.');
+
   const nextFile = (env.APPLE_EDGE_DDM_HMAC_KEY_NEXT_FILE ?? '').trim();
   return {
     config: {
@@ -181,6 +200,7 @@ export function readAppleConfig(env: Env = process.env, nodeEnv = env.NODE_ENV ?
       requireSignedProfiles: bool(env, 'APPLE_REQUIRE_SIGNED_PROFILES', errors),
       allowDefaultNotice: bool(env, 'APPLE_ALLOW_DEFAULT_NOTICE', errors),
       allowPushKeyImport: bool(env, 'APPLE_ALLOW_PUSH_KEY_IMPORT', errors),
+      vendorCertPins: vendorCertPins ?? [],
       vppBaseUrl,
       setupTimeoutS: intIn(env, 'APPLE_SETUP_TIMEOUT_S', 120, 3_600, APPLE_DEFAULTS.setupTimeoutS, errors),
       pushRelaunchSteps,

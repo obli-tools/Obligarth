@@ -151,6 +151,8 @@ export interface SignedFileCheck {
   /** Common name of the vendor certificate (an organisation, never a person): the label of its deadline. */
   vendorCertLabel: string;
   signedAt: Date | null;
+  /** The vendor certificate is pinned by the platform (checkVendorTrust): only then may it set the instance's deadline. */
+  vendorTrusted?: boolean;
 }
 
 /**
@@ -238,6 +240,23 @@ export function checkSignedFile(text: string, expect: { instanceId: string; requ
     appleRequestB64: doc.apple_request_b64.replace(/\s+/g, ''), vendorCertSha256: vendorSha, vendorCertNotAfter: new Date(vendor.validTo),
     vendorCertLabel: cn.slice(0, 200), signedAt,
   };
+}
+
+/**
+ * The trust anchor of the vendor certificate (§11.1, review of lot C3, R2): the file names its own certificate, so
+ * only the fingerprints pinned by the platform (APPLE_MDM_VENDOR_CERT_SHA256; the vendor is the single operator) are
+ * trusted. Pinned: true. Not pinned while some are: VendorFileError vendor_not_trusted. None pinned: refused when
+ * `pinRequired` (production), otherwise accepted untrusted (false): such a file never touches a deadline of the
+ * instance.
+ */
+export function checkVendorTrust(vendorCertSha256: string, pins: readonly string[], pinRequired: boolean): boolean {
+  const sha = vendorCertSha256.toLowerCase();
+  if (pins.length > 0) {
+    if (!pins.includes(sha)) throw new VendorFileError('vendor_not_trusted', 'The vendor certificate is not one the instance trusts');
+    return true;
+  }
+  if (pinRequired) throw new VendorFileError('vendor_not_trusted', 'No vendor certificate is pinned on this instance (APPLE_MDM_VENDOR_CERT_SHA256)');
+  return false;
 }
 
 export interface PushCertificateCheck {

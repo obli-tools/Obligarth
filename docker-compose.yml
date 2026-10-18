@@ -261,6 +261,7 @@ services:
       # USR-01 and CNF-02), unsigned enrollment profiles until the pilot — see .env.example
       APPLE_ALLOW_DEFAULT_NOTICE: ${APPLE_ALLOW_DEFAULT_NOTICE:-false}
       APPLE_REQUIRE_SIGNED_PROFILES: ${APPLE_REQUIRE_SIGNED_PROFILES:-false}
+      APPLE_MDM_VENDOR_CERT_SHA256: ${APPLE_MDM_VENDOR_CERT_SHA256:-}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}

@@ -13,9 +13,10 @@ import { appleEdge } from '../edge/instance';
 import { isAppleEdgeError } from '../edge/errors';
 import { realtime } from '../realtime';
 import { appleTenants, upsertMirror } from '../tenants/registry';
+import { vendorPinRequired } from '../config';
 import { recordDeadline } from './deadlines';
 import {
-  buildRequestFile, checkAppleCertificate, checkSignedFile, PushCertificateError, VendorFileError,
+  buildRequestFile, checkAppleCertificate, checkSignedFile, checkVendorTrust, PushCertificateError, VendorFileError,
   type PushCertificateCheck, type PushRequestFile, type SignedFileCheck,
 } from './pushFiles';
 
@@ -197,6 +198,8 @@ export async function importVendorSigned(tenantId: number, id: string, text: str
     let check: SignedFileCheck;
     try {
       check = checkSignedFile(text, { instanceId: inst, requestId: r.id, csrDer: Buffer.from(r.csr_der_b64, 'base64') });
+      // Review of lot C3, R2: the vendor certificate must be one the platform pinned (the file names its own).
+      check.vendorTrusted = checkVendorTrust(check.vendorCertSha256, config.apple.vendorCertPins ?? [], vendorPinRequired(config.nodeEnv));
     } catch (err) {
       if (err instanceof VendorFileError) {
         throw new AppError(422, `The vendor's file is refused: ${err.message}`, 'vendorFileInvalid', { reason: err.reason });

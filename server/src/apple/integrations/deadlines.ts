@@ -75,9 +75,10 @@ const INSTANCE_REPLACE_SQL = `${INSTANCE_INSERT_SQL}EXCLUDED.not_after`;
 /** A later expiry wins (a renewal extends). */
 const INSTANCE_EXTEND_SQL = `${INSTANCE_INSERT_SQL}CASE WHEN i.not_after IS NULL OR EXCLUDED.not_after > i.not_after THEN EXCLUDED.not_after ELSE i.not_after END`;
 
-/** Retires the items of the instance of `kind` (all, or all but `keep`). Identity context. */
-export async function retireInstanceDeadlines(trx: Knex.Transaction, kind: InstanceDeadlineKind, keep?: string): Promise<void> {
+/** Retires the items of the instance of `kind` (all, or all but `keep`: one subject or several). Identity context. */
+export async function retireInstanceDeadlines(trx: Knex.Transaction, kind: InstanceDeadlineKind, keep?: string | readonly string[]): Promise<void> {
   let q = trx('integration_deadline_items').whereNull('tenant_id').where({ kind }).whereNull('retired_at');
-  if (keep !== undefined) q = q.whereNot('subject_ref', keep.slice(0, 100));
+  if (typeof keep === 'string') q = q.whereNot('subject_ref', keep.slice(0, 100));
+  else if (keep !== undefined && keep.length > 0) q = q.whereNotIn('subject_ref', keep.map((k) => k.slice(0, 100)));
   await q.update({ retired_at: new Date(), updated_at: new Date() });
 }

@@ -163,7 +163,7 @@ export function createAppleIntegrationsRouter(): Router {
     await recordVendorDeadline(userActor(req.session.userId!), check);
     await audit.append({
       tenantId, action: 'integration.push_vendor_file_imported', target: { type: 'push_request', id },
-      details: { vendorCertSha256: check.vendorCertSha256, vendorCertNotAfter: check.vendorCertNotAfter.toISOString() },
+      details: { vendorCertSha256: check.vendorCertSha256, vendorCertNotAfter: check.vendorCertNotAfter.toISOString(), vendorCertPinned: check.vendorTrusted === true },
     }, await audit.fromRequest(req, tenantId));
     res.json({ data: view });
   }));
