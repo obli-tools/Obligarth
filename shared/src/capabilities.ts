@@ -35,6 +35,9 @@ export const TENANT_CAPABILITIES = [
   'mdm.policies.manage',
   // Manage the enrollment profiles, links, invitations and sessions (integration-apple-edge §10.9, lot C1).
   'mdm.enrollment.manage',
+  // Connect and renew the Apple integrations: push certificate, ADE servers, deadlines (integration-apple-edge §11.6,
+  // lot C3); reading them needs 'settings' or this one.
+  'mdm.integrations.manage',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -53,6 +56,7 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'approvals.review':      'Approvals · Review requests',
   'mdm.policies.manage':   'Policies · Edit, assign and publish',
   'mdm.enrollment.manage': 'Enrollment · Profiles, links and invitations',
+  'mdm.integrations.manage': 'Apple integrations · Push certificate, ADE servers',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row
