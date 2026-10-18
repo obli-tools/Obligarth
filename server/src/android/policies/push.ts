@@ -12,6 +12,9 @@
 //   android.policies.enrollment-policy: e-<profile uuid> compiled for a fictitious device of the profile, without any
 //     secret (enrollmentPolicySecret refused: §22.3), pushed; android_enrollment_policies records it (rule of the 5
 //     minutes: no token without it, section 10.7).
+// Kiosk (lot AN-G1): a dedicated device is compiled with the kiosk app of its enrollment profile (when it is a live app
+// of the tenant's catalog) and with its running kiosk exit (the lock lifted until the exit ends); so is the enrollment
+// policy of a kiosk profile (its app, never an exit).
 // No call to Google inside a transaction (G-A1).
 import type { Knex } from 'knex';
 import { POLICY_VARIABLES, type JsonValue, type PolicyVariable } from '@obligarth/shared';
@@ -30,7 +33,8 @@ import { AndroidError } from '../gateway/errors';
 import { parseOwnedName } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { DEFAULT_PRIVACY } from '../inventory/privacy';
-import { readAndroidProfile, snapshotOf } from '../enrollment/profiles';
+import { kioskAppInCatalog, readAndroidProfile, snapshotOf } from '../enrollment/profiles';
+import { runningKioskExit } from '../kiosk/exits';
 import { androidSenders } from '../enrollment/senders';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
@@ -99,7 +103,7 @@ export function setAndroidSettingsSources(o: { device?: AndroidDeviceSettingsSou
 export type PushResult = 'pushed' | 'unchanged' | 'pending_approval' | 'not_managed' | 'error' | 'no_enterprise';
 
 interface DeviceRow {
-  id: number; uuid: string; management_mode: string; ownership: string; usage: string; enrollment_state: string;
+  id: number; uuid: string; enrollment_profile_id: string | null; management_mode: string; ownership: string; usage: string; enrollment_state: string;
   amapi_name: string; api_level: number | null; approval_state: string; policy_name: string | null; pushed_rendered_hash: string | null;
   pushed_policy_version: string | null; policy_push_failures: number; policy_state_reasons: string[]; state: string | null; released_at: Date | null;
 }
@@ -122,7 +126,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       const e = await readEnterprise(trx);
       const row = await trx('devices as d').join('android_devices as a', function j() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
         .where({ 'd.tenant_id': tenantId, 'd.id': deviceId })
-        .first('d.id', 'd.uuid', 'd.management_mode', 'd.ownership', 'd.usage', 'd.enrollment_state', 'a.amapi_name', 'a.api_level', 'a.approval_state',
+        .first('d.id', 'd.uuid', 'd.enrollment_profile_id', 'd.management_mode', 'd.ownership', 'd.usage', 'd.enrollment_state', 'a.amapi_name', 'a.api_level', 'a.approval_state',
           'a.policy_name', 'a.pushed_rendered_hash', 'a.pushed_policy_version', 'a.policy_push_failures', 'a.policy_state_reasons', 'a.state', 'a.released_at') as DeviceRow | undefined;
       if (!row || row.released_at || row.enrollment_state !== 'enrolled') return { kind: 'not_managed' as const };
       if (row.approval_state === 'pending' || row.approval_state === 'rejected') return { kind: 'pending_approval' as const };
@@ -131,7 +135,14 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       const desired = await deviceSource(trx, tenantId, deviceId);
       // Lot AN-D1 (review AN-C1b, R8): a device the operator disabled (mdm.android_disable) is never reactivated by a push.
       const operatorDisabled = !!(await trx('android_device_controls').where({ tenant_id: tenantId, device_id: deviceId }).first('device_id'));
-      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled };
+      // Lot AN-G1: the kiosk of a dedicated device.
+      let kiosk: { app: string | null; appInCatalog: boolean; exit: boolean } | undefined;
+      if (row.usage === 'kiosk') {
+        const profile = row.enrollment_profile_id ? await readAndroidProfile(trx, String(row.enrollment_profile_id), tenantId) : null;
+        const app = profile?.settings.deviceUsage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
+        kiosk = { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false, exit: !!(await runningKioskExit(trx, tenantId, deviceId)) };
+      }
+      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled, kiosk };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, row, desired } = prep;
@@ -143,7 +154,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       compiled = compileAndroid(desired.settings, facts, {
         purpose: 'device', variables: desired.variables,
         privacy: { networkInfo: DEFAULT_PRIVACY[row.ownership as 'corporate' | 'corporate_personal' | 'personal']?.networkInfo ?? false },
-        guards: { adminDomain: prep.adminDomain },
+        guards: { adminDomain: prep.adminDomain }, ...(prep.kiosk ? { kiosk: prep.kiosk } : {}),
       });
     } catch (err) {
       await setPolicyError(tenantId, deviceId, [`compile:${err instanceof AndroidCompileError ? err.code : 'invalid_value'}`], false);
@@ -221,7 +232,9 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
       const snap = snapshotOf(profile);
       const desired = await profileSource(trx, tenantId, { id: profile.id, defaultGroupId: profile.defaultGroupId, mode: snap.mode, ownership: snap.ownership });
       const current = await trx('android_enrollment_policies').where({ profile_id: profile.id }).first('compiled_hash', 'state');
-      return { kind: 'ok' as const, e, profile, snap, desired, current: current as { compiled_hash: string | null; state: string } | undefined };
+      const app = snap.usage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
+      const kiosk = { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false };
+      return { kind: 'ok' as const, e, profile, snap, desired, kiosk, current: current as { compiled_hash: string | null; state: string } | undefined };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, profile, snap, desired } = prep;
@@ -232,7 +245,8 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
     try {
       compiled = compileAndroid(desired.settings, {
         platform: 'android', mode: snap.mode, ownership: snap.ownership, apiLevel: null, uuid: profile.id, usage: snap.usage,
-      }, { purpose: 'enrollment', profileUuid: profile.id, variables: desired.variables, privacy: { networkInfo: DEFAULT_PRIVACY[snap.ownership].networkInfo } });
+      }, { purpose: 'enrollment', profileUuid: profile.id, variables: desired.variables, privacy: { networkInfo: DEFAULT_PRIVACY[snap.ownership].networkInfo },
+        kiosk: prep.kiosk });
     } catch (err) {
       await record({ state: 'error', last_error: err instanceof AndroidCompileError ? err.code : 'invalid_value' });
       return 'error';

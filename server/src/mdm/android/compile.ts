@@ -7,9 +7,11 @@ import {
 import { CanonicalJsonError, canonicalize } from '../../apple/ddm/canonical';
 import { secretRefsOf } from '../apple/compile';
 import type { VariableValues } from '../apple/variables';
+import type { AndroidKioskLock } from '@obligarth/shared/dist/android/kiosk.js';
 import { androidKeyAvailability } from './availability';
 import { androidCatalog, type AndroidCatalogView } from './catalog';
 import { FAILED_PASSWORDS_FOR_WIPE, POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES } from './overlay';
+import { applyKioskRules, isKioskApp } from './kiosk';
 import { defaultApplicationDomain, preferredActivityConflicts, preferredDomains } from './validate';
 
 // =============================================================================
@@ -21,9 +23,14 @@ import { defaultApplicationDomain, preferredActivityConflicts, preferredDomains 
 //   2. the retained and available keys, in the order of the keys;
 //   3. applications[]: one entry per package (android:app[…]), sorted, never
 //      the reserved package nor a reserved role;
-//   4. usage rules: a kiosk device needs a kiosk form (an app installed as
-//      KIOSK or holding the KIOSK role, or the custom launcher); a device that
-//      is not a kiosk never receives one;
+//   4. usage rules (kiosk.ts, lot AN-G1): a device that is not a kiosk never
+//      receives a kiosk app; a kiosk device needs ONE kiosk form (an app
+//      installed as KIOSK, an app holding the KIOSK role, or Google's
+//      launcher), the app of its enrollment profile when its policies give
+//      none (a live app of the tenant's catalog only), no other home beside
+//      it, the Settings app blocked unless a policy allows it, a windowed
+//      system update unless a policy sets one; a running kiosk exit lifts
+//      the lock of the device's own policy;
 //   5. ownership rules (through the availability: ownership_forbidden);
 //   6. conflicts between two keys (persistentPreferredActivities and
 //      defaultApplicationSettings on one intent domain, from two policies):
@@ -46,7 +53,7 @@ import { defaultApplicationDomain, preferredActivityConflicts, preferredDomains 
 // =============================================================================
 
 /** Bumped when the form of the compiled body changes: every tenant is then resolved again. */
-export const ANDROID_COMPILER_VERSION = 1;
+export const ANDROID_COMPILER_VERSION = 2;
 
 export type AndroidNotApplicableReason = AndroidUnavailableReason | UnavailableReason;
 
@@ -70,6 +77,10 @@ export interface CompiledAndroidPolicy {
   problems: string[];
   /** Conflicts between two keys broken here: the loser's entries on the domains were left out. */
   conflicts: AndroidKeyConflict[];
+  /** The kiosk lock of the policy (a kiosk device; null otherwise), even while a kiosk exit lifts it. */
+  kioskLock: AndroidKioskLock | null;
+  /** A kiosk exit lifted the lock of this compilation. */
+  kioskExit: boolean;
 }
 
 /** Provenance of a retained setting (the resolver's ResolvedSetting.source). */
@@ -121,6 +132,9 @@ export interface AndroidCompileContext {
   /** Guards re-checked at the compilation (the validation checked them at the write, against the values then). */
   guards?: { adminDomain?: string | null; minFailedPasswordsForWipe?: number };
   catalog?: AndroidCatalogView;
+  /** Kiosk of a dedicated device (lot AN-G1): the app of its enrollment profile, whether it is a live app of the
+   *  tenant's catalog, and whether a kiosk exit runs (the device's own policy only). */
+  kiosk?: { app?: string | null; appInCatalog?: boolean; exit?: boolean };
 }
 
 export class AndroidCompileError extends Error {
@@ -166,9 +180,6 @@ export function statusReportingSettings(ownership: string, privacy: AndroidCompi
 export function androidPolicyHash(body: Record<string, JsonValue>): string {
   return createHash('sha256').update(canonicalize({ channel: AMAPI_CHANNEL, policyId: null, body }), 'utf8').digest('hex');
 }
-
-const isKioskApp = (a: Record<string, JsonValue>): boolean => a.installType === 'KIOSK'
-  || (Array.isArray(a.roles) && a.roles.some((r) => isObject(r) && r.roleType === 'KIOSK'));
 
 /**
  * compileAndroid(effective, device, ctx): the AMAPI policy of the settings retained for one device. The settings
@@ -267,11 +278,11 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
     if (list.filter((a) => a.minimumVersionCode !== undefined).length > POLICY_LIMITS.minimumVersionCodeApps) problems.push('compile:limit:minimum_version_code');
     if (list.filter((a) => a.installType === 'KIOSK').length > POLICY_LIMITS.kioskApps) problems.push('compile:limit:kiosk');
   }
-  // 4. A kiosk device needs a kiosk form.
-  if (device.usage === 'kiosk' && !enrollment) {
-    const list = Array.isArray(body.applications) ? body.applications.filter(isObject) : [];
-    if (!list.some(isKioskApp) && body.kioskCustomLauncherEnabled !== true) problems.push('compile:kiosk_form_missing');
-  }
+  // 4. The kiosk of a dedicated device (kiosk.ts).
+  const kiosk = applyKioskRules(body, device.usage, {
+    purpose: ctx.purpose, app: ctx.kiosk?.app ?? null, appInCatalog: ctx.kiosk?.appInCatalog === true, exit: ctx.kiosk?.exit === true,
+  });
+  problems.push(...kiosk.problems);
   if (Array.isArray(body.setupActions) && body.setupActions.length > POLICY_LIMITS.setupActions) problems.push('compile:limit:setup_actions');
 
   // 6. Preferred activities against default applications, from two keys.
@@ -329,5 +340,6 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
   return {
     artifactKey: AMAPI_ARTIFACT_KEY, channel: AMAPI_CHANNEL, policyId, body, hash, secretRefs,
     hasVariables: variablesOf(body).length > 0, sources, notApplicable, deferred, problems, conflicts,
+    kioskLock: kiosk.lock, kioskExit: kiosk.exitApplied,
   };
 }

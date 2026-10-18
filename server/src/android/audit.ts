@@ -45,6 +45,9 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.app_added', criticality: 'standard', label: 'Android: app added to the catalog' },
     { name: 'android.app_archived', criticality: 'standard', label: 'Android: app archived' },
     { name: 'android.web_token_created', criticality: 'standard', label: 'Android: managed Google Play iframe opened' },
+    // Lot AN-G1: the temporary exit of the kiosk of a dedicated device (guarded action mdm.android_kiosk_exit).
+    { name: 'android.kiosk_exit_started', criticality: 'critical', label: 'Android: kiosk lock lifted for a while' },
+    { name: 'android.kiosk_exit_ended', criticality: 'standard', label: 'Android: kiosk lock back' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

@@ -101,6 +101,8 @@ export function tokenPlan(s: Pick<ProfileSnapshot, 'method' | 'ownership' | 'usa
       plan = { kind: 'byod_link', oneTime: true, durationSeconds: 0, allowPersonalUsage: 'PERSONAL_USAGE_ALLOWED', approvalByDefault: false, long: false };
       break;
     case 'android_signin_url':
+      // A kiosk is a device without user (USERLESS): nobody signs in (lot AN-G1).
+      if (kiosk) throw new EnrollmentRuleError('androidKioskMethod');
       bounds = TOKEN_DURATIONS.signin;
       plan = { kind: 'signin', oneTime: true, durationSeconds: 0, allowPersonalUsage: personalUse, approvalByDefault: false, long: false };
       break;

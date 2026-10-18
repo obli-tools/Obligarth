@@ -2,8 +2,15 @@
 // with platform = 'android' (the CHECKs admit them from part 3b of the migrations, at the junction), their settings in
 // the existing column settings jsonb, validated by the zod schema of this file (deviceUsage, minimumApiLevel,
 // kioskApp, googleAuth, requireApproval, approvedSerials). requiredAccountEmail is never stored in a profile. The
-// write path of the profiles (the route of lot C1) calls validateAndroidProfile at the junction AN-A2; this lot reads.
+// write path of the profiles (the route of lot C1) calls validateAndroidProfile and checkAndroidKioskProfile at the
+// junction AN-A2; this lot reads.
+// Dedicated devices (lot AN-G1, §9.7): a kiosk profile is a company device without personal use (USERLESS token), its
+// form chosen by the policies; settings.kioskApp, when set, is the single-app kiosk of its devices whose policies give
+// no form, and must be a live app of the tenant's catalog; the approval of new devices is mandatory for a kiosk token
+// (AN17: long token, several uses, copied out of Obligarth on printed QR codes): requireApproval false is refused, and
+// a kiosk token requires it whatever the stored settings say.
 import type { Knex } from 'knex';
+import { RESERVED_PACKAGES } from '../../mdm/android/overlay';
 import { z } from 'zod';
 import { PACKAGE_RE } from '../gateway/names';
 import {
@@ -62,7 +69,8 @@ export function validateAndroidProfile(p: { method: unknown; ownership: unknown;
   if (p.method === 'android_nfc' && ownership === 'corporate_personal') issues.push({ code: 'androidMethodOwnership', field: 'ownership' });
   if (s.deviceUsage === 'kiosk') {
     if (ownership !== 'corporate') issues.push({ code: 'androidKioskCorporateOnly', field: 'settings.deviceUsage' });
-    if (!s.kioskApp) issues.push({ code: 'androidKioskAppRequired', field: 'settings.kioskApp' });
+    if (s.requireApproval === false) issues.push({ code: 'androidKioskApprovalRequired', field: 'settings.requireApproval' });
+    if (s.kioskApp && RESERVED_PACKAGES.has(s.kioskApp)) issues.push({ code: 'androidPackageReserved', field: 'settings.kioskApp' });
   } else if (s.kioskApp) {
     issues.push({ code: 'androidKioskAppWithoutKiosk', field: 'settings.kioskApp' });
   }
@@ -90,9 +98,28 @@ export function snapshotOf(p: AndroidProfile): ProfileSnapshot {
   };
 }
 
-/** Does the token require an approval (AN17): the profile's setting, else the default of the method. */
-export function requiresApproval(p: AndroidProfile, approvalByDefault: boolean): boolean {
+/** Does the token require an approval (AN17): always for a kiosk (lot AN-G1), else the profile's setting, else the
+ *  default of the method. */
+export function requiresApproval(p: Pick<AndroidProfile, 'settings'>, approvalByDefault: boolean): boolean {
+  if (p.settings.deviceUsage === 'kiosk') return true;
   return p.settings.requireApproval ?? approvalByDefault;
+}
+
+/**
+ * The checks of a kiosk profile against the tenant's data (lot AN-G1), in the transaction that writes the profile
+ * (point of junction of the profile service of lot C1, AN-A2): settings.kioskApp is a live Android app of the
+ * tenant's catalog (an app of another tenant, archived or never added is refused: its package would be installed as
+ * the kiosk of the tenant's devices). The compilation checks it again at each push (compile:kiosk_app_not_in_catalog).
+ */
+export async function checkAndroidKioskProfile(q: Knex | Knex.Transaction, tenantId: number, settings: AndroidProfileSettings): Promise<ProfileIssue[]> {
+  if (settings.deviceUsage !== 'kiosk' || !settings.kioskApp) return [];
+  return (await kioskAppInCatalog(q, tenantId, settings.kioskApp)) ? [] : [{ code: 'androidKioskAppNotInCatalog', field: 'settings.kioskApp' }];
+}
+
+/** Is the package a live Android app of the tenant's catalog (RLS and tenant explicit)? */
+export async function kioskAppInCatalog(q: Knex | Knex.Transaction, tenantId: number, pkg: string): Promise<boolean> {
+  const row = await q('apps').where({ tenant_id: tenantId, platform_family: 'android', identifier: pkg }).whereNull('archived_at').first('id');
+  return !!row;
 }
 
 /** A snapshot read back from a token row (jsonb), checked: null when malformed (the token is then unknown). */

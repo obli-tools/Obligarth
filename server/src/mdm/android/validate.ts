@@ -8,6 +8,7 @@ import {
   POLICY_LIMITS, PRIVATE_SPACE_DISALLOWED, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES, fieldSecretPurpose, isOncSecretKey,
   oncSecretPurpose,
 } from './overlay';
+import { validateKioskSection, validateSystemUpdate, type KioskValidationCode } from './kiosk';
 
 // =============================================================================
 // Validation of the Android section of a policy version, applied at each
@@ -36,7 +37,12 @@ import {
 //     password of an APN, managed configurations), never in clear at a
 //     secret key, returned with their purpose: the caller moves the
 //     values typed in to the vault before any storage;
-//   - variables of the closed list only.
+//   - variables of the closed list only;
+//   - kiosk (kiosk.ts, lot AN-G1): one kiosk form per section, the KIOSK
+//     role on an app REQUIRED_FOR_SETUP only, a role held once, no other
+//     home beside the kiosk; system updates: a window of 0 to 1439 minutes,
+//     freeze periods of 90 days at most and 60 days apart (warning: the
+//     Settings app explicitly allowed in a kiosk).
 // Pure: the vault and the database are the caller's. The unit tests load it.
 // =============================================================================
 
@@ -46,7 +52,7 @@ export type AndroidValidationCode =
   | 'duplicate_setting_key' | 'onc_guid_invalid' | 'unknown_variable' | 'secret_not_allowed' | 'secret_invalid' | 'secret_expected'
   | 'wipe_rule_invalid' | 'wipe_threshold_too_low' | 'frp_email_outside_domain' | 'too_many_setup_actions'
   | 'too_many_required_for_setup' | 'too_many_minimum_version_code' | 'too_many_kiosk_apps'
-  | 'managed_configuration_exclusive' | 'preferred_activities_conflict' | 'duplicate_value';
+  | 'managed_configuration_exclusive' | 'preferred_activities_conflict' | 'duplicate_value' | KioskValidationCode;
 
 export interface AndroidValidationIssue {
   /** Path of the value in the section ('fragment.cameraDisabled', 'applications[com.example.app].roles[0]'). */
@@ -65,7 +71,7 @@ export interface AndroidSecretMarker {
 
 export interface AndroidValidationResult {
   issues: AndroidValidationIssue[];
-  warnings: Array<{ path: string; code: 'value_deprecated' }>;
+  warnings: Array<{ path: string; code: 'value_deprecated' | 'kiosk_settings_access_allowed' }>;
   /** Setting keys of the wipe-capable settings the section sets. */
   wipeRules: string[];
   secrets: AndroidSecretMarker[];
@@ -304,6 +310,13 @@ export function validateAndroidSection(section: unknown, opts: AndroidValidation
       types.add(d);
       if (conflicts.has(d)) issues.push({ path: `fragment.defaultApplicationSettings[${i}]`, code: 'preferred_activities_conflict' });
     });
+  }
+
+  // ── Kiosk and system updates (lot AN-G1) ──────────────────────────────────
+  issues.push(...validateKioskSection(fragment, apps));
+  if (fragment.systemUpdate !== undefined) issues.push(...validateSystemUpdate(fragment.systemUpdate));
+  if (isObject(fragment.kioskCustomization) && fragment.kioskCustomization.deviceSettings === 'SETTINGS_ACCESS_ALLOWED') {
+    warnings.push({ path: 'fragment.kioskCustomization.deviceSettings', code: 'kiosk_settings_access_allowed' });
   }
 
   // ── Secrets and variables, at any depth ───────────────────────────────────

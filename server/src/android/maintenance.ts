@@ -13,6 +13,7 @@ import { checkProjectEnterprises, MAINTENANCE_ACTOR } from './enterprises/orphan
 import { expireEnrollmentTokens } from './enrollment/tokens';
 import type { AndroidGateway } from './gateway/types';
 import { resubmitStaleCommands, resumeHeldCommands, sweepResetPasswordSecrets } from './commands/submit';
+import { expireKioskExits } from './kiosk/exits';
 
 type DrainWaker = (tenantId: number) => Promise<unknown>;
 let wakeDrain: DrainWaker = async () => undefined;
@@ -33,11 +34,13 @@ export interface MaintenanceResult {
   commands: number;
   /** Lot AN-E1: tenants whose Android apps' metadata were sent to android.app-metadata. */
   apps: number;
+  /** Lot AN-G1: tenants whose kiosk exits past their end (or of devices that left management) were ended. */
+  kiosk: number;
 }
 
 export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean } = {}): Promise<MaintenanceResult> {
   const now = o.now ?? new Date();
-  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0, apps: 0 };
+  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0, apps: 0, kiosk: 0 };
   const due = await asNone(MAINTENANCE_ACTOR, async () => {
     const r = await db.raw('SELECT tenant_id, inbox_due, signups_due, purge_due FROM obligarth.android_maintenance_due()') as
       { rows: Array<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }> };
@@ -109,6 +112,12 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     return r.rows.map((x) => Number(x.tenant_id));
   });
   for (const tenantId of appsDue) { await refreshApps(tenantId); out.apps += 1; }
+  // Kiosk exits (lot AN-G1, section 9.7): those past their end whose job was lost, those of devices that left.
+  const kioskDue = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw('SELECT tenant_id FROM obligarth.android_kiosk_due()') as { rows: Array<{ tenant_id: number }> };
+    return r.rows.map((x) => Number(x.tenant_id));
+  });
+  for (const tenantId of kioskDue) { await expireKioskExits(tenantId, MAINTENANCE_ACTOR); out.kiosk += 1; }
   const weekly = o.weekly ?? (now.getUTCDay() === 1 && now.getUTCHours() === 4 && now.getUTCMinutes() === 0);
   if (weekly && o.gateway?.mode !== 'off') {
     out.orphans = (await checkProjectEnterprises(o.gateway)).length;

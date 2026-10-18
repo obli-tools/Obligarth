@@ -16,11 +16,13 @@ import { setCommandSenders } from './commands/bus';
 import { pollAndroidOperations, submitAndroidCommand } from './commands/submit';
 import { setOperationsPollSender, setAppMetadataSender } from './maintenance';
 import { refreshDueAndroidApps } from './apps/catalog';
+import { expireKioskExits, setKioskExitEndSender } from './kiosk/exits';
 
 const tenantPayload = z.object({ tenantId: z.number().int().positive() }).strict();
 const devicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
 const quarantinePayload = z.object({ tenantId: z.number().int().positive(), quarantineId: z.number().int().positive() }).strict();
 const profilePayload = z.object({ tenantId: z.number().int().positive(), profileId: z.string().uuid() }).strict();
+const kioskExitPayload = z.object({ tenantId: z.number().int().positive(), exitId: z.string().uuid() }).strict();
 const commandPayload = z.object({ tenantId: z.number().int().positive(), commandId: z.string().uuid() }).strict();
 
 let registered = false;
@@ -161,6 +163,19 @@ export function registerAndroidJobs(): void {
     setAppMetadataSender((tenantId) => appMetadata.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
   };
 
+  // ── Kiosk exits (lot AN-G1, section 9.7) ────────────────────────────────────
+  // The end of a kiosk exit at its expiry (one job per exit, started at expires_at); android.maintenance ends the
+  // exits whose job was lost.
+  const kioskExitEnd = registerJob({
+    name: 'android.kiosk-exit-end', scope: 'tenant', description: 'Ends the kiosk exits of a tenant past their end (the lock is pushed back)',
+    payload: kioskExitPayload, policy: 'stately', retry: { limit: 5, delaySeconds: 30, backoff: true, maxDelaySeconds: 600 },
+    async handler(ctx) { return { output: { ...(await expireKioskExits(ctx.payload.tenantId)) } }; },
+  });
+  const bindKiosk = () => {
+    setKioskExitEndSender((trx, p) => kioskExitEnd.sendInTx(trx, { tenantId: p.tenantId, exitId: p.exitId },
+      { singletonKey: `t:${p.tenantId}:k:${p.exitId}`, tenantId: p.tenantId, startAfter: p.expiresAt }));
+  };
+
   bind = () => {
     setDrainSender((trx, tenantId) => drain.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setMaintenanceDrainWaker((tenantId) => drain.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
@@ -169,6 +184,7 @@ export function registerAndroidJobs(): void {
     bindEnrollment();
     bindCommands();
     bindApps();
+    bindKiosk();
   };
   bind();
 
@@ -181,7 +197,7 @@ export function registerAndroidJobs(): void {
     schedule: { cron: '* * * * *' },
     async handler() {
       const r = await runAndroidMaintenance();
-      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands, apps: r.apps } };
+      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands, apps: r.apps, kiosk: r.kiosk } };
     },
   });
 }

@@ -148,7 +148,9 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   if (mismatch) return notAccepted(ctx, d, mismatch, token);
 
   // 5. Approval (AN17), and the hourly cap of a long token that forces it.
-  let requires = token.requires_approval;
+  // A kiosk token always requires it (lot AN-G1, AN17), whatever its row says (a token written before the rule, or by
+  // a path that skipped requiresApproval).
+  let requires = token.requires_approval || snapshot.usage === 'kiosk';
   // Forced by the hourly cap: the list of approved serials does not apply (the serial is reported by the device,
   // unchecked: AN45; a copied long token would announce an approved one).
   let forced = token.approval_forced_at !== null;

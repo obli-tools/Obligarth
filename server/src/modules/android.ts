@@ -2,6 +2,7 @@ import { logger } from '../utils/logger';
 import { registerStartTask, registerStopTask } from '../lifecycle';
 import { findSecretRefs, registerInstanceSecretName, registerSecretColumn, registerSecretReferenceHolder } from '../vault';
 import { registerAndroidGuardedActions } from '../android/commands/guarded';
+import { registerAndroidKioskActions } from '../android/kiosk/exits';
 import { registerCommandHandler } from '../android/commands/submit';
 import { db } from '../db';
 import { raiseAndroidPlatformAlert } from '../android/alerts';
@@ -61,6 +62,8 @@ export function registerAndroidModule(): void {
   registerSecretReferenceHolder({ table: 'pending_actions', column: 'params', tenantColumn: 'tenant_id', refs: (v) => findSecretRefs(typeof v === 'string' ? JSON.parse(v) : v) });
   registerCommandHandler();
   registerAndroidGuardedActions();
+  // Lot AN-G1: the temporary exit of a kiosk (guarded action mdm.android_kiosk_exit, new restriction key).
+  registerAndroidKioskActions();
   setAndroidDeviceCounter(async (tenantId) => {
     const r = await db('android_devices').where({ tenant_id: tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
     return Number(r[0]?.n ?? 0);
