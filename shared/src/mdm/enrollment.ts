@@ -66,6 +66,23 @@ export interface EnrollmentProfileView {
   archivedAt: string | null;
   /** Usable links and invitations of the profile. */
   activeTokens: number;
+  /** ADE profiles: where the profile is defined at Apple, one entry per active ADE server of the tenant (lot C2). */
+  adeBindings?: EnrollmentAdeBindingView[];
+}
+
+/** An ADE profile as defined at Apple on one ADE server (ade_profile_bindings; integration §10.6). */
+export interface EnrollmentAdeBindingView {
+  adeTokenId: string;
+  serverName: string;
+  /** Apple's profile UUID; null: never defined. */
+  profileUuid: string | null;
+  /** The version of the profile defined at Apple (null: never). */
+  definedVersion: number | null;
+  definedAt: string | null;
+  /** The code of the last failure of the definition, null when it succeeded. */
+  lastErrorCode: string | null;
+  /** The version defined is the profile's current one. */
+  upToDate: boolean;
 }
 
 /** What the console sends to create or change a profile (the method never changes). */
@@ -148,9 +165,41 @@ export interface EnrollmentSessionView {
   failureCode: string | null;
   /** Shown to the tenant's administrators only (null for the others). */
   managedAppleAccount: string | null;
+  /** ADE: the serial number of the verified MachineInfo (a company device); null otherwise. */
+  serialNumber: string | null;
   deviceId: number | null;
   locale: string | null;
   acknowledgedAt: string | null;
   createdAt: string;
   expiresAt: string;
+}
+
+/** A device of Apple Business seen by the ADE synchronisation (apple_ade_devices; integration §10.6, §11.2). */
+export interface AdeDeviceView {
+  id: number;
+  adeTokenId: string;
+  serverName: string;
+  serialNumber: string;
+  model: string | null;
+  description: string | null;
+  deviceFamily: string | null;
+  os: string | null;
+  /** Apple's profile status: empty, assigned, pushed, removed. */
+  profileStatus: string | null;
+  profileAssignTime: string | null;
+  /** The enrollment profile Apple's profile UUID corresponds to (null: none of ours, or not known). */
+  appliedProfileId: string | null;
+  appliedProfileName: string | null;
+  /** The enrollment profile an operator chose; null: the tenant's default ADE profile. */
+  wantedProfileId: string | null;
+  wantedProfileName: string | null;
+  /** The enrolled device, once it authenticated. */
+  deviceId: number | null;
+  firstSeenAt: string;
+  removedAt: string | null;
+}
+
+export interface AdeDevicePage {
+  items: AdeDeviceView[];
+  nextCursor: string | null;
 }
