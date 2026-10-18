@@ -233,6 +233,14 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
   }
   const e = await readEnterprise(trx);
   if (!e || e.state !== 'linked') throw new AndroidCommandError(409, 'androidNotLinked', 'no linked Android enterprise');
+  // Lot AN-E1 (§11.2, « managed apps only »): CLEAR_APP_DATA clears only apps of the tenant's catalog, never an app the
+  // user installed in the personal profile nor a package the catalog does not know.
+  if (req.type === 'CLEAR_APP_DATA') {
+    const names = params.packageNames as string[];
+    const known = await trx('apps').where({ tenant_id: tenantId, platform_family: 'android' }).whereNull('archived_at')
+      .whereIn('identifier', names).pluck('identifier') as string[];
+    if (known.length !== names.length) throw new AndroidCommandError(422, 'invalidCommandParams', 'app_not_managed');
+  }
   const frozen = spec.destructive && !!(await readSettings(tenantId, trx)).frozen_at;
 
   const targets = await targetRows(trx, tenantId, deviceIds);

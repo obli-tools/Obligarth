@@ -14,7 +14,8 @@ import { runAndroidMaintenance, setMaintenanceDrainWaker, setTokenRecoverySender
 import { pushDevicePolicy, pushEnrollmentPolicy } from './policies/push';
 import { setCommandSenders } from './commands/bus';
 import { pollAndroidOperations, submitAndroidCommand } from './commands/submit';
-import { setOperationsPollSender } from './maintenance';
+import { setOperationsPollSender, setAppMetadataSender } from './maintenance';
+import { refreshDueAndroidApps } from './apps/catalog';
 
 const tenantPayload = z.object({ tenantId: z.number().int().positive() }).strict();
 const devicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
@@ -145,6 +146,21 @@ export function registerAndroidJobs(): void {
     setOperationsPollSender((tenantId) => poll.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
   };
 
+  // ── Apps (lot AN-E1, section 9.6) ───────────────────────────────────────────
+  // The metadata of a tenant's Android apps, once a day at most per app (stately t:<tenant>), 50 apps a run.
+  const appMetadata = registerJob({
+    name: 'android.app-metadata', scope: 'tenant', description: 'Reads the metadata of the Android apps of a tenant at Google again',
+    payload: tenantPayload, policy: 'stately', retry: { limit: 3, delaySeconds: 60, backoff: true, maxDelaySeconds: 3600 },
+    async handler(ctx) {
+      const r = await refreshDueAndroidApps(ctx.payload.tenantId);
+      if (r.remaining) await appMetadata.send({ tenantId: ctx.payload.tenantId }, { singletonKey: `t:${ctx.payload.tenantId}`, tenantId: ctx.payload.tenantId });
+      return { output: { refreshed: r.refreshed, unavailable: r.unavailable, remaining: r.remaining } };
+    },
+  });
+  const bindApps = () => {
+    setAppMetadataSender((tenantId) => appMetadata.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
+  };
+
   bind = () => {
     setDrainSender((trx, tenantId) => drain.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setMaintenanceDrainWaker((tenantId) => drain.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
@@ -152,6 +168,7 @@ export function registerAndroidJobs(): void {
     setTestCheckSender((trx, tenantId) => testCheck.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId, startAfter: 900 }));
     bindEnrollment();
     bindCommands();
+    bindApps();
   };
   bind();
 
@@ -164,7 +181,7 @@ export function registerAndroidJobs(): void {
     schedule: { cron: '* * * * *' },
     async handler() {
       const r = await runAndroidMaintenance();
-      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands } };
+      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands, apps: r.apps } };
     },
   });
 }

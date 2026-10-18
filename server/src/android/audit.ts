@@ -41,6 +41,10 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.device_enabled', criticality: 'standard', label: 'Android: device enabled again' },
     // Review AN-D1: a command held by the last-resort cap (gateway_cap), released by the operator.
     { name: 'android.command_released', criticality: 'critical', label: 'Android: command held by the last-resort cap released' },
+    // Lot AN-E1: the Android apps of the catalog and the tokens of the managed Google Play iframes (never the token).
+    { name: 'android.app_added', criticality: 'standard', label: 'Android: app added to the catalog' },
+    { name: 'android.app_archived', criticality: 'standard', label: 'Android: app archived' },
+    { name: 'android.web_token_created', criticality: 'standard', label: 'Android: managed Google Play iframe opened' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

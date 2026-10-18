@@ -37,6 +37,8 @@ export const NOTIFICATION_TYPES = ['ENROLLMENT', 'STATUS_REPORT', 'COMMAND', 'US
 /** Command types the freeze lock refuses (AN15). */
 export const FROZEN_COMMANDS: ReadonlySet<string> = new Set(['WIPE', 'RESET_PASSWORD', 'LOCK', 'RELINQUISH_OWNERSHIP', 'START_LOST_MODE']);
 const PATCH_FIELDS: ReadonlySet<string> = new Set(['enterpriseDisplayName', 'logo', 'primaryColor', 'termsAndConditions', 'signinDetails']);
+const IFRAME_FEATURES: ReadonlySet<string> = new Set(['PLAY_SEARCH', 'PRIVATE_APPS', 'WEB_APPS', 'STORE_BUILDER', 'MANAGED_CONFIGURATIONS',
+  'ZERO_TOUCH_CUSTOMER_MANAGEMENT']);
 const CLEANUP_AGE_MS = 270 * 86_400_000;
 const CLEANUP_CAP_PER_HOUR = 100;
 const DURATION_RE = /^[0-9]{1,10}(\.[0-9]{1,9})?s$/;
@@ -463,7 +465,12 @@ export class GoogleGateway implements AndroidGateway {
 
   async createWebToken(e: AndroidEnterpriseRef, w: { parentFrameUrl: string; enabledFeatures: IframeFeature[] }): Promise<{ value: string }> {
     this.own(e);
-    if (!/^https:\/\/[^\s]{1,500}$/.test(w.parentFrameUrl) && this.mode === 'google') throw new AndroidRequestError('parentFrameUrl must be https');
+    // Lot AN-E1: in every mode (Google refuses another scheme: « The URL must use the https scheme »), and never a
+    // token without features (Google opens them all, the zero-touch iframe included).
+    if (!/^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\/[A-Za-z0-9/-]{0,200}$/.test(w.parentFrameUrl)) throw new AndroidRequestError('parentFrameUrl must be an https page URL');
+    if (!Array.isArray(w.enabledFeatures) || w.enabledFeatures.length === 0 || w.enabledFeatures.some((f) => !IFRAME_FEATURES.has(f))) {
+      throw new AndroidRequestError('enabledFeatures must list known features');
+    }
     await this.limit('webtoken', e, null, 'interactive');
     const r = await this.amapi.createWebToken(names.enterprise(e), { parentFrameUrl: w.parentFrameUrl, enabledFeatures: w.enabledFeatures });
     if (typeof r?.value !== 'string') throw new AndroidRequestError('unexpected web token answer');
