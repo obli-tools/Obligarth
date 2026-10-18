@@ -36,5 +36,10 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.device_approved', criticality: 'standard', label: 'Android: device approved' },
     { name: 'android.device_approval_refused', criticality: 'standard', label: 'Android: device approval refused' },
     { name: 'android.enterprise_upgraded', criticality: 'standard', label: 'Android: enterprise upgraded to a managed domain' },
+    // Lot AN-D1: the operator's disabling of a device (mdm.android_disable, AN30).
+    { name: 'android.device_disabled', criticality: 'critical', label: 'Android: device disabled' },
+    { name: 'android.device_enabled', criticality: 'standard', label: 'Android: device enabled again' },
   ]);
+  // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
+  // which index.ts registers in every instance, Android or not.
 }

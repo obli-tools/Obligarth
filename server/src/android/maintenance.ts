@@ -12,6 +12,7 @@ import { raiseAndroidTenantAlert } from './alerts';
 import { checkProjectEnterprises, MAINTENANCE_ACTOR } from './enterprises/orphans';
 import { expireEnrollmentTokens } from './enrollment/tokens';
 import type { AndroidGateway } from './gateway/types';
+import { resubmitStaleCommands, resumeHeldCommands, sweepResetPasswordSecrets } from './commands/submit';
 
 type DrainWaker = (tenantId: number) => Promise<unknown>;
 let wakeDrain: DrainWaker = async () => undefined;
@@ -19,12 +20,19 @@ export function setMaintenanceDrainWaker(fn: DrainWaker): void { wakeDrain = fn;
 /** android.tokens-recover of a tenant (AN50 recovery and garbage collection at Google: network, hence a job). */
 let recoverTokens: DrainWaker = async () => undefined;
 export function setTokenRecoverySender(fn: DrainWaker): void { recoverTokens = fn; }
+/** android.operations-poll of a tenant (lot AN-D1: operations to read, commands to expire: network, hence a job). */
+let pollOperations: DrainWaker = async () => undefined;
+export function setOperationsPollSender(fn: DrainWaker): void { pollOperations = fn; }
 
-export interface MaintenanceResult { drains: number; interrupted: number; expired: number; purged: number; orphans: number | null; tokensExpired: number }
+export interface MaintenanceResult {
+  drains: number; interrupted: number; expired: number; purged: number; orphans: number | null; tokensExpired: number;
+  /** Lot AN-D1: tenants whose commands were followed up (polls sent, submissions sent again, held resumed, secrets swept). */
+  commands: number;
+}
 
 export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGateway; weekly?: boolean } = {}): Promise<MaintenanceResult> {
   const now = o.now ?? new Date();
-  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0 };
+  const out: MaintenanceResult = { drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, commands: 0 };
   const due = await asNone(MAINTENANCE_ACTOR, async () => {
     const r = await db.raw('SELECT tenant_id, inbox_due, signups_due, purge_due FROM obligarth.android_maintenance_due()') as
       { rows: Array<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }> };
@@ -74,6 +82,21 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     const stale = await asTenant(tenantId, MAINTENANCE_ACTOR, () => db('android_enrollment_tokens').where({ state: 'creating' })
       .where('created_at', '<', db.raw("now() - interval '15 minutes'")).first('id'));
     if (stale) await recoverTokens(tenantId);
+  }
+  // Commands (lot AN-D1, section 11.3): operations to poll and commands past their end (android.operations-poll),
+  // submissions lost or interrupted (their job again), held commands to resume, reset-password secrets to sweep.
+  const commandDue = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw('SELECT tenant_id, submit_due, poll_due, expire_due, resume_due, secrets_due FROM obligarth.android_commands_due()') as
+      { rows: Array<{ tenant_id: number; submit_due: boolean; poll_due: boolean; expire_due: boolean; resume_due: boolean; secrets_due: boolean }> };
+    return r.rows;
+  });
+  for (const t of commandDue) {
+    const tenantId = Number(t.tenant_id);
+    if (t.poll_due || t.expire_due) await pollOperations(tenantId);
+    if (t.submit_due) await resubmitStaleCommands(tenantId, MAINTENANCE_ACTOR);
+    if (t.resume_due) await resumeHeldCommands(tenantId, MAINTENANCE_ACTOR);
+    if (t.secrets_due) await sweepResetPasswordSecrets(tenantId, MAINTENANCE_ACTOR);
+    out.commands += 1;
   }
   const weekly = o.weekly ?? (now.getUTCDay() === 1 && now.getUTCHours() === 4 && now.getUTCMinutes() === 0);
   if (weekly && o.gateway?.mode !== 'off') {

@@ -1,6 +1,8 @@
 import { logger } from '../utils/logger';
 import { registerStartTask, registerStopTask } from '../lifecycle';
-import { registerInstanceSecretName, registerSecretReferenceHolder } from '../vault';
+import { findSecretRefs, registerInstanceSecretName, registerSecretColumn, registerSecretReferenceHolder } from '../vault';
+import { registerAndroidGuardedActions } from '../android/commands/guarded';
+import { registerCommandHandler } from '../android/commands/submit';
 import { db } from '../db';
 import { raiseAndroidPlatformAlert } from '../android/alerts';
 import { registerAndroidAuditActions } from '../android/audit';
@@ -48,6 +50,17 @@ export function registerAndroidModule(): void {
     table: 'android_enrollment_tokens', column: 'value_ref', tenantColumn: 'tenant_id',
     refs: (v) => (typeof v === 'string' && /^[0-9a-f-]{36}$/.test(v) ? [v] : []),
   });
+  // Lot AN-D1: commands (section 11, §22.9): the sealed newPassword of RESET_PASSWORD (android_commands.secret_enc: a
+  // command whose seal is lost is rejected, never sent without its password), the references of pending_actions
+  // (mdm.reset_password carries {"$secret": "<uuid>"}, purpose android.reset_password), the COMMAND handler, the
+  // guarded actions that exist only for Android and the final hook of the lost mode.
+  registerSecretColumn({
+    table: 'android_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
+    owner: 'android.commands', onLoss: 'null', lossPatch: { state: 'rejected', reject_code: 'secret_lost', submit_state: 'failed', hold_reason: null },
+  });
+  registerSecretReferenceHolder({ table: 'pending_actions', column: 'params', tenantColumn: 'tenant_id', refs: (v) => findSecretRefs(typeof v === 'string' ? JSON.parse(v) : v) });
+  registerCommandHandler();
+  registerAndroidGuardedActions();
   setAndroidDeviceCounter(async (tenantId) => {
     const r = await db('android_devices').where({ tenant_id: tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
     return Number(r[0]?.n ?? 0);

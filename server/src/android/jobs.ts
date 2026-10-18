@@ -12,11 +12,15 @@ import { setAndroidSenders } from './enrollment/senders';
 import { recoverEnrollmentTokens } from './enrollment/tokens';
 import { runAndroidMaintenance, setMaintenanceDrainWaker, setTokenRecoverySender } from './maintenance';
 import { pushDevicePolicy, pushEnrollmentPolicy } from './policies/push';
+import { setCommandSenders } from './commands/bus';
+import { pollAndroidOperations, submitAndroidCommand } from './commands/submit';
+import { setOperationsPollSender } from './maintenance';
 
 const tenantPayload = z.object({ tenantId: z.number().int().positive() }).strict();
 const devicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
 const quarantinePayload = z.object({ tenantId: z.number().int().positive(), quarantineId: z.number().int().positive() }).strict();
 const profilePayload = z.object({ tenantId: z.number().int().positive(), profileId: z.string().uuid() }).strict();
+const commandPayload = z.object({ tenantId: z.number().int().positive(), commandId: z.string().uuid() }).strict();
 
 let registered = false;
 let bind: (() => void) | null = null;
@@ -123,12 +127,31 @@ export function registerAndroidJobs(): void {
     setTokenRecoverySender((tenantId) => tokensRecover.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
   };
 
+  // ── Commands (lot AN-D1, section 11.3) ─────────────────────────────────────
+  // One submission per command (stately t:<tenant>:c:<command>): never a blind retry of issueCommand, the AN50
+  // recovery runs on every attempt after the first call; the polling of a tenant's operations (stately t:<tenant>).
+  const submit = registerJob({
+    name: 'android.commands.submit', scope: 'tenant', description: 'Submits an Android command to Google (AN50 recovery)',
+    payload: commandPayload, policy: 'stately', notify: true, retry: { limit: 8, delaySeconds: 15, backoff: true, maxDelaySeconds: 900 },
+    async handler(ctx) { return { output: { result: await submitAndroidCommand(ctx.payload.tenantId, ctx.payload.commandId) } }; },
+  });
+  const poll = registerJob({
+    name: 'android.operations-poll', scope: 'tenant', description: 'Polls the Android operations sent and expires the commands past their end',
+    payload: tenantPayload, policy: 'stately', retry: { limit: 3, delaySeconds: 30, backoff: true, maxDelaySeconds: 600 },
+    async handler(ctx) { return { output: { ...(await pollAndroidOperations(ctx.payload.tenantId)) } }; },
+  });
+  const bindCommands = () => {
+    setCommandSenders({ submit: (trx, p) => submit.sendInTx(trx, p, { singletonKey: `t:${p.tenantId}:c:${p.commandId}`, tenantId: p.tenantId }) });
+    setOperationsPollSender((tenantId) => poll.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
+  };
+
   bind = () => {
     setDrainSender((trx, tenantId) => drain.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setMaintenanceDrainWaker((tenantId) => drain.send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setSetupSender((trx, tenantId) => setup.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId }));
     setTestCheckSender((trx, tenantId) => testCheck.sendInTx(trx, { tenantId }, { singletonKey: `t:${tenantId}`, tenantId, startAfter: 900 }));
     bindEnrollment();
+    bindCommands();
   };
   bind();
 
@@ -141,7 +164,7 @@ export function registerAndroidJobs(): void {
     schedule: { cron: '* * * * *' },
     async handler() {
       const r = await runAndroidMaintenance();
-      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired } };
+      return { output: { drains: r.drains, interrupted: r.interrupted, expired: r.expired, purged: r.purged, orphans: r.orphans, tokensExpired: r.tokensExpired, commands: r.commands } };
     },
   });
 }
