@@ -2,7 +2,7 @@
 // AMAPI-R1, SEC-AN-14, COH-14; §22.2; criteria 5 and 18). The order is normative: idempotence first, then checks
 // made against the state AT THE TIME OF THE ENROLLMENT (the token's profile_snapshot and the enrollmentTime), never
 // against the current profile; no automatic deletion outside the narrow window of step 4.
-//   1. a record not released for this AMAPI name, or an open quarantine: nothing (a replayed ENROLLMENT, after a seek,
+//   1. a name already seen (a record, released or not, an episode, a quarantine in any state): nothing (a replayed ENROLLMENT, after a seek,
 //      from the dead letters, after a profile changed or a token was revoked, never touches a known device: no
 //      deleteDevice, no patchDevice);
 //   2. enrollmentTokenData obg1:<uuid>, else no record, alert enrollment.unknown_session, quarantine;
@@ -126,10 +126,15 @@ async function findToken(ctx: Ctx, d: Device, at: Date): Promise<TokenRow | null
 export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   const { trx, tenantId } = ctx;
   const d = ctx.event.payload;
-  // 1. Idempotence.
-  const known = await trx('android_devices').where({ amapi_name: d.name }).whereNull('released_at').first('device_id');
+  // 1. Idempotence. Google never gives an AMAPI device name twice: a name the instance has already seen (a record,
+  // released or not, an episode of a renewed record, a quarantine in any state) is a replay (seek, dead letter
+  // redriven), never a new enrollment: no ghost record for a superseded or released resource, no new quarantine
+  // feeding the hourly cap and the freeze A1 (revue AN-C1b, R2).
+  const known = await trx('android_devices').where({ amapi_name: d.name }).first('device_id');
   if (known) return { result: 'already_known' };
-  const quarantined = await trx('android_quarantine').where({ amapi_name: d.name }).whereIn('state', ['open', 'rejected']).first('id');
+  const episode = await trx('device_enrollments').where({ tenant_id: tenantId, channel_enrollment_id: d.name }).first('id');
+  if (episode) return { result: 'already_known' };
+  const quarantined = await trx('android_quarantine').where({ amapi_name: d.name }).first('id');
   if (quarantined) return { result: 'already_known' };
 
   const at = enrollmentTimeOf(d.enrollmentTime) ?? ctx.event.occurredAt;
@@ -148,8 +153,11 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   // unchecked: AN45; a copied long token would announce an approved one).
   let forced = token.approval_forced_at !== null;
   if (token.max_uses === null) {
+    // Enrolled in the hour, or processed in the hour: a backlog applied late (instance stopped) counts too
+    // (revue AN-C1b, R1).
     const hour = await trx('android_devices').where({ enrollment_token_id: token.id })
-      .where('enrolled_at', '>', trx.raw("now() - interval '1 hour'")).count<{ n: string }[]>('* as n');
+      .where((q) => q.where('enrolled_at', '>', trx.raw("now() - interval '1 hour'")).orWhere('created_at', '>', trx.raw("now() - interval '1 hour'")))
+      .count<{ n: string }[]>('* as n');
     const n = Number(hour[0]?.n ?? 0) + 1;
     if (n > LONG_TOKEN_HOURLY_CAP && !token.approval_forced_at) {
       await trx('android_enrollment_tokens').where({ id: token.id }).update({ requires_approval: true, approval_forced_at: trx.fn.now() });
