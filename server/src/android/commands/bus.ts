@@ -31,6 +31,7 @@ import {
   ANDROID_COMMANDS, AndroidCommandParamError, checkNewPassword, commandBody, FINAL_STATES, finalStateOf, isAndroidCommandType, refusalOf,
   validateParams, type AndroidCommandType, type AndroidTargetState,
 } from './catalog';
+import { byodCommandRefusal } from '../byod/policy';
 
 export const COMMAND_SECRET_COLUMN = { table: 'android_commands', column: 'secret_enc' } as const;
 /** The guarded command types each guarded action key dispatches (table of §11.4). */
@@ -260,6 +261,8 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
       ownership: t.ownership, mode: t.management_mode, apiLevel: t.api_level === null ? null : Number(t.api_level),
     } : undefined, { profileWipe: req.profileWipe === true });
     if (code) { out.refused.push({ deviceId, code }); continue; }
+    // Lot AN-F1 (EX-A7): a personal device never takes a WIPE with a wipe data flag (they act on the whole device).
+    if (t!.ownership === 'personal' && byodCommandRefusal(body)) { out.refused.push({ deviceId, code: 'ownership' }); continue; }
     if (Number(t!.enterprise_id) !== e.id) { out.refused.push({ deviceId, code: 'not_amapi' }); continue; }
     const id = (req.commandIdFor?.(deviceId) ?? randomUUID()).toLowerCase();
     let secretEnc: string | null = null;

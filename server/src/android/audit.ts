@@ -54,6 +54,11 @@ export function registerAndroidAuditActions(): void {
     // policy (the paths withheld, never their values), then the full policy back after the unfreeze.
     { name: 'android.kiosk_wipe_settings_withheld', criticality: 'critical', label: 'Android: kiosk lock restored under a freeze without its wipe-capable settings' },
     { name: 'android.kiosk_wipe_settings_applied', criticality: 'standard', label: 'Android: withheld wipe-capable settings of a kiosk applied' },
+    // Lot AN-F1: BYOD invitations by link (the prefix of a code, never the code; the version of the notice acknowledged).
+    { name: 'android.byod_invitation_created', criticality: 'standard', label: 'Android: BYOD invitation created' },
+    { name: 'android.byod_invitation_revoked', criticality: 'standard', label: 'Android: BYOD invitation revoked' },
+    { name: 'android.byod_notice_acknowledged', criticality: 'standard', label: 'Android: notice of a personal device acknowledged' },
+    { name: 'android.byod_invitation_used', criticality: 'standard', label: 'Android: BYOD invitation used by an enrollment' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

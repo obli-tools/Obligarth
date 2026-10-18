@@ -12,6 +12,7 @@ import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventCont
 import { DeviceSchema } from '../inbox/schemas';
 import { evaluateAndroidDevices } from './compliance';
 import { filterInventory } from './privacy';
+import { byodApps } from '../byod/policy';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -116,10 +117,18 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   }
   cols.config_state = policyState === 'applied' ? 'applied' : policyState === 'error' ? 'error' : 'pending';
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
-  // Apps: the whole set replaced (source amapi_report); Google reports the work profile only (AMAPI-R20).
+  // Apps: the whole set replaced (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
+  // device keeps the apps of the tenant's catalog only (lot AN-F1, criterion 6): never a personal app, whatever the
+  // report carries.
+  let apps = inv.apps;
+  if (ownership === 'personal' && apps.length) {
+    const catalog = new Set(await trx('apps').where({ tenant_id: tenantId, platform_family: 'android' }).whereNull('archived_at')
+      .whereIn('identifier', apps.map((a) => a.identifier)).pluck('identifier') as string[]);
+    apps = byodApps(apps, catalog);
+  }
   await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId }).delete();
-  if (inv.apps.length) {
-    await trx('device_apps').insert(inv.apps.map((a) => ({
+  if (apps.length) {
+    await trx('device_apps').insert(apps.map((a) => ({
       tenant_id: tenantId, device_id: deviceId, identifier: a.identifier, name: a.name, version: a.version, short_version: a.shortVersion,
       managed: true, management_status: a.state, source: 'amapi_report',
     })));

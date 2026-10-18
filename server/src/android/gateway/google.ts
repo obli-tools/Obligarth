@@ -14,6 +14,7 @@ import { readSettings } from '../../guard/settings';
 import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert } from '../alerts';
+import { byodCommandRefusal, byodPolicyViolations } from '../byod/policy';
 import type { AndroidConfig } from '../config';
 import { amapiClient, type AmapiClient } from '../google/amapi';
 import { GoogleHttp } from '../google/http';
@@ -61,6 +62,41 @@ export function setAndroidQuotaSource(fn: (tenantId: number) => Promise<AndroidQ
 let deviceCountOf: (tenantId: number) => Promise<number> = async () => 0;
 export function setAndroidDeviceCounter(fn: (tenantId: number) => Promise<number>): void { deviceCountOf = fn; }
 
+/**
+ * Lot AN-F1 (EX-A7, criterion 6): is the device a personal one (work profile on a personal device)? The instance's
+ * record (the device, or its quarantine), read in a short transaction of its own in the tenant's context; null when
+ * the instance has no record of it (the caller then reads Google's resource).
+ */
+async function personalOfRecord(e: AndroidEnterpriseRef, name: string): Promise<boolean | null> {
+  return db.transaction(async (trx) => {
+    const r = await trx('android_devices as a').join('devices as d', function j() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
+      .where({ 'a.tenant_id': e.tenantId, 'a.amapi_name': name }).first('d.ownership') as { ownership: string } | undefined;
+    if (r) return r.ownership === 'personal';
+    const q = await trx('android_quarantine').where({ tenant_id: e.tenantId, amapi_name: name }).first('amapi_ownership') as
+      { amapi_ownership: string | null } | undefined;
+    return q ? q.amapi_ownership === 'PERSONALLY_OWNED' : null;
+  });
+}
+
+/** Lot AN-F1: does a policy id name the own policy of a personal device (d-<devices.uuid>) or the enrollment policy of a
+ *  BYOD profile (e-<profile id>)? */
+async function personalPolicyId(e: AndroidEnterpriseRef, policyId: string): Promise<boolean> {
+  const m = /^([de])-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(policyId);
+  if (!m) return false;
+  return db.transaction(async (trx) => {
+    const r = m[1] === 'd'
+      ? await trx('devices').where({ tenant_id: e.tenantId, uuid: m[2] }).first('ownership')
+      : await trx('enrollment_profiles').where({ tenant_id: e.tenantId, id: m[2] }).first('ownership');
+    return (r as { ownership?: string } | undefined)?.ownership === 'personal';
+  });
+}
+
+function personalRefusal(e: AndroidEnterpriseRef, reason: string, field?: string): AndroidRequestError {
+  logger.warn({ android: { personal: reason, tenantId: e.tenantId } }, 'android: an operation on a personal device was refused');
+  void raiseAndroidPlatformAlert('android.ownership_violation', { reason, tenantId: e.tenantId });
+  return new AndroidRequestError(reason, { reason, ...(field ? { field } : {}) });
+}
+
 export class GoogleGateway implements AndroidGateway {
   readonly mode: 'google' | 'fake';
   readonly http: GoogleHttp;
@@ -78,6 +114,17 @@ export class GoogleGateway implements AndroidGateway {
   }
 
   // ── Checks ───────────────────────────────────────────────────────────────
+
+  /** Lot AN-F1: personal by the instance's record, else by Google's resource (an own field, not a method of the
+   *  prototype: the closed list of the gateway's operations is unchanged). */
+  private readonly personalDevice = async (e: AndroidEnterpriseRef, deviceId: string): Promise<boolean> => {
+    const name = names.device(e, deviceId);
+    const known = await personalOfRecord(e, name);
+    if (known !== null) return known;
+    await this.limit('device', e, deviceId);
+    const d = await this.amapi.getDevice(name);
+    return d?.ownership === 'PERSONALLY_OWNED';
+  };
 
   /** Step 1: the enterprise is the current tenant's, issued by the registry, in an allowed state. */
   private own(e: AndroidEnterpriseRef, states: ReadonlyArray<AndroidEnterpriseRef['state']> = ['linked']): AndroidEnterpriseRef {
@@ -282,6 +329,10 @@ export class GoogleGateway implements AndroidGateway {
     this.own(e);
     const name = names.policy(e, checkPolicyId(policyId));
     if (policyHasWipeSettings(policy)) await this.freezeLock(e, 'policies.patch (wipe-capable settings)');
+    // Lot AN-F1: a policy of a personal device never carries a setting that acts on the whole device nor asks for a
+    // report a personal device never sends (byod/policy.ts; policies/push.ts already withholds them).
+    const violations = byodPolicyViolations((policy ?? {}) as Record<string, unknown>);
+    if (violations.length && await personalPolicyId(e, String(policyId))) throw personalRefusal(e, 'byod_policy_refused', violations[0]);
     await this.limit('policy', e, policyId);
     const { name: _n, version: _v, ...body } = policy ?? {};
     const r = await this.amapi.patchPolicy(name, body);
@@ -386,7 +437,9 @@ export class GoogleGateway implements AndroidGateway {
     this.own(e, ['linked', 'unlinking']);
     const name = names.device(e, deviceId);
     if (o.wipeDataFlags?.some((f) => !/^[A-Z_]{1,64}$/.test(f))) throw new AndroidRequestError('invalid wipe flags');
+    // Lot AN-F1: never a wipe data flag for a personal device (the deletion removes its work profile only).
     await this.freezeLock(e, 'devices.delete');
+    if (o.wipeDataFlags?.length && await this.personalDevice(e, deviceId)) throw personalRefusal(e, 'personal_full_wipe');
     if (o.purpose === 'cleanup') {
       // The caller's label is not believed: devices.delete tries to wipe the device (RR-4).
       await this.limit('device', e, deviceId);
@@ -421,6 +474,11 @@ export class GoogleGateway implements AndroidGateway {
     if (!cmd || typeof cmd.type !== 'string' || !/^[A-Z_]{1,40}$/.test(cmd.type)) throw new AndroidRequestError('invalid command type');
     if (typeof cmd.duration !== 'string' || !DURATION_RE.test(cmd.duration)) throw new AndroidRequestError('a command needs an explicit duration');
     if (FROZEN_COMMANDS.has(cmd.type)) await this.freezeLock(e, `issueCommand ${cmd.type}`);
+    // Lot AN-F1 (EX-A7): a personal device takes LOCK, CLEAR_APP_DATA and the WIPE of its work profile only (no wipe
+    // data flag), whatever the caller (the bus and the submission refused it already). Read only for a command a
+    // personal device would not take.
+    const byodWhy = byodCommandRefusal(cmd);
+    if (byodWhy && await this.personalDevice(e, deviceId)) throw personalRefusal(e, byodWhy);
     if (cmd.type === 'WIPE') await this.destructiveCap(e, 'wipe');
     if (cmd.type === 'RELINQUISH_OWNERSHIP') await this.destructiveCap(e, 'relinquish');
     await this.limit('command', e, deviceId, 'interactive');

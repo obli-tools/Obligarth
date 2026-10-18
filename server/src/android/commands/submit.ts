@@ -35,6 +35,7 @@ import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventCont
 import { OperationSchema } from '../inbox/schemas';
 import type { z } from 'zod';
 import { adoptableOperations, ANDROID_COMMANDS, finalStateOf, nextPollAt, withDuration, type AndroidCommandType } from './catalog';
+import { byodCommandRefusal } from '../byod/policy';
 import {
   cancelSent, COMMAND_COLUMNS, COMMAND_SECRET_COLUMN, commandSenders, finalizeCommand, type CommandRow,
 } from './bus';
@@ -51,6 +52,14 @@ const deviceIdOf = (e: AndroidEnterpriseRef, name: string): string => {
   if (p.kind !== 'device') throw new Error('android: malformed device name');
   return p.deviceId;
 };
+
+/** Lot AN-F1 (EX-A7): why the command of a personal device must not be issued, or null (the device's ownership read now). */
+async function personalRefusal(trx: Knex.Transaction, tenantId: number, row: CommandRow): Promise<string | null> {
+  const d = await trx('devices').where({ tenant_id: tenantId, id: row.device_id }).first('ownership') as { ownership: string } | undefined;
+  if (!d || d.ownership !== 'personal') return null;
+  const body = typeof row.amapi_command === 'string' ? JSON.parse(row.amapi_command) : row.amapi_command;
+  return byodCommandRefusal({ ...(body ?? {}), type: row.request_type });
+}
 
 async function readRow(trx: Knex.Transaction, tenantId: number, id: string, lock = true): Promise<CommandRow | undefined> {
   const q = trx('android_commands').where({ tenant_id: tenantId, id }).first(COMMAND_COLUMNS);
@@ -124,6 +133,13 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: 'secret_lost' });
         return { kind: 'done' as const, result: 'rejected' as const };
       }
+      // Lot AN-F1 (EX-A7): a command a personal device must never take (a row written by a defect, or before a rule)
+      // is rejected before any issue.
+      const personal = await personalRefusal(trx, tenantId, row);
+      if (personal) {
+        await finalizeCommand(trx, row, { state: 'rejected', rejectCode: personal });
+        return { kind: 'done' as const, result: 'rejected' as const };
+      }
       if (ANDROID_COMMANDS[row.request_type].destructive && (await readSettings(tenantId, trx)).frozen_at) {
         await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', updated_at: trx.fn.now() });
         return { kind: 'done' as const, result: 'held' as const };
@@ -170,6 +186,9 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
           await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', amapi_submit_started_at: null, updated_at: trx.fn.now() });
           return 'held' as const;
         }
+        // Lot AN-F1: the recovery issues again only what a personal device may take.
+        const personal = await personalRefusal(trx, tenantId, cur);
+        if (personal) { await finalizeCommand(trx, cur, { state: 'rejected', rejectCode: personal }); return 'rejected' as const; }
         await trx('android_commands').where({ tenant_id: tenantId, id }).update({
           amapi_submit_started_at: clock(), submit_attempts: trx.raw('submit_attempts + 1'), updated_at: trx.fn.now(),
         });

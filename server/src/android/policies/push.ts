@@ -48,6 +48,7 @@ import {
 } from '../kiosk/exits';
 import { policyHasWipeSettings, PRIVATE_SPACE_DISALLOWED } from '../../mdm/android/overlay';
 import { androidSenders } from '../enrollment/senders';
+import { byodPolicy } from '../byod/policy';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
 export const ENROLLMENT_POLICY_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.enrollment-policy' }) as DbActor;
@@ -230,7 +231,9 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     const lockHeld = !!compiled.kioskLock && !compiled.kioskExit;
     // G1-S1, G1-S2: the return of the lock is never blocked by the freeze. The lock pending under a freeze and the
     // locked policy carrying a wipe-capable setting: that policy goes without its wipe-capable paths (the only case).
-    let body = compiled.body;
+    // Lot AN-F1: the own policy of a personal device (« politique propre au BYOD »): nothing that acts on the whole
+    // device, the status reporting of a personal device (the gateway refuses a body that still carries one).
+    let body = row.ownership === 'personal' ? byodPolicy(compiled.body).body as Record<string, JsonValue> : compiled.body;
     let wipeWithheld: string[] | null = null;
     if (lockHeld && policyHasWipeSettings(compiled.body) && await kioskLockPendingUnderFreeze(tenantId, deviceId)) {
       const stripped = withoutWipeSettings(compiled.body);
@@ -393,7 +396,9 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
     if (prep.current?.state === 'pushed' && prep.current.compiled_hash === compiled.hash) return 'unchanged';
     let policy;
     try {
-      ({ policy } = renderAndroidPolicy(compiled.body, desired.variables, new Map()));
+      // Lot AN-F1: the enrollment policy of a BYOD profile follows the rules of a personal device too.
+      const body = snap.ownership === 'personal' ? byodPolicy(compiled.body).body as Record<string, JsonValue> : compiled.body;
+      ({ policy } = renderAndroidPolicy(body, desired.variables, new Map()));
     } catch (err) {
       await record({ state: 'error', last_error: `render:${err instanceof RenderError ? err.code : 'invalid'}`.slice(0, 64) });
       return 'error';

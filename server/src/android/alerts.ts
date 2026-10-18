@@ -53,6 +53,8 @@ export const ANDROID_ALERTS: readonly AndroidAlertDefinition[] = [
   { key: 'android.device_offline_long', scope: 'tenant', severity: sev('medium'), title: 'Android: devices without contact for 240 days' },
   { key: 'android.device_presumed_gone', scope: 'tenant', severity: sev('low'), title: 'Android: devices presumed gone' },
   { key: 'android.token_expiring', scope: 'tenant', severity: sev('low'), title: 'Android: long enrollment tokens to renew' },
+  // Lot AN-F1: wrong BYOD invitation codes beyond the hourly threshold (every code of the tenant refused until the hour ends).
+  { key: 'android.byod_code_flood', scope: 'tenant', severity: sev('high'), title: 'Android: too many wrong BYOD invitation codes' },
 ];
 
 const byKey = new Map(ANDROID_ALERTS.map((a) => [a.key, a]));

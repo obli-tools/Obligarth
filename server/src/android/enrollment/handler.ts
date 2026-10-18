@@ -32,6 +32,7 @@ import {
 import { readAndroidProfile, readSnapshot } from './profiles';
 import { androidSenders } from './senders';
 import { endToken } from './tokens';
+import { invitationForEnrollment, markInvitationUsed } from '../byod/enrollmentGuard';
 import type { z } from 'zod';
 
 type Device = z.infer<typeof DeviceSchema>;
@@ -146,6 +147,13 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   // 4. The device against the snapshot.
   const mismatch = checkAgainstSnapshot(d, snapshot);
   if (mismatch) return notAccepted(ctx, d, mismatch, token);
+  // Lot AN-F1: a BYOD link token enrolls a device only through an invitation issued after its notice was acknowledged
+  // (not revoked, not used): otherwise an unknown enrollment, quarantined (a personal device is never deleted).
+  let invitation: { id: string; noticeVersionId: string } | null = null;
+  if (token.kind === 'byod_link') {
+    invitation = await invitationForEnrollment(trx, tenantId, token.id);
+    if (!invitation) return notAccepted(ctx, d, 'unknown_token', token);
+  }
 
   // 5. Approval (AN17), and the hourly cap of a long token that forces it.
   // A kiosk token always requires it (lot AN-G1, AN17), whatever its row says (a token written before the rule, or by
@@ -259,6 +267,13 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   // The token's use: a single-use token is used (its value destroyed).
   await trx('android_enrollment_tokens').where({ id: token.id }).update({ uses: trx.raw('uses + 1'), last_used_at: now });
   if (token.one_time && token.state === 'active') await endToken(trx, token, 'used');
+  if (invitation) {
+    await markInvitationUsed(trx, tenantId, invitation.id, deviceId);
+    ctx.audit({
+      tenantId, action: 'android.byod_invitation_used', target: { type: 'android_byod_invitation', id: invitation.id },
+      details: { invitationId: invitation.id, deviceId, noticeVersionId: invitation.noticeVersionId },
+    });
+  }
 
   // 8. Follow-up.
   if (pending) await androidSenders.hold(trx, { tenantId, deviceId });
