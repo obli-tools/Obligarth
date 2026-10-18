@@ -9,6 +9,7 @@ import type {
 } from '@obligarth/shared/dist/android/amapi';
 import { db } from '../../db';
 import { currentDbContext } from '../../db/context';
+import { autoFreeze } from '../../guard/freeze';
 import { readSettings } from '../../guard/settings';
 import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
@@ -150,6 +151,9 @@ export class GoogleGateway implements AndroidGateway {
     if (count >= 0) {
       void raiseAndroidPlatformAlert('android.gateway_cap_reached', { tenantId: e.tenantId, kind, count }, `t${e.tenantId}:${kind}`);
       void raiseAndroidTenantAlert(e.tenantId, 'android.gateway_cap_reached', { kind, count });
+      // AN47: the tenant is frozen by the anomaly rule A1 (the cleanups are spread, never a defect: no freeze). Awaited
+      // before the refusal, so that the caller (and anything after it) sees the freeze; autoFreeze never throws.
+      if (kind !== 'cleanup') await autoFreeze(e.tenantId, 'A1');
       throw new AndroidDestructiveCapError(kind, count, cap);
     }
   }

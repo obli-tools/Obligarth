@@ -129,7 +129,9 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       if (!e || e.state !== 'linked') return { kind: 'no_enterprise' as const };
       const enterprise = await readEnterpriseRow(trx);
       const desired = await deviceSource(trx, tenantId, deviceId);
-      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null };
+      // Lot AN-D1 (review AN-C1b, R8): a device the operator disabled (mdm.android_disable) is never reactivated by a push.
+      const operatorDisabled = !!(await trx('android_device_controls').where({ tenant_id: tenantId, device_id: deviceId }).first('device_id'));
+      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, row, desired } = prep;
@@ -165,7 +167,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     }
     const sameRender = rendered.renderedHash === row.pushed_rendered_hash && row.pushed_policy_version !== null;
     const attach = row.policy_name !== compiled.policyId;
-    const activate = row.approval_state === 'approved' && row.state === 'DISABLED';
+    const activate = row.approval_state === 'approved' && row.state === 'DISABLED' && !prep.operatorDisabled;
     if (sameRender && !attach && !activate) return 'unchanged';
     const p = parseOwnedName(e, row.amapi_name);
     if (p.kind !== 'device') throw new Error('android: malformed device name');
