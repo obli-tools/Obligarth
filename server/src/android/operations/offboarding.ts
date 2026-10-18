@@ -10,9 +10,12 @@
 //       revoking         new enrollments refused (createEnrollmentToken wants linked), tokens deleted at Google and
 //                        revoked (their value destroyed);
 //       waiting_devices  the managed devices are never erased by the procedure: the console offers, by batch, the
-//                        guarded action that fits (mdm.erase_device, mdm.remove_management); the job waits until none
-//                        is left, or the operator forces the rest (android_enterprise_force_unlink, a separate
-//                        restricted request, audited android.enterprise_force_unlinked: they keep their last policy);
+//                        guarded action that fits (mdm.erase_device, mdm.remove_management; WIPE and
+//                        RELINQUISH_OWNERSHIP stay admitted while unlinking, gateway/commandStates.ts); each pass reads
+//                        devices.list whole and takes out the devices gone at Google (operations/gone.ts:
+//                        removed_by_command or missing_in_provider, race guard of the reconciliation, which is
+//                        suspended meanwhile); the job waits until none is left, or the operator forces the rest
+//                        (android_enterprise_force_unlink, a separate restricted request, audited android.enterprise_force_unlinked: they keep their last policy);
 //       deleting         the own policies of the devices, the enrollment policies of the profiles and 'default' are
 //                        deleted (a policy still referenced by a device left by force stays: counted), the tokens no
 //                        row knows are collected at Google;
@@ -50,6 +53,7 @@ import { AndroidError } from '../gateway/errors';
 import { parseOwnedName, type AndroidEnterpriseRef } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { exitManagement } from './exit';
+import { releaseDevicesGoneAtGoogle } from './gone';
 
 export const OFFBOARD_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.offboard-tenant' }) as DbActor;
 /** Capability of the integrations: mdm.integrations.manage once it exists (AN41); devices.manage until then. */
@@ -251,10 +255,22 @@ export async function runOffboarding(tenantId: number, o: { gateway?: AndroidGat
         off.step = 'waiting_devices';
       }
       if (off.step === 'waiting_devices') {
-        const left = await devicesLeft(db, tenantId, off.enterprise_id);
+        let left = await devicesLeft(db, tenantId, off.enterprise_id);
+        // Review AN-H1 (H1R-1, §6.5 step 2): the reconciliation is suspended during an offboarding, so the devices
+        // erased (or released) at Google while the procedure waits are seen here, with the same rule and race guard.
+        if (left > 0 && !off.forced_at && e && e.state === 'unlinking') {
+          try {
+            const r = await releaseDevicesGoneAtGoogle(gw, e, tenantId);
+            if (r.released) left = await devicesLeft(db, tenantId, off.enterprise_id);
+          } catch (err) {
+            // Access lost or enterprise gone: nothing can be checked at Google; the procedure keeps waiting (the
+            // operator may force the rest). Any other error: the step is retried.
+            if (!goneAtGoogle(err)) throw err;
+          }
+        }
         if (left > 0 && !off.forced_at) {
           await db('android_offboardings').where({ id: off.id }).update({
-            devices_left: left, next_run_at: db.raw('now() + make_interval(mins => ?)', [WAIT_MINUTES]),
+            devices_left: left, attempts: 0, last_error: null, next_run_at: db.raw('now() + make_interval(mins => ?)', [WAIT_MINUTES]),
           });
           return 'waiting';
         }

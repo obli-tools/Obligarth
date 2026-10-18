@@ -27,6 +27,7 @@ import { findSecretRefs, vault } from '../../vault';
 import { logger } from '../../utils/logger';
 import { readEnterprise } from '../enterprises/registry';
 import { androidGateway } from '../gateway';
+import { commandAdmitted } from '../gateway/commandStates';
 import { AndroidError } from '../gateway/errors';
 import { parseOwnedName, type AndroidEnterpriseRef } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
@@ -115,7 +116,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, row, { state: 'expired' });
         return { kind: 'done' as const, result: 'expired' as const };
       }
-      if (!e || e.state !== 'linked' || e.id !== Number(row.enterprise_id)) {
+      if (!e || !commandAdmitted(row.request_type, e.state) || e.id !== Number(row.enterprise_id)) {
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: 'enterprise_not_linked' });
         return { kind: 'done' as const, result: 'rejected' as const };
       }

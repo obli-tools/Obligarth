@@ -23,6 +23,7 @@ import {
   AndroidDestructiveCapError, AndroidError, AndroidFrozenError, AndroidNotFoundError, AndroidOwnershipError,
   AndroidQuotaError, AndroidRequestError,
 } from './errors';
+import { commandEnterpriseStates } from './commandStates';
 import { takeTokens } from './limiter';
 import { checkId, checkPolicyId, enterpriseIdOf, names, parseOwnedName, type AndroidEnterpriseRef, type PolicyId } from './names';
 import { redactEnterprise, redactProvisioningInfo, redactTokenListItem } from './redact';
@@ -414,7 +415,8 @@ export class GoogleGateway implements AndroidGateway {
   // ── Commands and operations ────────────────────────────────────────────────
 
   async issueCommand(e: AndroidEnterpriseRef, deviceId: string, cmd: AmapiCommand): Promise<{ operation: string }> {
-    this.own(e);
+    // Review AN-H1 (H1R-1): WIPE and RELINQUISH_OWNERSHIP stay admitted while the enterprise is unlinking (§6.5 step 2).
+    this.own(e, commandEnterpriseStates(cmd?.type));
     const name = names.device(e, deviceId);
     if (!cmd || typeof cmd.type !== 'string' || !/^[A-Z_]{1,40}$/.test(cmd.type)) throw new AndroidRequestError('invalid command type');
     if (typeof cmd.duration !== 'string' || !DURATION_RE.test(cmd.duration)) throw new AndroidRequestError('a command needs an explicit duration');

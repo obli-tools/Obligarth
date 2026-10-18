@@ -35,18 +35,15 @@ import { androidSenders } from '../enrollment/senders';
 import { readEnterprise } from '../enterprises/registry';
 import { androidGateway } from '../gateway';
 import { AndroidError } from '../gateway/errors';
-import type { AndroidEnterpriseRef } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { sendDrainInTx } from '../link/pull';
-import { exitManagement } from './exit';
+import { listAllDevices, releaseGoneDevice, writtenDuringListing } from './gone';
 import { automaticForgetEnabled, deleteDevicePolicy, forgetPresumedGone } from './forget';
 import { tenantDeadlineAlerts } from './deadlines';
 import { markEnterpriseAccessLost } from './offboarding';
 
 export const RECONCILE_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.reconcile-tenant' }) as DbActor;
 const DAY_MS = 86_400_000;
-/** 200 pages of 100 devices: 20 000 devices per enterprise at most in one run. */
-const MAX_PAGES = 200;
 
 /** mdmStaleAfterDays of a tenant for an ownership (the tenant setting at the junction; 30 days by default). */
 type StaleDaysSource = (tenantId: number, ownership: string) => Promise<number | null>;
@@ -97,19 +94,6 @@ export async function requestReconcile(tenantId: number, trigger: Exclude<Androi
   });
 }
 
-/** Lists every device of the enterprise at Google (bounded); `complete` false when the bound cut the list. */
-async function listAll(gw: AndroidGateway, e: AndroidEnterpriseRef): Promise<{ devices: AmapiDevice[]; complete: boolean }> {
-  const devices: AmapiDevice[] = [];
-  let token: string | undefined;
-  for (let page = 0; page < MAX_PAGES; page++) {
-    const r = await gw.listDevices(e, token);
-    devices.push(...r.items);
-    token = r.nextPageToken;
-    if (!token) return { devices, complete: true };
-  }
-  return { devices, complete: false };
-}
-
 export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGateway; now?: Date; trigger?: AndroidReconcileTrigger } = {}):
   Promise<AndroidReconcileResult | 'no_enterprise' | 'offboarding' | 'access_lost'> {
   const gw = o.gateway ?? androidGateway();
@@ -134,7 +118,7 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
     // the base when both are compared; only a record created (or enrolled again) before the listing may be missing.
     const listStartedAt = Date.now() - 1000;
     try {
-      listed = await listAll(gw, e);
+      listed = await listAllDevices(gw, e);
     } catch (err) {
       if (err instanceof AndroidError && err.kind === 'access_lost') {
         await markEnterpriseAccessLost(tenantId);
@@ -164,11 +148,8 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       const deviceId = Number(k.device_id);
       if (!g) {
         if (!listed.complete) continue;
-        if ([k.created_at, k.enrolled_at].some((t) => t && new Date(t).getTime() >= listStartedAt)) continue;   // written during the listing
-        const removed = await db('android_commands').where({ tenant_id: tenantId, device_id: deviceId })
-          .whereIn('request_type', ['WIPE', 'RELINQUISH_OWNERSHIP']).whereIn('state', ['sent', 'acknowledged']).first('id');
-        const left = await db.transaction((trx) => exitManagement(trx, tenantId, deviceId, removed ? 'removed_by_command' : 'missing_in_provider'));
-        if (left) out.missing += 1;
+        if (writtenDuringListing(k, listStartedAt)) continue;
+        if (await releaseGoneDevice(tenantId, deviceId)) out.missing += 1;
         continue;
       }
       const report = time(g.lastStatusReportTime);

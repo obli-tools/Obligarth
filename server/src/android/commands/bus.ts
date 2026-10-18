@@ -24,6 +24,7 @@ import { lateCancelOf } from '../../guard/types';
 import { vault } from '../../vault';
 import { readEnterprise } from '../enterprises/registry';
 import { androidGateway } from '../gateway';
+import { commandAdmitted } from '../gateway/commandStates';
 import { AndroidError } from '../gateway/errors';
 import type { AndroidGateway } from '../gateway/types';
 import {
@@ -232,7 +233,9 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
     }
   }
   const e = await readEnterprise(trx);
-  if (!e || e.state !== 'linked') throw new AndroidCommandError(409, 'androidNotLinked', 'no linked Android enterprise');
+  // Review AN-H1 (H1R-1): while the enterprise is unlinking, only WIPE and RELINQUISH_OWNERSHIP (the guarded actions the
+  // offboarding proposes) are admitted.
+  if (!e || !commandAdmitted(req.type, e.state)) throw new AndroidCommandError(409, 'androidNotLinked', 'no linked Android enterprise');
   // Lot AN-E1 (§11.2, « managed apps only »): CLEAR_APP_DATA clears only apps of the tenant's catalog, never an app the
   // user installed in the personal profile nor a package the catalog does not know.
   if (req.type === 'CLEAR_APP_DATA') {
