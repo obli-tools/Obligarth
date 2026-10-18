@@ -258,8 +258,16 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       await setPolicyError(tenantId, deviceId, ['kiosk_wipe_withhold_failed'], false);
       return 'error';
     }
+    let lockMarked = 0;
     const lockAccepted = async () => {
-      if (lockHeld) await markKioskLockRestored(tenantId, deviceId, wipeWithheld ? { wipeWithheld } : {});
+      if (lockHeld) lockMarked += await markKioskLockRestored(tenantId, deviceId, wipeWithheld ? { wipeWithheld } : {});
+    };
+    // Third review AN-G1: a degraded rendering accepted while no pending lock was left to mark (another push of the
+    // device, not serialised with this one, restored the lock with the full policy after the unfreeze): nothing
+    // records the withheld settings, so the push of the full policy is sent again now (refused while frozen, which
+    // then means the other push was degraded too and recorded them).
+    const settleDegraded = async () => {
+      if (wipeWithheld && !lockMarked) await db.transaction((trx) => androidSenders.push(trx, { tenantId, deviceId }));
     };
     const sameRender = rendered.renderedHash === row.pushed_rendered_hash && row.pushed_policy_version !== null;
     const attach = row.policy_name !== compiled.policyId;
@@ -267,6 +275,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     if (sameRender && !attach && !activate) {
       await lockAccepted();
       if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
+      await settleDegraded();
       return 'unchanged';
     }
     const p = parseOwnedName(e, row.amapi_name);
@@ -309,6 +318,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     }
     await lockAccepted();
     if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
+    await settleDegraded();
     return 'pushed';
   });
 }
