@@ -60,5 +60,11 @@ export function platformsOfAsset(list: string[]): string[] {
   return [...out].sort();
 }
 
-/** Is the mdmInfo a location holds ours, or absent? */
-export const mdmInfoIsOurs = (c: { mdmInfo: { id: string | null } | null }, ours: string): boolean => !c.mdmInfo || !c.mdmInfo.id || c.mdmInfo.id === ours;
+/**
+ * Is the mdmInfo a location holds ours, or absent? The id names the instance; its metadata names the tenant
+ * (tenants.uuid): a location another tenant of this instance configured is another MDM's for this tenant (review
+ * of lot C4: never taken over in silence). A metadata Apple does not return is not held against us [J1].
+ */
+export const mdmInfoIsOurs = (c: { mdmInfo: { id: string | null; metadata?: string | null } | null }, ours: string, tenantUuid?: string | null): boolean =>
+  !c.mdmInfo || !c.mdmInfo.id
+  || (c.mdmInfo.id === ours && (!tenantUuid || !c.mdmInfo.metadata || c.mdmInfo.metadata === tenantUuid));

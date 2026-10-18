@@ -281,7 +281,9 @@ async function configureClient(tenantId: number, id: string, o: { takeover?: boo
   const r = await tokenRow(db, tenantId, id);
   const calls = await callsOf(r);
   const current = await calls.getClientConfig();
-  if (!o.takeover && !mdmInfoIsOurs(current, r.mdm_info_id)) {
+  const t = await db('tenants').where({ id: tenantId }).first('uuid') as { uuid: string } | undefined;
+  // Another MDM's, or another tenant's of this instance (its metadata): a takeover only, under its guard.
+  if (!o.takeover && !mdmInfoIsOurs(current, r.mdm_info_id, t?.uuid ?? null)) {
     await db.transaction(async (trx) => {
       await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id }).whereNot('state', 'removed').update({
         state: 'foreign_mdm', state_at: new Date(), location_name: current.locationName ?? r.location_name, location_uid: current.uId ?? r.location_uid,
@@ -292,7 +294,6 @@ async function configureClient(tenantId: number, id: string, o: { takeover?: boo
     realtime.integrationChanged(tenantId, 'vpp');
     return 'foreign';
   }
-  const t = await db('tenants').where({ id: tenantId }).first('uuid') as { uuid: string } | undefined;
   const key = (await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined)?.mdm_key;
   if (!key) throw new AppError(409, 'The tenant is not provisioned at the device service yet', 'tenantNotProvisioned');
   const s = o.secret ? { secret: o.secret, hash: r.notification_secret_hash } : newSecret();
@@ -816,7 +817,8 @@ export async function syncToken(tenantId: number, id: string, o: { full: boolean
     }
     const calls = await callsOf(r);
     const cfg = await calls.getClientConfig();
-    if (!mdmInfoIsOurs(cfg, r.mdm_info_id)) {
+    const tenantUuid = (await db('tenants').where({ id: tenantId }).first('uuid') as { uuid: string } | undefined)?.uuid ?? null;
+    if (!mdmInfoIsOurs(cfg, r.mdm_info_id, tenantUuid)) {
       if (r.state !== 'foreign_mdm') {
         await db.transaction(async (trx) => {
           await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id }).update({ state: 'foreign_mdm', state_at: new Date(), updated_at: new Date() });
