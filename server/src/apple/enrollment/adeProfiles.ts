@@ -225,7 +225,7 @@ export function registerAdeProfileJobs(): void {
     payload: z.object({}).strict(),
     policy: 'exclusive',
     // APPLE_EDGE_MODE=off: no ADE server, the daily pass is not scheduled.
-    ...(config.apple.mode === 'on' ? { schedule: { cron: '40 3 * * *' } } : {}),
+    ...(config.apple.mode === 'on' ? { schedule: { cron: '50 2 * * *' } } : {}),
     retry: { limit: 2, delaySeconds: 300, backoff: true, maxDelaySeconds: 3600 },
     timeoutSeconds: 600,
     pollSeconds: 300,
