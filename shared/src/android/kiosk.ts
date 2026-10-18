@@ -29,8 +29,12 @@ export const ANDROID_KIOSK_LOCK_TYPE = 'android.kiosk.lock';
 export const ANDROID_KIOSK_EXIT_ACTION = 'mdm.android_kiosk_exit';
 /** Duration of a kiosk exit, in minutes: never more than 8 hours, the lock comes back by itself. */
 export const ANDROID_KIOSK_EXIT_MINUTES = { min: 5, max: 480, dflt: 30 } as const;
-/** Why a kiosk exit ended. */
-export const ANDROID_KIOSK_EXIT_END_REASONS = ['operator', 'expired', 'device_left'] as const;
+/**
+ * Why a kiosk exit ended: by the operator, at its end, the device left management, the tenant was frozen (the safest
+ * state first: review AN-G1), or the device's policy came to carry a wipe-capable setting (the lock is kept: an
+ * unlocked policy with such a setting could not be locked again under a freeze, AN15; review AN-G1, G1-R1).
+ */
+export const ANDROID_KIOSK_EXIT_END_REASONS = ['operator', 'expired', 'device_left', 'frozen', 'wipe_policy'] as const;
 export type AndroidKioskExitEndReason = typeof ANDROID_KIOSK_EXIT_END_REASONS[number];
 
 /** A kiosk exit as the console shows it (identifiers and times only). */
@@ -43,6 +47,8 @@ export interface AndroidKioskExitView {
   expiresAt: string;
   endedAt: string | null;
   endReason: AndroidKioskExitEndReason | null;
+  /** When Google accepted the policy that holds the lock again (null: not yet, or the exit still runs). */
+  lockRestoredAt: string | null;
 }
 
 /** The kiosk state of a device for the console. */
@@ -50,7 +56,16 @@ export interface AndroidKioskState {
   deviceId: number;
   dedicated: boolean;
   exit: AndroidKioskExitView | null;
+  /**
+   * An exit ended but the policy that holds the lock again has not been accepted by Google yet (push waiting, or
+   * refused): the device may still be out of its lock. The last such exit is `lockPendingExit`.
+   */
+  lockPending: boolean;
+  lockPendingExit: AndroidKioskExitView | null;
 }
+
+/** Refusal of a kiosk exit whose device's policy carries a wipe-capable setting (review AN-G1, G1-R1). */
+export const ANDROID_KIOSK_EXIT_WIPE_REFUSAL = 'kiosk_wipe_policy';
 
 /**
  * System updates (Policy.systemUpdate, revision 20261014): the maintenance window is in minutes after midnight, local

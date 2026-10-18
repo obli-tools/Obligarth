@@ -1,5 +1,5 @@
 // /api/android (tenant router: requireAuth, requireTenant), kiosks of dedicated devices (section 9.7, lot AN-G1):
-//   GET    /devices/:id/kiosk        the kiosk state of a device (dedicated, running exit)
+//   GET    /devices/:id/kiosk        the kiosk state of a device (dedicated, running exit, lock pending: review AN-G1)
 //   DELETE /devices/:id/kiosk-exit   ends the running kiosk exit of a device now (the lock is pushed back), audited
 // The exit itself is the guarded action mdm.android_kiosk_exit, requested by POST /api/guard/actions (restriction
 // matrix, step-up and approvals of the guard engine), never by a route of this module. Capability devices.manage on

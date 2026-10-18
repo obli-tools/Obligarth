@@ -47,7 +47,9 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.web_token_created', criticality: 'standard', label: 'Android: managed Google Play iframe opened' },
     // Lot AN-G1: the temporary exit of the kiosk of a dedicated device (guarded action mdm.android_kiosk_exit).
     { name: 'android.kiosk_exit_started', criticality: 'critical', label: 'Android: kiosk lock lifted for a while' },
-    { name: 'android.kiosk_exit_ended', criticality: 'standard', label: 'Android: kiosk lock back' },
+    // Review AN-G1 (G1-R1): the end of an exit is not the return of the lock, audited once Google accepted it.
+    { name: 'android.kiosk_exit_ended', criticality: 'standard', label: 'Android: kiosk exit ended' },
+    { name: 'android.kiosk_lock_restored', criticality: 'standard', label: 'Android: kiosk lock back on the device policy' },
   ]);
   // The commands keep the existing actions mdm.command_* (annex D), declared by the Apple module (apple/audit.ts),
   // which index.ts registers in every instance, Android or not.

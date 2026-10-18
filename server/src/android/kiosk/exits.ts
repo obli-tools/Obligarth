@@ -11,6 +11,17 @@
 //     expires_at by the job android.kiosk-exit-end, or by android.maintenance (android_kiosk_due) when the job is lost
 //     or the device left management. The compilation reads an exit as running only while ended_at is null AND
 //     expires_at is in the future: a push after the end restores the lock even when nothing ended the row.
+// Review AN-G1 (G1-R1): under a freeze the gateway refuses any policies.patch that carries a wipe-capable setting
+// (AN15), the policy that locks a kiosk again included. Hence:
+//   - an exit is refused at its start when the device's policy carries such a setting (kiosk_wipe_policy; policy_error
+//     when it does not compile), and the compiler never lifts the lock of such a policy: an exit whose policy comes
+//     to carry one ends (wipe_policy) and the lock is pushed;
+//   - a freeze ends the running exits of the tenant (frozen; the safest state first): android.maintenance does it
+//     within the minute (android_kiosk_due), and endKioskExitsOnFreeze is the Android handler of the freeze list of
+//     actions.freeze-sync at the junction AN-P;
+//   - the end of an exit is not the return of the lock: lock_restored_at (audit android.kiosk_lock_restored) is set
+//     when Google accepted the policy that holds the lock again (push.ts); until then readKioskState says the lock
+//     pending, and android.maintenance sends the push again every 15 minutes.
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
@@ -22,7 +33,9 @@ import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { registerGuardedAction, type GuardedActionDef, type GuardExecutionContext, type GuardTargetRefusal, type GuardTargetResult } from '../../guard';
+import { readSettings } from '../../guard/settings';
 import { androidSenders } from '../enrollment/senders';
+import { kioskExitPolicyRefusal } from '../policies/push';
 
 export const KIOSK_EXIT_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.kiosk-exit-end' }) as DbActor;
 
@@ -94,6 +107,9 @@ export async function startKioskExits(ctx: GuardExecutionContext<Record<string, 
       const open = await trx('android_kiosk_exits').where({ tenant_id: ctx.tenantId, device_id: deviceId }).whereNull('ended_at')
         .where('expires_at', '>', trx.fn.now()).first('id');
       if (open) return { status: 'skipped' as const, code: 'kiosk_exit_running' };
+      // G1-R1: never an exit on a policy with a wipe-capable setting (it could not be locked again under a freeze).
+      const policyRefusal = await kioskExitPolicyRefusal(trx, ctx.tenantId, deviceId);
+      if (policyRefusal) return { status: 'skipped' as const, code: policyRefusal };
       // A running row past its end (the end job not run yet) is closed before the new one.
       const stale = await trx('android_kiosk_exits').where({ tenant_id: ctx.tenantId, device_id: deviceId }).whereNull('ended_at')
         .select('id', 'device_id') as Array<{ id: string; device_id: number }>;
@@ -121,14 +137,15 @@ async function closeExits(trx: Knex.Transaction, tenantId: number, rows: Array<{
   const devices: number[] = [];
   for (const k of rows) {
     const n = await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: k.id }).whereNull('ended_at')
-      .update({ ended_at: trx.fn.now(), end_reason: reason, ended_by: endedBy });
+      .update({ ended_at: trx.fn.now(), end_reason: reason, ended_by: endedBy, lock_retry_at: reason === 'device_left' ? null : trx.raw("now() + interval '15 minutes'") });
     if (!n) continue;
     devices.push(Number(k.device_id));
     await audit.appendInTx(trx, {
       tenantId, action: 'android.kiosk_exit_ended', target: { type: 'device', id: String(k.device_id), device: Number(k.device_id) },
       details: { exitId: k.id, reason, channel: 'amapi' },
     }, auditCtx, { onFailure: 'spool' });
-    // The lock comes back with the next push (a device that left management receives nothing).
+    // The lock comes back with the next push (a device that left management receives nothing); it is said restored
+    // only when Google accepts it (markKioskLockRestored).
     if (push && reason !== 'device_left') await androidSenders.push(trx, { tenantId, deviceId: Number(k.device_id) });
   }
   return devices;
@@ -145,8 +162,10 @@ export async function endKioskExit(tenantId: number, userId: number, deviceId: n
   }));
 }
 
-/** Ends the exits of a tenant past their end, and those of devices that left management (job and maintenance). */
-export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_EXIT_ACTOR): Promise<{ expired: number; left: number }> {
+/** Ends the exits of a tenant past their end, those of devices that left management and, the tenant frozen, all its
+ *  running exits; sends the push of the locks still pending (job and maintenance). */
+export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_EXIT_ACTOR):
+  Promise<{ expired: number; left: number; frozen: number; lockRetried: number }> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
     const ctx = audit.fromJob({ name: 'android.kiosk-exit-end', requestId: `android-kiosk-${tenantId}-${Date.now()}` });
     const due = await trx('android_kiosk_exits as k')
@@ -160,8 +179,87 @@ export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_
     const expired = due.filter((k) => !left.includes(k));
     await closeExits(trx, tenantId, left, 'device_left', ctx, null);
     await closeExits(trx, tenantId, expired, 'expired', ctx, null);
-    return { expired: expired.length, left: left.length };
+    // A frozen tenant: its running exits end now (the safest state first; the junction AN-P also calls
+    // endKioskExitsOnFreeze from the freeze list).
+    let frozen = 0;
+    if ((await readSettings(tenantId, trx)).frozen_at) frozen = await closeRunning(trx, tenantId, 'frozen', ctx);
+    // Locks still pending past their retry time: the push again (a device with a new running exit waits for it).
+    const pending = await trx('android_kiosk_exits as k')
+      .join('android_devices as a', function j() { this.on('a.device_id', '=', 'k.device_id').andOn('a.tenant_id', '=', 'k.tenant_id'); })
+      .where('k.tenant_id', tenantId).whereNotNull('k.ended_at').whereNull('k.lock_restored_at').whereNot('k.end_reason', 'device_left')
+      .whereNull('a.released_at')
+      .whereRaw("COALESCE(k.lock_retry_at, k.ended_at + interval '10 minutes') <= now()")
+      .forUpdate('k').select('k.id', 'k.device_id') as Array<{ id: string; device_id: number }>;
+    const devices = new Set<number>();
+    for (const p of pending) {
+      await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: p.id }).update({ lock_retry_at: trx.raw("now() + interval '15 minutes'") });
+      devices.add(Number(p.device_id));
+    }
+    for (const d of devices) {
+      if (!(await runningKioskExit(trx, tenantId, d))) await androidSenders.push(trx, { tenantId, deviceId: d });
+    }
+    return { expired: expired.length, left: left.length, frozen, lockRetried: devices.size };
   }));
+}
+
+async function closeRunning(trx: Knex.Transaction, tenantId: number, reason: 'frozen', auditCtx: AuditWriteContext): Promise<number> {
+  const rows = await trx('android_kiosk_exits').where({ tenant_id: tenantId }).whereNull('ended_at').forUpdate()
+    .select('id', 'device_id') as Array<{ id: string; device_id: number }>;
+  return (await closeExits(trx, tenantId, rows, reason, auditCtx, null)).length;
+}
+
+/**
+ * A freeze of the tenant ends its running kiosk exits (the safest state first; review AN-G1). The Android handler of
+ * the freeze list of actions.freeze-sync at the junction AN-P (registerEdgeFreezeHandler becomes a list there; same
+ * signature as EdgeFreezeHandler, tenant and frozen); until then android.maintenance does it within the minute.
+ * Nothing on an unfreeze.
+ */
+export async function endKioskExitsOnFreeze(tenantId: number, frozen: boolean, actor: DbActor = KIOSK_EXIT_ACTOR): Promise<number> {
+  if (!frozen) return 0;
+  return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
+    if (!(await readSettings(tenantId, trx)).frozen_at) return 0;
+    const ctx = audit.fromJob({ name: 'android.kiosk-exit-end', requestId: 'android-kiosk-freeze-' + tenantId + '-' + Date.now() });
+    return closeRunning(trx, tenantId, 'frozen', ctx);
+  }));
+}
+
+/**
+ * The running exit of a device ends because its policy came to carry a wipe-capable setting (push.ts: the compiler
+ * kept the lock; G1-R1). Tenant context of the caller; the caller pushes the lock itself.
+ */
+export async function endKioskExitForWipePolicy(tenantId: number, deviceId: number): Promise<number> {
+  return db.transaction(async (trx) => {
+    await trx('devices').where({ tenant_id: tenantId, id: deviceId }).forUpdate().first('id');
+    const rows = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNull('ended_at').forUpdate()
+      .select('id', 'device_id') as Array<{ id: string; device_id: number }>;
+    if (!rows.length) return 0;
+    const ctx = audit.fromJob({ name: 'android.policies.push-device', requestId: 'android-kiosk-wipe-' + tenantId + '-' + deviceId + '-' + Date.now() });
+    return (await closeExits(trx, tenantId, rows, 'wipe_policy', ctx, null, false)).length;
+  });
+}
+
+/**
+ * Google accepted (or already holds) the device's policy with its kiosk lock: the ended exits whose lock was pending
+ * are restored (lock_restored_at, audit android.kiosk_lock_restored). Tenant context of the caller (push.ts).
+ */
+export async function markKioskLockRestored(tenantId: number, deviceId: number): Promise<number> {
+  return db.transaction(async (trx) => {
+    const rows = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('ended_at')
+      .whereNull('lock_restored_at').whereNot('end_reason', 'device_left').forUpdate()
+      .select('id', 'end_reason') as Array<{ id: string; end_reason: string }>;
+    if (!rows.length) return 0;
+    // A running exit (started after the read of the push) keeps the older rows pending: the lock is not held now.
+    if (await runningKioskExit(trx, tenantId, deviceId)) return 0;
+    const ctx = audit.fromJob({ name: 'android.policies.push-device', requestId: 'android-kiosk-lock-' + tenantId + '-' + deviceId + '-' + Date.now() });
+    for (const r of rows) {
+      await trx('android_kiosk_exits').where({ tenant_id: tenantId, id: r.id }).update({ lock_restored_at: trx.fn.now(), lock_retry_at: null });
+      await audit.appendInTx(trx, {
+        tenantId, action: 'android.kiosk_lock_restored', target: { type: 'device', id: String(deviceId), device: deviceId },
+        details: { exitId: r.id, reason: r.end_reason, channel: 'amapi' },
+      }, ctx, { onFailure: 'spool' });
+    }
+    return rows.length;
+  });
 }
 
 /** The running exit of a device for the compilation (null: none, or past its end). */
@@ -176,7 +274,9 @@ const view = (r: Record<string, unknown>): AndroidKioskExitView => ({
   requestedBy: r.requested_by === null || r.requested_by === undefined ? null : Number(r.requested_by),
   startedAt: new Date(r.started_at as string).toISOString(), expiresAt: new Date(r.expires_at as string).toISOString(),
   endedAt: r.ended_at ? new Date(r.ended_at as string).toISOString() : null, endReason: (r.end_reason as AndroidKioskExitEndReason | null) ?? null,
+  lockRestoredAt: r.lock_restored_at ? new Date(r.lock_restored_at as string).toISOString() : null,
 });
+const VIEW_COLUMNS = ['id', 'device_id', 'guard_action_uuid', 'requested_by', 'started_at', 'expires_at', 'ended_at', 'end_reason', 'lock_restored_at'];
 
 /** The kiosk state of a device of the tenant (route GET /devices/:id/kiosk); null when the device is unknown. */
 export async function readKioskState(tenantId: number, userId: number, deviceId: number): Promise<AndroidKioskState | null> {
@@ -184,8 +284,17 @@ export async function readKioskState(tenantId: number, userId: number, deviceId:
     const r = (await facts(db, tenantId, [deviceId])).get(deviceId);
     if (!r || r.management_channel !== 'amapi') return null;
     const exit = await db('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNull('ended_at')
-      .where('expires_at', '>', db.fn.now()).first('id', 'device_id', 'guard_action_uuid', 'requested_by', 'started_at', 'expires_at', 'ended_at', 'end_reason');
-    return { deviceId, dedicated: r.usage === 'kiosk' && r.management_mode === 'dedicated', exit: exit ? view(exit) : null };
+      .where('expires_at', '>', db.fn.now()).first(VIEW_COLUMNS);
+    // G1-R1: an exit ended (or past its end) whose lock Google has not accepted yet: the lock is pending.
+    const pending = exit ? undefined : await db('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId })
+      .whereNull('lock_restored_at').where((q) => q.where((w) => w.whereNotNull('ended_at').whereNot('end_reason', 'device_left'))
+        .orWhere((w) => w.whereNull('ended_at').where('expires_at', '<=', db.fn.now())))
+      .orderBy('started_at', 'desc').first(VIEW_COLUMNS);
+    const managed = r.enrollment_state === 'enrolled' && !r.released_at;
+    return {
+      deviceId, dedicated: r.usage === 'kiosk' && r.management_mode === 'dedicated', exit: exit ? view(exit) : null,
+      lockPending: !!pending && managed, lockPendingExit: pending && managed ? view(pending) : null,
+    };
   });
 }
 
@@ -206,6 +315,16 @@ export function defineKioskExitAction(): GuardedActionDef<Record<string, unknown
       const rows = await facts(db, ctx.tenantId, ctx.deviceIds);
       const out = new Map<number, 'ok' | GuardTargetRefusal>();
       for (const id of ctx.deviceIds) out.set(id, kioskExitRefusal(rows.get(id)) ?? 'ok');
+      // G1-R1: refused at the request already when the device's policy carries a wipe-capable setting.
+      const candidates = ctx.deviceIds.filter((id) => out.get(id) === 'ok');
+      if (candidates.length) {
+        await db.transaction(async (trx) => {
+          for (const id of candidates) {
+            const code = await kioskExitPolicyRefusal(trx, ctx.tenantId, id);
+            if (code) out.set(id, { code });
+          }
+        });
+      }
       return out;
     },
     execute: (ctx, ids) => startKioskExits(ctx, ids),

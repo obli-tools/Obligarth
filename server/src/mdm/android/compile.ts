@@ -81,6 +81,8 @@ export interface CompiledAndroidPolicy {
   kioskLock: AndroidKioskLock | null;
   /** A kiosk exit lifted the lock of this compilation. */
   kioskExit: boolean;
+  /** A kiosk exit runs but the lock was kept: the policy carries a wipe-capable setting (kiosk.ts, G1-R1). */
+  kioskExitWithheld: boolean;
 }
 
 /** Provenance of a retained setting (the resolver's ResolvedSetting.source). */
@@ -340,6 +342,6 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
   return {
     artifactKey: AMAPI_ARTIFACT_KEY, channel: AMAPI_CHANNEL, policyId, body, hash, secretRefs,
     hasVariables: variablesOf(body).length > 0, sources, notApplicable, deferred, problems, conflicts,
-    kioskLock: kiosk.lock, kioskExit: kiosk.exitApplied,
+    kioskLock: kiosk.lock, kioskExit: kiosk.exitApplied, kioskExitWithheld: kiosk.exitWithheld,
   };
 }

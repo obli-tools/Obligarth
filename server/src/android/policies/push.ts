@@ -14,7 +14,9 @@
 //     minutes: no token without it, section 10.7).
 // Kiosk (lot AN-G1): a dedicated device is compiled with the kiosk app of its enrollment profile (when it is a live app
 // of the tenant's catalog) and with its running kiosk exit (the lock lifted until the exit ends); so is the enrollment
-// policy of a kiosk profile (its app, never an exit).
+// policy of a kiosk profile (its app, never an exit). Review AN-G1 (G1-R1): an exit is never applied to a policy that
+// carries a wipe-capable setting (the compiler keeps the lock, the exit ends as wipe_policy), and the lock of an ended
+// exit is said restored only once Google accepted the policy that holds it (markKioskLockRestored).
 // No call to Google inside a transaction (G-A1).
 import type { Knex } from 'knex';
 import { POLICY_VARIABLES, type JsonValue, type PolicyVariable } from '@obligarth/shared';
@@ -34,7 +36,8 @@ import { parseOwnedName } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { DEFAULT_PRIVACY } from '../inventory/privacy';
 import { kioskAppInCatalog, readAndroidProfile, snapshotOf } from '../enrollment/profiles';
-import { runningKioskExit } from '../kiosk/exits';
+import { endKioskExitForWipePolicy, markKioskLockRestored, runningKioskExit } from '../kiosk/exits';
+import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { androidSenders } from '../enrollment/senders';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
@@ -164,6 +167,8 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       await setPolicyError(tenantId, deviceId, compiled.problems, false);
       return 'error';
     }
+    // G1-R1: the exit is ended before the push of the locked policy (never an unlocked policy with a wipe-capable setting).
+    if (compiled.kioskExitWithheld) await endKioskExitForWipePolicy(tenantId, deviceId);
     // The secrets of the tenant, read in the job (never another tenant's: readTenantSecret refuses it).
     const secrets = new Map<string, Buffer>();
     let rendered;
@@ -179,7 +184,12 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
     const sameRender = rendered.renderedHash === row.pushed_rendered_hash && row.pushed_policy_version !== null;
     const attach = row.policy_name !== compiled.policyId;
     const activate = row.approval_state === 'approved' && row.state === 'DISABLED' && !prep.operatorDisabled;
-    if (sameRender && !attach && !activate) return 'unchanged';
+    // The lock of a kiosk is on Google's side as compiled: an ended exit's lock is restored (G1-R1).
+    const lockHeld = !!compiled.kioskLock && !compiled.kioskExit;
+    if (sameRender && !attach && !activate) {
+      if (lockHeld) await markKioskLockRestored(tenantId, deviceId);
+      return 'unchanged';
+    }
     const p = parseOwnedName(e, row.amapi_name);
     if (p.kind !== 'device') throw new Error('android: malformed device name');
     if (!sameRender) {
@@ -215,8 +225,39 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
         policy_name: compiled.policyId, ...(activate ? { state: typeof patched?.state === 'string' ? patched.state : 'ACTIVE' } : {}), updated_at: trx.fn.now(),
       }));
     }
+    if (lockHeld) await markKioskLockRestored(tenantId, deviceId);
     return 'pushed';
   });
+}
+
+/**
+ * Why a dedicated device cannot leave its kiosk because of its policy (review AN-G1, G1-R1), null when it can: the
+ * device's own policy, compiled with its lock, carries a wipe-capable setting (kiosk_wipe_policy: under a freeze the
+ * gateway would refuse the policy that locks it again, AN15), or does not compile (policy_error: fail closed).
+ * Called in the caller's transaction, tenant context.
+ */
+export async function kioskExitPolicyRefusal(trx: Knex.Transaction, tenantId: number, deviceId: number): Promise<string | null> {
+  const row = await trx('devices as d').join('android_devices as a', function j() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
+    .where({ 'd.tenant_id': tenantId, 'd.id': deviceId })
+    .first('d.uuid', 'd.enrollment_profile_id', 'd.management_mode', 'd.ownership', 'd.usage', 'a.api_level') as
+    { uuid: string; enrollment_profile_id: string | null; management_mode: string; ownership: string; usage: string; api_level: number | null } | undefined;
+  if (!row) return 'not_found';
+  const desired = await deviceSource(trx, tenantId, deviceId);
+  const profile = row.enrollment_profile_id ? await readAndroidProfile(trx, String(row.enrollment_profile_id), tenantId) : null;
+  const app = profile?.settings.deviceUsage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
+  try {
+    const compiled = compileAndroid(desired.settings, {
+      platform: 'android', mode: row.management_mode, ownership: row.ownership, apiLevel: row.api_level, uuid: String(row.uuid), usage: row.usage,
+    }, {
+      purpose: 'device', variables: desired.variables,
+      privacy: { networkInfo: DEFAULT_PRIVACY[row.ownership as 'corporate' | 'corporate_personal' | 'personal']?.networkInfo ?? false },
+      kiosk: { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false, exit: false },
+    });
+    if (compiled.problems.length || !compiled.kioskLock) return 'policy_error';
+    return policyHasWipeSettings(compiled.body) ? 'kiosk_wipe_policy' : null;
+  } catch {
+    return 'policy_error';
+  }
 }
 
 /** android.policies.enrollment-policy for one profile (sections 9.3, 10.7, §22.3). */

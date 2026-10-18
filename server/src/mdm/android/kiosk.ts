@@ -3,7 +3,7 @@ import { isAndroidPackage, parseAndroidSettingKey } from '@obligarth/shared/dist
 import {
   ANDROID_KIOSK_LOCK_TYPE, ANDROID_KIOSK_UPDATE_WINDOW, ANDROID_SYSTEM_UPDATE_LIMITS, type AndroidKioskForm, type AndroidKioskLock,
 } from '@obligarth/shared/dist/android/kiosk.js';
-import { RESERVED_PACKAGES } from './overlay';
+import { policyHasWipeSettings, RESERVED_PACKAGES } from './overlay';
 import { defaultApplicationDomain, preferredDomains } from './validate';
 
 // =============================================================================
@@ -225,6 +225,10 @@ export interface KioskCompileResult {
   lock: AndroidKioskLock | null;
   /** The lock was lifted for a kiosk exit. */
   exitApplied: boolean;
+  /** A kiosk exit runs but the lock was kept: the policy carries a wipe-capable setting (review AN-G1, G1-R1). Under a
+   *  freeze the gateway refuses any policies.patch with such a setting (AN15), so an unlocked policy pushed with one
+   *  could not be locked again before the tenant is unfrozen: it is never pushed. The caller ends the exit. */
+  exitWithheld: boolean;
   /** The profile's app was set as the single-app kiosk. */
   injected: boolean;
   problems: string[];
@@ -255,7 +259,7 @@ export function stripKioskLock(body: Json): void {
  * dedicated-only fields away from it).
  */
 export function applyKioskRules(body: Json, usage: string, o: KioskCompileOptions): KioskCompileResult {
-  const out: KioskCompileResult = { lock: null, exitApplied: false, injected: false, problems: [] };
+  const out: KioskCompileResult = { lock: null, exitApplied: false, exitWithheld: false, injected: false, problems: [] };
   if (usage !== 'kiosk') return out;
   let apps = Array.isArray(body.applications) ? body.applications.filter(isObject) : [];
   for (const a of apps) {
@@ -284,7 +288,8 @@ export function applyKioskRules(body: Json, usage: string, o: KioskCompileOption
     out.lock = { form: forms[0].form, packageName: forms[0].packageName };
     if (forms.length === 1 && homeConflicts(body, out.lock).length > 0) out.problems.push('compile:kiosk_home_conflict');
   }
-  if (out.lock && o.exit === true && o.purpose === 'device') {
+  if (out.lock && o.exit === true && o.purpose === 'device' && policyHasWipeSettings(body)) out.exitWithheld = true;
+  if (out.lock && o.exit === true && o.purpose === 'device' && !out.exitWithheld) {
     stripKioskLock(body);
     out.exitApplied = true;
   } else if (out.lock) {
