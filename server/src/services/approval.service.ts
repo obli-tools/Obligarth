@@ -76,7 +76,9 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   // A command of the MDM queue the tenant's matrix holds at 'restricted' (integration-apple-edge §8.11, lot B4).
   | 'apple_action'
   // A change of push topic or the deletion of an ADE server (integration-apple-edge §11.1, §11.2, lot C3).
-  | 'apple_integration';
+  | 'apple_integration'
+  // A command or a revocation of the Android bridge agent the tenant's matrix holds at 'restricted' (agent-pont-android §5.4).
+  | 'legacy_agent_action';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */

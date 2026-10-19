@@ -14,6 +14,8 @@ export const JOB_MODULES: readonly string[] = [
   'actions', 'enrollment', 'alerts', 'vault', 'tenants', 'restore', 'notifications', 'maintenance',
   // Lot AN-A2 (android-amapi §3.4): the queues of the Android module, registered only when ANDROID_MODE is not off.
   'android',
+  // The Android bridge agent (agent-pont-android §6).
+  'legacy-agent',
 ];
 
 /** The shared dead letter queue (no worker). */

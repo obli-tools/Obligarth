@@ -27,6 +27,7 @@ import { createDdmRelayRouter } from './apple/ddm/relay';
 import { createAppleDeviceSurface } from './apple/enrollment';
 import { createAndroidByodSurface } from './android/byod/surface';
 import { createAndroidSigninSurface } from './android/signin/surface';
+import { createLegacyAgentSurface } from './legacyAgent/surface';
 import { jobs } from './jobs';
 import { logger } from './utils/logger';
 
@@ -94,6 +95,10 @@ export function createApp() {
   const androidByod = createAndroidByodSurface();
   const androidSignin = createAndroidSigninSurface();
   app.use('/a/:key', (req, res, next) => (req.path === '/signin' || req.path.startsWith('/signin/') ? androidSignin : androidByod)(req, res, next));
+  // Surface of the Android bridge agents (/agent/v1/…; agent-pont-android §4, PB4): mounted like /t/:key, its own
+  // body reader (the signatures cover the exact bytes), limits and limiters; no session, no cookie. Reached through
+  // the edge proxy (mdm.<domain>) only.
+  app.use('/agent/v1', createLegacyAgentSurface());
   app.use(
     cors({
       origin: config.clientOrigin,

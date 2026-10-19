@@ -55,6 +55,8 @@ import { createAndroidTenantRouter } from '../android/routes/enterprise.routes';
 import { createAndroidKioskRouter } from '../android/routes/kiosk.routes';
 import { createAndroidOperationsAdminRouter, createAndroidOperationsRouter } from '../android/routes/operations.routes';
 import { createAndroidSignupCallbackRouter } from '../android/routes/signupCallback.routes';
+import { createLegacyAgentRouter } from '../legacyAgent/routes';
+import { createLegacyAgentAdminRouter } from '../legacyAgent/admin.routes';
 
 const router = Router();
 
@@ -156,6 +158,10 @@ tenantRouter.use('/apple', createAppleDdmRouter());
 // The vault of secrets: state, escrow events, key rotations (master tenant,
 // platform administrators; vault/admin.routes.ts).
 tenantRouter.use('/admin/vault', createVaultAdminRouter());
+// The Android bridge agent (agent-pont-android §7): the console of the tenant, the platform's (versions of the agent,
+// instance key, settings; master tenant, platform administrators).
+tenantRouter.use('/legacy-agent', createLegacyAgentRouter());
+tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
 // The hardened audit journal: retention, legal holds, SIEM destinations,
 // seal keys (master tenant, platform administrators; audit/admin.routes.ts).
 tenantRouter.use('/admin/audit', createAuditAdminRouter());
