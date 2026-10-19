@@ -20,6 +20,7 @@ const REASON_FALLBACK: Record<ImpactApprovalReason, string> = {
   removal_threshold: 'something is removed from 3 devices or more',
   restriction: 'the restriction of this tenant requires it',
   cumulative: 'with the changes made without a second approver over the last hour, the thresholds are reached',
+  wipe_settings: 'an Android setting that can wipe a device is added, removed or changed',
 };
 
 export const approvalReasonLabel = (t: TFunction, r: ImpactApprovalReason): string =>

@@ -36,6 +36,9 @@ export const ownershipLabel = (t: TFunction, o: Ownership | string): string =>
 const METHOD_FALLBACK: Record<EnrollmentMethod, string> = {
   ade: 'Automated Device Enrollment', ota: 'Enrollment link', byod_account: 'Account-driven User Enrollment',
   configurator: 'Apple Configurator', account_device: 'Account-driven Device Enrollment', migration: 'Migration',
+  android_qr: 'Android QR code', android_nfc: 'Android NFC', android_afw: 'Android afw#setup', android_token: 'Android token',
+  android_zero_touch: 'Android zero-touch', android_kme: 'Knox Mobile Enrollment', android_byod_link: 'Android BYOD link',
+  android_signin_url: 'Android sign-in URL',
 };
 export const enrollmentMethodLabel = (t: TFunction, m: EnrollmentMethod | string): string =>
   t(`mdm.enrollmentMethod.${m}`) || METHOD_FALLBACK[m as EnrollmentMethod] || m;

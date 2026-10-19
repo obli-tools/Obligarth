@@ -71,7 +71,8 @@
     "endUsers": "Utilisateurs finaux",
     "deviceEnrollment": "Inscription",
     "integrations": "Intégrations",
-    "apps": "Apps"
+    "apps": "Apps",
+    "androidPlatform": "Android"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -3152,7 +3153,15 @@
       "byod_account": "Enrôlement d'utilisateur par compte",
       "configurator": "Apple Configurator",
       "account_device": "Enrôlement d'appareil par compte",
-      "migration": "Migration"
+      "migration": "Migration",
+      "android_qr": "Code QR Android",
+      "android_nfc": "NFC Android",
+      "android_afw": "Android afw#setup",
+      "android_token": "Jeton Android",
+      "android_zero_touch": "Android zero-touch",
+      "android_kme": "Knox Mobile Enrollment",
+      "android_byod_link": "Lien BYOD Android",
+      "android_signin_url": "URL de connexion Android"
     },
     "managementMode": {
       "device": "Appareil",
@@ -3173,7 +3182,9 @@
       "disabled_in_edge": "désactivé au service d'appareils",
       "removed_by_command": "retiré de gestion par une commande",
       "wiped": "effacé",
-      "replaced": "remplacé par un cycle plus récent"
+      "replaced": "remplacé par un cycle plus récent",
+      "missing_in_provider": "absent chez Google (Android)",
+      "presumed_gone": "présumé parti après un long silence (Android)"
     },
     "identityState": {
       "valid": "Valide",
@@ -3364,7 +3375,8 @@
         "fleet_share": "10 % du parc ou plus est touché",
         "removal_threshold": "un retrait touche 3 appareils ou plus",
         "restriction": "la restriction de ce tenant l'exige",
-        "cumulative": "avec les changements faits sans second approbateur depuis une heure, les seuils sont atteints"
+        "cumulative": "avec les changements faits sans second approbateur depuis une heure, les seuils sont atteints",
+        "wipe_settings": "un réglage Android capable d’effacer un appareil est ajouté, retiré ou modifié"
       },
       "cumulative": "{{devices}} appareils touchés ces {{minutes}} dernières minutes par les changements faits sans second approbateur, celui-ci compris"
     },
@@ -3394,7 +3406,36 @@
       "asset_not_supported": "Les ressources ne sont pas encore prises en charge",
       "secret_requires_asset": "Ce type ne peut pas porter de secret",
       "identifier_too_long": "L'identifiant serait trop long",
-      "remove_not_allowed": "Ce type ne se retire pas par un élément"
+      "remove_not_allowed": "Ce type ne se retire pas par un élément",
+      "too_deep": "La valeur est trop imbriquée",
+      "field_reserved": "Ce champ est posé par Obligarth",
+      "field_deprecated": "Ce champ est obsolète chez Google",
+      "package_invalid": "Nom de paquet invalide",
+      "package_reserved": "Ce paquet est réservé",
+      "role_reserved": "Ce rôle est réservé",
+      "onc_guid_invalid": "GUID de réseau invalide",
+      "secret_invalid": "Secret invalide",
+      "wipe_rule_invalid": "Règle d'effacement incomplète : blocage et effacement ensemble, effacement après 14 jours au moins et après le blocage",
+      "wipe_threshold_too_low": "Effacement après trop peu d'échecs de mot de passe",
+      "frp_email_outside_domain": "Les administrateurs de la protection contre la réinitialisation doivent appartenir au domaine de l'entreprise",
+      "too_many_setup_actions": "Une action de configuration au plus",
+      "too_many_required_for_setup": "Trop d'apps requises à la configuration (5 au plus)",
+      "too_many_minimum_version_code": "Trop d'apps avec une version minimale (20 au plus)",
+      "too_many_kiosk_apps": "Une app de kiosque au plus",
+      "managed_configuration_exclusive": "Une configuration gérée par modèle ou par valeur, pas les deux",
+      "preferred_activities_conflict": "Une activité préférée et une application par défaut visent le même domaine",
+      "duplicate_value": "La même valeur figure deux fois",
+      "kiosk_form_ambiguous": "Une seule forme de kiosque par politique",
+      "kiosk_role_install_type": "Le rôle de kiosque exige une app requise à la configuration",
+      "role_duplicate": "Ce rôle est tenu par deux apps",
+      "kiosk_home_conflict": "Une autre app d'accueil entre en conflit avec le kiosque",
+      "system_update_window_invalid": "Fenêtre de mise à jour système invalide",
+      "freeze_period_invalid": "Période de gel invalide",
+      "freeze_period_too_long": "Période de gel trop longue (90 jours au plus)",
+      "freeze_period_gap_too_short": "Les périodes de gel doivent être espacées de 60 jours",
+      "freeze_period_overlap": "Les périodes de gel se chevauchent",
+      "freeze_period_without_type": "Une période de gel exige un type de mise à jour système",
+      "too_many_freeze_periods": "Trop de périodes de gel"
     },
     "rawProfile": {
       "binary_plist": "Un profil binaire n'est pas accepté : exportez-le en XML.",
@@ -3782,5 +3823,69 @@
       "cancelled": "retrait annulé"
     },
     "cancelled": "Retrait annulé : les étapes restantes n'ont pas été jouées et l'appareil n'a pas été libéré."
+  },
+  "androidPlatform": {
+    "title": "Plateforme · Android",
+    "description": "Identité de cette instance chez Google et santé du lien avec l’Android Management API.",
+    "refresh": "Actualiser",
+    "loading": "Chargement…",
+    "yes": "Oui",
+    "no": "Non",
+    "offHint": "Android est désactivé sur cette instance (ANDROID_MODE=off).",
+    "mode": {
+      "off": "Désactivé",
+      "google": "Google",
+      "fake": "Simulé (essais)"
+    },
+    "auth": {
+      "vault_key": "Clé de compte de service (coffre)",
+      "adc": "Identité sans clé (ADC)"
+    },
+    "loop": {
+      "connected": "Connectée",
+      "off": "Désactivée",
+      "unconfigured": "Non démarrée",
+      "stopped": "Arrêtée",
+      "waiting_lock": "En attente de son verrou (une autre instance tire)",
+      "degraded": "Dégradée"
+    },
+    "breaker": {
+      "closed": "Fermé",
+      "open": "Ouvert",
+      "half_open": "Entrouvert"
+    },
+    "identity": {
+      "title": "Identité",
+      "mode": "Mode",
+      "state": "État",
+      "auth": "Identité Google",
+      "project": "Projet",
+      "pinnedProject": "Projet épinglé",
+      "configured": "Identité configurée",
+      "fingerprint": "Empreinte de la clé",
+      "account": "Compte de service",
+      "setAt": "Clé déposée le",
+      "lastToken": "Dernier jeton d’accès",
+      "lastError": "Dernière erreur"
+    },
+    "health": {
+      "title": "Santé du lien",
+      "loop": "Boucle de tirage",
+      "subscription": "Droit sur l’abonnement",
+      "lastPull": "Dernier tirage",
+      "lag": "Retard",
+      "lastTest": "Dernier message de test",
+      "breaker": "Disjoncteur",
+      "limiter": "Budget du projet (100 s)"
+    },
+    "quota": {
+      "title": "Quota du projet",
+      "devices": "Appareils comptés",
+      "quota": "Quota accordé",
+      "unknown": "non renseigné",
+      "percent": "Utilisé",
+      "lastRecount": "Dernier recalage hebdomadaire",
+      "gap": "écart"
+    }
   }
 }

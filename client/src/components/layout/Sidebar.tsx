@@ -9,6 +9,7 @@ import {
   Server,
   ArrowLeftRight,
   Building2,
+  Smartphone,
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
@@ -519,6 +520,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // are rendered only when `admin && currentTenantId === MASTER`).
     ...(admin && isMasterTenant(currentTenantId)
       ? [{ label: t('nav.workspace', 'Workspace'), path: '/workspace', icon: <Building2 size={18} /> } as NavItem]
+      : []),
+    // Platform > Android (lot AN-A2): identity and health of the link to Google, master tenant only.
+    ...(admin && isMasterTenant(currentTenantId)
+      ? [{ label: t('nav.androidPlatform', 'Android'), path: '/admin/android', icon: <Smartphone size={18} /> } as NavItem]
       : []),
     ...(admin
       ? [{ label: t('nav.settings'), path: '/settings', icon: <Settings size={18} /> } as NavItem]

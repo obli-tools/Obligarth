@@ -25,6 +25,7 @@ import { SettingsPage } from '@/pages/SettingsPage';
 import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { AdminTenantsPage } from '@/pages/AdminTenantsPage';
+import { AndroidPlatformPage } from '@/pages/admin/AndroidPlatformPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
 import { SecurityPage } from '@/pages/SecurityPage';
@@ -81,6 +82,9 @@ export default function App() {
      "tenants admin"). Old URL kept as alias above so external
      bookmarks / saved deep-links keep resolving. */}
  <Route path="/workspace" element={<AdminTenantsPage />} />
+ {/* Platform > Android (android-amapi §12.1, lot AN-A2): identity and health of the link to Google (the server
+     answers the platform administrators of the master tenant only). */}
+ <Route path="/admin/android" element={<AndroidPlatformPage />} />
  </Route>
 
  {/* Security — the journal for the holders of audit.read (tenant

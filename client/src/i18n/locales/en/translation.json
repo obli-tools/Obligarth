@@ -71,7 +71,8 @@
     "endUsers": "End users",
     "deviceEnrollment": "Enrollment",
     "integrations": "Integrations",
-    "apps": "Apps"
+    "apps": "Apps",
+    "androidPlatform": "Android"
   },
   "login": {
     "title": "Sign in to your account",
@@ -3152,7 +3153,15 @@
       "byod_account": "Account-driven User Enrollment",
       "configurator": "Apple Configurator",
       "account_device": "Account-driven Device Enrollment",
-      "migration": "Migration"
+      "migration": "Migration",
+      "android_qr": "Android QR code",
+      "android_nfc": "Android NFC",
+      "android_afw": "Android afw#setup",
+      "android_token": "Android token",
+      "android_zero_touch": "Android zero-touch",
+      "android_kme": "Knox Mobile Enrollment",
+      "android_byod_link": "Android BYOD link",
+      "android_signin_url": "Android sign-in URL"
     },
     "managementMode": {
       "device": "Device",
@@ -3173,7 +3182,9 @@
       "disabled_in_edge": "disabled at the device service",
       "removed_by_command": "removed from management by a command",
       "wiped": "erased",
-      "replaced": "replaced by a newer cycle"
+      "replaced": "replaced by a newer cycle",
+      "missing_in_provider": "absent at Google (Android)",
+      "presumed_gone": "presumed gone after a long silence (Android)"
     },
     "identityState": {
       "valid": "Valid",
@@ -3364,7 +3375,8 @@
         "fleet_share": "10 % of the fleet or more is touched",
         "removal_threshold": "something is removed from 3 devices or more",
         "restriction": "the restriction of this tenant requires it",
-        "cumulative": "with the changes made without a second approver over the last hour, the thresholds are reached"
+        "cumulative": "with the changes made without a second approver over the last hour, the thresholds are reached",
+        "wipe_settings": "an Android setting that can wipe a device is added, removed or changed"
       },
       "cumulative": "{{devices}} devices touched over the last {{minutes}} minutes by the changes made without a second approver, this one included"
     },
@@ -3394,7 +3406,36 @@
       "asset_not_supported": "Assets are not supported yet",
       "secret_requires_asset": "This type cannot carry a secret",
       "identifier_too_long": "The identifier would be too long",
-      "remove_not_allowed": "This type cannot be removed by an item"
+      "remove_not_allowed": "This type cannot be removed by an item",
+      "too_deep": "The value is nested too deeply",
+      "field_reserved": "This field is set by Obligarth",
+      "field_deprecated": "This field is deprecated by Google",
+      "package_invalid": "Invalid package name",
+      "package_reserved": "This package is reserved",
+      "role_reserved": "This role is reserved",
+      "onc_guid_invalid": "Invalid network GUID",
+      "secret_invalid": "Invalid secret",
+      "wipe_rule_invalid": "Wipe rule incomplete: block and wipe together, wipe after 14 days at least and after the block",
+      "wipe_threshold_too_low": "Wipe after too few failed passwords",
+      "frp_email_outside_domain": "Factory reset protection administrators must belong to the enterprise's domain",
+      "too_many_setup_actions": "One setup action at most",
+      "too_many_required_for_setup": "Too many apps required for setup (5 at most)",
+      "too_many_minimum_version_code": "Too many apps with a minimum version (20 at most)",
+      "too_many_kiosk_apps": "One kiosk app at most",
+      "managed_configuration_exclusive": "A managed configuration by template or by value, not both",
+      "preferred_activities_conflict": "A preferred activity and a default application claim the same domain",
+      "duplicate_value": "The same value is listed twice",
+      "kiosk_form_ambiguous": "Only one kiosk form per policy",
+      "kiosk_role_install_type": "The kiosk role requires an app required for setup",
+      "role_duplicate": "This role is held by two apps",
+      "kiosk_home_conflict": "Another home app conflicts with the kiosk",
+      "system_update_window_invalid": "Invalid system update window",
+      "freeze_period_invalid": "Invalid freeze period",
+      "freeze_period_too_long": "Freeze period too long (90 days at most)",
+      "freeze_period_gap_too_short": "Freeze periods must be 60 days apart",
+      "freeze_period_overlap": "Freeze periods overlap",
+      "freeze_period_without_type": "A freeze period requires a system update type",
+      "too_many_freeze_periods": "Too many freeze periods"
     },
     "rawProfile": {
       "binary_plist": "A binary profile is not accepted: export it as XML.",
@@ -3782,5 +3823,69 @@
       "cancelled": "retirement cancelled"
     },
     "cancelled": "Retirement cancelled: the remaining steps were not run and the device was not released."
+  },
+  "androidPlatform": {
+    "title": "Platform · Android",
+    "description": "Identity of this instance at Google and health of the Android Management API link.",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "yes": "Yes",
+    "no": "No",
+    "offHint": "Android is turned off on this instance (ANDROID_MODE=off).",
+    "mode": {
+      "off": "Off",
+      "google": "Google",
+      "fake": "Simulated (tests)"
+    },
+    "auth": {
+      "vault_key": "Service account key (vault)",
+      "adc": "Keyless identity (ADC)"
+    },
+    "loop": {
+      "connected": "Connected",
+      "off": "Off",
+      "unconfigured": "Not started",
+      "stopped": "Stopped",
+      "waiting_lock": "Waiting for its lock (another instance pulls)",
+      "degraded": "Degraded"
+    },
+    "breaker": {
+      "closed": "Closed",
+      "open": "Open",
+      "half_open": "Half open"
+    },
+    "identity": {
+      "title": "Identity",
+      "mode": "Mode",
+      "state": "State",
+      "auth": "Google identity",
+      "project": "Project",
+      "pinnedProject": "Pinned project",
+      "configured": "Identity configured",
+      "fingerprint": "Key fingerprint",
+      "account": "Service account",
+      "setAt": "Key deposited",
+      "lastToken": "Last access token",
+      "lastError": "Last error"
+    },
+    "health": {
+      "title": "Health of the link",
+      "loop": "Pull loop",
+      "subscription": "Permission on the subscription",
+      "lastPull": "Last pull",
+      "lag": "Lag",
+      "lastTest": "Last test message",
+      "breaker": "Circuit breaker",
+      "limiter": "Budget of the project (100 s)"
+    },
+    "quota": {
+      "title": "Quota of the project",
+      "devices": "Devices counted",
+      "quota": "Quota granted",
+      "unknown": "not set",
+      "percent": "Used",
+      "lastRecount": "Last weekly recount",
+      "gap": "gap"
+    }
   }
 }
