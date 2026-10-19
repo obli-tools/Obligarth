@@ -228,19 +228,23 @@ export function createLegacyAgentSurface(): Router {
       }
     };
 
-  /** The agent of a signed request (poll, inventory, packages): clock, identity, signature, revocation. */
+  /**
+   * The agent of a signed request (poll, inventory, packages): identity, signature, revocation, then the clock. The
+   * signature is checked BEFORE the clock window: a signed clockSkew (whose serverTime sets the agent's clock, RC-6)
+   * is never given for a request the agent's key did not sign (else anyone could collect signed answers for chosen
+   * agent, seq and body hash, e.g. the empty body of a download, and replay them later as a stale serverTime).
+   */
   const authenticated = async (ex: Exchange): Promise<AgentIdentity | Reply> => {
-    const skew = clockReply(ex);
-    if (skew) return skew;
-    return identify(ex);
+    const who = await identify(ex);
+    if (isReply(who)) return who;
+    return clockReply(ex) ?? who;
   };
 
   router.post('/enroll', (req, res) => {
     void post('POST /agent/v1/enroll', MAX_BODY, true, async (ex, body) => {
       const wait = surfaceLimits.enrollPerAddress.hit(`ip:${req.ip ?? 'unknown'}`);
       if (wait) return limited(wait);
-      const skew = clockReply(ex);
-      if (skew) return skew;
+      // The clock window is checked by handleEnroll after the proof of possession (no signed clockSkew otherwise).
       const out = await handleEnroll(ex, body, (publicId) => surfaceLimits.enrollPerToken.hit(publicId));
       if ('tenantId' in out && typeof out.tenantId === 'number') locals(res).tenantId = out.tenantId;
       return out.reply;

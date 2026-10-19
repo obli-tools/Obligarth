@@ -349,6 +349,14 @@ const DELIVERY_ORDER_SQL = "CASE request_type WHEN 'device.wipe' THEN 0 WHEN 'de
 export const MAX_DELIVERED = 20;
 
 /**
+ * Excludes an agent.update whose version was withdrawn, even when queued or delivered before the withdrawal: a bad
+ * build is stopped at once (delivery and download). A constant: no value interpolated; the catalog is readable in
+ * every context.
+ */
+export const WITHDRAWN_UPDATE_EXCLUDED_SQL = "NOT (request_type = 'agent.update' AND EXISTS (SELECT 1 FROM obligarth.legacy_agent_releases r "
+  + "WHERE r.id::text = legacy_agent_commands.params->>'releaseId' AND r.withdrawn_at IS NOT NULL))";
+
+/**
  * The commands an interrogation takes, in the tenant's transaction, the satellite already locked: nothing while the
  * tenant is frozen (RS-3: the pending get hold_reason 'frozen'); else at most 20, pending (not_before passed,
  * expires_at ahead) and sent without result for max(2 × pollSeconds, 600 s), erase first, then lock, then by age;
@@ -369,6 +377,7 @@ export async function deliver(trx: Knex.Transaction, tenantId: number, deviceId:
         .orWhere((s) => s.where('state', 'sent').where('delivered_at', '<', redeliverBefore));
     });
   if (o.onlyTypes) q = q.whereIn('request_type', o.onlyTypes as string[]);
+  q = q.whereRaw(WITHDRAWN_UPDATE_EXCLUDED_SQL);
   const rows = await q.orderByRaw(DELIVERY_ORDER_SQL).limit(MAX_DELIVERED).forUpdate()
     .select('id', 'request_type', 'params', 'created_at', 'expires_at') as
     Array<{ id: string; request_type: string; params: unknown; created_at: Date; expires_at: Date }>;
@@ -406,6 +415,10 @@ export async function applyResults(trx: Knex.Transaction, tenantId: number, devi
       { id: string; device_id: number; state: string; request_type: string; delivered_at: Date | null } | undefined;
     if (!row || Number(row.device_id) !== deviceId || !row.delivered_at) { ignored++; continue; }
     if (row.state !== 'sent' && row.state !== 'expired') continue;
+    // An expired command the agent refused (expired_on_device…) stays expired: 'rejected' has the rank of 'expired'
+    // (3) and the trigger refuses a change between two final states of the same rank, which failed the whole
+    // interrogation (503), again at every retry since the agent keeps the result in its outbox.
+    if (row.state === 'expired' && r.status === 'rejected') continue;
     const code = RESULT_CODES.has(r.code) ? r.code : 'internal';
     let detail: string | null = null;
     if (r.detail && Object.keys(r.detail).length > 0) {

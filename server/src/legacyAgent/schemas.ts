@@ -25,7 +25,9 @@ export const DeviceFacts = z.object({
   manufacturer: nstr(64), brand: nstr(64), model: nstr(64), device: nstr(64),
   androidId: z.string().regex(/^[0-9a-fA-F]{1,32}$/).nullable().optional(),
   serial: nstr(64), samsungSerial: nstr(64),
-  imeis: z.array(z.string().regex(/^[0-9]{14,16}$/)).max(4).optional(),
+  // A slot whose identifier is not a decimal IMEI (a CDMA MEID in hexadecimal, a placeholder) is dropped, never a
+  // 400 that would stop the enrollment of the device for good (§8.7: an unreadable value is null, never an error).
+  imeis: z.array(z.string().max(32)).max(4).transform((list) => list.filter((v) => /^[0-9]{14,16}$/.test(v))).optional(),
   apiLevel: nint(1, 100), osVersion: nstr(32),
   securityPatch: z.string().regex(/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/).nullable().optional(),
   build: nstr(128), deviceName: nstr(255),

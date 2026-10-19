@@ -11,7 +11,7 @@ import { instanceSettings } from './config';
 import { EnrollBody } from './schemas';
 import { currentServerKey } from './serverKey';
 import { fromB64url, p256PublicKey, sha256Hex } from './signature';
-import { errorReply, signatureHolds, type Exchange, type Reply } from './surface';
+import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } from './surface';
 
 // =============================================================================
 // POST /agent/v1/enroll (docs: agent-pont-android §4.4, RS-7, PB13): the
@@ -81,6 +81,8 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
   const spki = fromB64url(b.publicKey, 200);
   if (!spki || !p256PublicKey(spki)) return { reply: errorReply(400, 'badKey', 'The key must be an EC P-256 SubjectPublicKeyInfo') };
   if (!signatureHolds(ex, spki)) return { reply: { ...errorReply(401, 'badSignature', 'Bad signature'), signed: false } };
+  const skew = clockReply(ex);
+  if (skew) return { reply: skew };
   if (!LEGACY_AGENT_TOKEN_RE.test(b.token)) return { reply: tokenInvalid() };
   const [, publicId, secret] = b.token.split('.');
   const wait = perToken(publicId);
@@ -172,7 +174,17 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
   } catch (err) {
     // The key enrolled in another tenant (unique key_sha256): the same refusal as a bad token.
     if ((err as { code?: string })?.code === '23505' && /key_sha256|agent_id/.test(String((err as { constraint?: string }).constraint ?? ''))) {
-      return { reply: tokenInvalid() };
+      // A concurrent enrollment of the SAME key in this tenant won (the agent retried while its first request was
+      // still being processed): the idempotent answer of RS-7, never a tokenInvalid that would stop the agent.
+      const again = await asTenant(tenantId, LEGACY_AGENT_ACTOR, () => db.transaction(async (trx) => {
+        const won = await trx('legacy_agent_devices as a').join('devices as d', function j() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
+          .where({ 'a.tenant_id': tenantId, 'a.key_sha256': keySha }).first('a.agent_id', 'a.revoked_at', 'd.uuid') as
+          { agent_id: string; revoked_at: Date | null; uuid: string } | undefined;
+        if (!won) return null;
+        if (won.revoked_at) return errorReply(403, 'agentRevoked', 'This device was removed from management');
+        return answer(trx, tenantId, String(won.agent_id), String(won.uuid), 200);
+      }));
+      return again ? { reply: again, tenantId } : { reply: tokenInvalid() };
     }
     throw err;
   }

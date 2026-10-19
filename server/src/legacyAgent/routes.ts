@@ -565,8 +565,19 @@ export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<st
   const spec = commandSpecOrNull(p.type);
   if (!spec || spec.guardedBy || !(LEGACY_AGENT_CONSOLE_TYPES as readonly string[]).includes(spec.type)) refuse('This command type is no longer available');
   const s = spec as CommandSpec;
-  const params = (p.params && typeof p.params === 'object' && !Array.isArray(p.params) ? p.params : {}) as Record<string, unknown>;
+  let params = (p.params && typeof p.params === 'object' && !Array.isArray(p.params) ? p.params : {}) as Record<string, unknown>;
   if (!s.params.safeParse(params).success) refuse('The parameters of the command are no longer valid');
+  // A package or a version of the agent is resolved again at the approval, in the tenant: a package removed or a
+  // version withdrawn meanwhile is refused, and the file named is always the one of the tenant's row.
+  if (s.type === 'app.install' || s.type === 'agent.update') {
+    try {
+      params = (await consoleCommand(x.tenantId, s.type, params)).params;
+    } catch (err) {
+      const e = err as { statusCode?: number; message?: string };
+      if (e.statusCode && e.statusCode < 500) refuse(`The ${s.type === 'app.install' ? 'package' : 'version of the agent'} is no longer available`);
+      throw err;
+    }
+  }
   const found = await db('devices').where({ tenant_id: x.tenantId }).whereRaw('id = ANY (?::int[])', [ids]).pluck('id') as number[];
   if (found.length !== ids.length) refuse('Some devices of this request are no longer in the tenant');
   if (!requester.isPlatformAdmin) {

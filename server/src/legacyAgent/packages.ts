@@ -4,6 +4,7 @@ import { mkdir, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import type { Request } from 'express';
 import { AppError } from '../middleware/errorHandler';
+import { WITHDRAWN_UPDATE_EXCLUDED_SQL } from './commands';
 import { apkDir, MAX_APK_BYTES } from './config';
 import { withAgentTransaction } from './session';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
@@ -25,7 +26,7 @@ export async function handlePackage(who: AgentIdentity, ex: Exchange, sha: strin
   let size = 0;
   const reply = await withAgentTransaction(who, ex, async (trx) => {
     const row = await trx('legacy_agent_commands').where({ tenant_id: who.tenantId, device_id: who.deviceId, state: 'sent' })
-      .whereIn('request_type', ['app.install', 'agent.update']).whereRaw("params->>'sha256' = ?", [sha])
+      .whereIn('request_type', ['app.install', 'agent.update']).whereRaw("params->>'sha256' = ?", [sha]).whereRaw(WITHDRAWN_UPDATE_EXCLUDED_SQL)
       .first('params') as { params: unknown } | undefined;
     if (!row) return errorReply(404, 'notFound', 'Not found');
     const p = (typeof row.params === 'string' ? JSON.parse(row.params) : row.params) as { size?: unknown };
