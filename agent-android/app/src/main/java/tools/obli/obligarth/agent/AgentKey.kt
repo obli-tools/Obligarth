@@ -8,6 +8,7 @@ import tools.obli.obligarth.agent.core.AgentLog
 import tools.obli.obligarth.agent.core.AgentSigner
 import tools.obli.obligarth.agent.core.Ec
 import java.io.File
+import java.io.IOException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -21,6 +22,8 @@ import java.security.spec.ECGenParameterSpec
  */
 class AgentKey(private val context: Context, private val log: AgentLog) : AgentSigner {
     private val softFile get() = File(context.noBackupFilesDirCompat(), "agent-key.pkcs8")
+    /** Written once a Keystore key served as the identity: a later Keystore failure is then transient, never a new key. */
+    private val keystoreMarker get() = File(context.noBackupFilesDirCompat(), "agent-key.keystore")
 
     @Volatile private var cached: Pair<PrivateKey, ByteArray>? = null
     @Volatile private var cachedStorage: String = "unknown"
@@ -37,8 +40,13 @@ class AgentKey(private val context: Context, private val log: AgentLog) : AgentS
         cached?.let { return it }
         val fromStore = try { loadOrCreateKeystore() } catch (e: Exception) {
             log.warn("Keystore unavailable: ${e.javaClass.simpleName}: ${e.message}")
+            // The Keystore key is already the identity: a transient failure (Keystore not ready after
+            // a boot...) must never switch to a new software key, which the server would refuse
+            // (badSignature) for good. The cycle fails and is retried with back-off.
+            if (keystoreMarker.exists()) throw IOException("Keystore unavailable", e)
             null
         }
+        if (fromStore == null && keystoreMarker.exists() && !softFile.exists()) throw IOException("Keystore key missing")
         val pair = fromStore ?: loadOrCreateSoftware()
         cached = pair
         return pair
@@ -60,6 +68,10 @@ class AgentKey(private val context: Context, private val log: AgentLog) : AgentS
         }
         val entry = ks.getEntry(ALIAS, null) as? KeyStore.PrivateKeyEntry ?: return null
         val spki = entry.certificate.publicKey.encoded
+        if (!keystoreMarker.exists()) {
+            keystoreMarker.parentFile?.mkdirs()
+            keystoreMarker.writeText("1")
+        }
         cachedStorage = try {
             val info = KeyFactory.getInstance(entry.privateKey.algorithm, KEYSTORE).getKeySpec(entry.privateKey, KeyInfo::class.java)
             @Suppress("DEPRECATION")
@@ -95,6 +107,7 @@ class AgentKey(private val context: Context, private val log: AgentLog) : AgentS
         }
         softFile.delete()
         File(softFile.path + ".spki").delete()
+        keystoreMarker.delete()
     }
 
     companion object {

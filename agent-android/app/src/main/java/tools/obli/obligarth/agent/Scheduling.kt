@@ -13,6 +13,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -63,12 +64,14 @@ object PollScheduler {
         val pi = PendingIntent.getBroadcast(
             ctx, 0, Intent(ctx, AlarmReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        val at = System.currentTimeMillis() + delaySeconds.coerceIn(5, 86_400) * 1000
+        // Elapsed time, not wall time: store clocks can be far off and corrected later
+        // (F-6); an RTC alarm would then fire years late (or at once in a loop).
+        val at = SystemClock.elapsedRealtime() + delaySeconds.coerceIn(5, 86_400) * 1000
         try {
-            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            am.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
         } catch (e: SecurityException) {
             // Exact alarms can be denied on recent Android versions: inexact fallback.
-            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, at, pi)
+            am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
         }
     }
 }
@@ -88,6 +91,8 @@ class PollJobService : JobService() {
                 rt.cycle()
             } catch (e: Throwable) {
                 AgentRuntime.get(applicationContext).log.warn("cycle failed: ${e.javaClass.simpleName}: ${e.message}")
+                // Keep the alarm chain alive: an unexpected failure must not wait for the 15 min job alone.
+                try { PollScheduler.scheduleNext(applicationContext, 300) } catch (ignored: Throwable) { }
             } finally {
                 running.set(false)
                 jobFinished(params, false)

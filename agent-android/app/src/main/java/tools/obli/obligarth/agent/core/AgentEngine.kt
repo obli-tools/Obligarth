@@ -82,6 +82,9 @@ class AgentEngine(
     @Synchronized
     fun runCycle(force: Boolean = false): CycleReport {
         val local = clock()
+        // A wait never exceeds a day: beyond that, the local clock was moved back since it was set
+        // (store clocks corrected late, F-6) and the agent would stay silent for as long.
+        if (state.notBefore - local > MAX_WAIT_S) state.notBefore = 0
         if (!force && local < state.notBefore) return CycleReport(state.notBefore - local, installWork = state.installQueue.isNotEmpty())
         settleLocalState()
         return try {
@@ -679,6 +682,8 @@ class AgentEngine(
         const val MAX_EVENTS = 20
         const val FOLLOW_UP_S = 10L
         const val DAY_S = 86_400L
+        /** Longest legitimate wait: slow(DAY_S), Retry-After (1 day at most), back-off (36 min). */
+        const val MAX_WAIT_S = DAY_S + 3_600L
         const val USER_TIMEOUT_S = 86_400L
         const val CLOCK_EVENT_S = 120L
         const val BACKOFF_MIN_S = 30L

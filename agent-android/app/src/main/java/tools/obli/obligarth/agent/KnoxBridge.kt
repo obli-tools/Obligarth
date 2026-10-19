@@ -113,7 +113,9 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
     // ---- Policies (each returns null when done, else an error code of §5.3) ----
 
     fun setAdminRemovable(removable: Boolean): Boolean = try {
-        edm()?.let { call(it, "setAdminRemovable", removable) }
+        val manager = edm() ?: throw IllegalStateException("no EnterpriseDeviceManager")
+        // The Knox call answers false when refused: the state is kept only when it worked (retried otherwise).
+        if (call(manager, "setAdminRemovable", removable) == false) throw IllegalStateException("refused")
         prefs.edit().putBoolean(K_REMOVABLE, removable).commit()
         true
     } catch (e: Throwable) {

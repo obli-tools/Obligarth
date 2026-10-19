@@ -65,20 +65,23 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
 
     @SuppressLint("HardwareIds")
     @Suppress("DEPRECATION")
+    // Every value is bounded and shaped like the server's strict schema (DeviceFacts): one value out of
+    // it fails the whole /enroll or /inventory (400), and an enrollment refused that way waits a day.
     override fun device(): Map<String, Any?> = linkedMapOf(
-        "manufacturer" to Build.MANUFACTURER,
-        "brand" to Build.BRAND,
-        "model" to Build.MODEL,
-        "device" to Build.DEVICE,
-        "androidId" to safe { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) },
+        "manufacturer" to Build.MANUFACTURER?.take(64),
+        "brand" to Build.BRAND?.take(64),
+        "model" to Build.MODEL?.take(64),
+        "device" to Build.DEVICE?.take(64),
+        "androidId" to safe { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) }
+            ?.takeIf { ANDROID_ID_RE.matches(it) },
         // Readable under targetSdk 25 (PB8).
-        "serial" to Build.SERIAL?.takeIf { it.isNotBlank() && it != Build.UNKNOWN },
-        "samsungSerial" to (systemProperty("ril.serialnumber") ?: knox.serialNumber()),
+        "serial" to Build.SERIAL?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }?.take(64),
+        "samsungSerial" to (systemProperty("ril.serialnumber") ?: knox.serialNumber())?.take(64),
         "imeis" to imeis(),
         "apiLevel" to Build.VERSION.SDK_INT,
-        "osVersion" to Build.VERSION.RELEASE,
-        "securityPatch" to Build.VERSION.SECURITY_PATCH?.takeIf { it.isNotBlank() },
-        "build" to Build.DISPLAY,
+        "osVersion" to Build.VERSION.RELEASE?.take(32),
+        "securityPatch" to Build.VERSION.SECURITY_PATCH?.takeIf { PATCH_RE.matches(it) },
+        "build" to Build.DISPLAY?.take(128),
         "deviceName" to deviceName(),
     )
 
@@ -137,7 +140,7 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
                 "package" to p.packageName,
                 "label" to safe { ai.loadLabel(pm).toString().take(200) },
                 "versionName" to p.versionName?.take(64),
-                "versionCode" to (if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()),
+                "versionCode" to (if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()).coerceAtLeast(0),
                 "system" to system,
                 "installer" to safe { pm.getInstallerPackageName(p.packageName) },
                 "firstInstallAt" to p.firstInstallTime / 1000,
@@ -205,7 +208,15 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
         if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return emptyList()
         val count = safe { tm.phoneCount } ?: 1
-        return (0 until count).mapNotNull { slot -> safe { tm.getDeviceId(slot) }?.takeIf { it.isNotBlank() } }.distinct()
+        // IMEI digits only (a CDMA MEID, hexadecimal, is left out: the server schema takes 14 to 16 digits).
+        return (0 until count).mapNotNull { slot -> safe { tm.getDeviceId(slot) }?.trim()?.takeIf { IMEI_RE.matches(it) } }
+            .distinct().take(4)
+    }
+
+    private companion object {
+        val ANDROID_ID_RE = Regex("^[0-9a-fA-F]{1,32}$")
+        val PATCH_RE = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+        val IMEI_RE = Regex("^[0-9]{14,16}$")
     }
 
     private fun deviceName(): String? =

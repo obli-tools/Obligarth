@@ -7,7 +7,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentSender
 import android.content.pm.PackageInstaller
+import android.os.Handler
+import android.os.Looper
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Device administrator (spec §8.2): force-lock and wipe-data only. */
 class AgentAdminReceiver : DeviceAdminReceiver() {
@@ -43,9 +46,12 @@ class AgentAdminReceiver : DeviceAdminReceiver() {
 class ConfigReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != ACTION_CONFIGURE) return
-        val rt = AgentRuntime.get(context)
-        val refusal = rt.importConfig(intent.getStringExtra("config"), "intent")
-        if (refusal != null) rt.log.warn("configuration intent refused: $refusal")
+        val raw = intent.getStringExtra("config")
+        // Off the main thread: the import waits for a running cycle (engine lock, network time-outs).
+        runAsync(context, "obligarth-config") { rt ->
+            val refusal = rt.importConfig(raw, "intent")
+            if (refusal != null) rt.log.warn("configuration intent refused: $refusal")
+        }
     }
 
     companion object {
@@ -97,10 +103,13 @@ class InstallStatusReceiver : BroadcastReceiver() {
             }
             else -> {
                 Notifications.cancelInstallPrompt(context, commandId)
-                rt.engine.onInstallerStatus(
-                    commandId, status == PackageInstaller.STATUS_SUCCESS, status == PackageInstaller.STATUS_FAILURE_ABORTED, message,
-                )
-                PollScheduler.pollNow(context)
+                // Off the main thread: the engine lock may be held by a cycle waiting on the network.
+                runAsync(context, "obligarth-install-status") { r ->
+                    r.engine.onInstallerStatus(
+                        commandId, status == PackageInstaller.STATUS_SUCCESS, status == PackageInstaller.STATUS_FAILURE_ABORTED, message,
+                    )
+                    PollScheduler.pollNow(context)
+                }
             }
         }
     }
@@ -133,10 +142,39 @@ class KnoxLicenseReceiver : BroadcastReceiver() {
             if (lower.contains("error") && value is Int) error = value
         }
         val ok = success ?: return
+        val action = intent.action
         rt.knox.onLicenseStatus(ok, error)
-        rt.state.addEvent("knox_license", rt.client.correctedNow(), mapOf("success" to ok, "errorCode" to error, "action" to intent.action))
+        rt.state.addEvent("knox_license", rt.client.correctedNow(), mapOf("success" to ok, "errorCode" to error, "action" to action))
         rt.log.info("Knox licence status: ${if (ok) "success" else "fail ($error)"}")
-        rt.applyKnoxAndKeepAlive()
-        PollScheduler.pollNow(context)
+        // Knox calls (licence probe, setAdminRemovable) off the main thread.
+        runAsync(context, "obligarth-knox") { r ->
+            r.applyKnoxAndKeepAlive()
+            PollScheduler.pollNow(context)
+        }
     }
+}
+
+/**
+ * Runs [block] on a worker thread: a receiver never blocks the main thread on
+ * the engine lock (held by a cycle waiting on the network) or on Knox, which
+ * would end in an ANR and the process killed in the middle of a cycle. The
+ * broadcast is kept alive (goAsync) while the work is short, and released
+ * after 8 s at most (well under the broadcast time-out); a longer wait only
+ * happens while a cycle runs, whose job keeps the process alive.
+ */
+private fun BroadcastReceiver.runAsync(context: Context, name: String, block: (AgentRuntime) -> Unit) {
+    val pending = goAsync()
+    val released = AtomicBoolean(false)
+    val release = { if (released.compareAndSet(false, true)) pending.finish() }
+    Handler(Looper.getMainLooper()).postDelayed({ release() }, 8_000)
+    val app = context.applicationContext
+    Thread({
+        try {
+            block(AgentRuntime.get(app))
+        } catch (e: Throwable) {
+            AgentRuntime.get(app).log.warn("$name failed: ${e.javaClass.simpleName}: ${e.message}")
+        } finally {
+            release()
+        }
+    }, name).start()
 }

@@ -90,10 +90,11 @@ data class AgentConfig(
             }
             val hints = LinkedHashMap<String, Any?>()
             root.obj("hints")?.let { h ->
-                for (name in listOf("deviceName", "serial", "imei")) {
+                // Bounds of the server schema (hints of /enroll): a longer value would fail the enrollment (400).
+                for ((name, max) in listOf("deviceName" to 100, "serial" to 64, "imei" to 32)) {
                     val v = h[name] as? String
                     // MobiControl leaves an unexpanded macro (%DEVICENAME%) when it lacks one.
-                    hints[name] = v?.trim()?.takeIf { it.isNotEmpty() && it.length <= 100 && !(it.startsWith("%") && it.endsWith("%")) }
+                    hints[name] = v?.trim()?.takeIf { it.isNotEmpty() && it.length <= max && !(it.startsWith("%") && it.endsWith("%")) }
                 }
             }
             return ConfigResult.Valid(AgentConfig(base, host, token, pin, knox, hints))
