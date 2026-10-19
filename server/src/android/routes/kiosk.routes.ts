@@ -10,29 +10,26 @@ import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
 import { endKioskExit, KioskExitError, readKioskState } from '../kiosk/exits';
 import { toRouteError } from './enterprise.routes';
+import { androidDeviceOf } from './deviceAccess';
 
 const wrap = (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction): void => { fn(req, res).catch(next); };
-
-const deviceIdOf = (req: Request): number => {
-  const id = Number(req.params.id);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new AppError(404, 'Not found', 'notFound');
-  return id;
-};
 
 export function createAndroidKioskRouter(): Router {
   const router = Router();
   const capability = requireTenantCapability('devices.manage');
 
+  // A device the caller sees in the tenant (team scopes), else 404; ending an exit takes mdm:lock on it, the capability
+  // of the exit itself (review AN-A2).
   router.get('/devices/:id/kiosk', capability, wrap(async (req, res) => {
-    const deviceId = deviceIdOf(req);
+    const deviceId = await androidDeviceOf(req, req.params.id);
     const state = await readKioskState(Number(req.tenantId), Number(req.session.userId), deviceId);
     if (!state) throw new AppError(404, 'Not found', 'notFound');
     res.json({ success: true, data: state });
   }));
 
   router.delete('/devices/:id/kiosk-exit', capability, wrap(async (req, res) => {
-    const deviceId = deviceIdOf(req);
+    const deviceId = await androidDeviceOf(req, req.params.id, 'mdm:lock');
     const tenantId = Number(req.tenantId);
     try {
       const r = await endKioskExit(tenantId, Number(req.session.userId), deviceId, await audit.fromRequest(req, tenantId));

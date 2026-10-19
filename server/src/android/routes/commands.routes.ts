@@ -2,7 +2,9 @@
 // /api/android by routes/index.ts (lot AN-A2); at the lot AN-P the routes of the queue (integration §8.12: /api/mdm/devices/:id/commands,
 // /api/mdm/commands/:id/cancel, relaunch) gain the channel amapi and take these functions, with the checks of
 // capabilities per device and of the restrictions matrix of those routes (mdm.reboot, mdm.lost_mode_disable,
-// mdm.clear_app_data: restriction 'sensitive'). Until then this router is their shape, behind devices.manage.
+// mdm.clear_app_data: restriction 'sensitive'). Until then this router is their shape, behind devices.manage, the
+// device's team scope and the capability of each type (deviceAccess.ts, §22.8), and the restriction of the Apple command
+// of the same nature (mdm.restart, mdm.lost_mode, mdm.apps; 'restricted' refused without an approval path): review AN-A2.
 //   GET  /devices/:id/commands        the commands of a device: type, state, age, operation, error (never a secret)
 //   POST /devices/:id/commands        a command that is not guarded (REBOOT, STOP_LOST_MODE, CLEAR_APP_DATA); the
 //                                     guarded ones go through /api/guard/actions (409 guardedActionRequired)
@@ -17,10 +19,12 @@ import { db } from '../../db';
 import { asTenant } from '../../db/context';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
+import { applyRestriction } from '../../services/restriction.service';
 import { ANDROID_COMMANDS, isAndroidCommandType } from '../commands/catalog';
 import { AndroidCommandError, cancelAndroidCommand, enqueueAndroidCommands } from '../commands/bus';
 import { releaseHeldCommand } from '../commands/submit';
 import { toRouteError } from './enterprise.routes';
+import { ANDROID_COMMAND_CAPABILITY, ANDROID_COMMAND_RESTRICTION, androidDeviceOf } from './deviceAccess';
 
 const CreateBody = z.object({ type: z.string().max(32), params: z.record(z.unknown()).optional(), reason: z.string().trim().max(500).optional() }).strict();
 const UUID = z.string().uuid();
@@ -34,12 +38,6 @@ function routeError(err: unknown): unknown {
   return toRouteError(err);
 }
 
-const deviceIdOf = (req: Request): number => {
-  const id = Number(req.params.id);
-  if (!Number.isSafeInteger(id) || id <= 0) throw new AppError(404, 'Not found', 'notFound');
-  return id;
-};
-
 /** One command as the console sees it (never secret_enc, never the body of a command). */
 const dto = (r: Record<string, unknown>) => ({
   id: r.id, type: r.request_type, state: r.state, submitState: r.submit_state, holdReason: r.hold_reason, rejectCode: r.reject_code,
@@ -47,9 +45,13 @@ const dto = (r: Record<string, unknown>) => ({
   createdAt: r.created_at, deliveredAt: r.delivered_at, completedAt: r.completed_at, expiresAt: r.expires_at,
 });
 
-/** A device of the request's tenant (under its RLS), else 404: an id of another tenant names nothing (rls-tenant §11.5). */
-async function ownDevice(tenantId: number, deviceId: number): Promise<void> {
-  if (!(await db('devices').where({ tenant_id: tenantId, id: deviceId }).first('id'))) throw new AppError(404, 'Not found', 'notFound');
+/** A command of the request's tenant and its device, with the capability its type needs there (review AN-A2): 404
+ *  for a command of another tenant or of a device the caller does not see, 403 without the capability. */
+async function ownCommand(req: Request, commandId: string): Promise<void> {
+  const row = await db('android_commands').where({ tenant_id: Number(req.tenantId), id: commandId.toLowerCase() }).first('device_id', 'request_type') as
+    { device_id: number | string; request_type: string } | undefined;
+  if (!row) throw new AppError(404, 'Not found', 'notFound');
+  await androidDeviceOf(req, Number(row.device_id), isAndroidCommandType(row.request_type) ? ANDROID_COMMAND_CAPABILITY[row.request_type] : 'mdm:wipe');
 }
 
 export function createAndroidCommandsRouter(): Router {
@@ -57,8 +59,7 @@ export function createAndroidCommandsRouter(): Router {
   const capability = requireTenantCapability('devices.manage');
 
   router.get('/devices/:id/commands', capability, wrap(async (req, res) => {
-    const deviceId = deviceIdOf(req);
-    await ownDevice(Number(req.tenantId), deviceId);
+    const deviceId = await androidDeviceOf(req, req.params.id);
     const rows = await db('android_commands').where({ tenant_id: Number(req.tenantId), device_id: deviceId }).orderBy('created_at', 'desc').limit(200)
       .select('id', 'request_type', 'state', 'submit_state', 'hold_reason', 'reject_code', 'amapi_error_code', 'origin', 'guard_action_uuid',
         'amapi_operation', 'created_at', 'delivered_at', 'completed_at', 'expires_at');
@@ -66,14 +67,19 @@ export function createAndroidCommandsRouter(): Router {
   }));
 
   router.post('/devices/:id/commands', capability, wrap(async (req, res) => {
-    const deviceId = deviceIdOf(req);
-    await ownDevice(Number(req.tenantId), deviceId);
+    // The device first (404 whatever the request says), then the type, the capability of the type on this device (403)
+    // and the restriction of the tenant's matrix (step-up; 'restricted': refused until the approvals of the common
+    // queue, lot AN-P): the order of the Apple route (review AN-A2).
+    const deviceId = await androidDeviceOf(req, req.params.id);
     const parsed = CreateBody.safeParse(req.body);
     if (!parsed.success || !isAndroidCommandType(parsed.data.type)) throw new AppError(400, 'Invalid input', 'invalidInput');
     const type = parsed.data.type;
     if (ANDROID_COMMANDS[type].guarded) throw new AppError(409, 'This command is requested through a guarded action', 'guardedActionRequired');
+    await androidDeviceOf(req, deviceId, ANDROID_COMMAND_CAPABILITY[type]);
     const key = req.get('Idempotency-Key');
     if (key !== undefined && !KEY.test(key)) throw new AppError(400, 'Invalid Idempotency-Key', 'invalidInput');
+    const restrictionKey = ANDROID_COMMAND_RESTRICTION[type];
+    if (restrictionKey && !(await applyRestriction(res, { req, actionKey: restrictionKey, deviceIds: [deviceId] }))) return;
     const tenantId = Number(req.tenantId);
     const userId = Number(req.session.userId);
     try {
@@ -101,6 +107,7 @@ export function createAndroidCommandsRouter(): Router {
   router.post('/commands/:id/cancel', capability, wrap(async (req, res) => {
     const id = UUID.safeParse(req.params.id);
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
+    await ownCommand(req, id.data);
     const tenantId = Number(req.tenantId);
     try {
       const r = await cancelAndroidCommand(tenantId, id.data, { actor: `u:${Number(req.session.userId)}`, auditCtx: await audit.fromRequest(req, tenantId) });
@@ -111,6 +118,7 @@ export function createAndroidCommandsRouter(): Router {
   router.post('/commands/:id/retry', capability, wrap(async (req, res) => {
     const id = UUID.safeParse(req.params.id);
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
+    await ownCommand(req, id.data);
     const tenantId = Number(req.tenantId);
     const userId = Number(req.session.userId);
     try {
@@ -137,7 +145,7 @@ export function createAndroidCommandsRouter(): Router {
     const id = UUID.safeParse(req.params.id);
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
     const tenantId = Number(req.tenantId);
-    if (!(await db('android_commands').where({ tenant_id: tenantId, id: id.data }).first('id'))) throw new AppError(404, 'Not found', 'notFound');
+    await ownCommand(req, id.data);
     const r = await releaseHeldCommand(tenantId, id.data, { type: 'user', userId: Number(req.session.userId) });
     if (r === 'frozen') throw new AppError(423, 'The tenant is frozen', 'tenantFrozen');
     if (r === 'not_held') throw new AppError(409, 'This command is not held by the last-resort cap', 'commandNotHeld');
