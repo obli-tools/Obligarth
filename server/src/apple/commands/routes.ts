@@ -147,6 +147,9 @@ function consoleSpec(requestType: string, params: Record<string, unknown> | unde
   if (guardedActionOf(spec, parsed.data as Record<string, unknown>)) {
     throw new AppError(409, 'This command goes through its guarded action', 'guardedActionRequired', { actionKey: guardedActionOf(spec, parsed.data as Record<string, unknown>) });
   }
+  // Parameters reserved to the system origins (a profile of a policy, the items a policy compiles), told at once, before
+  // a step-up or a second approver is asked: the bus refuses them anyway (MDM-B5c-R7).
+  if (spec.systemOnly?.(parsed.data)) throw new AppError(422, `${requestType}: these parameters are reserved to the policies`, 'invalidParams');
   // No secret in clear among the parameters (§8.8), told at once: the bus refuses the command anyway, but only once
   // a step-up or a second approver was asked, and a request for approval would keep the value in its payload
   // meanwhile (review of lot B4). The same rules as the bus, on what the caller typed; key names only in the answer.

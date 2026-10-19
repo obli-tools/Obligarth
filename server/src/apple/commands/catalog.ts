@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { DeviceCapability, NanoEnrollType, Ownership } from '@obligarth/shared';
+import { POLICY_PROFILE_PREFIXES } from '@obligarth/shared';
 import type { PrivacyRules } from '../devices/privacy';
 import { PlistData, plistFromJson, plistFromTypedJson, type PlistDict, type PlistValue } from './plist';
 import { UNLOCK_PLACEHOLDER } from './sensitive';
@@ -113,6 +114,12 @@ const identifiers = z.array(identifier).min(1).max(500);
 /** Prefix of the identifier of the enrollment profile of a tenant ('tools.obli.obligarth.enroll.<key>', §10.2):
  *  removing it is the removal from management, reserved to the guarded action mdm.remove_management. */
 export const ENROLLMENT_PROFILE_PREFIX = 'tools.obli.obligarth.enroll.';
+
+/** Is this the identifier of a profile a policy delivers (shared POLICY_PROFILE_PREFIXES), compared without case? */
+export function isPolicyProfileIdentifier(identifier: string): boolean {
+  const id = identifier.toLowerCase();
+  return POLICY_PROFILE_PREFIXES.some((p) => id.startsWith(p));
+}
 export const REMOVE_MANAGEMENT_ACTION = 'mdm.remove_management';
 
 /** The identifier of the enrollment profile of the tenant of `mdmKey`. */
@@ -289,11 +296,15 @@ export function registerMvpCommandSpecs(): void {
     }).strict(),
     build: () => { throw new Error('InstallProfile is built by the bus from its profile source'); },
   });
-  // 20: the enrollment profile is removed by the guarded action mdm.remove_management only (guardedActionOf).
+  // 20: the enrollment profile is removed by the guarded action mdm.remove_management only (guardedActionOf). A profile
+  // of a policy (tools.obli.obligarth.p. or .raw.) is removed by the reconciliation of its artifacts only: from the
+  // console, the same removal on 500 devices escaped the preview and the thresholds of DM23 (review of lot B5c,
+  // MDM-B5c-R7; decision of the owners of 15/10/2026). Compared without case, like the enrollment profile.
   registerCommandSpec({
     requestType: 'RemoveProfile', restrictionKey: 'mdm.profiles', capability: 'mdm:profiles', supervised: 'no', ownership: E_C_B,
     enrollmentStates: BOTH, perDevice: false, maxTargets: 10_000, expiresInSeconds: 14 * DAY, guardedBy: null, reasonRequired: false,
     params: z.object({ identifier }).strict(),
+    systemOnly: (p) => isPolicyProfileIdentifier(p.identifier),
     build: (p) => ({ Identifier: p.identifier }),
   });
   // 21, 22

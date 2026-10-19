@@ -123,35 +123,49 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 const APP_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/;
 const MAX_LIST = 2000;
 
+/** Rows of device_apps written per statement (INT-B5a-R4: 2 000 apps were written one by one). */
+const APPS_BATCH = 500;
+
 /** app.managed.list: the managed apps the device reports, merged by identifier; an element marked _removed leaves
- *  (incremental reports [J1]). A row another source created keeps its source. */
+ *  (incremental reports [J1]). A row another source created keeps its source. Written by batches of APPS_BATCH
+ *  rows (review of lot B5a, INT-B5a-R4). */
 async function applyManagedApps(trx: Knex.Transaction, tenantId: number, deviceId: number, value: unknown, managedOnly: boolean, at: Date): Promise<void> {
   if (!Array.isArray(value)) return;
   const seen = new Set<string>();
+  const removed: string[] = [];
+  const rows: Array<Record<string, unknown>> = [];
   for (const a of value.slice(0, MAX_LIST)) {
     const identifier = isObject(a) ? str(a.identifier, 255) : null;
     if (!isObject(a) || !identifier || !APP_IDENTIFIER_RE.test(identifier) || seen.has(identifier)) continue;
     seen.add(identifier);
-    if (a._removed === true) {
-      // No longer managed: a row of this source leaves; an installed app stays, unmanaged (unless only the managed
-      // apps of this device are kept).
-      const gone = trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, identifier });
-      if (managedOnly) await gone.del();
-      else {
-        await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, identifier, source: 'ddm_status' }).del();
-        await gone.update({ managed: false, management_status: null });
-      }
-      continue;
+    if (a._removed === true) { removed.push(identifier); continue; }
+    rows.push({
+      tenant_id: tenantId, device_id: deviceId, identifier, name: str(a.name, 255), version: str(a.version, 64),
+      short_version: str(a['short-version'], 64), managed: true, management_status: str(a.state, 32), source: 'ddm_status',
+      first_seen_at: at, last_seen_at: at,
+    });
+  }
+  for (let i = 0; i < removed.length; i += APPS_BATCH) {
+    // No longer managed: a row of this source leaves; an installed app stays, unmanaged (unless only the managed apps
+    // of this device are kept).
+    const ids = removed.slice(i, i + APPS_BATCH);
+    const gone = trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId }).whereIn('identifier', ids);
+    if (managedOnly) await gone.del();
+    else {
+      await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, source: 'ddm_status' }).whereIn('identifier', ids).del();
+      await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId }).whereIn('identifier', ids).update({ managed: false, management_status: null });
     }
-    const name = str(a.name, 255);
-    const version = str(a.version, 64);
-    const shortVersion = str(a['short-version'], 64);
+  }
+  for (let i = 0; i < rows.length; i += APPS_BATCH) {
     // What the report does not say (a name, a version) keeps the value another source wrote.
-    await trx('device_apps').insert({
-      tenant_id: tenantId, device_id: deviceId, identifier, name, version, short_version: shortVersion, managed: true,
-      management_status: str(a.state, 32), source: 'ddm_status', first_seen_at: at, last_seen_at: at,
-    }).onConflict(['tenant_id', 'device_id', 'identifier']).merge(['managed', 'management_status', 'last_seen_at',
-      ...(name ? ['name'] : []), ...(version ? ['version'] : []), ...(shortVersion ? ['short_version'] : [])]);
+    await trx('device_apps').insert(rows.slice(i, i + APPS_BATCH)).onConflict(['tenant_id', 'device_id', 'identifier']).merge({
+      managed: trx.raw('excluded.managed'),
+      management_status: trx.raw('excluded.management_status'),
+      last_seen_at: trx.raw('excluded.last_seen_at'),
+      name: trx.raw('COALESCE(excluded.name, device_apps.name)'),
+      version: trx.raw('COALESCE(excluded.version, device_apps.version)'),
+      short_version: trx.raw('COALESCE(excluded.short_version, device_apps.short_version)'),
+    });
   }
 }
 

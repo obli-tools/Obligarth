@@ -304,12 +304,17 @@ export function createAppleEdgeClient(opts: AppleEdgeClientOptions): AppleEdgeCl
     if (status >= 300 && status < 400) throw new AppleEdgeError(status, 'protocol', 'apple-edge answered a redirection (never followed)', false);
     let code = `http_${status}`;
     let message = `apple-edge answered ${status}`;
+    let targets: string[] | null = null;
     try {
-      const e = JSON.parse(buf.toString('utf8')) as { error?: { code?: unknown; message?: unknown } };
+      const e = JSON.parse(buf.toString('utf8')) as { error?: { code?: unknown; message?: unknown; targets?: unknown; targets_truncated?: unknown } };
       if (typeof e?.error?.code === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(e.error.code)) code = e.error.code;
       if (typeof e?.error?.message === 'string') message = e.error.message.slice(0, 300);
+      // The refused targets of an enqueue (point 19), when apple-edge lists them all: enrollment ids only.
+      const t = e?.error?.targets;
+      if (Array.isArray(t) && t.length <= 1000 && e.error?.targets_truncated !== true
+        && t.every((x) => typeof x === 'string' && x.length <= 300 && /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(x))) targets = t as string[];
     } catch { /* not JSON: the status speaks */ }
-    throw new AppleEdgeError(status, code, message, isRetryableAnswer(status, code));
+    throw new AppleEdgeError(status, code, message, isRetryableAnswer(status, code), targets);
   }
 
   async function callRaw<S extends z.ZodTypeAny | null>(spec: CallSpec<S>, o: EdgeCallOptions): Promise<{ status: number; data: unknown }> {

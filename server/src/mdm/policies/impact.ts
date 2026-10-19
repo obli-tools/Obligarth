@@ -5,6 +5,8 @@ import {
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
+import { fleetShareFloor } from '../settings';
+import { recentlyTouched } from './changeLedger';
 import { findConflicts } from './conflicts';
 import { ancestryWithout, describeKeys, encodeSpread, entryName, impactDigest, movedAncestry } from './impactPure';
 import {
@@ -44,9 +46,12 @@ export type ProposedChange =
   /** A group moved under `newParentId` (null: to the root): the ancestry of its whole subtree changes. */
   | { kind: 'group_move'; groupId: number; newParentId: number | null }
   /** A group deleted: its assignments go with it, its devices leave it, its subgroups lose it as an ancestor. */
-  | { kind: 'group_delete'; groupId: number };
+  | { kind: 'group_delete'; groupId: number }
+  /** Devices moved into a group (null: out of any group): they inherit what the new group's ancestry carries (S12). */
+  | { kind: 'device_move'; deviceIds: number[]; groupId: number | null };
 
 export type GroupTreeChange = Extract<ProposedChange, { kind: 'group_move' | 'group_delete' }>;
+export type DeviceMoveChange = Extract<ProposedChange, { kind: 'device_move' }>;
 
 export interface ImpactOptions {
   catalog?: AppleCatalogView;
@@ -55,6 +60,8 @@ export interface ImpactOptions {
   /** Devices the sample may show (the caller's scopes); 'all' for an administrator. */
   visibleDeviceIds?: number[] | 'all';
   sampleSize?: number;
+  /** False: the thresholds bear on this change alone (the executor of an approved request compares its own preview). */
+  cumulative?: boolean;
 }
 
 export interface TouchedDevice { deviceId: number; label: string; added: string[]; changed: string[]; removed: string[] }
@@ -75,6 +82,8 @@ export interface ImpactResult {
   digest: string;
   /** The entries of that digest, each with the number of devices it reaches. */
   content: ContentEntry[];
+  /** The devices with at least one removal (artifact, kiosk lock, app), by id (the cumulative threshold). */
+  removalDeviceIds: number[];
 }
 
 const KIOSK_LOCK_TYPE = 'com.apple.app.lock';
@@ -128,10 +137,33 @@ async function proposedTree(q: Knex | Knex.Transaction, tenantId: number, state:
   };
 }
 
+/** The proposed state of devices moved into a group (or out of any): their group and its ancestry change (S12). */
+async function proposedDeviceMove(q: Knex | Knex.Transaction, tenantId: number, state: PolicyState,
+  change: Extract<ProposedChange, { kind: 'device_move' }>): Promise<Proposal> {
+  let line: Array<{ groupId: number; depth: number }> = [];
+  if (change.groupId !== null) {
+    line = (await loadGroupAncestors(q, tenantId, [change.groupId])).get(change.groupId) ?? [];
+    if (!line.length) throw new AppError(404, 'Group not found');
+  }
+  const moved = new Set(change.deviceIds);
+  const groupId = change.groupId;
+  return {
+    proposed: state,
+    targets: change.deviceIds.map((id) => ({ scope: 'device' as const, id })),
+    focus: null,
+    reshape: (set) => {
+      const groupAncestors = new Map(set.groupAncestors);
+      if (groupId !== null) groupAncestors.set(groupId, line);
+      return { devices: set.devices.map((d) => (moved.has(d.id) ? { ...d, groupId } : d)), groupAncestors };
+    },
+  };
+}
+
 /** The proposed state of a change, the targets it reaches and the resources it changes. */
 async function proposedState(q: Knex | Knex.Transaction, tenantId: number, state: PolicyState, change: ProposedChange,
   catalog: AppleCatalogView): Promise<Proposal> {
   if (change.kind === 'group_move' || change.kind === 'group_delete') return proposedTree(q, tenantId, state, change);
+  if (change.kind === 'device_move') return proposedDeviceMove(q, tenantId, state, change);
   if (change.kind === 'version') {
     const v = await q('policy_versions as v').join('policies as p', function joinPolicy() { this.on('p.id', '=', 'v.policy_id').andOn('p.tenant_id', '=', 'v.tenant_id'); })
       .where({ 'v.tenant_id': tenantId, 'v.id': change.versionId, 'v.policy_id': change.policyId })
@@ -213,6 +245,7 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
   let devicesAdded = 0;
   let devicesRemoved = 0;
   let removalDevices = 0;
+  const removalDeviceIds: number[] = [];
   const touched: TouchedDevice[] = [];
   // What the change does, entry by entry (a device counts once per entry: it has one state per key).
   const content = new Map<string, { settingKey: string; devices: number }>();
@@ -275,7 +308,7 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       if (x.type === KIOSK_LOCK_TYPE) artifacts.kioskLockChanges++;
       if (x.kind === 'app') artifacts.appRemovals++;
     }
-    if (removal) removalDevices++;
+    if (removal) { removalDevices++; removalDeviceIds.push(devices[i].id); }
   }
 
   // A change of the tree sets no two values at one target: the conflicts are those of the assignments (section 7.7).
@@ -283,10 +316,25 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
   const fleet = await q('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled').count({ n: '*' }).first() as { n: string | number };
   const fleetSize = Number(fleet?.n ?? 0);
   const T = PUBLISH_APPROVAL_THRESHOLDS;
+  // The share of the fleet counts from a floor of touched devices (5 by default, set by the tenant): on a small
+  // fleet, 10 % would ask a second approver for almost any change (decision of the owners of 15/10/2026).
+  const floor = await fleetShareFloor(q, tenantId);
+  const beyond = (n: number): boolean => n >= T.devicesTouched || (n >= floor && fleetSize > 0 && n >= T.fleetShare * fleetSize);
   const reasons: ImpactApprovalReason[] = [];
   if (touched.length >= T.devicesTouched) reasons.push('devices_threshold');
-  if (touched.length > 0 && fleetSize > 0 && touched.length >= T.fleetShare * fleetSize) reasons.push('fleet_share');
+  if (touched.length >= floor && fleetSize > 0 && touched.length >= T.fleetShare * fleetSize) reasons.push('fleet_share');
   if (removalDevices >= T.removalDevices) reasons.push('removal_threshold');
+  // The same thresholds on this change together with the direct changes of the last hour (MDM-B5b-C7): distinct
+  // devices, counted only when this change touches one (or removes something, for the removals).
+  let cumulative: PolicyImpact['cumulative'];
+  if (opts.cumulative !== false && (touched.length > 0 || removalDevices > 0)) {
+    const recent = await recentlyTouched(q, tenantId);
+    for (const t of touched) recent.devices.add(t.deviceId);
+    for (const d of removalDeviceIds) recent.removals.add(d);
+    cumulative = { windowMinutes: T.cumulativeWindowMinutes, devicesTouched: recent.devices.size, removalDevices: recent.removals.size };
+    if (!reasons.length && ((touched.length > 0 && beyond(recent.devices.size))
+      || (removalDevices > 0 && recent.removals.size >= T.removalDevices))) reasons.push('cumulative');
+  }
   if (opts.matrixLevel === 'restricted') reasons.push('restriction');
 
   const visible = opts.visibleDeviceIds ?? 'all';
@@ -305,10 +353,13 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     fleetSize,
     approval: { required: reasons.length > 0, reasons },
     removalDevices,
+    ...(cumulative ? { cumulative } : {}),
+    fleetShareFloor: floor,
   };
   return {
     impact, touched, digest: impactDigest(content.keys()),
     content: [...content].map(([entry, c]) => ({ name: entryName(entry), settingKey: c.settingKey, devices: c.devices })),
+    removalDeviceIds,
   };
 }
 

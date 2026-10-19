@@ -20,13 +20,17 @@ export class AppleEdgeError extends Error {
   readonly code: AppleEdgeErrorCode;
   /** A later attempt may succeed (transport, timeout, circuit open, 5xx, 502 ade_unavailable). */
   readonly retryable: boolean;
+  /** The enrollments the error names (422 target_outside_tenant of the enqueue: apple-edge README §10, point 19);
+   *  null when it names none, or more than it lists (targets_truncated). */
+  readonly targets: string[] | null;
 
-  constructor(status: number | null, code: AppleEdgeErrorCode, message: string, retryable: boolean) {
+  constructor(status: number | null, code: AppleEdgeErrorCode, message: string, retryable: boolean, targets: string[] | null = null) {
     super(message);
     this.name = 'AppleEdgeError';
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.targets = targets;
   }
 }
 

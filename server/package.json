@@ -15,7 +15,8 @@
     "test:vault": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/vault/*.test.ts\"",
     "test:audit": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/audit/*.test.ts\"",
     "test:guard": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/guard/*.test.ts\"",
-    "test:mdm": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/mdm/**/*.test.ts\""
+    "test:mdm": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/mdm/**/*.test.ts\"",
+    "test:apple": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/apple/**/*.test.ts\""
   },
   "dependencies": {
     "@obligarth/shared": "*",

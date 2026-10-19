@@ -1,4 +1,5 @@
 import { RAW_PROFILE_TYPE, type AppleItem, type JsonValue } from '@obligarth/shared';
+import { verifySignedData, type CmsSignatureCheck } from '../../apple/commands/cmsVerify';
 import { DerError, signedDataContent } from '../../apple/commands/der';
 import { PlistData, PlistDate, PlistError, PlistReal, parsePlist, type PlistValue } from '../../apple/commands/plist';
 import { PEM_PRIVATE_KEY_RE, SECRET_KEY_RE } from '../../apple/commands/sensitive';
@@ -10,10 +11,13 @@ export { RAW_PROFILE_MAX_DEPTH };
 // =============================================================================
 // Reading of an imported configuration profile (docs: modele-donnees-mdm §7.2,
 // CFG-06, S6): a .mobileconfig becomes the values of a raw.profile item.
-//   - 1 MiB at most; a CMS signature, when there is one, is removed (the
-//     content it carries is read; the signature itself is NOT verified at
-//     this stage: the profile is delivered by the MDM channel, re-rendered
-//     and never signed by its author's key);
+//   - 1 MiB at most; a CMS signature, when there is one, is verified, then
+//     removed (the content it carries is read; the profile is delivered by
+//     the MDM channel, re-rendered, never signed by its author's key): a
+//     signature that does not verify refuses the profile (invalid_signature),
+//     one of an algorithm not verified here (RSA-PSS…) is reported as such and
+//     never shown as a signature (S6; MDM-B5c-R8, decision of the owners of
+//     15/10/2026; apple/commands/cmsVerify.ts);
 //   - an XML property list read by the strict reader of the brain (the plist
 //     subset only, no internal DTD, no entity besides the five predefined
 //     ones and character references); a binary property list is refused;
@@ -33,7 +37,7 @@ export { RAW_PROFILE_MAX_DEPTH };
 // Pure: the unit tests load it.
 // =============================================================================
 
-export type RawProfileErrorCode = 'too_large' | 'binary_plist' | 'unreadable_signature' | 'invalid_plist' | 'not_a_profile'
+export type RawProfileErrorCode = 'too_large' | 'binary_plist' | 'unreadable_signature' | 'invalid_signature' | 'invalid_plist' | 'not_a_profile'
   | 'encrypted_profile' | 'no_payload' | 'too_many_payloads' | 'forbidden_payload' | 'too_deep' | 'invalid_value';
 
 export class RawProfileError extends Error {
@@ -87,7 +91,10 @@ export interface RawProfile {
   originalIdentifier: string;
   payloads: Array<Record<string, JsonValue>>;
   /** The file carried a CMS signature (removed, not verified). */
+  /** The file carried a signature that verifies (signature.status 'valid'). */
   signed: boolean;
+  /** The check of the signature the file carried; null when it was not signed. */
+  signature: CmsSignatureCheck | null;
 }
 
 /** Reads the bytes of an imported .mobileconfig. Throws RawProfileError. */
@@ -95,17 +102,18 @@ export function readRawProfile(bytes: Buffer): RawProfile {
   if (!Buffer.isBuffer(bytes) || bytes.length === 0) throw new RawProfileError('invalid_plist');
   if (bytes.length > RAW_PROFILE_MAX_BYTES) throw new RawProfileError('too_large');
   let content = bytes;
-  let signed = false;
+  let signature: CmsSignatureCheck | null = null;
   if (bytes[0] === 0x30) {
     try {
       const inner = signedDataContent(bytes);
       if (inner === null) throw new RawProfileError('invalid_plist');
+      signature = verifySignedData(bytes, inner);
       content = inner;
-      signed = true;
     } catch (err) {
       if (err instanceof DerError) throw new RawProfileError('unreadable_signature');
       throw err;
     }
+    if (signature.status === 'invalid') throw new RawProfileError('invalid_signature');
   }
   let start = 0;
   while (start < content.length && LEADING.has(content[start])) start++;
@@ -136,7 +144,8 @@ export function readRawProfile(bytes: Buffer): RawProfile {
     displayName: text(root.PayloadDisplayName, 200) || 'Imported profile',
     originalIdentifier: text(root.PayloadIdentifier, 255),
     payloads,
-    signed,
+    signed: signature?.status === 'valid',
+    signature,
   };
 }
 
@@ -145,6 +154,11 @@ export interface RawSecretSite { path: Array<string | number>; value: JsonValue 
 
 const nonEmpty = (v: JsonValue): boolean => (typeof v === 'string' ? v !== ''
   : !!v && typeof v === 'object' && !Array.isArray(v) && typeof (v as { $data?: unknown }).$data === 'string' && (v as { $data: string }).$data !== '');
+
+/** The import's own rule, beyond the command scanner's (MDM-B5c-R9; decision of the owners of 15/10/2026): whatever
+ *  their case, a key that names a password, a secret, a token, an API key, a credential or an authorization header
+ *  goes to the vault. For the import only: a value moved there is still delivered, encrypted for each device. */
+export const IMPORT_SECRET_KEY_RE = /pass(word|wd|phrase)|secret|token|api[-_]?key|credential|authori[sz]ation/i;
 
 /**
  * The secrets of the payloads of a raw profile. `secretKeyOf(payloadType, dottedPath)`: true when the overlay names
@@ -166,7 +180,7 @@ export function rawSecretSites(payloads: Array<Record<string, JsonValue>>, secre
       const pem = typeof e === 'string' && PEM_PRIVATE_KEY_RE.test(e);
       const pemData = !pem && candidate && typeof e !== 'string'
         && PEM_PRIVATE_KEY_RE.test(Buffer.from((e as { $data: string }).$data, 'base64').toString('latin1'));
-      if (candidate && nonEmpty(e) && (pkcs12 || pem || pemData || SECRET_KEY_RE.test(k) || secretKeyOf(type, here.join('.')))) {
+      if (candidate && nonEmpty(e) && (pkcs12 || pem || pemData || SECRET_KEY_RE.test(k) || IMPORT_SECRET_KEY_RE.test(k) || secretKeyOf(type, here.join('.')))) {
         sites.push({ path: [...path, k], value: e });
         continue;
       }

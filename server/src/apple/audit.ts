@@ -41,6 +41,8 @@ export function registerAppleAuditActions(): void {
     { name: 'mdm.command_cancelled', criticality: 'protective', label: 'MDM command cancelled' },
     { name: 'mdm.command_acknowledged', criticality: 'standard', label: 'MDM command acknowledged' },
     { name: 'mdm.command_failed', criticality: 'standard', label: 'MDM command failed' },
+    // A synchronisation of the declarations forced from the console, in the name of the user (INT-B5a-R5).
+    { name: 'apple.ddm_sync_requested', criticality: 'standard', label: 'DDM synchronisation forced' },
     // Enrollment (§10)
     { name: 'apple.enrollment_profile_saved', criticality: 'standard', label: 'Enrollment profile saved' },
     { name: 'apple.enrollment_token_created', criticality: 'standard', label: 'Enrollment link created' },

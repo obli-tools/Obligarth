@@ -19,8 +19,10 @@ import { DECLARATION_FAMILIES, type DeclarationFamily } from './capabilities';
 // Self-contained: the unit tests run under node --test.
 // =============================================================================
 
-/** Largest status report accepted (bytes of the JSON a device posted). */
-export const MAX_REPORT_BYTES = 4 * 1024 * 1024;
+/** Largest status report accepted (bytes of the JSON a device posted). A report of Apple weighs a few tens of KiB:
+ *  1 MiB, not the 4 MiB of the other endpoints (review of lot B5a, INT-B5a-R4; decision of the owners of 15/10/2026:
+ *  a report of 4 MiB held the relay 244 to 317 ms and its ingestion 3.6 to 5.3 s). */
+export const MAX_REPORT_BYTES = 1024 * 1024;
 /** reasons of a declaration status kept (bytes of their JSON). */
 export const MAX_REASONS_BYTES = 4 * 1024;
 const MAX_DEPTH = 12;

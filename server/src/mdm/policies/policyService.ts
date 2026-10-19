@@ -13,7 +13,7 @@ import { logger } from '../../utils/logger';
 import { vault } from '../../vault';
 import { appleCatalog } from '../apple/catalog';
 import {
-  RawProfileError, rawSecretSites, rawSuspectKeys, readRawProfile, redactRawProfileItem, redactRawProfileValues, withRawSecretRefs,
+  RawProfileError, type RawProfile, rawSecretSites, rawSuspectKeys, readRawProfile, redactRawProfileItem, redactRawProfileValues, withRawSecretRefs,
 } from '../apple/plistRead';
 import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
@@ -489,7 +489,8 @@ export const policyService = {
    * (never a value). 422 rawProfileInvalid; 409 when the policy has no draft.
    */
   async importRawProfile(tenantId: number, policyId: number, bytes: Buffer, actor: PolicyActor):
-    Promise<{ version: PolicyVersion; itemId: string; movedSecrets: string[]; suspectKeys: string[]; payloadTypes: string[]; signed: boolean }> {
+    Promise<{ version: PolicyVersion; itemId: string; movedSecrets: string[]; suspectKeys: string[]; payloadTypes: string[]; signed: boolean;
+      signature: RawProfile['signature'] }> {
     await policyRow(db, tenantId, policyId);
     await settleOrphanedPending(db, tenantId, policyId);
     let profile: ReturnType<typeof readRawProfile>;
@@ -534,11 +535,12 @@ export const policyService = {
     const movedSecrets = [...new Set(sites.map((s) => s.path.filter((p) => typeof p === 'string').join('.')))].sort();
     await audit.append({
       tenantId, action: 'policy.raw_profile_imported', target: { type: 'policy', id: String(policyId) },
-      details: { version: Number(saved.version), payloads: profile.payloads.length, payloadTypes: payloadTypes.slice(0, 20), movedToVault: sites.length, signed: profile.signed },
+      details: { version: Number(saved.version), payloads: profile.payloads.length, payloadTypes: payloadTypes.slice(0, 20), movedToVault: sites.length, signed: profile.signed,
+        signature: profile.signature ? { status: profile.signature.status, trusted: profile.signature.trusted ?? false, signerSha256: profile.signature.signer?.sha256 ?? null } : null },
     }, actor.auditCtx);
     // Keys that look like secrets and stay in clear (no rule moved them): shown to the editor (MDM-B5c-R9).
     const suspectKeys = rawSuspectKeys(profile.payloads, sites);
-    return { version: rowToVersion(saved), itemId, movedSecrets, suspectKeys, payloadTypes, signed: profile.signed };
+    return { version: rowToVersion(saved), itemId, movedSecrets, suspectKeys, payloadTypes, signed: profile.signed, signature: profile.signature };
   },
 
   /** Validation and conflicts of a version, without effect (POST …/validate). */

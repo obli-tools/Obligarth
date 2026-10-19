@@ -215,12 +215,18 @@ async function applyAccepted(trx: Knex.Transaction, tenantId: number, commandId:
 }
 
 /** 422 target_outside_tenant: nothing was enqueued. The targets apple-edge no longer holds as enabled leave the
- *  set; true when the set shrank (the caller submits again). */
-async function shrinkSet(ctx: JobContext<Submit>, key: string, commandId: string, set: Array<{ deviceId: number; enrollmentId: string }>): Promise<{ left: typeof set; changed: number[] }> {
+ *  set; true when the set shrank (the caller submits again). When the refusal names the refused targets (apple-edge
+ *  README §10, point 19), they are taken from it; otherwise each target is asked for (50 at most) or the enrollments
+ *  of the tenant are listed. */
+async function shrinkSet(ctx: JobContext<Submit>, key: string, commandId: string, set: Array<{ deviceId: number; enrollmentId: string }>,
+  named: string[] | null = null): Promise<{ left: typeof set; changed: number[] }> {
   const tenantId = ctx.tenantId as number;
   const call = { actor: ctx.actor, requestId: ctx.requestId, signal: ctx.signal };
   const enabled = new Set<string>();
-  if (set.length <= 50) {
+  const refused = named ? new Set(named) : null;
+  if (refused && set.some((s) => refused.has(s.enrollmentId))) {
+    for (const s of set) if (!refused.has(s.enrollmentId)) enabled.add(s.enrollmentId);
+  } else if (set.length <= 50) {
     for (const s of set) {
       try {
         const e = await appleEdge.getEnrollment(key, s.enrollmentId, call);
@@ -291,7 +297,7 @@ async function submit(ctx: JobContext<Submit>): Promise<JobResult> {
         if (e.code === 'target_outside_tenant') {
           // Two rounds at most in one run (§8.6); a set that changes again is taken up by the next attempt.
           if (round >= 2) throw new JobError('target_outside_tenant', 'the targets of the command changed again at apple-edge');
-          const s = await shrinkSet(ctx, key, commandId, set);
+          const s = await shrinkSet(ctx, key, commandId, set, e.targets);
           changed.push(...s.changed);
           if (s.left.length === set.length) throw new JobError('target_outside_tenant', 'apple-edge refuses a target it reports as enabled');
           set = s.left;

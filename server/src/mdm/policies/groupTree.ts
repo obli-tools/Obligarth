@@ -10,6 +10,7 @@ import { groupNotificationService } from '../../services/groupNotification.servi
 import { groupService } from '../../services/group.service';
 import { permissionService } from '../../services/permission.service';
 import { restrictionService } from '../../services/restriction.service';
+import { recordDirectChange } from './changeLedger';
 import { withConfigurationLock } from './configLock';
 import { approvalImpact, computeImpact, describeKeys, impactSummary, type GroupTreeChange, type ImpactResult } from './impact';
 import { quoted } from './impactPure';
@@ -76,6 +77,12 @@ async function look(q: Knex | Knex.Transaction, tenantId: number, change: GroupT
   return { ...result, level, actionKey: publish !== 'none' && strictest(publish, bulk) === publish ? POLICY_PUBLISH_ACTION : BULK_GROUP_ACTION };
 }
 
+/** 409 groupHasSubgroups: a group whose subgroups would lose it as an ancestor without being moved. */
+export async function refuseIfSubgroups(q: Knex | Knex.Transaction, tenantId: number, groupId: number): Promise<void> {
+  const child = await q('device_groups').where({ tenant_id: tenantId, parent_id: groupId }).first('id');
+  if (child) throw new AppError(409, 'A group with subgroups is not deleted: move its subgroups first', 'groupHasSubgroups');
+}
+
 /** Writes the change in `trx` (which holds the lock), with its journal entry; null or false when the group is gone. */
 async function write(trx: Knex.Transaction, change: GroupTreeChange,
   journal: { ctx: AuditWriteContext; approvalId?: number; impact: PolicyImpact }): Promise<DeviceGroup | boolean | null> {
@@ -105,6 +112,9 @@ async function describe(q: Knex | Knex.Transaction, tenantId: number, group: { i
  */
 export async function changeGroupTree(req: Request, group: DeviceGroup, change: GroupTreeChange, dryRun: boolean): Promise<RouteOutcome> {
   const tenantId = group.tenantId;
+  // A group with subgroups is not deleted (decision of the owners of 15/10/2026): its subgroups are moved first,
+  // each move previewed. Refused here for the preview too; groupService.delete checks it again under the lock.
+  if (change.kind === 'group_delete') await refuseIfSubgroups(db, tenantId, change.groupId);
   const userId = req.session.userId!;
   const visible = await visibleDevices(req);
   // The token of the full list is read by /api/mdm/impact in the tenant of the session: none from the global view.
@@ -139,7 +149,9 @@ export async function changeGroupTree(req: Request, group: DeviceGroup, change: 
     }
     // A second factor is owed that the request was not asked for, or was asked for another restriction.
     if (now.level === 'sensitive' && (!proven || now.actionKey !== first.actionKey)) impactChanged();
-    return { impact: now.impact, approval: null, result: await write(trx, change, { ctx, impact: now.impact }) };
+    const result = await write(trx, change, { ctx, impact: now.impact });
+    if (result) await recordDirectChange(trx, tenantId, change.kind, { deviceIds: now.touched.map((t) => t.deviceId), removalDeviceIds: now.removalDeviceIds });
+    return { impact: now.impact, approval: null, result };
   });
   done.impact.devicesToken = token();
   if (done.approval) {

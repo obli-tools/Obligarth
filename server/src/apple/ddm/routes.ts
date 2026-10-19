@@ -9,6 +9,8 @@ import { asTargetTenant, globalViewRead, globalViewScope } from '../../middlewar
 import { AppError } from '../../middleware/errorHandler';
 import { parseRequestDeviceId, resolveRequestDevice } from '../../services/deviceScope.service';
 import { permissionService } from '../../services/permission.service';
+import { audit } from '../../audit';
+import { tenantFrozen } from '../commands/bus';
 import { isFinalTargetState } from '../commands/targets';
 import type { SetItem } from './engine';
 import { ddmJobs } from './jobs';
@@ -22,7 +24,11 @@ import { ddmJobs } from './jobs';
 //                                   ?item=<name>&history=1: the history of one
 //   POST /devices/:id/ddm-sync      202: a synchronisation now, announced even
 //                                   when the tokens did not change (one per
-//                                   device and per minute)
+//                                   device and per minute); a device of the
+//                                   session's tenant only (§8.11), 423
+//                                   tenantFrozen during an emergency freeze,
+//                                   entry apple.ddm_sync_requested in the
+//                                   name of the user (INT-B5a-R5)
 // A device out of reach answers like an unknown one (404), whatever the state
 // of the integration. Reads accept the master tenant's global view. Never the
 // payload of a declaration: its identifier, type and tokens. With
@@ -152,6 +158,9 @@ router.get('/devices/:id/status-items', globalViewScope('console.devices'), reso
 router.post('/devices/:id/ddm-sync', resolveDevice({ capability: SYNC_CAPABILITY, write: true }), requireIntegration, async (req, res, next) => {
   try {
     const { id, tenantId } = req.ddmDevice!;
+    // Like the commands of §8.12 (§8.11), a device of the session's tenant only: never from the master tenant's global
+    // view (review of lot B5a, INT-B5a-R5; decision of the owners of 15/10/2026).
+    if (tenantId !== req.tenantId) throw new AppError(404, 'Device not found');
     const job = ddmJobs.deviceSync();
     if (!job || !defaultRuntime.isStarted()) throw new AppError(503, 'Background jobs are not running', 'jobsUnavailable');
     const requested = await asTargetTenant(req, tenantId, () => db.transaction(async (trx) => {
@@ -159,6 +168,9 @@ router.post('/devices/:id/ddm-sync', resolveDevice({ capability: SYNC_CAPABILITY
       if (!d || (d.enrollment_state !== 'enrolled' && d.enrollment_state !== 'awaiting_configuration')) {
         throw new AppError(409, 'This device is not under management', 'deviceNotManaged');
       }
+      // During an emergency freeze, like a command of the console: 423, nothing written (it answered 202 and wrote a
+      // command held back).
+      if (await tenantFrozen(trx, tenantId)) throw new AppError(423, 'The commands of this tenant are frozen', 'tenantFrozen');
       // One forced synchronisation per device and per minute (its own key: the engine's requests are not throttled).
       const sent = await job.sendInTx(trx, { tenantId, deviceId: id }, { singletonKey: `d:${id}:console`, tenantId, throttleSeconds: 60, priority: 10 });
       if (!sent) return false;
@@ -171,6 +183,10 @@ router.post('/devices/:id/ddm-sync', resolveDevice({ capability: SYNC_CAPABILITY
                               AND t.state IN ('pending', 'queued', 'sent', 'notnow'))`, [tenantId, id]);
       return true;
     }));
+    // In the name of the user who asked (the command itself is journaled as the job j:apple.ddm.device-sync).
+    await audit.append({
+      tenantId, action: 'apple.ddm_sync_requested', target: { type: 'device', id: String(id), device: id }, details: { requested },
+    }, await audit.fromRequest(req, tenantId));
     const data: DdmSyncRequestOutcome = { requested };
     res.status(202).json({ data });
   } catch (err) { next(err); }

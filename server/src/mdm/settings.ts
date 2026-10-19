@@ -1,4 +1,5 @@
-import { MDM_STALE_AFTER_DAYS_DEFAULT, SETTINGS_KEYS } from '@obligarth/shared';
+import type { Knex } from 'knex';
+import { MDM_STALE_AFTER_DAYS_DEFAULT, PUBLISH_APPROVAL_THRESHOLDS, SETTINGS_KEYS } from '@obligarth/shared';
 import { db } from '../db';
 
 // =============================================================================
@@ -33,4 +34,18 @@ export async function staleAfterDaysOf(tenantIds: number[]): Promise<Map<number,
 /** mdmStaleAfterDays of one tenant. */
 export async function staleAfterDays(tenantId: number): Promise<number> {
   return (await staleAfterDaysOf([tenantId])).get(tenantId) ?? MDM_STALE_AFTER_DAYS_DEFAULT;
+}
+
+/**
+ * publishFleetShareFloor of a tenant (DM23; decision of the owners of 15/10/2026): the share of 10 % of the fleet
+ * only counts once a change touches at least this many devices (1 to 25, 5 by default). Read in `q`, the caller's
+ * context (the tenant's own row).
+ */
+export async function fleetShareFloor(q: Knex | Knex.Transaction, tenantId: number): Promise<number> {
+  const T = PUBLISH_APPROVAL_THRESHOLDS;
+  const row = await q('settings').where({ tenant_id: tenantId, scope: 'global', key: SETTINGS_KEYS.PUBLISH_FLEET_SHARE_FLOOR })
+    .whereNull('scope_id').first('value') as { value: unknown } | undefined;
+  const v = row?.value;
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  return Number.isInteger(n) && n >= 1 && n <= T.fleetShareFloorMax ? n : T.fleetShareFloorDefault;
 }

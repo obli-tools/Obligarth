@@ -14,7 +14,8 @@ import { permissionService } from '../../services/permission.service';
 import { launchChromium } from '../../utils/chromium';
 import { listEpisodes } from '../registry/episodes';
 import { assignEndUser } from '../registry/endUsers';
-import { changeOwnership, moveToGroup } from '../registry/ownership';
+import { changeOwnership } from '../registry/ownership';
+import { changeDevicesGroup } from '../policies/deviceMove';
 import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
 import { deviceConfiguration } from '../policies/configuration';
 import { requestDeviceResolution } from '../policies/triggers';
@@ -33,6 +34,8 @@ import { requestDeviceResolution } from '../policies/triggers';
 // =============================================================================
 
 const router = Router();
+/** ?dryRun=true (or 1): the preview of a change only, nothing written. */
+const isDryRun = (req: Request): boolean => req.query.dryRun === 'true' || req.query.dryRun === '1';
 
 // ── Query and body schemas ─────────────────────────────────────────────────
 
@@ -211,9 +214,11 @@ router.get('/fleet/hourly', globalViewScope('console.devices'), async (req, res,
   } catch (err) { next(err); }
 });
 
-// POST /api/mdm/devices/batch/group — { deviceIds, groupId }: devices of the session's tenant only (an id of
-// another tenant, or unknown: 404, nothing moved); write on the target group; restriction
-// device.bulk_group_change beyond one device (second approver at 'restricted': approval change_group).
+// POST /api/mdm/devices/batch/group[?dryRun=true] — { deviceIds, groupId }: devices of the session's tenant only (an
+// id of another tenant, or unknown: 404, nothing moved); write on the target group. What the devices inherit follows
+// their group (S12; decision of the owners of 15/10/2026): previewed, and guarded like a change of assignments (a
+// step-up when a configuration changes, a second approver beyond the thresholds of DM23: 202), with the restriction
+// device.bulk_group_change beyond one device (mdm/policies/deviceMove.ts).
 router.post('/devices/batch/group', requireTenantCapability('devices.manage'), async (req, res, next) => {
   try {
     const b = body(BatchGroupBody, req);
@@ -226,24 +231,14 @@ router.post('/devices/batch/group', requireTenantCapability('devices.manage'), a
       throw new AppError(404, 'Group not found');
     }
     await requireGroupWriteOn(req, b.groupId);
-    if (ids.length > 1) {
-      const { applyRestriction } = await import('../../services/restriction.service');
-      const describe = await import('../../services/approvalDescribe');
-      const approved = await applyRestriction(res, {
-        req, actionKey: 'device.bulk_group_change', deviceIds: ids, approvalRequestType: 'batch_command',
-        approvalDescription: `Move to ${await describe.groupLabel(req.tenantId!, b.groupId)} — ${await describe.deviceList(req.tenantId!, ids)}`,
-        approvalPayload: { action: 'change_group', deviceIds: ids, params: { groupId: b.groupId } },
-      });
-      if (!approved) return;
+    const out = await changeDevicesGroup(req, req.tenantId!, ids, b.groupId, isDryRun(req));
+    const data = (out.body as { data?: { changedIds?: number[] } }).data;
+    if (out.status === 200 && data?.changedIds) {
+      deviceService.emitChanged(req.tenantId!, data.changedIds);
+      delete data.changedIds;
     }
-    const changed = await db.transaction((trx) => moveToGroup(trx, req.tenantId!, ids, b.groupId));
-    await audit.append({
-      tenantId: req.tenantId!, action: ids.length > 1 ? 'device.bulk_group_changed' : 'device.group_changed',
-      target: ids.length > 1 ? { type: 'device', id: ids.join(',').slice(0, 200) } : { type: 'device', id: String(ids[0]), device: ids[0] },
-      details: { count: ids.length, changed: changed.length, toGroupId: b.groupId },
-    }, await audit.fromRequest(req, req.tenantId!));
-    deviceService.emitChanged(req.tenantId!, changed);
-    res.json({ data: { updated: ids.length, changed: changed.length } });
+    if (out.headers) res.set(out.headers);
+    res.status(out.status).json(out.body);
   } catch (err) { next(err); }
 });
 
@@ -288,29 +283,27 @@ router.patch('/devices/:id', resolveDevice(true), async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/mdm/devices/:id/group — { groupId }: a group of the DEVICE's tenant the caller can write (from
-// the global view too: written in the device's tenant, asTargetTenant); another tenant's group answers like an
-// unknown one (404).
+// POST /api/mdm/devices/:id/group[?dryRun=true] — { groupId }: a group of the DEVICE's tenant the caller can write
+// (from the global view too: written in the device's tenant, asTargetTenant); another tenant's group answers like an
+// unknown one (404). Previewed and guarded like the batch (S12): a step-up when the configuration of the device
+// changes, a second approver beyond the thresholds (202).
 router.post('/devices/:id/group', requireTenantCapability('devices.manage'), resolveDevice(true), async (req, res, next) => {
   try {
     const { groupId } = body(GroupBody, req);
     const { id, tenantId } = req.mdmDevice!;
-    const changed = await asTargetTenant(req, tenantId, async () => {
+    const out = await asTargetTenant(req, tenantId, async () => {
       if (groupId !== null && !(await db('device_groups').where({ id: groupId, tenant_id: tenantId }).first('id'))) {
         throw new AppError(404, 'Group not found');
       }
       await requireGroupWriteOn(req, groupId);
-      const moved = await db.transaction((trx) => moveToGroup(trx, tenantId, [id], groupId));
-      if (moved.length) {
-        await audit.append({
-          tenantId, action: 'device.group_changed', target: { type: 'device', id: String(id), device: id },
-          details: { toGroupId: groupId },
-        }, await audit.fromRequest(req, tenantId));
-      }
-      return moved;
+      return changeDevicesGroup(req, tenantId, [id], groupId, isDryRun(req));
     });
-    if (changed.length) deviceService.emitChanged(tenantId, [id], tenantId !== req.tenantId ? req.tenantId! : null);
-    res.json({ data: { changed: changed.length > 0 } });
+    if (out.headers) res.set(out.headers);
+    const data = (out.body as { data?: { outcome?: string; changed?: number; changedIds?: number[] } }).data;
+    if (out.status !== 200 || !data || data.outcome === 'preview') { res.status(out.status).json(out.body); return; }
+    const changed = (data.changedIds ?? []).length > 0;
+    if (changed) deviceService.emitChanged(tenantId, [id], tenantId !== req.tenantId ? req.tenantId! : null);
+    res.json({ data: { changed } });
   } catch (err) { next(err); }
 });
 

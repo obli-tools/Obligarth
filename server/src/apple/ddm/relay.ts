@@ -474,13 +474,13 @@ async function handle(req: Request, res: Response): Promise<void> {
 
 /**
  * The router of the relay, to mount before every other middleware of the application (I5): its own raw body
- * parser (6 MiB: a status report of 4 MiB in base64), no session. Nothing else is served under /internal.
+ * parser (2 MiB: a status report of 1 MiB in base64, INT-B5a-R4), no session. Nothing else is served under /internal.
  */
 export function createDdmRelayRouter(): Router {
   const router = express.Router();
   // inflate: false: apple-edge never compresses and the signature covers the bytes received; a body with a
   // Content-Encoding is refused (415) before anything is decompressed for a caller that proved nothing.
-  router.post(DDM_RELAY_PATH, rawBodyParser({ type: () => true, limit: '6mb', inflate: false }), (req: Request, res: Response) => {
+  router.post(DDM_RELAY_PATH, rawBodyParser({ type: () => true, limit: '2mb', inflate: false }), (req: Request, res: Response) => {
     handle(req, res).catch((err) => {
       logger.error({ err: safeErr(err) }, 'DDM relay: unexpected failure');
       if (!res.headersSent) res.status(503).end();

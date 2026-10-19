@@ -299,6 +299,11 @@ export const groupService = {
       const group = await trx('device_groups').where({ id, tenant_id: tenantId }).first('name', 'parent_id') as
         { name: string; parent_id: number | null } | undefined;
       if (!group) return false;
+      // Its subgroups would keep it in their closure (shown at the root, still inheriting from it): refused, they are
+      // moved first (decision of the owners of 15/10/2026; mdm/policies/groupTree.ts, refuseIfSubgroups).
+      if (await trx('device_groups').where({ tenant_id: tenantId, parent_id: id }).first('id')) {
+        throw new AppError(409, 'A group with subgroups is not deleted: move its subgroups first', 'groupHasSubgroups');
+      }
       const count = await trx('device_groups').where({ id, tenant_id: tenantId }).del();
       if (!count) return false;
       // Its assignments went with it (assignments_cleanup) and its devices left it: the policies follow

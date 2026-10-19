@@ -15,6 +15,8 @@ import {
 import { permissionService } from '../../services/permission.service';
 import { logger } from '../../utils/logger';
 import { lockTenantConfiguration, withConfigurationLock } from './configLock';
+import { recordDirectChange } from './changeLedger';
+import { executeDeviceMove } from './deviceMove';
 import { executeGroupTreeChange } from './groupTree';
 import {
   approvalImpact, computeImpact, describeKeys, impactSummary, type AssignmentDelta, type ImpactResult, type ProposedChange,
@@ -167,6 +169,8 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
   const versionId = Number(row.id);
   const visible = await visibleDevices(req);
   const userId = req.session.userId ?? null;
+  const requester: Requester = { userId: req.session.userId!, isPlatformAdmin: req.session.role === 'admin' };
+  await requireWriteOnAssignedTargets(db, tenantId, policyId, requester);
   // A first look, before anything is locked: an early refusal, and what the request must prove.
   const first = await checkVersion(db, tenantId, policyId, versionId, { visibleDeviceIds: visible });
   if (first.issues.length) validationFailed(first.issues);
@@ -188,6 +192,7 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
       { state: string } | undefined;
     if (!locked) throw new AppError(404, 'Policy version not found');
     if (locked.state !== 'draft') throw new AppError(409, 'Only a draft is submitted', 'policyVersionNotDraft', { state: locked.state });
+    await requireWriteOnAssignedTargets(trx, tenantId, policyId, requester);
     const check = await checkVersion(trx, tenantId, policyId, versionId, { visibleDeviceIds: visible });
     if (check.issues.length) validationFailed(check.issues);
     const { impact } = check;
@@ -208,6 +213,7 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
     }
     if (level === 'sensitive' && !proven) impactChanged();
     await publishVersionInTx(trx, tenantId, policyId, versionId, ctx, { from: 'draft', impact, userId, expectedSha: check.contentSha256 });
+    await recordDirectChange(trx, tenantId, 'version', { deviceIds: check.touched.map((t) => t.deviceId), removalDeviceIds: check.removalDeviceIds });
     return { impact, approval: null };
   });
   const { impact, approval } = done;
@@ -253,6 +259,27 @@ async function canWriteTarget(r: Requester, tenantId: number, scope: string, id:
   if (scope === 'tenant') return false;
   if (scope === 'group') return permissionService.canWriteGroup(r.userId, Number(id), false);
   return permissionService.canWriteDevice(r.userId, Number(id), false);
+}
+
+/**
+ * A version published changes the configuration of every device its policy is included on: the requester must be
+ * able to write each of those targets, as an assignment to them requires (review of lot B5b, MDM-B5b-C6; decision
+ * of the owners of 15/10/2026). A tenant administrator (and a platform administrator) always can. An exclusion is
+ * not a target the publication changes. 403 policyTargetNotWritable, naming the first target refused.
+ */
+export async function requireWriteOnAssignedTargets(q: Knex | Knex.Transaction, tenantId: number, policyId: number, r: Requester): Promise<void> {
+  if (r.isPlatformAdmin) return;
+  const ut = await db('user_tenants').where({ user_id: r.userId, tenant_id: tenantId }).first('role') as { role: string } | undefined;
+  if (ut?.role === 'admin') return;
+  const targets = await q('assignments').where({
+    tenant_id: tenantId, resource_type: 'policy', resource_tenant_id: tenantId, resource_id: policyId, mode: 'include',
+  }).orderBy('id').select('target_scope', 'target_id') as Array<{ target_scope: string; target_id: number | null }>;
+  for (const t of targets) {
+    const id = t.target_id === null ? null : Number(t.target_id);
+    if (!(await canWriteTarget(r, tenantId, t.target_scope, id))) {
+      throw new AppError(403, 'No write permission on a target the policy is assigned to', 'policyTargetNotWritable', { scope: t.target_scope, id });
+    }
+  }
 }
 
 /**
@@ -473,6 +500,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
     }
     if (level === 'sensitive' && !proven) impactChanged();
     await applyChangesInTx(trx, tenantId, deltas, ctx, { userId: requester.userId, impact });
+    await recordDirectChange(trx, tenantId, 'assignments', { deviceIds: now.touched.map((t) => t.deviceId), removalDeviceIds: now.removalDeviceIds });
     return { impact, change: now.change, approval: null, deltas };
   });
   const { impact } = done;
@@ -490,7 +518,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
 // ── Approval of a publication or of a batch (request type mdm_policy_publish) ──
 
 interface PublishPayload {
-  kind: 'version' | 'assignments' | 'group_move' | 'group_delete';
+  kind: 'version' | 'assignments' | 'group_move' | 'group_delete' | 'device_move';
   policyId?: number;
   versionId?: number;
   version?: number;
@@ -512,7 +540,7 @@ async function backToDraft(tenantId: number, versionId: number, approvalId: numb
 /** The publication of an approved version: rights, content, conflicts and preview checked again under the lock of
  *  the configuration, then published in the same transaction. */
 async function executeVersionPublication(x: ApprovalExecution, p: PublishPayload, policyId: number, versionId: number): Promise<void> {
-  await requireTenantCapability(x.requesterId, x.tenantId, POLICY_MANAGE);
+  const r = await requireTenantCapability(x.requesterId, x.tenantId, POLICY_MANAGE);
   const approved = approvedImpactOf(p);
   if (!approved) refuse('Malformed publication request');
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
@@ -520,6 +548,8 @@ async function executeVersionPublication(x: ApprovalExecution, p: PublishPayload
     const v = await trx('policy_versions').where({ tenant_id: x.tenantId, id: versionId, policy_id: policyId }).first('state', 'approval_id') as
       { state: string; approval_id: number | null } | undefined;
     if (!v || v.state !== 'pending_approval' || Number(v.approval_id) !== x.approvalId) refuse('This version no longer awaits this approval');
+    await requireWriteOnAssignedTargets(trx, x.tenantId, policyId, { userId: x.requesterId, isPlatformAdmin: r.isPlatformAdmin })
+      .catch((err: { statusCode?: number }) => { if (err?.statusCode === 403) refuse('The requester can no longer write every target the policy is assigned to'); throw err; });
     const check = await checkVersion(trx, x.tenantId, policyId, versionId);
     if (check.issues.length) refuse('The content of the version is no longer valid: submit it again');
     if (check.impact.conflicts.length) refuse('policyConflict: the version now conflicts with another policy at the same priority; submit it again');
@@ -604,6 +634,8 @@ export async function executePolicyPublish(x: ApprovalExecution): Promise<string
   if (p.kind === 'assignments') return executeAssignmentChanges(x, p);
   // A group moved in the tree or deleted (groupTree.ts): the same request type, the same checks.
   if (p.kind === 'group_move' || p.kind === 'group_delete') return executeGroupTreeChange(x);
+  // Devices moved into a group (deviceMove.ts, S12).
+  if (p.kind === 'device_move') return executeDeviceMove(x);
   refuse('Malformed publication request');
 }
 
