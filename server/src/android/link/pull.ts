@@ -52,6 +52,9 @@ export interface PullOutcome {
 
 const foreignTimes: number[] = [];
 let lastPullStamp = 0;
+/** last_pull_at of an empty pull, written every 5 minutes at most (health screen, seek after days of absence; file-durable
+ *  L3, lot AN-A2): a pull that brings messages always stamps it. */
+const PULL_STAMP_MS = 300_000;
 
 function noteForeign(): void {
   const now = Date.now();
@@ -81,7 +84,7 @@ export async function pullOnce(o: { gateway?: AndroidGateway; cfg?: AndroidConfi
   const out: PullOutcome = { received: 0, written: 0, duplicates: 0, tests: 0, foreign: 0, unparsable: 0, oversized: 0, acknowledged: 0, failedTenants: [] };
   const messages: PubsubReceived[] = await asNone(PULL_ACTOR, () => gw.pull({ maxMessages: o.maxMessages ?? cfg.pullMaxMessages, signal: o.signal }));
   out.received = messages.length;
-  if (Date.now() - lastPullStamp > 60_000 || messages.length) {
+  if (Date.now() - lastPullStamp > PULL_STAMP_MS || messages.length) {
     lastPullStamp = Date.now();
     await asNone(PULL_ACTOR, () => updatePlatformState(db, { last_pull_at: new Date() }));
   }
