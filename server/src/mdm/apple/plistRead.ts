@@ -90,7 +90,6 @@ export interface RawProfile {
   displayName: string;
   originalIdentifier: string;
   payloads: Array<Record<string, JsonValue>>;
-  /** The file carried a CMS signature (removed, not verified). */
   /** The file carried a signature that verifies (signature.status 'valid'). */
   signed: boolean;
   /** The check of the signature the file carried; null when it was not signed. */

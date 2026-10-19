@@ -12,7 +12,8 @@ import { DerError, TAG, derChildren, derOid, derRead, issuerAndSerialOf, type De
 // and ECDSA, with SHA-1, SHA-256, SHA-384 or SHA-512; any other algorithm (RSA-
 // PSS…) is 'unsupported', never taken for valid. The chain of the signer is
 // then looked for up to a root of Node's store (tls.rootCertificates),
-// through the certificates the SignedData carries, each within its dates:
+// through the certificates the SignedData carries (each intermediate a CA),
+// each within its dates:
 // `trusted` says whether one was found (an author's own certificate is valid,
 // not trusted). Definite DER only (der.ts). Pure; no network.
 // =============================================================================
@@ -85,7 +86,9 @@ function chainsToRoot(cert: X509Certificate, pool: X509Certificate[], now: Date,
     const root = store.find((r) => current.checkIssued(r) && current.verify(r.publicKey));
     if (root) return within(root, now);
     if (current.checkIssued(current)) return false;                     // self-signed, not a root of the store
-    const next = pool.find((p) => p !== current && current.checkIssued(p) && current.verify(p.publicKey));
+    // An intermediate must be a CA (basicConstraints cA): a leaf a public CA issued (a TLS server certificate, say)
+    // never issues a signer that would then read as trusted.
+    const next = pool.find((p) => p !== current && p.ca && current.checkIssued(p) && current.verify(p.publicKey));
     if (!next) return false;
     current = next;
   }
