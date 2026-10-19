@@ -7,23 +7,24 @@
 export const PLATFORMS = ['ios', 'ipados', 'macos', 'tvos', 'visionos', 'android'] as const;
 export type Platform = typeof PLATFORMS[number];
 
-export const MANAGEMENT_CHANNELS = ['apple_mdm', 'amapi'] as const;
+/** 'legacy_agent': the Android bridge agent in device administrator mode (agent-pont-android §0, PB1). */
+export const MANAGEMENT_CHANNELS = ['apple_mdm', 'amapi', 'legacy_agent'] as const;
 export type ManagementChannel = typeof MANAGEMENT_CHANNELS[number];
 
 export const OWNERSHIPS = ['corporate', 'corporate_personal', 'personal'] as const;
 export type Ownership = typeof OWNERSHIPS[number];
 
 /** Enrollment METHOD (DM3): those of the enrollment profiles, plus Apple Configurator; account-driven device
- *  enrollment and migration are v1. The Android methods since the junction AN-A2 (android-amapi §4.4, part 3b):
- *  mirror of devices_enrollment_type_check. */
+ *  enrollment and migration are v1. The Android methods since the junction AN-A2 (android-amapi §4.4, part 3b), and
+ *  agent_token for the Android bridge agent (agent-pont-android §3.1): mirror of devices_enrollment_type_check. */
 export const ENROLLMENT_METHODS = ['ade', 'ota', 'byod_account', 'configurator', 'account_device', 'migration',
   'android_qr', 'android_nfc', 'android_afw', 'android_token', 'android_zero_touch', 'android_kme', 'android_byod_link',
-  'android_signin_url'] as const;
+  'android_signin_url', 'agent_token'] as const;
 export type EnrollmentMethod = typeof ENROLLMENT_METHODS[number];
 
 /** Management SCOPE (DM3): device or User Enrollment on Apple; the Android modes are v1. */
 export const MANAGEMENT_MODES = ['device', 'user_enrollment', 'fully_managed', 'dedicated',
-  'work_profile_corporate', 'work_profile_personal'] as const;
+  'work_profile_corporate', 'work_profile_personal', 'device_admin'] as const;
 export type ManagementMode = typeof MANAGEMENT_MODES[number];
 
 /** Declared use of the device (filters, dynamic groups in v1); never a security rule. */
@@ -36,7 +37,8 @@ export type EnrollmentState = typeof ENROLLMENT_STATES[number];
 /** Why a device left management (the reasons of onUnenrolled, integration §7.3; missing_in_provider and
  *  presumed_gone: an Android device absent at Google or silent too long, android-amapi §13.1, part 3b). */
 export const UNENROLL_REASONS = ['checkout', 'retired', 'transfer', 'superseded_by_proof', 'superseded',
-  'apns_inactive', 'purged', 'disabled_in_edge', 'removed_by_command', 'wiped', 'missing_in_provider', 'presumed_gone'] as const;
+  'apns_inactive', 'purged', 'disabled_in_edge', 'removed_by_command', 'wiped', 'missing_in_provider', 'presumed_gone',
+  'agent_revoked'] as const;
 export type UnenrollReason = typeof UNENROLL_REASONS[number];
 
 /** Why an enrollment episode ended: an unenroll reason, or a newer cycle that replaced it. */

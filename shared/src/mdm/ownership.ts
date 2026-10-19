@@ -30,7 +30,9 @@ export function ownershipAllows(ownership: Ownership | string | null | undefined
         || (mode === 'work_profile_corporate' && isAndroidMethod(method) && method !== 'android_byod_link' && method !== 'android_nfc');
     case 'corporate':
       return (mode === 'device' && ['ade', 'configurator', 'ota', 'account_device', 'migration'].includes(method))
-        || (['fully_managed', 'dedicated'].includes(mode) && isAndroidMethod(method) && method !== 'android_byod_link');
+        || (['fully_managed', 'dedicated'].includes(mode) && isAndroidMethod(method) && method !== 'android_byod_link')
+        // The Android bridge agent (agent-pont-android §3.1): device administrator, enrolled by a tenant token.
+        || (mode === 'device_admin' && method === 'agent_token');
     default:
       return false;
   }

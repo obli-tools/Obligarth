@@ -22,3 +22,5 @@ export * from './operations';
 export * from './integrations';
 // Catalog of apps and Apps and Books (lot C4, modele §8, integration-apple-edge §11.3).
 export * from './apps';
+// Android bridge agent (agent-pont-android §4, §7): contract vocabulary and views of the console.
+export * from './legacyAgent';
