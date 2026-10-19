@@ -3,12 +3,15 @@
 // outside the work profile. Three barriers share these rules:
 //   - the own policy of a BYOD device and the enrollment policy of a BYOD profile (« politique propre au BYOD »):
 //     byodPolicy() withholds every setting that acts on the whole device (wipe flags, factory reset protection,
-//     setup actions, the device-scope wipe after failed passwords, personal usage policies of COPE, usage logs) and
+//     setup actions, the device-scope wipe after failed passwords, personal usage policies of COPE, usage logs),
 //     forces the minimised status reporting of a personal device (no hardware, memory, network, display, power nor
-//     system properties report); policies/push.ts applies it, the gateway refuses a body that still carries one
+//     system properties report) and forces a separate challenge of the work profile
+//     (passwordPolicies[SCOPE_PROFILE].unifiedLockSettings = REQUIRE_SEPARATE_WORK_LOCK, decision of the owners of
+//     19/10/2026 on F1R-3: a LOCK then locks the work profile only, never the personal device, as the notice the
+//     employee acknowledges says); policies/push.ts applies it, the gateway refuses a body that still carries one
 //     (byodPolicyViolations) for a policy of a personal device or profile;
-//   - the commands: byodCommandRefusal() admits on a personal device only LOCK (the work profile when it has its own
-//     challenge [AR]), CLEAR_APP_DATA of managed apps and WIPE without any wipe data flag (the removal of the work
+//   - the commands: byodCommandRefusal() admits on a personal device only LOCK (the work profile, which always has
+//     its own challenge since 19/10/2026 [AR]), CLEAR_APP_DATA of managed apps and WIPE without any wipe data flag (the removal of the work
 //     profile: AMAPI never resets a personally-owned device [AR]); the bus refuses the rest at the request, the
 //     submission refuses it again before each issue (recovery included), the gateway once more before the call;
 //   - the inventory: only the apps of the tenant's catalog are kept for a personal device (byodApps), whatever the
@@ -41,6 +44,15 @@ export const BYOD_STATUS_REPORTING: Readonly<Record<string, Json>> = Object.free
 const REPORTS_OFF = ['memoryInfoEnabled', 'networkInfoEnabled', 'displayInfoEnabled', 'powerManagementEventsEnabled',
   'systemPropertiesEnabled', 'hardwareStatusEnabled'] as const;
 
+/** The separate challenge of the work profile a personal device always gets (F1R-3, decision of 19/10/2026). */
+export const BYOD_WORK_LOCK = 'REQUIRE_SEPARATE_WORK_LOCK';
+/** The path byodPolicyViolations gives when the separate challenge of the work profile is not required. */
+export const BYOD_WORK_LOCK_PATH = 'passwordPolicies[SCOPE_PROFILE].unifiedLockSettings';
+const profileScope = (r: Json): boolean => isObj(r) && r.passwordScope === 'SCOPE_PROFILE';
+/** Does the body require a separate challenge of the work profile (a SCOPE_PROFILE entry, none allowing the unified lock)? */
+const separateWorkLock = (pp: Json): boolean => Array.isArray(pp) && pp.some((r) => profileScope(r) && (r as Record<string, Json>).unifiedLockSettings === BYOD_WORK_LOCK)
+  && !pp.some((r) => profileScope(r) && (r as Record<string, Json>).unifiedLockSettings !== BYOD_WORK_LOCK);
+
 /** A password policy whose failed attempts wipe the whole device (scope device, or the deprecated requirements). */
 const deviceScopeWipe = (r: Json): boolean => isObj(r) && r.maximumFailedPasswordsForWipe !== undefined && r.passwordScope === 'SCOPE_DEVICE';
 
@@ -55,6 +67,7 @@ export function byodPolicyViolations(body: Record<string, Json>): string[] {
   if (Array.isArray(pp) && pp.some(deviceScopeWipe)) out.push('passwordPolicies[SCOPE_DEVICE].maximumFailedPasswordsForWipe');
   const pr = body.passwordRequirements;
   if (isObj(pr) && pr.maximumFailedPasswordsForWipe !== undefined) out.push('passwordRequirements.maximumFailedPasswordsForWipe');
+  if (!separateWorkLock(pp)) out.push(BYOD_WORK_LOCK_PATH);
   const srs = body.statusReportingSettings;
   if (isObj(srs)) {
     for (const k of REPORTS_OFF) if (srs[k] !== undefined && srs[k] !== false) out.push(`statusReportingSettings.${k}`);
@@ -69,17 +82,27 @@ export function byodPolicyViolations(body: Record<string, Json>): string[] {
  * status reporting of a personal device forced. Idempotent; the result has no violation.
  */
 export function byodPolicy(body: Record<string, Json>): { body: Record<string, Json>; withheld: string[] } {
-  const withheld = byodPolicyViolations(body).filter((p) => !p.startsWith('statusReportingSettings.'));
+  // Forced, not withheld: the status reporting and the separate challenge of the work profile.
+  const withheld = byodPolicyViolations(body).filter((p) => !p.startsWith('statusReportingSettings.') && p !== BYOD_WORK_LOCK_PATH);
   const out: Record<string, Json> = { ...body };
   for (const f of BYOD_FORBIDDEN_FIELDS) delete out[f];
   const pp = out.passwordPolicies;
-  if (Array.isArray(pp)) {
-    out.passwordPolicies = pp.map((r) => {
+  const kept = Array.isArray(pp)
+    ? pp.map((r) => {
       if (!deviceScopeWipe(r)) return r;
       const { maximumFailedPasswordsForWipe: _m, ...rest } = r as Record<string, Json>;
       return rest;
-    });
-  }
+    })
+    : [];
+  // F1R-3: every SCOPE_PROFILE entry requires the separate challenge of the work profile (AMAPI admits
+  // unifiedLockSettings under SCOPE_PROFILE only). Without one, the first entry of unspecified scope (the work profile
+  // on a personal device) is made SCOPE_PROFILE; without either, an entry is added.
+  const unspecified = (r: Json): boolean => isObj(r) && (r.passwordScope === undefined || r.passwordScope === 'SCOPE_UNSPECIFIED');
+  const promote = !kept.some(profileScope) ? kept.findIndex(unspecified) : -1;
+  const forced = kept.map((r, i) => (profileScope(r) || i === promote
+    ? { ...(r as Record<string, Json>), passwordScope: 'SCOPE_PROFILE', unifiedLockSettings: BYOD_WORK_LOCK } : r));
+  if (!forced.some(profileScope)) forced.push({ passwordScope: 'SCOPE_PROFILE', unifiedLockSettings: BYOD_WORK_LOCK });
+  out.passwordPolicies = forced;
   const pr = out.passwordRequirements;
   if (isObj(pr) && pr.maximumFailedPasswordsForWipe !== undefined) {
     const { maximumFailedPasswordsForWipe: _m, ...rest } = pr;
