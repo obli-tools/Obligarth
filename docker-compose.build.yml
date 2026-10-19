@@ -117,7 +117,8 @@ services:
       EDGE_ADMIN_DATABASE_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth?sslmode=disable
       # Password given to the role apple_edge_app (the one apple-edge uses).
       EDGE_APP_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
-      EDGE_OUTBOX_READER_GRANTEE: obligarth
+      # The owner role of the brain: the runtime role reads the outbox through its guarded functions only.
+      EDGE_OUTBOX_READER_GRANTEE: obligarth_owner
     secrets:
       - apple_edge_db_password
     networks:

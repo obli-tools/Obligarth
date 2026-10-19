@@ -371,6 +371,35 @@ func grant(ctx context.Context, conn *sql.Conn, o UpOptions) error {
 	if _, err := conn.ExecContext(ctx, `GRANT `+RoleOutboxReader+` TO `+pq.QuoteIdentifier(o.OutboxReaderGrantee)); err != nil {
 		return fmt.Errorf("migrate: grant %s: %w", RoleOutboxReader, err)
 	}
+	// The grantee is the only reader: a role granted by an earlier configuration loses it (the brain's runtime
+	// role until 19/10/2026, decision INT-B1-R9 B: it reads the outbox through functions of its owner role, guarded
+	// by its signed context). Administrators of the role (admin option) and the connected role are kept.
+	rows, err := conn.QueryContext(ctx, `
+SELECT pg_get_userbyid(m.member) FROM pg_auth_members m
+ WHERE m.roleid = $1::regrole AND NOT m.admin_option
+   AND m.member <> $2::regrole AND pg_get_userbyid(m.member) <> current_user`, RoleOutboxReader, o.OutboxReaderGrantee)
+	if err != nil {
+		return fmt.Errorf("migrate: members of %s: %w", RoleOutboxReader, err)
+	}
+	var stale []string
+	for rows.Next() {
+		var m string
+		if err := rows.Scan(&m); err != nil {
+			rows.Close()
+			return err
+		}
+		stale = append(stale, m)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, m := range stale {
+		if _, err := conn.ExecContext(ctx, `REVOKE `+RoleOutboxReader+` FROM `+pq.QuoteIdentifier(m)); err != nil {
+			return fmt.Errorf("migrate: revoke %s from %q: %w", RoleOutboxReader, m, err)
+		}
+		o.Logf("%s revoked from %q: the outbox reader is %q (EDGE_OUTBOX_READER_GRANTEE)", RoleOutboxReader, m, o.OutboxReaderGrantee)
+	}
 	return nil
 }
 

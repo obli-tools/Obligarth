@@ -32,18 +32,11 @@ export interface OutboxLag {
 /** The lag of the queue (file-durable §7.8): events not consumed, outside and inside their attempts. */
 export async function outboxLag(actor: DbActor = COUNTS_ACTOR): Promise<OutboxLag> {
   return asNone(actor, async () => {
-    const t = await db.raw(`
-      SELECT COALESCE((SELECT has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT')
-                         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE n.nspname = 'apple_edge' AND c.relname = 'outbox'), false) AS ok`) as { rows: Array<{ ok: boolean }> };
+    // Through the guarded functions only (INT-B1-R9 B): the jobs in the context 'none', counts only.
+    const t = await db.raw('SELECT obligarth.edge_outbox_ready() AS ok') as { rows: Array<{ ok: boolean }> };
     if (t.rows[0]?.ok !== true) return { table: false, pending: 0, retrying: 0, oldestPendingSeconds: null };
-    const res = await db.raw(`
-      SELECT count(*) FILTER (WHERE a.event_id IS NULL)::int     AS pending,
-             count(*) FILTER (WHERE a.event_id IS NOT NULL)::int AS retrying,
-             extract(epoch FROM now() - min(o.occurred_at) FILTER (WHERE a.event_id IS NULL))::float8 AS oldest
-        FROM apple_edge.outbox o
-        LEFT JOIN obligarth.apple_edge_inbox_attempts a ON a.event_id = o.event_id
-       WHERE o.consumed_at IS NULL`) as { rows: Array<{ pending: number; retrying: number; oldest: number | null }> };
+    const res = await db.raw('SELECT pending, retrying, oldest FROM obligarth.edge_outbox_lag()') as
+      { rows: Array<{ pending: number; retrying: number; oldest: number | null }> };
     const r = res.rows[0];
     return {
       table: true,

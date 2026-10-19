@@ -113,7 +113,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		DBMaxConns:               p.integer("EDGE_DB_MAX_CONNS", 32, 4, 512),
 		AdminDatabaseURL:         p.str("EDGE_ADMIN_DATABASE_URL", ""),
 		AppDBPasswordFile:        p.str("EDGE_APP_DB_PASSWORD_FILE", ""),
-		OutboxReaderGrantee:      p.str("EDGE_OUTBOX_READER_GRANTEE", "obligarth"),
+		OutboxReaderGrantee:      p.str("EDGE_OUTBOX_READER_GRANTEE", "obligarth_owner"),
 		KEKFile:                  p.str("EDGE_KEK_FILE", ""),
 		KEKPreviousFile:          p.str("EDGE_KEK_PREVIOUS_FILE", ""),
 		APITokenFile:             p.str("EDGE_API_TOKEN_FILE", ""),

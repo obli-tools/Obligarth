@@ -81,11 +81,11 @@ function add(c: ReconcileCounts, kind: ReconcileFixKind, n = 1): void {
 
 const time = (v: unknown): number => (v instanceof Date ? v.getTime() : v ? new Date(String(v)).getTime() : Number.NaN);
 
-/** The enrollments of the tenant with an event not yet consumed (the outbox, read-only for the brain). */
+/** The enrollments of the tenant with an event not yet consumed (the outbox, read through the guarded function
+ *  obligarth.edge_outbox_pending_enrollments: the key of the tenant of the context, or a job's, INT-B1-R9 B). */
 export async function pendingEnrollments(key: string): Promise<Set<string>> {
   try {
-    const r = await db.raw(`SELECT DISTINCT enrollment_id FROM apple_edge.outbox
-                             WHERE consumed_at IS NULL AND tenant_key = ? AND enrollment_id IS NOT NULL`, [key]) as
+    const r = await db.raw('SELECT e AS enrollment_id FROM obligarth.edge_outbox_pending_enrollments(?) e', [key]) as
       { rows: Array<{ enrollment_id: string }> };
     return new Set(r.rows.map((x) => String(x.enrollment_id)));
   } catch (err) {

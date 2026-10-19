@@ -52,9 +52,13 @@ async function releaseEnrollment(ctx: JobContext<z.infer<typeof ReleasePayload>>
   const target = await ctx.inTenant(async () => {
     const t = await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
     if (!t?.mdm_key) return null;
-    const ev = await db('apple_edge.outbox').where({ event_id: ctx.payload.eventId })
-      .first('tenant_key', 'enrollment_id', 'type', db.raw("payload #>> '{identity,cert_sha256}' AS cert_sha256")) as
-      { tenant_key: string | null; enrollment_id: string | null; type: string; cert_sha256: string | null } | undefined;
+    // The event through the guarded function (INT-B1-R9 B): an event of this tenant, or only that it is another's.
+    type Read = { other_tenant?: true; tenant_key?: string | null; enrollment_id?: string | null; type?: string; cert_sha256?: string | null };
+    const read = ((await db.raw('SELECT obligarth.edge_outbox_event(?::uuid) AS ev', [ctx.payload.eventId])) as { rows: Array<{ ev: Read | null }> })
+      .rows[0]?.ev ?? null;
+    const ev = read === null ? undefined : read.other_tenant
+      ? { tenant_key: null, enrollment_id: null, type: '', cert_sha256: null }
+      : { tenant_key: read.tenant_key ?? null, enrollment_id: read.enrollment_id ?? null, type: String(read.type ?? ''), cert_sha256: read.cert_sha256 ?? null };
     // The record of the tenant still under management that holds this enrollment id, if any.
     const holder = ev?.enrollment_id
       ? await db('apple_devices as a')

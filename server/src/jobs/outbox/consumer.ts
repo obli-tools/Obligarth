@@ -201,40 +201,25 @@ export interface DrainResult {
   deadLettered: number;
 }
 
-const HEAD_SQL = `
-  SELECT o.seq::text AS seq, COALESCE(a.attempts, 0) AS attempts, pg_column_size(o.payload) AS bytes
-    FROM apple_edge.outbox o
-    LEFT JOIN obligarth.apple_edge_inbox_attempts a ON a.event_id = o.event_id
-   WHERE o.consumed_at IS NULL
-     AND (a.next_attempt_at IS NULL OR a.next_attempt_at <= now())
-   ORDER BY o.seq
-   LIMIT ?
-     FOR UPDATE OF o SKIP LOCKED`;
+// The outbox is read through the functions of migration outbox_definer_reads only (decision of the owners of
+// 19/10/2026, INT-B1-R9 option B): the runtime role has no right on apple_edge.outbox, each function checks the signed
+// context (here: 'none', actor j:apple-edge.outbox-consumer). The head is locked FOR UPDATE SKIP LOCKED in the
+// caller's transaction, as before.
+const HEAD_SQL = 'SELECT seq, attempts, bytes FROM obligarth.edge_outbox_head(?::integer)';
 
 const LOAD_SQL = `
-  SELECT seq::text AS seq, event_id::text AS event_id, schema_version, scope, tenant_key, type, enrollment_id,
-         command_uuid, request_id, occurred_at, payload
-    FROM apple_edge.outbox
-   WHERE seq = ANY (?::bigint[])`;
+  SELECT seq, event_id, schema_version, scope, tenant_key, type, enrollment_id, command_uuid, request_id, occurred_at, payload
+    FROM obligarth.edge_outbox_load(?::bigint[])`;
 
-const DUE_SQL = `
-  SELECT EXISTS (
-    SELECT 1 FROM apple_edge.outbox o
-      LEFT JOIN obligarth.apple_edge_inbox_attempts a ON a.event_id = o.event_id
-     WHERE o.consumed_at IS NULL AND (a.next_attempt_at IS NULL OR a.next_attempt_at <= now())) AS due`;
+const DUE_SQL = 'SELECT obligarth.edge_outbox_due() AS due';
 
-const MARK_SQL = `UPDATE apple_edge.outbox SET consumed_at = now() WHERE seq = ANY (?::bigint[]) AND consumed_at IS NULL`;
+const MARK_SQL = 'SELECT obligarth.edge_outbox_mark_consumed(?::bigint[]) AS n';
 
-/** Is apple_edge.outbox there and usable by the runtime role (SELECT, UPDATE (consumed_at))? Catalogs only:
- *  never an error for a schema the role cannot use. */
+/** Is apple_edge.outbox there and usable by the functions that read it (SELECT, UPDATE (consumed_at) of their owner)?
+ *  Catalogs only: never an error for a schema not there yet. */
 export async function outboxTableReady(): Promise<boolean> {
   return asNone(CONSUMER_ACTOR, async () => {
-    const res = await db.raw(`
-      SELECT COALESCE((SELECT has_schema_privilege(n.oid, 'USAGE') AND has_table_privilege(c.oid, 'SELECT')
-                              AND has_column_privilege(c.oid, 'consumed_at', 'UPDATE')
-                         FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-                        WHERE n.nspname = 'apple_edge' AND c.relname = 'outbox' AND c.relkind IN ('r', 'p')), false) AS ready`) as
-      { rows: Array<{ ready: boolean }> };
+    const res = await db.raw('SELECT obligarth.edge_outbox_ready() AS ready') as { rows: Array<{ ready: boolean }> };
     return res.rows[0]?.ready === true;
   });
 }
