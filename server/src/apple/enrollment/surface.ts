@@ -53,6 +53,9 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 interface SurfaceLocals {
   tenant: TenantFacts;
   route: string;
+  /** The request carried a valid MachineInfo, access token or web session (decision C2 B of 19/10/2026): it does not
+   *  count against the cap of the key. */
+  credentialOk?: boolean;
 }
 const locals = (res: Response): SurfaceLocals => res.locals as SurfaceLocals;
 
@@ -79,13 +82,33 @@ const perAddress = (max: number): RequestHandler => rateLimit({
   validate: { xForwardedForHeader: false, trustProxy: false },
 });
 
-/** A limiter of `max` requests a minute and per tenant key (the ADE and discovery routes: one address, Apple's
- *  or the device's, says little). */
-const perKey = (max: number): RequestHandler => rateLimit({
-  windowMs: 60_000, limit: max, standardHeaders: false, legacyHeaders: false,
-  keyGenerator: (req) => `k:${String(req.params.key ?? '')}`, handler: (_req, res) => { res.status(429).end(); },
-  validate: { xForwardedForHeader: false, trustProxy: false },
-});
+/** The cap of a key is this many times the budget of one address (decision C2 A of 19/10/2026). */
+export const KEY_CAP_FACTOR = 10;
+
+/**
+ * The limiters of the ADE and BYOD routes (§10.8; owners' decision of 19/10/2026 on the review of lot C2, options A
+ * and B): the key is public, so a limiter per key alone let one third party block the enrollments of the whole
+ * tenant (429).
+ *   A. `max` requests a minute per (key, address): a third party exhausts its own budget only;
+ *   B. a cap per key, KEY_CAP_FACTOR times higher, that counts only the requests without a valid MachineInfo, access
+ *      token or web session (res.locals.credentialOk, set by the route once checked): the enrollments that succeed
+ *      never fill it; only many addresses sending invalid requests together reach it.
+ * The address keys the limiters only, never logged.
+ */
+const perKey = (max: number): RequestHandler[] => [
+  rateLimit({
+    windowMs: 60_000, limit: max, standardHeaders: false, legacyHeaders: false,
+    keyGenerator: (req) => `ka:${String(req.params.key ?? '')}|${req.ip ?? 'unknown'}`, handler: (_req, res) => { res.status(429).end(); },
+    validate: { xForwardedForHeader: false, trustProxy: false },
+  }),
+  rateLimit({
+    windowMs: 60_000, limit: max * KEY_CAP_FACTOR, standardHeaders: false, legacyHeaders: false,
+    keyGenerator: (req) => `k:${String(req.params.key ?? '')}`, handler: (_req, res) => { res.status(429).end(); },
+    skipSuccessfulRequests: true,
+    requestWasSuccessful: (_req, res) => locals(res).credentialOk === true,
+    validate: { xForwardedForHeader: false, trustProxy: false },
+  }),
+];
 
 /** Marks the route template of the request (the log line names it, never the URL). */
 const route = (template: string): RequestHandler => (_req, res, next) => { locals(res).route = template; next(); };
@@ -244,7 +267,7 @@ export function createAppleDeviceSurface(): Router {
     sendPage(res, 410, messagePage(tx, tx.adeRestartTitle, tx.adeRestartBody));
   };
 
-  router.post('/ade/:profileId/enroll', route('POST /t/:key/ade/:profileId/enroll'), perKey(60), raw64, asyncHandler(async (req, res) => {
+  router.post('/ade/:profileId/enroll', route('POST /t/:key/ade/:profileId/enroll'), ...perKey(60), raw64, asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     const profile = await adeProfileOf(req, res);
     if (!profile) return;
@@ -252,6 +275,7 @@ export function createAppleDeviceSurface(): Router {
     if (body.length === 0) { forbidden(res); return; }
     const mi = await checkMachineInfo(t, profile, body.toString('base64'), ENROLL_ADE_WEB);
     if (mi.kind === 'refused') { forbidden(res); return; }
+    locals(res).credentialOk = true;
     if (mi.kind === 'unavailable') { unavailable(res); return; }
     if (mi.kind === 'os_update') { osUpdate(req, res, profile, mi.required); return; }
     const out: AdeIssueOutcome = await adeEnroll(t, profile, mi, pickLocale(req.headers['accept-language'], profile.locale), ENROLL_ADE_WEB);
@@ -260,7 +284,7 @@ export function createAppleDeviceSurface(): Router {
     unavailable(res);
   }));
 
-  router.get('/ade/:profileId/web', route('GET /t/:key/ade/:profileId/web'), perKey(60), asyncHandler(async (req, res) => {
+  router.get('/ade/:profileId/web', route('GET /t/:key/ade/:profileId/web'), ...perKey(60), asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     const profile = await adeProfileOf(req, res);
     if (!profile) return;
@@ -269,6 +293,7 @@ export function createAppleDeviceSurface(): Router {
     if (!b64 || b64.length > Math.ceil(MAX_MACHINE_INFO_BYTES / 3) * 4 + 4) { forbidden(res); return; }
     const mi = await checkMachineInfo(t, profile, b64, ENROLL_ADE_WEB);
     if (mi.kind === 'refused') { forbidden(res); return; }
+    locals(res).credentialOk = true;
     if (mi.kind === 'unavailable') { unavailable(res); return; }
     if (mi.kind === 'os_update') { osUpdate(req, res, profile, mi.required); return; }
     const locale = pickLocale(req.headers['accept-language'], profile.locale);
@@ -280,7 +305,7 @@ export function createAppleDeviceSurface(): Router {
       action: pathOf(t.key, 'ade', profile.id, 'web'), hidden: { session: opened.sessionId, form_token: opened.formToken } }));
   }));
 
-  router.post('/ade/:profileId/web', route('POST /t/:key/ade/:profileId/web'), perKey(30), form, asyncHandler(async (req, res) => {
+  router.post('/ade/:profileId/web', route('POST /t/:key/ade/:profileId/web'), ...perKey(30), form, asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     const profile = await adeProfileOf(req, res);
     if (!profile) return;
@@ -301,6 +326,7 @@ export function createAppleDeviceSurface(): Router {
     }
     const ack = await adeAcknowledgeWeb(t, profile, sessionId, formToken, versionId, locale, ENROLL_ADE_WEB);
     if (ack.kind === 'invalid' || ack.kind === 'expired') { restartPage(res, locale); return; }
+    locals(res).credentialOk = true;
     if (ack.kind === 'notice_changed') {
       if (!ack.notice) { forbidden(res); return; }
       sendPage(res, 409, noticePage({ t: tx, organization: t.name, ownershipLabel: tx.ownership[profile.ownership], notice: ack.notice,
@@ -325,14 +351,14 @@ export function createAppleDeviceSurface(): Router {
   };
   const surfaceUrl = (key: string, ...parts: string[]): string => `${config.apple.mdmPublicBase}${pathOf(key, ...parts)}`;
 
-  router.get('/byod/discovery', route('GET /t/:key/byod/discovery'), perKey(120), asyncHandler(async (_req, res) => {
+  router.get('/byod/discovery', route('GET /t/:key/byod/discovery'), ...perKey(120), asyncHandler(async (_req, res) => {
     const t = locals(res).tenant;
     if (!(await byodGate(res))) return;
     res.status(200).type('application/json')
       .send(JSON.stringify({ Servers: [{ Version: 'mdm-byod', BaseURL: surfaceUrl(t.key, 'byod', 'enroll') }] }));
   }));
 
-  router.post('/byod/enroll', route('POST /t/:key/byod/enroll'), perKey(60), raw64, asyncHandler(async (req, res) => {
+  router.post('/byod/enroll', route('POST /t/:key/byod/enroll'), ...perKey(60), raw64, asyncHandler(async (req, res) => {
     const t = locals(res).tenant;
     if (!(await byodGate(res))) return;
     const signIn = (): void => {
@@ -342,8 +368,9 @@ export function createAppleDeviceSurface(): Router {
     const m = /^Bearer\s+(\S+)$/.exec(String(req.headers.authorization ?? ''));
     if (!m || !isAccessToken(m[1])) { signIn(); return; }
     const out = await byodEnroll(t, m[1], ENROLL_BYOD);
-    if (out.kind === 'profile') { sendProfile(res, out.body); return; }
     if (out.kind === 'unauthorized') { signIn(); return; }
+    locals(res).credentialOk = true;
+    if (out.kind === 'profile') { sendProfile(res, out.body); return; }
     unavailable(res);
   }));
 
