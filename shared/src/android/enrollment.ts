@@ -3,8 +3,8 @@
 // and the console: the zero-touch iframe (webTokens ZERO_TOUCH_CUSTOMER_MANAGEMENT, the long token in dpcExtras), the
 // custom JSON of Samsung Knox Mobile Enrollment (the enrollment token and nothing else), the sign-in URL of the
 // enterprise (signinDetails) and the states of a sign-in session of the device surface (provisioningInfo read for the
-// tenant's enterprise, the user authenticated by Obligate, a single-use token of 15 minutes). Imported by direct path
-// until the shared index exports it (junction AN-A2).
+// tenant's enterprise, the user authenticated by Obligate, a single-use token of 15 minutes). Exported by the index
+// of shared (junction AN-A2).
 // =============================================================================
 
 /** Package of Android Device Policy, the DPC of every AMAPI enrollment (zero-touch dpcId, Knox EMM agent). */

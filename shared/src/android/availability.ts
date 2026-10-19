@@ -15,7 +15,7 @@
 // An unknown API level (before the first status report) makes nothing
 // unavailable for the reason 4, and a field whose minimum is not known never
 // is: Google reports API_LEVEL as a non-compliance.
-// Imported by direct path until the shared index exports it.
+// Exported by the index of shared (junction AN-A2).
 // =============================================================================
 
 export const ANDROID_UNAVAILABLE_REASONS = [

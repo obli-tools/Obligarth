@@ -5,7 +5,7 @@
 // policy, setting key android:app[<package>]), the screens of the managed
 // Google Play iframes and the features each one opens, the pages allowed to
 // host them, and the content security policy those pages need.
-// Imported by direct path until the shared index exports it.
+// Exported by the index of shared (junction AN-A2).
 // =============================================================================
 import type { JsonValue } from '../mdm/policyContent';
 

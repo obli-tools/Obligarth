@@ -11,7 +11,7 @@
 //                            each other)
 // One AMAPI policy per device ('d-<device uuid>') and one per enrollment
 // profile ('e-<profile uuid>'), delivered as the artifact 'amapi:policy'.
-// Imported by direct path until the shared index exports it.
+// Exported by the index of shared (junction AN-A2).
 // =============================================================================
 import type { JsonValue } from '../mdm/policyContent';
 

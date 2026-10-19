@@ -8,12 +8,15 @@
 
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 
+import type { AndroidPolicySection } from '../android/policy';
+
 /** policy_versions.content, format 1. */
 export interface PolicyContentV1 {
   format: 1;
   sections: {
     apple?: { items: AppleItem[] };
-    android?: { fragment: Record<string, JsonValue> };   // v1 (section 7.14)
+    /** The Android section (android-amapi §9.2): a fragment of the AMAPI Policy resource and the policy's apps. */
+    android?: AndroidPolicySection;
   };
 }
 
@@ -138,6 +141,13 @@ export const POLICY_VALIDATION_CODES = [
   'unknown_type', 'type_disabled', 'unknown_key', 'type_mismatch', 'out_of_range', 'required', 'invalid_instance',
   'duplicate_setting_key', 'unknown_variable', 'secret_expected', 'secret_not_allowed', 'secret_not_found',
   'asset_not_supported', 'secret_requires_asset', 'identifier_too_long', 'remove_not_allowed',
+  // The Android section (android-amapi §9.2, §22.4; lot AN-A2): the codes of server/src/mdm/android/validate.ts.
+  'too_deep', 'field_reserved', 'field_deprecated', 'package_invalid', 'package_reserved', 'role_reserved', 'onc_guid_invalid',
+  'secret_invalid', 'wipe_rule_invalid', 'wipe_threshold_too_low', 'frp_email_outside_domain', 'too_many_setup_actions',
+  'too_many_required_for_setup', 'too_many_minimum_version_code', 'too_many_kiosk_apps', 'managed_configuration_exclusive',
+  'preferred_activities_conflict', 'duplicate_value', 'kiosk_form_ambiguous', 'kiosk_role_install_type', 'role_duplicate',
+  'kiosk_home_conflict', 'system_update_window_invalid', 'freeze_period_invalid', 'freeze_period_too_long',
+  'freeze_period_gap_too_short', 'freeze_period_overlap', 'freeze_period_without_type', 'too_many_freeze_periods',
 ] as const;
 export type PolicyValidationCode = typeof POLICY_VALIDATION_CODES[number];
 

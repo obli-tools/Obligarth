@@ -1,8 +1,8 @@
 // =============================================================================
 // BYOD Android by link (android-amapi §10.1, §10.5, criterion 6; lot AN-F1), shared by the server and the console:
 // the invitation of an end user (single use, 7 days at most, a code shown once to the administrator and a link to the
-// notice page of the device surface), its states and its view in the console. Imported by direct path until the
-// shared index exports it (junction AN-A2).
+// notice page of the device surface), its states and its view in the console. Exported by the index of
+// shared (junction AN-A2).
 // =============================================================================
 
 /** Lifetime of an invitation (AN17: the BYOD link, 7 days, single use): default and bounds, in hours. */

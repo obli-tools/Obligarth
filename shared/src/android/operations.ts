@@ -2,7 +2,7 @@
 // Operation of the Android integration (android-amapi §6.5, §13, §22.5, annexes D and E; lot AN-H1), shared by the
 // server and the console: the daily reconciliation and the silent disappearances (presumed gone, forget at 270 days),
 // the quota of the project and its weekly recount, the offboarding of a client, the adoption of an orphan enterprise,
-// and the deadlines (long tokens, service account key). Imported by direct path until the shared index exports it.
+// and the deadlines (long tokens, service account key). Exported by the index of shared (junction AN-A2).
 // =============================================================================
 
 /** Days without a status report after which a device is « presumed gone » (mdmStaleAfterDays: 30 by default). */

@@ -1,6 +1,6 @@
 // Typed subsets of the Android Management API v1 REST reference (androidmanagement.googleapis.com) and of the
 // Pub/Sub v1 messages the instance reads. Unknown fields are kept (index signature): Google adds fields every
-// month and a lost field would be a silent regression. Imported by direct path until the shared index exports it.
+// month and a lost field would be a silent regression. Exported by the index of shared (junction AN-A2).
 
 export type AmapiPassthrough = { [key: string]: unknown };
 

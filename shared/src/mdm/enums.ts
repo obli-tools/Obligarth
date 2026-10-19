@@ -14,8 +14,11 @@ export const OWNERSHIPS = ['corporate', 'corporate_personal', 'personal'] as con
 export type Ownership = typeof OWNERSHIPS[number];
 
 /** Enrollment METHOD (DM3): those of the enrollment profiles, plus Apple Configurator; account-driven device
- *  enrollment and migration are v1. */
-export const ENROLLMENT_METHODS = ['ade', 'ota', 'byod_account', 'configurator', 'account_device', 'migration'] as const;
+ *  enrollment and migration are v1. The Android methods since the junction AN-A2 (android-amapi §4.4, part 3b):
+ *  mirror of devices_enrollment_type_check. */
+export const ENROLLMENT_METHODS = ['ade', 'ota', 'byod_account', 'configurator', 'account_device', 'migration',
+  'android_qr', 'android_nfc', 'android_afw', 'android_token', 'android_zero_touch', 'android_kme', 'android_byod_link',
+  'android_signin_url'] as const;
 export type EnrollmentMethod = typeof ENROLLMENT_METHODS[number];
 
 /** Management SCOPE (DM3): device or User Enrollment on Apple; the Android modes are v1. */
@@ -30,9 +33,10 @@ export type DeviceUsage = typeof DEVICE_USAGES[number];
 export const ENROLLMENT_STATES = ['enrolling', 'awaiting_configuration', 'enrolled', 'unenrolling', 'unenrolled'] as const;
 export type EnrollmentState = typeof ENROLLMENT_STATES[number];
 
-/** Why a device left management (the reasons of onUnenrolled, integration §7.3). */
+/** Why a device left management (the reasons of onUnenrolled, integration §7.3; missing_in_provider and
+ *  presumed_gone: an Android device absent at Google or silent too long, android-amapi §13.1, part 3b). */
 export const UNENROLL_REASONS = ['checkout', 'retired', 'transfer', 'superseded_by_proof', 'superseded',
-  'apns_inactive', 'purged', 'disabled_in_edge', 'removed_by_command', 'wiped'] as const;
+  'apns_inactive', 'purged', 'disabled_in_edge', 'removed_by_command', 'wiped', 'missing_in_provider', 'presumed_gone'] as const;
 export type UnenrollReason = typeof UNENROLL_REASONS[number];
 
 /** Why an enrollment episode ended: an unenroll reason, or a newer cycle that replaced it. */

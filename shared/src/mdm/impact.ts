@@ -8,7 +8,8 @@ import type { SourceScope } from './effective';
 
 /** cumulative: the thresholds are reached by this change together with those written without a second approver in
  *  the tenant over the last hour (PUBLISH_APPROVAL_THRESHOLDS.cumulativeWindowMinutes). */
-export type ImpactApprovalReason = 'devices_threshold' | 'fleet_share' | 'removal_threshold' | 'restriction' | 'cumulative';
+/** wipe_settings: an Android setting that can wipe a device is added, removed or changed (android-amapi §22.4). */
+export type ImpactApprovalReason = 'devices_threshold' | 'fleet_share' | 'removal_threshold' | 'restriction' | 'cumulative' | 'wipe_settings';
 
 export interface PolicyConflict {
   settingKey: string;

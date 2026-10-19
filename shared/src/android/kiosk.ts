@@ -4,7 +4,7 @@
 // policy holds (counted in kioskLockChanges of the impact preview, DM23), the
 // temporary exit of a kiosk (guarded action mdm.android_kiosk_exit), and the
 // limits of the windowed system updates and of the yearly freeze periods.
-// Imported by direct path until the shared index exports it.
+// Exported by the index of shared (junction AN-A2).
 // =============================================================================
 
 /**
