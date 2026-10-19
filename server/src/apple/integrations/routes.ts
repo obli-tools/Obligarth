@@ -7,6 +7,7 @@ import { config } from '../../config';
 import { db } from '../../db';
 import { asIdentity, asPlatform, userActor } from '../../db/context';
 import { globalViewGrant } from '../../db/platformAccess';
+import { adoptHeaderStepUpProof } from '../../middleware/captureStepUpProof';
 import { AppError } from '../../middleware/errorHandler';
 import { requireAnyTenantCapability, requireTenantCapability } from '../../middleware/rbac';
 import { applyRestriction, restrictionService } from '../../services/restriction.service';
@@ -64,8 +65,10 @@ import {
 const read = requireAnyTenantCapability('settings', 'mdm.integrations.manage');
 const manage = requireTenantCapability('mdm.integrations.manage');
 const rawParser = expressRaw({ type: () => true, limit: INTEGRATION_LIMITS.fileBytes });
-/** The raw body of a file route (64 KiB at most): a larger one answers 413 fileTooLarge, never a 500. */
+/** The raw body of a file route (64 KiB at most): a larger one answers 413 fileTooLarge, never a 500. The second factor
+ *  of a file route travels in the header X-Obli-Step-Up-Proof (INT-INTC-R1 A): the client sends the same bytes again. */
 function raw(req: Request, res: Response, next: NextFunction): void {
+  adoptHeaderStepUpProof(req);
   rawParser(req, res, (err?: unknown) => {
     if (!err) { next(); return; }
     const type = (err as { type?: string }).type;
@@ -137,6 +140,7 @@ const vppSyncLimiter = rateLimit({
 /** The raw body of a .vpptoken (16 KiB at most). */
 const vppRawParser = expressRaw({ type: () => true, limit: VPP_LIMITS.tokenFileBytes });
 function vppRaw(req: Request, res: Response, next: NextFunction): void {
+  adoptHeaderStepUpProof(req);
   vppRawParser(req, res, (err?: unknown) => {
     if (!err) { next(); return; }
     const type = (err as { type?: string }).type;

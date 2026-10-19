@@ -44,8 +44,36 @@ apiClient.interceptors.request.use((config) => {
 // doesn't loop back into the gate — the user sees a plain "Invalid 2FA
 // code" error and can re-trigger the action from the UI.
 
+/** True when the request body is bytes (a file route of the Apple integrations), not a JSON object. */
+function isBinaryBody(data: unknown): boolean {
+  if (data == null || typeof data === 'string') return false;
+  if (typeof ArrayBuffer !== 'undefined' && (data instanceof ArrayBuffer || ArrayBuffer.isView(data))) return true;
+  if (typeof Blob !== 'undefined' && data instanceof Blob) return true;
+  return false;
+}
+
+/** base64url of the JSON of a proof (header X-Obli-Step-Up-Proof). */
+function proofHeaderValue(proof: Record<string, unknown>): string {
+  const bytes = new TextEncoder().encode(JSON.stringify(proof));
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+/**
+ * A file route (raw body) cannot carry the proof in its body: the SAME bytes
+ * are sent again with the proof in the header X-Obli-Step-Up-Proof, read by
+ * the server for the raw-body routes only (owners' decision INT-INTC-R1 A).
+ */
+function resendBinaryWithProof(config: any, proof: Record<string, unknown>, extra: Record<string, unknown> = {}) {
+  const next = { ...config, ...extra, _tfaRetried: true };
+  next.headers = { ...(config.headers ?? {}), 'X-Obli-Step-Up-Proof': proofHeaderValue(proof) };
+  return apiClient(next);
+}
+
 /** Replays a request once with extra JSON body fields (the step-up proof). */
 function retryWithProof(config: any, proof: Record<string, unknown>) {
+  if (isBinaryBody(config.data)) return resendBinaryWithProof(config, proof);
   let payload: Record<string, unknown> = {};
   if (typeof config.data === 'string') {
     try { payload = JSON.parse(config.data) as Record<string, unknown>; } catch { payload = {}; }
@@ -158,6 +186,9 @@ function normaliseSignResult(raw: unknown): SignDeviceChallengeResult {
 function sendWithProof(config: any, base: Record<string, unknown>, proof: Record<string, unknown>) {
   // `_tfaWithPassword`: the proof carried the password WITH the code (bound
   // session), so a refusal means "wrong password or code", not "wrong code".
+  if (isBinaryBody(config.data)) {
+    return resendBinaryWithProof(config, proof, { _tfaWithPassword: typeof proof.stepUpPassword === 'string' });
+  }
   const next = {
     ...config, _tfaRetried: true, _tfaWithPassword: typeof proof.stepUpPassword === 'string',
     data: JSON.stringify({ ...base, ...proof }),
