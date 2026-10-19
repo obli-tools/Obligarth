@@ -666,6 +666,87 @@ func (s *Server) release(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, http.StatusOK, map[string]any{"enrollment_id": id, "released": out, "revoked_certificates": len(revoked)})
 }
 
+// reenrollTarget returns the tenant key, the device channel enrollment of the
+// request and its active identifiers (404 when none is active: an enrollment
+// whose identifier was released re-enrolls freely).
+func (s *Server) reenrollTarget(r *http.Request) (string, string, []store.ActiveID, error) {
+	key, err := tenantKey(r)
+	if err != nil {
+		return "", "", nil, err
+	}
+	id, err := enrollmentParam(r, key)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if strings.Contains(id, ":") {
+		return "", "", nil, apierr.Unprocessable("validation_failed", "a device channel enrollment is expected")
+	}
+	if _, err := s.liveTenant(r, key); err != nil {
+		return "", "", nil, err
+	}
+	active, err := store.ActiveIDsOfEnrollment(r.Context(), s.DB, key, id)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if len(active) == 0 {
+		return "", "", nil, apierr.NotFound("enrollment_not_found", "no active identifier for this enrollment")
+	}
+	return key, id, active, nil
+}
+
+// allowReenroll lets one Authenticate without ADE proof re-enroll the active
+// identifiers of an enrollment under a new identity, until expiry (24 hours
+// at most; decision of the owners of 19/10/2026 on AE-C0-R2bis, option C of
+// MDM-B2-R13). The Authenticate it lets through consumes it.
+func (s *Server) allowReenroll(w http.ResponseWriter, r *http.Request) error {
+	var req struct {
+		TTLSeconds int `json:"ttl_seconds"`
+	}
+	if r.ContentLength != 0 {
+		if err := decode(r, defaultBodyLimit, &req); err != nil {
+			return err
+		}
+	}
+	ttl := store.ReenrollAllowanceMaxTTL
+	if req.TTLSeconds != 0 {
+		if req.TTLSeconds < 60 || time.Duration(req.TTLSeconds)*time.Second > store.ReenrollAllowanceMaxTTL {
+			return apierr.BadRequest("ttl_seconds must be between 60 and 86400")
+		}
+		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+	key, id, active, err := s.reenrollTarget(r)
+	if err != nil {
+		return err
+	}
+	expires := time.Now().Add(ttl)
+	err = store.InTx(r.Context(), s.DB, func(tx *sql.Tx) error {
+		for _, a := range active {
+			if err := store.SetReenrollAllowance(r.Context(), tx, key, a.Kind, a.RawID, expires, reqctx.RequestID(r.Context())); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	s.Logger.Info("msg", "re-enrollment allowed", "component", "api", "tenant", key, "request_id", reqctx.RequestID(r.Context()))
+	return writeJSON(w, http.StatusOK, map[string]any{"enrollment_id": id, "expires_at": expires.UTC().Truncate(time.Second)})
+}
+
+// withdrawReenroll withdraws the allowances of an enrollment.
+func (s *Server) withdrawReenroll(w http.ResponseWriter, r *http.Request) error {
+	key, id, active, err := s.reenrollTarget(r)
+	if err != nil {
+		return err
+	}
+	n, err := store.DeleteReenrollAllowances(r.Context(), s.DB, key, active)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, http.StatusOK, map[string]any{"enrollment_id": id, "withdrawn": n > 0})
+}
+
 // revokeEnrollmentCerts revokes the identities associated with an enrollment.
 func (s *Server) revokeEnrollmentCerts(r *http.Request, q store.Querier, key, deviceID, reason string) ([]string, error) {
 	hashes, err := nanomdmsql.CertHashes(r.Context(), q, deviceID)

@@ -170,19 +170,28 @@ async function handleDeviceIdConflict(ctx: Ctx<'security.device_id_conflict'>): 
   const { trx, event } = ctx;
   const tenantId = ctx.tenantId as number;
   const p = event.payload;
-  // Never the other tenant (S-11): its outcome for this tenant only.
-  await raiseForEvent(ctx, tenantId, 'security.device_id_conflict', { params: { outcome: p.outcome } });
+  // The record, when the event names its enrollment (the conflicts within a tenant do; the serial number of the payload
+  // is device data and designates nothing).
+  const sat = event.enrollmentId
+    ? await trx('apple_devices').where({ tenant_id: tenantId, enrollment_id: event.enrollmentId }).first('device_id') as { device_id: number } | undefined
+    : undefined;
+  if (p.outcome === REENROLL_REFUSED && sat) {
+    // A re-enrollment without proof of a record under management, refused by apple-edge (decision of the owners of
+    // 19/10/2026 on AE-C0-R2bis): the alert of the record proposes « Allow the re-enrollment ».
+    await raiseInTx(trx, tenantId, 'enrollment.reenroll_refused', { discriminant: Number(sat.device_id), navigateTo: `/devices/${sat.device_id}` });
+  } else {
+    // Never the other tenant (S-11): its outcome for this tenant only.
+    await raiseForEvent(ctx, tenantId, 'security.device_id_conflict', { params: { outcome: p.outcome } });
+  }
   if (await firstTimeFor(trx, event.eventId, 'audit')) {
-    ctx.audit({ tenantId, action: 'security.device_id_conflict', outcome: 'denied', details: { idKind: p.id_kind, outcome: p.outcome } });
+    ctx.audit({ tenantId, action: 'security.device_id_conflict', outcome: 'denied', ...(sat ? { target: deviceTarget(Number(sat.device_id)) } : {}),
+      details: { idKind: p.id_kind, outcome: p.outcome } });
   }
-  // The timeline of the record, when the event names its enrollment (apple-edge does not today; the serial number of
-  // the payload is device data and designates nothing).
-  if (event.enrollmentId) {
-    const sat = await trx('apple_devices').where({ tenant_id: tenantId, enrollment_id: event.enrollmentId }).first('device_id') as
-      { device_id: number } | undefined;
-    if (sat) await deviceEvents.add(trx, tenantId, Number(sat.device_id), 'id_conflict', event.occurredAt, event.eventId, { outcome: p.outcome });
-  }
+  if (sat) await deviceEvents.add(trx, tenantId, Number(sat.device_id), 'id_conflict', event.occurredAt, event.eventId, { outcome: p.outcome });
 }
+
+/** The outcome apple-edge gives a re-enrollment without proof of an active identifier (AE-C0-R2bis). */
+const REENROLL_REFUSED = 'refused_reenroll_without_proof';
 
 // ── security.* (platform) ───────────────────────────────────────────────────────
 

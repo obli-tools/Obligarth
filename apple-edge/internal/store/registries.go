@@ -304,3 +304,72 @@ SELECT EXISTS (
    WHERE m.id = $1 AND m.tenant_key = $2 AND m.udid = $3 AND m.token_id IS NOT NULL)`, machineInfoID, tenant, udid).Scan(&ok)
 	return ok, err
 }
+
+// ReenrollAllowanceMaxTTL bounds an allowance to re-enroll an active
+// identifier without proof (decision of the owners of 19/10/2026, option C
+// of MDM-B2-R13): 24 hours.
+const ReenrollAllowanceMaxTTL = 24 * time.Hour
+
+// ActiveIDsOfEnrollment returns the active identifiers bound to an enrollment
+// of the tenant (device channel).
+func ActiveIDsOfEnrollment(ctx context.Context, q Querier, tenant, enrollmentID string) ([]ActiveID, error) {
+	rows, err := q.QueryContext(ctx, `
+SELECT id_kind, raw_id, proof, since FROM apple_edge.device_ids
+ WHERE tenant_key = $1 AND enrollment_id = $2 AND state = 'active' ORDER BY id_kind`, tenant, enrollmentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ActiveID
+	for rows.Next() {
+		a := ActiveID{Tenant: tenant, EnrollmentID: enrollmentID}
+		if err := rows.Scan(&a.Kind, &a.RawID, &a.Proof, &a.Since); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// SetReenrollAllowance allows one re-enrollment without proof of (tenant,
+// kind, raw) until expires; the expired allowances of the tenant go.
+func SetReenrollAllowance(ctx context.Context, q Querier, tenant, kind, raw string, expires time.Time, requestID string) error {
+	if _, err := q.ExecContext(ctx, `DELETE FROM apple_edge.reenroll_allowances WHERE tenant_key = $1 AND expires_at <= now()`, tenant); err != nil {
+		return err
+	}
+	_, err := q.ExecContext(ctx, `
+INSERT INTO apple_edge.reenroll_allowances (tenant_key, id_kind, raw_id, expires_at, request_id)
+VALUES ($1, $2, $3, $4, NULLIF($5, ''))
+ON CONFLICT (tenant_key, id_kind, raw_id) DO UPDATE SET expires_at = EXCLUDED.expires_at, request_id = EXCLUDED.request_id, created_at = now()`,
+		tenant, kind, raw, expires.UTC(), requestID)
+	return err
+}
+
+// DeleteReenrollAllowances withdraws the allowances of the identifiers of an
+// enrollment of the tenant; it returns how many were withdrawn.
+func DeleteReenrollAllowances(ctx context.Context, q Querier, tenant string, ids []ActiveID) (int64, error) {
+	var n int64
+	for _, a := range ids {
+		res, err := q.ExecContext(ctx, `DELETE FROM apple_edge.reenroll_allowances WHERE tenant_key = $1 AND id_kind = $2 AND raw_id = $3`,
+			tenant, a.Kind, a.RawID)
+		if err != nil {
+			return n, err
+		}
+		k, _ := res.RowsAffected()
+		n += k
+	}
+	return n, nil
+}
+
+// TakeReenrollAllowance consumes a live allowance of (tenant, kind, raw) in
+// the caller's transaction: true when one was there.
+func TakeReenrollAllowance(ctx context.Context, q Querier, tenant, kind, raw string) (bool, error) {
+	res, err := q.ExecContext(ctx, `
+DELETE FROM apple_edge.reenroll_allowances
+ WHERE tenant_key = $1 AND id_kind = $2 AND raw_id = $3 AND expires_at > now()`, tenant, kind, raw)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}

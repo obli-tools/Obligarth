@@ -181,7 +181,7 @@ async function awaitConfiguration(ctx: JobContext<DeviceJob>): Promise<JobResult
 
 /** The alerts of a device that tell an ongoing problem of its management (resolved when it leaves). */
 const DEVICE_PROBLEM_ALERTS = ['enrollment.setup_timeout', 'device.serial_changed', 'security.identity_mismatch',
-  'enrollment.reenrolled_without_proof'] as const;
+  'enrollment.reenrolled_without_proof', 'enrollment.reenroll_refused'] as const;
 
 /** What another module does at the cleanup of a departure, in its transaction (the licences of Apps and Books given
  *  back, lot C4). */

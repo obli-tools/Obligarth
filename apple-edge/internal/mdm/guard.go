@@ -304,6 +304,40 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	if err != nil {
 		return err
 	}
+	// The same kind, active in this tenant, without ADE proof (decision of the
+	// owners of 19/10/2026 on AE-C0-R2bis, option C of MDM-B2-R13): NanoMDM
+	// would disable the managed device's enrollment and take its push token.
+	// Accepted only for the identity certificate already associated with the
+	// enrollment (the same device authenticating again), or under a
+	// re-enrollment allowance of the brain ("Allow the re-enrollment" on the
+	// record), consumed here; refused otherwise (403, security event).
+	reenrollAllowed := false
+	if proof != store.ProofADE && holder != nil && holder.Tenant == t.Key {
+		same := false
+		if is := p.st.issued; is != nil && is.SHA256 != "" {
+			hashes, err := nanomdmsql.CertHashes(ctx, tx, p.deviceID)
+			if err != nil {
+				return err
+			}
+			for _, h := range hashes {
+				if h == is.SHA256 {
+					same = true
+					break
+				}
+			}
+		}
+		if !same {
+			if reenrollAllowed, err = store.TakeReenrollAllowance(ctx, tx, t.Key, p.kind, p.raw); err != nil {
+				return err
+			}
+			if !reenrollAllowed {
+				_ = tx.Rollback()
+				g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedReenroll))
+				g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_reenroll")
+				return errKindConflict
+			}
+		}
+	}
 	var transfer *store.Transfer
 	if holder != nil && holder.Tenant != t.Key && p.kind == store.KindUDID {
 		if transfer, err = store.FindTransfer(ctx, g.db, p.kind, p.raw, holder.Tenant, t.Key); err != nil {
@@ -341,11 +375,12 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 		// one of the enrollment from now on (lot C0): a squatter's identity
 		// no longer answers. Without proof, the other associations stay until
 		// the identifier is activated anew (TokenUpdate): an Authenticate
-		// alone never cuts a device off (review of lot C0, AE-C0-R1), and a
-		// re-enrollment without proof of an active identifier shares the
-		// channel as before lot C0 (AE-C0-R2, option B of MDM-B2-R13 left to
-		// the owners for lot C2).
-		if is := p.st.issued; proof == store.ProofADE && is != nil && is.SHA256 != "" {
+		// alone never cuts a device off (review of lot C0, AE-C0-R1). A
+		// re-enrollment without proof of an active identifier is refused above
+		// unless the brain allowed it (decision of the owners of 19/10/2026 on
+		// AE-C0-R2bis): an allowed one replaces the previous identity, as the
+		// ADE proof does (the operator decided the record is this device's).
+		if is := p.st.issued; (proof == store.ProofADE || reenrollAllowed) && is != nil && is.SHA256 != "" {
 			if _, err := nanomdmsql.DropOtherCertHashes(ctx, tx, p.deviceID, is.SHA256); err != nil {
 				return nil, err
 			}
@@ -381,10 +416,14 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 			}
 			evs = append(evs, conflictEvents(t.Key, holder.Tenant, d, p.kind, m.SerialNumber, g.policy)...)
 		}
-		evs = append(evs, outbox.T(t.Key, "mdm.authenticate", map[string]any{
+		auth := map[string]any{
 			"device_id": p.raw, "enrollment_type": p.enrollType, "topic": m.Topic, "proof": proof,
 			"identity": identity, "message": msg,
-		}).WithEnrollment(p.enrollmentID))
+		}
+		if reenrollAllowed {
+			auth["reenroll"] = "allowed"
+		}
+		evs = append(evs, outbox.T(t.Key, "mdm.authenticate", auth).WithEnrollment(p.enrollmentID))
 		return evs, nil
 	}()
 	if err != nil {

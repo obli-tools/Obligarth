@@ -18,7 +18,11 @@ import { parseRequestDeviceId, resolveRequestDevice } from '../../services/devic
 import { sendStepUpFailure } from '../../services/deviceKey/stepUpProof';
 import { permissionService } from '../../services/permission.service';
 import { applyRestriction } from '../../services/restriction.service';
+import { config } from '../../config';
+import { edgeActorOf } from '../actors';
+import { resolveInTx } from '../alerts/service';
 import { deviceTimeline } from '../devices/events';
+import { appleEdge } from '../edge/instance';
 import { rethrowForConsole } from '../edge/appError';
 import { mdmCommands, refusalOf, type EnqueueOutcome } from './bus';
 import { commandSpecList, commandSpecOrNull, guardedActionOf, REMOVE_MANAGEMENT_ACTION, type CommandSpec } from './catalog';
@@ -36,6 +40,8 @@ import { findSecrets, type SecretFinding } from './sensitive';
 //   POST /commands/bulk                  the same on 500 devices at most
 //   POST /devices/:id/remove-management  shortcut of the guarded action mdm.remove_management
 //   POST /devices/:id/inventory-refresh  mdm:inventory; 429 within 5 minutes
+//   POST /devices/:id/reenroll-allowance mdm:remove; one re-enrollment without proof allowed for 24 hours
+//   DELETE /devices/:id/reenroll-allowance  the allowance withdrawn (AE-C0-R2bis, decision of 19/10/2026)
 //   GET  /devices/:id/commands           the queue of a device
 //   GET  /commands                       the queue of the tenant (devices.manage)
 //   GET  /commands/:commandId            one command and its targets the caller sees
@@ -366,6 +372,60 @@ router.post('/devices/:id/inventory-refresh', enqueueLimiter, async (req, res, n
     const o = await db.transaction((trx) => refreshInventoryNow(trx, tenantId, id, req.session.userId!, auditCtx));
     if (o.commandIds.length === 0 && o.refused[0]) throw refusedError(o.refused[0].code);
     res.status(202).json({ data: { commandIds: o.commandIds } });
+  } catch (err) { next(err); }
+});
+
+// ── Re-enrollment without proof (decision of the owners of 19/10/2026 on AE-C0-R2bis, option C of MDM-B2-R13) ──
+// apple-edge refuses an Authenticate without ADE proof of an identifier active under another identity (a device erased
+// without CheckOut, restored, or an impostor announcing its UDID). The operator who checked that it is the same
+// device allows its re-enrollment: one Authenticate within 24 hours, consumed by it. Capability mdm:remove with write
+// access to the device; critical entry of the journal; the alert enrollment.reenroll_refused of the record resolved.
+const REENROLL_TTL_S = 86_400;
+
+async function reenrollTarget(req: Request): Promise<{ id: number; key: string; enrollmentId: string }> {
+  if (config.apple.mode !== 'on') throw new AppError(503, 'The Apple integration is turned off on this instance', 'appleIntegrationDisabled');
+  const id = await deviceOf(req, 'mdm:remove', true);
+  const tenantId = req.tenantId!;
+  const row = await db('apple_devices as a')
+    .join('devices as d', function joinDevice() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
+    .where({ 'a.tenant_id': tenantId, 'a.device_id': id }).first('a.enrollment_id', 'd.enrollment_state') as
+    { enrollment_id: string | null; enrollment_state: string } | undefined;
+  if (!row?.enrollment_id) throw new AppError(422, 'The device is not an Apple device', 'notApple');
+  if (row.enrollment_state === 'unenrolled') throw new AppError(409, 'The device is no longer under management: it enrolls again freely', 'notEnrolled');
+  const t = await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
+  if (!t?.mdm_key || !String(row.enrollment_id).startsWith(`${t.mdm_key}_`)) throw new AppError(409, 'The tenant is not provisioned at the device service', 'tenantNotProvisioned');
+  return { id, key: t.mdm_key, enrollmentId: String(row.enrollment_id) };
+}
+
+// POST /api/apple/devices/:id/reenroll-allowance
+router.post('/devices/:id/reenroll-allowance', enqueueLimiter, async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId!;
+    const target = await reenrollTarget(req);
+    const actor = { actor: edgeActorOf(userActor(req.session.userId!)), requestId: req.requestId };
+    const out = await audit.withIntent({
+      tenantId, action: 'apple.reenroll_allowed', target: { type: 'device', id: String(target.id), device: target.id }, details: { hours: REENROLL_TTL_S / 3600 },
+    }, await audit.fromRequest(req, tenantId), async () => {
+      try { return await appleEdge.allowReenroll(target.key, target.enrollmentId, REENROLL_TTL_S, actor); } catch (err) { rethrowForConsole(err); }
+    }, { resultDetails: (o) => ({ expiresAt: o.expires_at }) });
+    await db.transaction((trx) => resolveInTx(trx, tenantId, 'enrollment.reenroll_refused', target.id));
+    res.json({ data: { deviceId: target.id, expiresAt: out.expires_at } });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/apple/devices/:id/reenroll-allowance
+router.delete('/devices/:id/reenroll-allowance', enqueueLimiter, async (req, res, next) => {
+  try {
+    const tenantId = req.tenantId!;
+    const target = await reenrollTarget(req);
+    const actor = { actor: edgeActorOf(userActor(req.session.userId!)), requestId: req.requestId };
+    let withdrawn: boolean;
+    try { withdrawn = await appleEdge.withdrawReenroll(target.key, target.enrollmentId, actor); } catch (err) { rethrowForConsole(err); }
+    if (withdrawn!) {
+      await audit.append({ tenantId, action: 'apple.reenroll_allowance_withdrawn', target: { type: 'device', id: String(target.id), device: target.id }, details: {} },
+        await audit.fromRequest(req, tenantId));
+    }
+    res.json({ data: { deviceId: target.id, withdrawn: withdrawn! } });
   } catch (err) { next(err); }
 });
 

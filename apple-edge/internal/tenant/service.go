@@ -489,6 +489,7 @@ SELECT key FROM apple_edge.tenants
 				`DELETE FROM nanodep.dep_names WHERE name IN (SELECT id::text FROM apple_edge.ade_tokens WHERE tenant_key = $1)`,
 				`DELETE FROM apple_edge.ade_tokens WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.apns_inactive WHERE tenant_key = $1`,
+				`DELETE FROM apple_edge.reenroll_allowances WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.expiry_alerts WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.device_secrets WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.device_ids WHERE tenant_key = $1`,

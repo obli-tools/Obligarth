@@ -48,6 +48,9 @@ export function registerAppleAuditActions(): void {
     { name: 'apple.enrollment_token_created', criticality: 'standard', label: 'Enrollment link created' },
     { name: 'apple.enrollment_token_revoked', criticality: 'protective', label: 'Enrollment link revoked' },
     { name: 'apple.ade_device_profile_set', criticality: 'standard', label: 'Enrollment profile of an ADE device chosen' },
+    // A re-enrollment without proof of a device under management, allowed for 24 hours (AE-C0-R2bis, 19/10/2026).
+    { name: 'apple.reenroll_allowed', criticality: 'critical', label: 'Re-enrollment without proof allowed' },
+    { name: 'apple.reenroll_allowance_withdrawn', criticality: 'protective', label: 'Re-enrollment allowance withdrawn' },
     // Apple integrations (§11)
     { name: 'integration.push_request_created', criticality: 'standard', label: 'Push certificate request created' },
     { name: 'integration.push_vendor_file_imported', criticality: 'standard', label: 'Vendor-signed push request imported' },

@@ -202,6 +202,27 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
   }, [deviceId]);
   useEffect(() => { load(); }, [load]);
 
+  // AE-C0-R2bis (decision of 19/10/2026): a re-enrollment without proof of this device is refused by the device service
+  // unless allowed here (24 hours, one enrollment).
+  const reenroll = async (allow: boolean) => {
+    setBusy(allow ? 'reenroll' : 'reenroll-withdraw');
+    try {
+      if (allow) {
+        const r = await appleApi.allowReenroll(deviceId);
+        toast.success((t('apple.actions.reenrollAllowed', { at: formatDateTime(r.expiresAt) }) as string)
+          || `Re-enrollment allowed until ${formatDateTime(r.expiresAt)}.`, { duration: 7000 });
+      } else {
+        const r = await appleApi.withdrawReenroll(deviceId);
+        toast.success(r.withdrawn ? (t('apple.actions.reenrollWithdrawn') || 'Re-enrollment allowance withdrawn.')
+          : (t('apple.actions.reenrollNone') || 'No re-enrollment allowance was pending.'));
+      }
+    } catch (err) {
+      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const send = async (action: MdmDeviceAction, reason?: string) => {
     setBusy(action.requestType);
     try {
@@ -276,6 +297,18 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
                 </span>
                 <Button size="sm" variant="danger" disabled={!canAct} onClick={() => setGuardFor({ type: 'RemoveManagement', actionKey: 'mdm.remove_management' })}>
                   <Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}
+                </Button>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-bg-secondary px-3 py-2 text-sm">
+                <span className="min-w-0 flex-1">
+                  <span className="text-text-primary">{t('apple.actions.reenroll') || 'Allow the re-enrollment without proof'}</span>
+                  <span className="block text-[11px] text-text-muted">{t('apple.actions.reenrollHint') || 'Only if you checked that it is this same device (erased or restored without leaving management): its next enrollment, within 24 hours, replaces the current one. Any other is refused.'}</span>
+                </span>
+                <Button size="sm" variant="secondary" disabled={!canAct || busy === 'reenroll'} onClick={() => void reenroll(true)}>
+                  {t('apple.actions.reenrollAllow') || 'Allow for 24 h'}
+                </Button>
+                <Button size="sm" variant="secondary" disabled={!canAct || busy === 'reenroll-withdraw'} onClick={() => void reenroll(false)}>
+                  {t('apple.actions.reenrollWithdraw') || 'Withdraw'}
                 </Button>
               </div>
             </section>

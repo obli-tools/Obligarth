@@ -128,6 +128,8 @@ func (s *Server) Handler() http.Handler {
 	route("GET "+t+"/enrollments", s.listEnrollments)
 	route("GET "+t+"/enrollments/{id}", s.getEnrollment)
 	route("POST "+t+"/enrollments/{id}/release", s.release)
+	route("PUT "+t+"/enrollments/{id}/reenroll-allowance", s.allowReenroll)
+	route("DELETE "+t+"/enrollments/{id}/reenroll-allowance", s.withdrawReenroll)
 	route("DELETE "+t+"/enrollments/{id}", s.purge)
 	route("POST "+t+"/certificates/{sha256}/revoke", s.revoke)
 	route("POST "+t+"/device-secrets/{ref}/reveal", s.reveal)

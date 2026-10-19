@@ -96,6 +96,7 @@ async function handleAuthenticate(ctx: Ctx<'mdm.authenticate'>): Promise<void> {
     enrollmentType: p.enrollment_type,
     topic: p.topic,
     proof: p.proof,
+    reenrollAllowed: p.reenroll === 'allowed',
     certSha256: p.identity.cert_sha256 ?? null,
     certNotAfter: p.identity.not_after ? new Date(p.identity.not_after) : null,
     challengeId: p.identity.challenge_id ?? null,

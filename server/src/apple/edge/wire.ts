@@ -148,6 +148,12 @@ export const EdgeReleaseResultW = z.object({
 }).passthrough();
 export type EdgeReleaseResult = z.infer<typeof EdgeReleaseResultW>;
 
+/** PUT …/enrollments/{id}/reenroll-allowance (AE-C0-R2bis, decision of 19/10/2026). */
+export const EdgeReenrollAllowanceW = z.object({ enrollment_id: z.string(), expires_at: z.string() }).passthrough();
+export type EdgeReenrollAllowance = z.infer<typeof EdgeReenrollAllowanceW>;
+/** DELETE …/enrollments/{id}/reenroll-allowance. */
+export const EdgeReenrollWithdrawnW = z.object({ enrollment_id: z.string(), withdrawn: z.boolean() }).passthrough();
+
 export const EdgeRevokeW = z.object({ sha256: z.string(), revoked: z.boolean() }).passthrough();
 
 export const EdgeRevealedSecretW = z.object({

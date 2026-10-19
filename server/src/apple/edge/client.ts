@@ -7,11 +7,11 @@ import {
   EdgeAcceptedW, EdgeAccountDrivenW, EdgeAdeAssignW, EdgeAdeProfileW, EdgeAdeTokenListW, EdgeAdeTokenW, EdgeCancelResponseW,
   EdgeCaRotationW, EdgeChallengeW, EdgeEnqueueResponseW, EdgeEnrollmentConfigW, EdgeEnrollmentDetailW, EdgeEnrollmentListW,
   EdgeFreezeW, EdgeLogRefsW, EdgeMachineInfoCheckW, EdgePushCertInfoW, EdgePushCertListW, EdgePushCsrW, EdgePushResultsW,
-  EdgeReleaseResultW, EdgeRevealedSecretW, EdgeRevokeW, EdgeStatusW, EdgeTenantCreatedW, EdgeTenantInfoW, EdgeTenantListW,
+  EdgeReenrollAllowanceW, EdgeReenrollWithdrawnW, EdgeReleaseResultW, EdgeRevealedSecretW, EdgeRevokeW, EdgeStatusW, EdgeTenantCreatedW, EdgeTenantInfoW, EdgeTenantListW,
   EdgeTenantStateW, EdgeTransferW,
   type EdgeAdeToken, type EdgeCaRotation, type EdgeChallenge, type EdgeChallengeRequest, type EdgeEnqueueRequest,
   type EdgeEnqueueResponse, type EdgeEnrollment, type EdgeEnrollmentConfig, type EdgeEnrollmentDetail, type EdgeMachineInfoCheck,
-  type EdgePushCertInfo, type EdgePushCsr, type EdgePushOutcome, type EdgeReleaseResult, type EdgeRevealedSecret, type EdgeStatus,
+  type EdgePushCertInfo, type EdgePushCsr, type EdgePushOutcome, type EdgeReenrollAllowance, type EdgeReleaseResult, type EdgeRevealedSecret, type EdgeStatus,
   type EdgeTenantCreated, type EdgeTenantInfo, type EdgeTenantSummary, type EdgeTransferRequest,
 } from './wire';
 
@@ -99,6 +99,9 @@ export interface AppleEdgeClient {
   listEnrollments(key: string, q: { cursor?: string; limit?: number; seenSince?: Date }, o: EdgeCallOptions): Promise<EdgePage<EdgeEnrollment>>;
   getEnrollment(key: string, enrollmentId: string, o: EdgeCallOptions): Promise<EdgeEnrollmentDetail>;
   releaseEnrollment(key: string, enrollmentId: string, o: EdgeCallOptions): Promise<EdgeReleaseResult>;
+  /** One re-enrollment without proof of the active identifiers of an enrollment, until expiry (AE-C0-R2bis). */
+  allowReenroll(key: string, enrollmentId: string, ttlSeconds: number, o: EdgeCallOptions): Promise<EdgeReenrollAllowance>;
+  withdrawReenroll(key: string, enrollmentId: string, o: EdgeCallOptions): Promise<boolean>;
   purgeEnrollment(key: string, enrollmentId: string, o: EdgeCallOptions): Promise<void>;
   revokeCertificate(key: string, sha256: string, reason: string, o: EdgeCallOptions): Promise<void>;
   revealDeviceSecret(key: string, ref: string, body: { reason: string; approval_ref: string }, o: EdgeCallOptions): Promise<EdgeRevealedSecret>;
@@ -429,6 +432,17 @@ export function createAppleEdgeClient(opts: AppleEdgeClientOptions): AppleEdgeCl
       method: 'POST', path: `${t(key)}/enrollments/${seg(enrollmentId)}/release`, route: 'POST /tenants/{key}/enrollments/{id}/release',
       schema: EdgeReleaseResultW, idempotent: false,
     }, o),
+    allowReenroll: (key, enrollmentId, ttlSeconds, o) => call({
+      method: 'PUT', path: `${t(key)}/enrollments/${seg(enrollmentId)}/reenroll-allowance`, route: 'PUT /tenants/{key}/enrollments/{id}/reenroll-allowance',
+      body: { ttl_seconds: ttlSeconds }, schema: EdgeReenrollAllowanceW, idempotent: true,
+    }, o),
+    async withdrawReenroll(key, enrollmentId, o) {
+      const r = await call({
+        method: 'DELETE', path: `${t(key)}/enrollments/${seg(enrollmentId)}/reenroll-allowance`, route: 'DELETE /tenants/{key}/enrollments/{id}/reenroll-allowance',
+        schema: EdgeReenrollWithdrawnW, idempotent: true,
+      }, o);
+      return r.withdrawn === true;
+    },
     purgeEnrollment: (key, enrollmentId, o) => none({
       method: 'DELETE', path: `${t(key)}/enrollments/${seg(enrollmentId)}`, route: 'DELETE /tenants/{key}/enrollments/{id}', schema: null, idempotent: true,
     }, o),

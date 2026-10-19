@@ -2403,6 +2403,10 @@
         "reenrolled_without_proof": {
           "title": "Managed device enrolled again without proof",
           "message": "A device under management enrolled again without proof of ownership: check that it is the same device."
+        },
+        "reenroll_refused": {
+          "title": "Re-enrollment without proof refused",
+          "message": "A device tried to enroll again as a device under management, without proof of ownership: refused. If it is the same device (erased, restored), allow its re-enrollment from its page."
         }
       },
       "device": {
@@ -2793,7 +2797,14 @@
         "footnote": "Footnote",
         "preserveDataPlan": "Keep the cellular plan (eSIM)",
         "disallowProximitySetup": "Disallow the quick start by proximity after the erase"
-      }
+      },
+      "reenroll": "Allow the re-enrollment without proof",
+      "reenrollHint": "Only if you checked that it is this same device (erased or restored without leaving management): its next enrollment, within 24 hours, replaces the current one. Any other is refused.",
+      "reenrollAllow": "Allow for 24 h",
+      "reenrollWithdraw": "Withdraw",
+      "reenrollAllowed": "Re-enrollment allowed until {{at}}.",
+      "reenrollWithdrawn": "Re-enrollment allowance withdrawn.",
+      "reenrollNone": "No re-enrollment allowance was pending."
     },
     "integrations": {
       "title": "Integrations",

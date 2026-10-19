@@ -43,6 +43,8 @@ export const P = {
     enrollment_type: nanoType,
     topic: z.string().max(255),
     proof: z.enum(['none', 'ade']),
+    /** 'allowed': a re-enrollment without proof the brain allowed (decision of 19/10/2026 on AE-C0-R2bis). */
+    reenroll: z.literal('allowed').optional(),
     identity: z.object({
       cert_sha256: sha256.optional(),
       not_after: iso.optional(),

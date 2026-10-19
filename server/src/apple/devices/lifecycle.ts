@@ -59,6 +59,8 @@ export interface AuthenticateFacts {
   enrollmentType: NanoEnrollType;
   topic: string;
   proof: 'none' | 'ade';
+  /** A re-enrollment without proof the brain allowed ("Allow the re-enrollment", AE-C0-R2bis): no alert. */
+  reenrollAllowed?: boolean;
   certSha256: string | null;
   certNotAfter: Date | null;
   challengeId: string | null;
@@ -378,7 +380,7 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
       const assignments = await trx('assignments').where({ tenant_id: tenantId, target_scope: 'device', target_id: deviceId }).del();
       const locations = await trx('lost_mode_locations').where({ tenant_id: tenantId, device_id: deviceId }).del();
       renewed = { assignments: Number(assignments), locations: Number(locations) };
-    } else if (sat && sat.enrollment_state !== 'unenrolled' && sat.id_activated_at && f.proof !== 'ade') {
+    } else if (sat && sat.enrollment_state !== 'unenrolled' && sat.id_activated_at && f.proof !== 'ade' && !f.reenrollAllowed) {
       // MDM-B2-R13, option A: a new cycle of a record under management without the ADE proof (an OTA enrollment that
       // announces the UDID of an enrolled device, or the device itself installing a profile again): the operator checks.
       await raiseInTx(trx, tenantId, 'enrollment.reenrolled_without_proof', { discriminant: deviceId, navigateTo: `/devices/${deviceId}` });

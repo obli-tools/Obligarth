@@ -52,6 +52,15 @@ export const appleApi = {
     const res = await apiClient.post<ApiResponse<{ commandIds: string[] }>>(`/apple/devices/${deviceId}/inventory-refresh`);
     return res.data.data ?? { commandIds: [] };
   },
+  /** One re-enrollment without proof of this managed device, for 24 hours (AE-C0-R2bis, decision of 19/10/2026). */
+  async allowReenroll(deviceId: number): Promise<{ deviceId: number; expiresAt: string }> {
+    const res = await apiClient.post<ApiResponse<{ deviceId: number; expiresAt: string }>>(`/apple/devices/${deviceId}/reenroll-allowance`);
+    return res.data.data!;
+  },
+  async withdrawReenroll(deviceId: number): Promise<{ deviceId: number; withdrawn: boolean }> {
+    const res = await apiClient.delete<ApiResponse<{ deviceId: number; withdrawn: boolean }>>(`/apple/devices/${deviceId}/reenroll-allowance`);
+    return res.data.data!;
+  },
   async removeManagement(deviceId: number, body: { reason: string; ticket?: string; confirm: string }): Promise<GuardOutcome> {
     const res = await apiClient.post<ApiResponse<GuardOutcome>>(`/apple/devices/${deviceId}/remove-management`, body);
     return res.data.data!;

@@ -31,6 +31,7 @@ export const APPLE_ALERTS = {
   'enrollment.invitation_locked': { scope: 'tenant', severity: 'warning', title: 'Enrollment invitation locked', message: 'An enrollment invitation was revoked after too many wrong codes.' },
   'enrollment.ownership_mismatch': { scope: 'tenant', severity: 'warning', title: 'Ownership differs from the enrollment profile', message: 'A device enrolled with an ownership its enrollment profile does not allow.' },
   'enrollment.reenrolled_without_proof': { scope: 'tenant', severity: 'warning', title: 'Managed device enrolled again without proof', message: 'A device under management enrolled again without proof of ownership: check that it is the same device.' },
+  'enrollment.reenroll_refused': { scope: 'tenant', severity: 'warning', title: 'Re-enrollment without proof refused', message: 'A device tried to enroll again as a device under management, without proof of ownership: refused. If it is the same device (erased, restored), allow its re-enrollment from its page.' },
   // ── Devices ───────────────────────────────────────────────────────────────
   'device.checked_out': { scope: 'tenant', severity: 'info', title: 'Device left management', message: 'A company device removed its management profile.' },
   'device.superseded': { scope: 'tenant', severity: 'warning', title: 'Device enrolled again elsewhere', message: 'A device of this tenant was enrolled again and its previous enrollment was released.' },

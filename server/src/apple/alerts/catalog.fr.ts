@@ -18,6 +18,7 @@ export const APPLE_ALERTS_FR: Record<AppleAlertKind, { title: string; message: s
   'enrollment.invitation_locked': { title: 'Invitation d\'enrôlement verrouillée', message: 'Une invitation d\'enrôlement a été révoquée après trop de codes erronés.' },
   'enrollment.ownership_mismatch': { title: 'Propriété différente de celle du profil d\'enrôlement', message: 'Un appareil s\'est enrôlé avec une propriété que son profil d\'enrôlement n\'autorise pas.' },
   'enrollment.reenrolled_without_proof': { title: 'Appareil géré réenrôlé sans preuve', message: 'Un appareil géré s\'est enrôlé de nouveau sans preuve de propriété : vérifiez qu\'il s\'agit bien du même appareil.' },
+  'enrollment.reenroll_refused': { title: 'Réenrôlement sans preuve refusé', message: 'Un appareil a tenté de s\'enrôler de nouveau comme un appareil géré, sans preuve de propriété : refusé. S\'il s\'agit du même appareil (effacé, restauré), autorisez son réenrôlement depuis sa page.' },
   'device.checked_out': { title: 'Appareil sorti de la gestion', message: 'Un appareil de l\'entreprise a retiré son profil de gestion.' },
   'device.superseded': { title: 'Appareil enrôlé de nouveau ailleurs', message: 'Un appareil de ce tenant a été enrôlé de nouveau et son enrôlement précédent a été libéré.' },
   'device.serial_changed': { title: 'Numéro de série modifié', message: 'Un appareil a signalé un autre numéro de série que celui enregistré.' },

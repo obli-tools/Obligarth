@@ -16,6 +16,12 @@ const (
 	// (UDID or EnrollmentID) of the same device channel.
 	OutcomeRefusedOtherKind    = "refused_other_kind"
 	OutcomeSupersededOtherKind = "superseded_other_kind"
+
+	// Within a tenant, same kind (decision of the owners of 19/10/2026 on
+	// AE-C0-R2bis, option C of MDM-B2-R13): an Authenticate without ADE proof
+	// of an identifier active under another identity certificate is refused
+	// unless the brain allowed the re-enrollment.
+	OutcomeRefusedReenroll = "refused_reenroll_without_proof"
 )
 
 // Decision is the result of the cross-tenant policy at Authenticate.

@@ -2403,6 +2403,10 @@
         "reenrolled_without_proof": {
           "title": "Appareil géré réenrôlé sans preuve",
           "message": "Un appareil géré s'est enrôlé de nouveau sans preuve de propriété : vérifiez qu'il s'agit bien du même appareil."
+        },
+        "reenroll_refused": {
+          "title": "Réenrôlement sans preuve refusé",
+          "message": "Un appareil a tenté de s'enrôler de nouveau comme un appareil géré, sans preuve de propriété : refusé. S'il s'agit du même appareil (effacé, restauré), autorisez son réenrôlement depuis sa page."
         }
       },
       "device": {
@@ -2793,7 +2797,14 @@
         "footnote": "Note de bas de page",
         "preserveDataPlan": "Conserver le forfait cellulaire (eSIM)",
         "disallowProximitySetup": "Interdire le démarrage rapide par proximité après l'effacement"
-      }
+      },
+      "reenroll": "Autoriser le réenrôlement sans preuve",
+      "reenrollHint": "Seulement si vous avez vérifié qu'il s'agit bien de ce même appareil (effacé ou restauré sans sortir de gestion) : son prochain enrôlement, dans les 24 heures, remplace l'actuel. Tout autre est refusé.",
+      "reenrollAllow": "Autoriser 24 h",
+      "reenrollWithdraw": "Retirer",
+      "reenrollAllowed": "Réenrôlement autorisé jusqu'au {{at}}.",
+      "reenrollWithdrawn": "Autorisation de réenrôlement retirée.",
+      "reenrollNone": "Aucune autorisation de réenrôlement n'était en attente."
     },
     "integrations": {
       "title": "Intégrations",
