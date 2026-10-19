@@ -14,7 +14,7 @@
 // request); then a strict step-up of the reviewer.
 import type { Request } from 'express';
 import {
-  MASTER_TENANT_ID, type GuardApprovalPayload, type GuardApproverSide, type GuardSettingsInput, type GuardSide,
+  MASTER_TENANT_ID, PUBLISH_APPROVAL_THRESHOLDS, SETTINGS_KEYS, type GuardApprovalPayload, type GuardApproverSide, type GuardSettingsInput, type GuardSide,
 } from '@obligarth/shared';
 import { z } from 'zod';
 import { audit, type AuditWriteContext } from '../audit';
@@ -39,6 +39,7 @@ import {
 import { capAllows, requiredApproverSide, reviewerRefusal, type RequiredApproverSide } from './policy';
 import { recordRefusal } from './refusals';
 import { targetsWithoutRights } from './selection';
+import { fleetShareFloor } from '../mdm/settings';
 import { readSettings } from './settings';
 import { findAction, findActionByApproval, toDto } from './store';
 import { lateCancelOf } from './types';
@@ -269,6 +270,7 @@ const SettingsPayload = z.object({
   hourlyCapPercent: z.number().int().min(5).max(50).optional(),
   hourlyCapMin: z.number().int().min(3).max(50).optional(),
   massApproverSide: z.enum(['client', 'msp']).optional(),
+  publishFleetShareFloor: z.number().int().min(1).max(PUBLISH_APPROVAL_THRESHOLDS.fleetShareFloorMax).optional(),
 }).strict();
 
 async function executeSettingsChange(x: ApprovalExecution): Promise<void> {
@@ -294,6 +296,15 @@ export async function applySettings(tenantId: number, input: GuardSettingsInput,
     }
     if (input.massApproverSide !== undefined && input.massApproverSide !== before.mass_approver_side) {
       patch.mass_approver_side = input.massApproverSide; changes.massApproverSide = { from: before.mass_approver_side, to: input.massApproverSide };
+    }
+    // DM23: the floor of the share of the fleet (setting publishFleetShareFloor), written here only.
+    const floorBefore = await fleetShareFloor(trx, tenantId);
+    if (input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floorBefore) {
+      await trx.raw(`INSERT INTO settings (tenant_id, scope, scope_id, key, value, created_at, updated_at)
+        VALUES (?, 'global', NULL, ?, ?, NOW(), NOW())
+        ON CONFLICT (tenant_id, scope, key) WHERE scope_id IS NULL DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+      [tenantId, SETTINGS_KEYS.PUBLISH_FLEET_SHARE_FLOOR, JSON.stringify(input.publishFleetShareFloor)]);
+      changes.publishFleetShareFloor = { from: floorBefore, to: input.publishFleetShareFloor };
     }
     if (!Object.keys(changes).length) return;
     await trx('tenant_guard_settings').where({ tenant_id: tenantId }).update(patch);

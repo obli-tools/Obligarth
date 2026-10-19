@@ -118,6 +118,8 @@ export interface GuardSettingsDto {
   hourlyCapPercent: number;
   hourlyCapMin: number;
   massApproverSide: GuardSide;
+  /** DM23 (setting publishFleetShareFloor), changed under guard.settings_change only. */
+  publishFleetShareFloor?: number;
   frozen: boolean;
   frozenAt: string | null;
   frozenBy: number | null;
@@ -136,6 +138,9 @@ export interface GuardSettingsInput {
   hourlyCapPercent?: number;
   hourlyCapMin?: number;
   massApproverSide?: GuardSide;
+  /** DM23: devices touched before the 10 % share of the fleet asks a second approver (1 to 25). Changed under
+   *  guard.settings_change only (decision of the owners of 19/10/2026). */
+  publishFleetShareFloor?: number;
 }
 
 export interface GuardApproverDto {

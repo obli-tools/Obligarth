@@ -73,12 +73,13 @@ function normalise(row: Record<string, unknown> | undefined, tenantId: number): 
 /** The settings as the console reads them; `hold`: the last loss of a client
  *  approver not decided by the approver, and the end of the fallback hold
  *  (AUD-A7-R4, guard/people.ts fallbackHold). */
-export function settingsToDto(s: GuardSettingsRow, hold: { lostAt: Date; until: Date } | null = null): GuardSettingsDto {
+export function settingsToDto(s: GuardSettingsRow, hold: { lostAt: Date; until: Date } | null = null, floor?: number): GuardSettingsDto {
   return {
     tenantId: s.tenant_id,
     hourlyCapPercent: s.hourly_cap_percent,
     hourlyCapMin: s.hourly_cap_min,
     massApproverSide: s.mass_approver_side,
+    ...(floor !== undefined ? { publishFleetShareFloor: floor } : {}),
     frozen: s.frozen_at !== null,
     frozenAt: s.frozen_at ? s.frozen_at.toISOString() : null,
     frozenBy: s.frozen_by,

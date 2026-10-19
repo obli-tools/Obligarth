@@ -2202,7 +2202,9 @@
       "save": "Demander le changement",
       "help": "Un changement est approuvé par une seconde personne (un approbateur client par défaut).",
       "requested": "Changement demandé : en attente d'un approbateur",
-      "unchanged": "Rien n'a changé"
+      "unchanged": "Rien n'a changé",
+      "fleetShareFloor": "Second approbateur : 10 % du parc comptés à partir de (appareils)",
+      "fleetShareFloorHelp": "Un changement de la configuration demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
     },
     "quota": "Budget horaire : reste {{remaining}} appareils sur {{cap}}",
     "approval": {

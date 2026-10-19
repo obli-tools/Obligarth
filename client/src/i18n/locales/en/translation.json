@@ -2202,7 +2202,9 @@
       "save": "Request the change",
       "help": "A change is approved by a second person (a client approver by default).",
       "requested": "Change requested: waiting for an approver",
-      "unchanged": "Nothing changed"
+      "unchanged": "Nothing changed",
+      "fleetShareFloor": "Second approver: 10 % of the fleet counted from (devices)",
+      "fleetShareFloorHelp": "A change of the configuration asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
     },
     "quota": "Hourly budget: {{remaining}} of {{cap}} devices left",
     "approval": {

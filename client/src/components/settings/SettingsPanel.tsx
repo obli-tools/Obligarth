@@ -87,6 +87,8 @@ export function SettingsPanel({ scope, scopeId, title }: SettingsPanelProps) {
  // make no sense per group/device — hide them outside the global scope
  // so they don't clutter (or imply they're overridable in) a group panel.
  .filter((def) => scope === 'global' || !def.globalOnly)
+ // A guarded setting (DM23: publishFleetShareFloor) is changed in the guard settings, with a second approver.
+ .filter((def) => !def.guardedBy)
  .map((def) => (
  <SettingField
  key={def.key}

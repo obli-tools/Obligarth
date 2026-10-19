@@ -5,7 +5,7 @@
 // global view, the action's tenant, one per request).
 import type { Request } from 'express';
 import {
-  type GuardApprovalPayload, type GuardApproverDto, type GuardSettingsInput, type GuardSide,
+  PUBLISH_APPROVAL_THRESHOLDS, type GuardApprovalPayload, type GuardApproverDto, type GuardSettingsInput, type GuardSide,
   type PendingActionDto, type PendingActionState,
 } from '@obligarth/shared';
 import { audit, type AuditWriteContext } from '../audit';
@@ -29,6 +29,7 @@ import { guardMetrics } from './metrics';
 import { notifyAction, notifyLateCancel } from './notify';
 import { cooldownUntil, personFacts } from './people';
 import { checkReason } from './policy';
+import { fleetShareFloor } from '../mdm/settings';
 import { readSettings } from './settings';
 import { findAction, toDto, type PendingActionRow } from './store';
 import { lateCancelOf } from './types';
@@ -336,10 +337,17 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
     if (b.massApproverSide !== 'client' && b.massApproverSide !== 'msp') throw new AppError(400, 'massApproverSide is client or msp', 'invalidSettings');
     input.massApproverSide = b.massApproverSide;
   }
+  // DM23 (decision of the owners of 19/10/2026): the floor of the share of the fleet is changed here only, under
+  // guard.settings_change, never by the settings routes.
+  if (b.publishFleetShareFloor !== undefined) {
+    input.publishFleetShareFloor = intIn(b.publishFleetShareFloor, 1, PUBLISH_APPROVAL_THRESHOLDS.fleetShareFloorMax, 'publishFleetShareFloor');
+  }
   const s = await readSettings(tenantId);
+  const floor = await fleetShareFloor(db, tenantId);
   const changed = (input.hourlyCapPercent !== undefined && input.hourlyCapPercent !== s.hourly_cap_percent)
     || (input.hourlyCapMin !== undefined && input.hourlyCapMin !== s.hourly_cap_min)
-    || (input.massApproverSide !== undefined && input.massApproverSide !== s.mass_approver_side);
+    || (input.massApproverSide !== undefined && input.massApproverSide !== s.mass_approver_side)
+    || (input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floor);
   if (!changed) return null;
   const facts = await personFacts(userId, tenantId);
   const required = await requiredSideFor(facts, tenantId);
@@ -348,6 +356,8 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
     input.hourlyCapPercent !== undefined ? `hourly cap ${s.hourly_cap_percent} % → ${input.hourlyCapPercent} %` : null,
     input.hourlyCapMin !== undefined ? `cap minimum ${s.hourly_cap_min} → ${input.hourlyCapMin}` : null,
     input.massApproverSide !== undefined ? `approver of mass actions ${s.mass_approver_side} → ${input.massApproverSide}` : null,
+    input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floor
+      ? `share of the fleet counted from ${floor} → ${input.publishFleetShareFloor} devices` : null,
   ].filter(Boolean);
   const approval = await fileGuardRequest(req, tenantId, 'guard_settings_change', `Guard settings: ${parts.join(', ')}`,
     { action: 'guard_settings_change', requiredSide: required.side, approverFallback: required.fallback, settings: input });

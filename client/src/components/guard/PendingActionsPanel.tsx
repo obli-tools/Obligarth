@@ -325,10 +325,17 @@ function SettingsForm({ settings, onSaved }: { settings: GuardSettingsDto; onSav
   const [percent, setPercent] = useState(settings.hourlyCapPercent);
   const [min, setMin] = useState(settings.hourlyCapMin);
   const [side, setSide] = useState(settings.massApproverSide);
-  useEffect(() => { setPercent(settings.hourlyCapPercent); setMin(settings.hourlyCapMin); setSide(settings.massApproverSide); }, [settings]);
+  const [floor, setFloor] = useState(settings.publishFleetShareFloor ?? 5);
+  useEffect(() => {
+    setPercent(settings.hourlyCapPercent); setMin(settings.hourlyCapMin); setSide(settings.massApproverSide);
+    setFloor(settings.publishFleetShareFloor ?? 5);
+  }, [settings]);
   const save = async () => {
     try {
-      const r = await guardApi.updateSettings({ hourlyCapPercent: percent, hourlyCapMin: min, massApproverSide: side });
+      const r = await guardApi.updateSettings({
+        hourlyCapPercent: percent, hourlyCapMin: min, massApproverSide: side,
+        ...(settings.publishFleetShareFloor !== undefined ? { publishFleetShareFloor: floor } : {}),
+      });
       toast.success('approvalId' in r ? (t('guard.settings.requested') || 'Change requested: waiting for an approver') : (t('guard.settings.unchanged') || 'Nothing changed'));
       onSaved();
     } catch (err) { errorToast(t, err); }
@@ -349,6 +356,12 @@ function SettingsForm({ settings, onSaved }: { settings: GuardSettingsDto; onSav
             <option value="msp">{t('guard.side.msp') || 'MSP'}</option>
           </select>
         </label>
+        {settings.publishFleetShareFloor !== undefined && (
+          <label className="flex flex-col gap-1" title={t('guard.settings.fleetShareFloorHelp') || 'A change of the configuration asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices.'}>
+            {t('guard.settings.fleetShareFloor') || 'Second approver: 10 % of the fleet counted from (devices)'}
+            <input type="number" min={1} max={25} value={floor} onChange={(e) => setFloor(Number(e.target.value))} className="w-24 rounded border border-border bg-bg-tertiary px-2 py-1" />
+          </label>
+        )}
         <button type="button" onClick={save} className="text-xs px-2.5 py-1 rounded bg-accent text-white coarse:min-h-10">{t('guard.settings.save') || 'Request the change'}</button>
       </div>
       <p className="text-[11px] text-text-muted">{t('guard.settings.help') || 'A change is approved by a second person (a client approver by default).'}</p>

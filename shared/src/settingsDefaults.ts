@@ -25,6 +25,9 @@ export interface SettingDefinition {
    *  When true, the setting is only shown/editable at the global scope —
    *  the group and device settings panels hide it. */
   globalOnly?: boolean;
+  /** Changed only through this guarded action (a request reviewed by a second approver), never by the settings
+   *  routes: the settings panels do not show it (decision of the owners of 19/10/2026, DM23). */
+  guardedBy?: 'guard.settings_change';
 }
 
 export const SETTINGS_DEFINITIONS: SettingDefinition[] = [
@@ -83,6 +86,7 @@ export const SETTINGS_DEFINITIONS: SettingDefinition[] = [
     max: 25,
     defaultValue: 5,
     globalOnly: true,
+    guardedBy: 'guard.settings_change',
   },
 ];
 

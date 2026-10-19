@@ -1,4 +1,5 @@
 import { db } from '../db';
+import { AppError } from '../middleware/errorHandler';
 
 import type { SettingScope, SettingKey, SettingDefinition } from '@obligarth/shared';
 import { SETTINGS_KEYS, HARDCODED_DEFAULTS, SETTINGS_DEFINITIONS, isMasterTenant } from '@obligarth/shared';
@@ -40,6 +41,17 @@ export interface SettingOverride {
 export const SERVED_SETTING_KEYS: readonly SettingKey[] = Object.values(SETTINGS_KEYS);
 
 const SERVED_KEY_SET: ReadonlySet<string> = new Set<string>(SERVED_SETTING_KEYS);
+
+/**
+ * A setting changed under a guarded action only (decision of the owners of 19/10/2026, DM23: publishFleetShareFloor
+ * under guard.settings_change, level 'restricted'): the settings routes never write nor reset it, whoever holds
+ * the 'settings' capability. The guard's executor writes it (guard/approvals.ts, applySettings).
+ */
+function refuseGuarded(def: SettingDefinition): void {
+  if (def.guardedBy) {
+    throw new AppError(403, `The setting ${def.key} is changed through the guard settings (${def.guardedBy}), with a second approver`, 'guardedSetting');
+  }
+}
 
 export const settingsService = {
   // ── Scope ──
@@ -89,6 +101,7 @@ export const settingsService = {
     // Validate key
     const def = SETTINGS_DEFINITIONS.find((d: SettingDefinition) => d.key === key);
     if (!def) throw new Error(`Unknown setting key: ${key}`);
+    refuseGuarded(def);
     // Tenant-wide policies can only be set at the global scope.
     if (def.globalOnly && scope !== 'global') {
       throw new Error(`Setting ${key} is global-only and cannot be overridden per ${scope}`);
@@ -127,6 +140,8 @@ export const settingsService = {
   },
 
   async remove(tenantId: number, scope: SettingScope, scopeId: number | null, key: SettingKey): Promise<boolean> {
+    const def = SETTINGS_DEFINITIONS.find((d: SettingDefinition) => d.key === key);
+    if (def) refuseGuarded(def);
     const count = await db('settings')
       .where({ tenant_id: tenantId, scope, scope_id: scopeId, key })
       .del();
@@ -134,6 +149,11 @@ export const settingsService = {
   },
 
   async setBulk(tenantId: number, scope: SettingScope, scopeId: number | null, overrides: SettingOverride[]): Promise<void> {
+    // Nothing written when one of them is guarded (checked before the first write).
+    for (const { key } of overrides) {
+      const def = SETTINGS_DEFINITIONS.find((d: SettingDefinition) => d.key === key);
+      if (def) refuseGuarded(def);
+    }
     for (const { key, value } of overrides) {
       await this.set(tenantId, scope, scopeId, key, value);
     }
