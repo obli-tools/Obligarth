@@ -95,13 +95,20 @@ async function next(ctx: JobContext<RetireJob>, step: number, round = 0, startAf
 }
 
 interface Facts {
-  key: string | null; enrollmentId: string | null; state: string | null; released: boolean; target: string | null;
+  key: string | null; enrollmentId: string | null; state: string | null; target: string | null;
+  /** The identifier was released by apple-edge's own release (retirement, purge): certificates revoked there. A
+   *  release by the device's CheckOut (or a supersession) leaves its identity valid at apple-edge: step 3 releases it
+   *  (integration of lot C: a retired device could re-enable its enrollment with a TokenUpdate). */
+  released: boolean;
   /** reject_code of the target (cancel_after_delivery: cancelled once delivered). */
   rejectCode: string | null;
   /** The late cancellation of the action was asked (result.lateCancel of its pending action), or the action itself
    *  was cancelled (state 'cancelled': cancelled while paused or scheduled after an interrupted run, no mark). */
   lateCancel: boolean;
 }
+
+/** Release reasons that come from apple-edge's own release of the enrollment (its certificates revoked). */
+const RELEASED_AT_EDGE = new Set(['retired', 'purged']);
 
 async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
   const { tenantId, deviceId, actionUuid } = ctx.payload;
@@ -110,13 +117,13 @@ async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
       .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
       .join('tenants as t', 't.id', 'd.tenant_id')
       .where({ 'd.tenant_id': tenantId, 'd.id': deviceId })
-      .first('t.mdm_key', 'a.enrollment_id', 'a.id_released_at', 'd.enrollment_state') as
-      { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; enrollment_state: string } | undefined;
+      .first('t.mdm_key', 'a.enrollment_id', 'a.id_released_at', 'a.id_release_reason', 'd.enrollment_state') as
+      { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; id_release_reason: string | null; enrollment_state: string } | undefined;
     const target = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: jobIdFor('mdm.command', `${actionUuid.toLowerCase()}:${deviceId}`).toLowerCase(), device_id: deviceId })
       .first('state', 'reject_code') as { state: string; reject_code: string | null } | undefined;
     const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: actionUuid.toLowerCase() }).first('result', 'state') as
       { result: unknown; state: string } | undefined;
-    return { key: r?.mdm_key ?? null, enrollmentId: r?.enrollment_id ?? null, state: r?.enrollment_state ?? null, released: !!r?.id_released_at,
+    return { key: r?.mdm_key ?? null, enrollmentId: r?.enrollment_id ?? null, state: r?.enrollment_state ?? null, released: !!r?.id_released_at && RELEASED_AT_EDGE.has(String(r?.id_release_reason ?? '')),
       target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null || action?.state === 'cancelled' };
   });
 }
