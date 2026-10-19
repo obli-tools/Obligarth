@@ -17,6 +17,7 @@ export * from './commands';
 export * from './ddm';
 // Enrollment (lot C1, integration-apple-edge §10.1, §10.9): profiles, links, invitations, sessions.
 export * from './enrollment';
+export * from './operations';
 // Apple integrations (lot C3, integration-apple-edge §11): push certificate, ADE servers, deadlines, readiness.
 export * from './integrations';
 // Catalog of apps and Apps and Books (lot C4, modele §8, integration-apple-edge §11.3).
