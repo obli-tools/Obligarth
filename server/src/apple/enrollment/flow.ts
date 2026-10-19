@@ -133,6 +133,23 @@ export interface SessionForDownload {
   method: EnrollmentProfileMethod;
   ownership: Ownership;
   locale: SurfaceLocale;
+  /** The end of the session: the SCEP challenge of its profile never outlives it (INT-C1-R7). */
+  expiresAt: Date;
+}
+
+/** The shortest lifetime apple-edge accepts for a SCEP challenge (ttl_seconds, 60 to 3 600). */
+export const CHALLENGE_MIN_TTL_S = 60;
+
+/**
+ * The lifetime of the SCEP challenge of a profile served for a session (decision of the owners of 19/10/2026,
+ * INT-C1-R7 option A): `maxSeconds`, bounded by what is left of the session, so that a device never gets an identity
+ * after its session expired (its Authenticate would be refused and its enrollment released). Less than a minute
+ * left: null, the profile is not served (the session is about to expire).
+ */
+export function challengeTtlFor(maxSeconds: number, sessionExpiresAt: Date, now = Date.now()): number | null {
+  const left = Math.floor((sessionExpiresAt.getTime() - now) / 1000);
+  if (!Number.isFinite(left) || left < CHALLENGE_MIN_TTL_S) return null;
+  return Math.min(maxSeconds, left);
 }
 
 export type ConsumeOutcome = { kind: 'ok'; session: SessionForDownload } | { kind: 'invalid' } | { kind: 'expired'; locale: SurfaceLocale };
@@ -183,7 +200,7 @@ export async function consumeNonce(t: TenantFacts, sessionId: string, nonce: str
       kind: 'ok',
       session: {
         id: String(row.id), profileId: String(row.profile_id), tokenId: row.token_id ? String(row.token_id) : null,
-        method: row.method, ownership: row.ownership, locale,
+        method: row.method, ownership: row.ownership, locale, expiresAt: new Date(row.expires_at),
       },
     };
   }));
@@ -356,7 +373,10 @@ export async function composeSigned(t: TenantFacts, s: SessionToSign, actor: DbA
  * retry page; signing required and unavailable: the session fails (signing_unavailable) and gives its use back.
  */
 export async function issueOtaProfile(t: TenantFacts, s: SessionForDownload, actor: DbActor): Promise<IssueOutcome> {
-  const out = await composeSigned(t, s, actor, { ttlSeconds: OTA_CHALLENGE_TTL_S });
+  // The challenge lives no longer than the session (INT-C1-R7); less than a minute left: not served, as if ended.
+  const ttlSeconds = challengeTtlFor(OTA_CHALLENGE_TTL_S, s.expiresAt);
+  if (ttlSeconds === null) return { kind: 'ended' };
+  const out = await composeSigned(t, s, actor, { ttlSeconds });
   switch (out.kind) {
     case 'not_ready':
       return { kind: 'not_ready', nonce: await renewNonce(t, s.id, actor) };

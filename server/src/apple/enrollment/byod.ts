@@ -7,7 +7,7 @@ import { asTenant, type DbActor } from '../../db/context';
 import { raiseInTx } from '../alerts/service';
 import { realtime } from '../realtime';
 import { checkFormToken as checkToken, newFormToken as newToken } from './adeRules';
-import { composeSigned, endSession, withdrawalOf, type TenantFacts } from './flow';
+import { challengeTtlFor, composeSigned, endSession, withdrawalOf, type TenantFacts } from './flow';
 import type { SurfaceLocale } from './i18n';
 import { enrollmentNotice, type EnrollmentNotice } from './notice';
 import { invitationHash, newAccessToken, normalizeInvitationCode, sha256Hex } from './tokens';
@@ -179,13 +179,16 @@ export async function byodEnroll(t: TenantFacts, bearer: string, actor: DbActor)
     }
     return {
       id: String(row.id), account: String(row.managed_apple_account), locale: (row.locale === 'en' ? 'en' : 'fr') as SurfaceLocale,
-      accessExpiresAt: new Date(row.access_token_expires_at),
+      accessExpiresAt: new Date(row.access_token_expires_at), expiresAt: new Date(row.expires_at),
     };
   }));
   if (ended) realtime.sessionChanged(t.tenantId, ended);
   if (!s) return { kind: 'unauthorized' };
+  // The challenge lives no longer than the session (INT-C1-R7); less than a minute left: the device signs in again.
+  const ttlSeconds = challengeTtlFor(BYOD_CHALLENGE_TTL_S, s.expiresAt);
+  if (ttlSeconds === null) return { kind: 'unauthorized' };
   const out = await composeSigned(t, { id: s.id, method: 'byod_account', ownership: 'personal', locale: s.locale }, actor,
-    { ttlSeconds: BYOD_CHALLENGE_TTL_S, byod: { managedAppleId: s.account } });
+    { ttlSeconds, byod: { managedAppleId: s.account } });
   const giveBack = () => asTenant(t.tenantId, actor, () => db('enrollment_sessions')
     .where({ tenant_id: t.tenantId, id: s.id, state: 'acknowledged' }).whereNull('access_token_hash')
     .where('access_token_expires_at', '>', new Date())
