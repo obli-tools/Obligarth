@@ -202,3 +202,16 @@ custom/
 
 # Données locales du poste : jamais versionnées ni dans un build
 .cache/
+
+# Agent pont Android (canal legacy_agent) : sources du projet Gradle de l'APK,
+# indispensables à son build (wrapper Gradle compris). Jamais : sorties de build,
+# caches Gradle, local.properties (chemin du SDK, clé de signature), APK/AAB,
+# tests. Les dossiers cachés (.gradle/, .kotlin/), *.bat (gradlew.bat), *.jks et
+# *.keystore restent exclus par les règles ci-dessus.
+!/agent-android/
+agent-android/local.properties
+agent-android/**/build/
+agent-android/app/src/test/
+agent-android/app/src/androidTest/
+agent-android/**/*.apk
+agent-android/**/*.aab

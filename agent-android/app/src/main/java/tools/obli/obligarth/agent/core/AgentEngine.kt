@@ -1,0 +1,687 @@
+package tools.obli.obligarth.agent.core
+
+import java.io.File
+import java.io.IOException
+import kotlin.random.Random
+
+/** What a cycle asks the scheduler for. */
+data class CycleReport(
+    /** Seconds until the next interrogation. */
+    val nextDelaySeconds: Long,
+    val commandsReceived: Int = 0,
+    /** The install queue has work (downloads run in a dedicated job, F-7). */
+    val installWork: Boolean = false,
+)
+
+/**
+ * The agent logic, independent from Android: configuration, enrollment,
+ * interrogation, inventory, command execution, install queue (spec §4, §5.3,
+ * §8.3, §8.6, revisions RS-2, RS-4 to RS-8, F-7, F-8).
+ */
+class AgentEngine(
+    private val state: AgentState,
+    private val client: AgentClient,
+    private val signer: AgentSigner,
+    private val facts: DeviceFacts,
+    private val actions: DeviceActions,
+    private val policy: TrustPolicy,
+    private val ownPackage: String,
+    private val versionCode: Long,
+    /** SHA-256 of the signing certificates admitted for an agent update (PINNED_SIGNERS). */
+    private val pinnedSigners: Set<String>,
+    private val updatesDir: File,
+    private val clock: () -> Long,
+    private val log: AgentLog = AgentLog.None,
+    private val random: Random = Random.Default,
+) {
+    /** Called when a delivered configuration changes (Knox licence, keep-alive...). */
+    var onConfigChanged: (() -> Unit)? = null
+    /** Called when the identity was erased after a signed agentRevoked. */
+    var onRevoked: (() -> Unit)? = null
+
+    private val now get() = client.correctedNow()
+
+    init {
+        client.onClockCorrected = { delta ->
+            // Enrollment sets the first offset: only later corrections are events.
+            if (state.phase == Phase.ENROLLED && Math.abs(delta) > CLOCK_EVENT_S) {
+                state.addEvent("clock_corrected", now, mapOf("deltaSeconds" to delta))
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Configuration (§4.9)
+    // ------------------------------------------------------------------
+
+    /** Returns null when accepted, else the refusal reason. */
+    @Synchronized
+    fun importConfig(raw: String?, source: String): String? {
+        val parsed = AgentConfig.parse(raw, policy)
+        val t = EnrollmentMachine.next(state.phase, EnrollEvent.ConfigImported(parsed is ConfigResult.Valid))
+        if (!t.acceptConfig) {
+            val reason = t.refusal ?: (parsed as? ConfigResult.Invalid)?.reason ?: "refused"
+            log.warn("configuration from $source refused: $reason")
+            return if (parsed is ConfigResult.Invalid && t.refusal == "invalid") parsed.reason else reason
+        }
+        val cfg = (parsed as ConfigResult.Valid).config
+        state.config = cfg
+        state.phase = t.next
+        state.notBefore = 0
+        state.backoffStep = 0
+        state.lastStatus = "configured"
+        state.addEvent("config_imported", now, mapOf("source" to source))
+        log.info("configuration from $source accepted for ${cfg.host}")
+        return null
+    }
+
+    // ------------------------------------------------------------------
+    // One cycle: enroll or poll, then inventory when due.
+    // ------------------------------------------------------------------
+
+    @Synchronized
+    fun runCycle(force: Boolean = false): CycleReport {
+        val local = clock()
+        if (!force && local < state.notBefore) return CycleReport(state.notBefore - local, installWork = state.installQueue.isNotEmpty())
+        settleLocalState()
+        return try {
+            when (state.phase) {
+                Phase.CONFIGURED -> enroll()
+                Phase.ENROLLED -> pollAndExecute()
+                else -> CycleReport(state.pollSeconds.toLong())
+            }
+        } catch (e: IOException) {
+            log.warn("network: ${e.message}")
+            state.lastStatus = "network_error"
+            backoff(null)
+        }
+    }
+
+    /** Self-update completion, prompt time-outs, old files (run before each cycle). */
+    private fun settleLocalState() {
+        val journal = state.journal.toMutableList()
+        var changed = false
+        val awaiting = state.awaitingUser.toMutableMap()
+        for ((i, e) in journal.withIndex()) {
+            if (e.state == "self_update" && e.targetVersion != null && versionCode >= e.targetVersion) {
+                val r = CommandResult(e.id, ResultStatus.ACKNOWLEDGED, Codes.UPDATE_INSTALLED, mapOf("versionCode" to versionCode), now)
+                journal[i] = e.copy(state = "done", result = r)
+                addResult(r)
+                state.addEvent("update_installed", now, mapOf("versionCode" to versionCode))
+                awaiting.remove(e.id)
+                changed = true
+            }
+        }
+        if (changed) state.journal = journal
+        // Prompts waiting for a user: settled by the package state, else 24 h time-out.
+        for ((id, a) in awaiting.toMap()) {
+            val pkg = a.str("package") ?: continue
+            val kind = a.str("kind")
+            val target = a.long("versionCode")
+            val since = a.long("since") ?: 0
+            val installed = actions.installedVersion(pkg)
+            val result = when {
+                kind == "uninstall" && installed == null -> CommandResult(id, ResultStatus.ACKNOWLEDGED, Codes.UNINSTALLED, emptyMap(), now)
+                kind == "install" && target != null && installed != null && installed >= target -> postInstallCheck(id, pkg, a.str("signer"))
+                clock() - since > USER_TIMEOUT_S -> CommandResult(id, ResultStatus.ERROR, Codes.USER_TIMEOUT, emptyMap(), now)
+                else -> null
+            }
+            if (result != null) {
+                awaiting.remove(id)
+                finish(id, result)
+            }
+        }
+        state.awaitingUser = awaiting
+        cleanUpdates()
+    }
+
+    private fun cleanUpdates() {
+        val files = updatesDir.listFiles() ?: return
+        for (f in files) if (clock() * 1000 - f.lastModified() > 86_400_000L) f.delete()
+    }
+
+    // ------------------------------------------------------------------
+    // Enrollment (§4.4)
+    // ------------------------------------------------------------------
+
+    private fun enroll(): CycleReport {
+        val cfg = state.config ?: return CycleReport(state.pollSeconds.toLong())
+        val body = linkedMapOf<String, Any?>(
+            "token" to cfg.token,
+            "publicKey" to B64.encodeUrl(signer.spki()),
+            "keyStorage" to signer.storage,
+            "agent" to facts.agent(),
+            "device" to facts.device(),
+            "capabilities" to facts.capabilities(),
+            "hints" to linkedMapOf("deviceName" to cfg.hints["deviceName"], "serial" to cfg.hints["serial"], "imei" to cfg.hints["imei"]),
+        )
+        val reply = client.call("POST", "/agent/v1/enroll", Json.bytes(body), enrollKeys = { json -> trustedEnrollKeys(cfg, json) })
+        if ((reply.status == 200 || reply.status == 201) && reply.signed && reply.json != null) {
+            val j = reply.json
+            val agentId = j.str("agentId")
+            val keys = trustedEnrollKeys(cfg, j)
+            if (agentId == null || !Uuids.isLower(agentId) || keys.isEmpty()) {
+                log.warn("enrollment answer malformed")
+                return backoff(null)
+            }
+            state.agentId = agentId
+            state.deviceUuid = j.str("deviceUuid")
+            state.serverKeys = keys
+            state.seq = 0
+            j.long("serverTime")?.let { client.setClock(it) }
+            j.int("pollSeconds")?.let { state.pollSeconds = it }
+            j.obj("config")?.let { applyConfig(it) }
+            state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.EnrollSucceeded).next
+            state.backoffStep = 0
+            state.notBefore = 0
+            state.authFailingSince = 0
+            state.inventoryRequested = true
+            state.lastStatus = "enrolled"
+            log.info("enrolled as $agentId")
+            return pollAndExecute()
+        }
+        if (reply.status == 403 && reply.code == "tokenInvalid") {
+            // Not destructive: the configuration stays, a new one is awaited (§4.8).
+            state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.TokenRejected).next
+            state.lastStatus = "token_invalid"
+            log.warn("enrollment refused: tokenInvalid")
+            return CycleReport(DAY_S)
+        }
+        if (reply.status == 400) {
+            state.lastStatus = "enroll_${reply.code ?: "badRequest"}"
+            log.warn("enrollment refused: ${reply.code}")
+            return slow(DAY_S)
+        }
+        state.lastStatus = "enroll_failed_${reply.status}"
+        return backoff(reply)
+    }
+
+    /** Keys of the enrollment answer the agent may trust: matching the configured pin, else the compiled pins, else (debug) all. */
+    private fun trustedEnrollKeys(cfg: AgentConfig, json: Map<String, Any?>?): List<ServerKey> {
+        val listed = json?.list("serverKeys").orEmpty().mapNotNull { k ->
+            @Suppress("UNCHECKED_CAST") val m = k as? Map<String, Any?> ?: return@mapNotNull null
+            val spki = m.str("spki")?.let { B64.decode(it) } ?: return@mapNotNull null
+            val key = ServerKey(spki)
+            if (key.publicKey == null || m.str("keyId") != key.keyId) null else key
+        }
+        return when {
+            cfg.serverKeySha256 != null -> listed.filter { it.sha256 == cfg.serverKeySha256 }
+            policy.serverKeyPins.isNotEmpty() -> listed.filter { it.sha256 in policy.serverKeyPins }
+            policy.requireServerKeyPin -> emptyList()
+            else -> listed // debug only: trust on first contact (PB11)
+        }
+    }
+
+    private fun applyConfig(c: Map<String, Any?>) {
+        c.long("version")?.let { state.configVersion = it }
+        c.long("inventorySeconds")?.let { if (it in 3600..30L * 86_400) state.inventorySeconds = it }
+        c.bool("keepAlive")?.let { state.keepAlive = it }
+        c.long("minAgentVersionCode")?.let { state.minAgentVersionCode = it }
+        if (c.containsKey("knoxLicenseKey")) state.serverKnoxLicenseKey = c.str("knoxLicenseKey")?.takeIf { it.isNotBlank() }
+        onConfigChanged?.invoke()
+    }
+
+    // ------------------------------------------------------------------
+    // Interrogation (§4.5) and execution (§5.3, RS-2)
+    // ------------------------------------------------------------------
+
+    private fun pollAndExecute(): CycleReport {
+        val first = poll()
+        if (first.report != null) return first.report
+        var received = first.commands.size
+        val terminal = execute(first.commands)
+        if (terminal != null) {
+            runTerminal(terminal)
+            return CycleReport(state.pollSeconds.toLong(), received, state.installQueue.isNotEmpty())
+        }
+        // Results of what just ran leave at once (the server waits for them).
+        if (state.outbox.isNotEmpty() || state.inventoryRequested || inventoryDue()) {
+            if (inventoryDue() || state.inventoryRequested) sendInventory()
+            if (state.outbox.isNotEmpty()) {
+                val second = poll()
+                if (second.report == null) {
+                    received += second.commands.size
+                    val t2 = execute(second.commands)
+                    if (t2 != null) runTerminal(t2)
+                }
+            }
+        }
+        val next = if (received > 0) FOLLOW_UP_S else jitter(state.pollSeconds.toLong(), 0.10)
+        return CycleReport(next, received, state.installQueue.isNotEmpty())
+    }
+
+    private class PollResult(val report: CycleReport?, val commands: List<Any?>)
+
+    private fun poll(timeoutMs: Int = AgentClient.DEFAULT_TIMEOUT_MS): PollResult {
+        val outbox = state.outbox.take(MAX_RESULTS)
+        val events = state.events.take(MAX_EVENTS)
+        val body = linkedMapOf<String, Any?>(
+            "agent" to linkedMapOf("versionCode" to versionCode, "configVersion" to state.configVersion),
+            "status" to facts.status(),
+            "results" to outbox.map { it.toJson() },
+            "events" to events,
+        )
+        val reply = client.call("POST", "/agent/v1/poll", Json.bytes(body), timeoutMs = timeoutMs)
+        state.lastPollAt = clock()
+        val j = reply.json
+        val usable = reply.signed && j != null && (reply.status == 200 || (reply.status == 426 && j.containsKey("commands")))
+        if (usable) {
+            state.authFailingSince = 0
+            state.backoffStep = 0
+            state.notBefore = 0
+            state.lastStatus = if (reply.status == 426) "agent_too_old" else "ok"
+            j!!.long("serverTime")?.let { client.setClock(it) }
+            j.int("pollSeconds")?.let { state.pollSeconds = it }
+            // Results accepted leave the outbox; the events sent leave their queue.
+            val accepted = j.list("resultsAccepted").orEmpty().filterIsInstance<String>().toSet()
+            state.outbox = state.outbox.filter { it.commandId !in accepted }
+            if (events.isNotEmpty()) state.dropEvents(events.size)
+            if (j.bool("inventoryDue") == true) state.inventoryRequested = true
+            j.obj("config")?.let { applyConfig(it) }
+            return PollResult(null, j.list("commands").orEmpty())
+        }
+        if (reply.status == 403 && reply.code == "agentRevoked") {
+            if (reply.signed) {
+                revoke()
+                return PollResult(CycleReport(DAY_S), emptyList())
+            }
+            log.warn("unsigned agentRevoked ignored (RS-8)")
+            return PollResult(backoff(reply), emptyList())
+        }
+        if (reply.status == 401 && (reply.code == "badSignature" || reply.code == "unknownAgent")) {
+            if (state.authFailingSince == 0L) state.authFailingSince = clock()
+            if (clock() - state.authFailingSince > DAY_S) {
+                state.lastStatus = "link_lost"
+                return PollResult(slow(DAY_S), emptyList())
+            }
+            state.lastStatus = "auth_failed"
+            return PollResult(backoff(reply), emptyList())
+        }
+        if (reply.status == 400) {
+            // Never resend the same request: the oldest outbox entries go to the local log.
+            log.warn("poll refused: ${reply.code}; outbox kept=${state.outbox.size}")
+            state.lastStatus = "bad_request"
+            if (outbox.isNotEmpty()) state.outbox = state.outbox.drop(outbox.size)
+            if (events.isNotEmpty()) state.dropEvents(events.size)
+            return PollResult(CycleReport(state.pollSeconds.toLong()), emptyList())
+        }
+        if (reply.status == 426) {
+            state.lastStatus = "agent_too_old"
+            return PollResult(CycleReport(state.pollSeconds.toLong()), emptyList())
+        }
+        state.lastStatus = "poll_failed_${reply.status}"
+        return PollResult(backoff(reply), emptyList())
+    }
+
+    private fun revoke() {
+        log.warn("signed agentRevoked: identity erased")
+        state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.RevokedSigned).next
+        state.eraseIdentity()
+        try { signer.erase() } catch (e: Exception) { log.warn("key erase: ${e.message}") }
+        state.lastStatus = "revoked"
+        onRevoked?.invoke()
+    }
+
+    private sealed class Terminal {
+        data class Wipe(val id: String, val external: Boolean) : Terminal()
+        data class Reboot(val id: String) : Terminal()
+    }
+
+    /** Executes immediate commands now, queues installs (RS-2). Returns a wipe or reboot to run last. */
+    private fun execute(raw: List<Any?>): Terminal? {
+        var terminal: Terminal? = null
+        val journal = state.journal.associateBy { it.id }
+        val outboxIds = state.outbox.map { it.commandId }.toSet()
+        for (item in raw) {
+            when (val p = CommandParser.parse(item)) {
+                ParsedCommand.Dropped -> log.warn("command without id dropped")
+                is ParsedCommand.Refused -> {
+                    val known = journal[p.id]
+                    if (known == null) finish(p.id, CommandResult(p.id, ResultStatus.REJECTED, p.code, emptyMap(), now), "?")
+                    else resendKnown(known, outboxIds)
+                }
+                is ParsedCommand.Ok -> {
+                    val c = p.command
+                    val known = journal[c.id]
+                    if (known != null) {
+                        // Already executed: send the known result again; in progress: ignore (F-8).
+                        resendKnown(known, outboxIds)
+                        continue
+                    }
+                    if (c.expiresAt <= now) {
+                        finish(c.id, CommandResult(c.id, ResultStatus.REJECTED, Codes.EXPIRED_ON_DEVICE, emptyMap(), now), c.type.wire)
+                        continue
+                    }
+                    if (!c.type.immediate) {
+                        record(JournalEntry(c.id, c.type.wire, "running", null, now))
+                        state.installQueue = state.installQueue + listOf(c.raw)
+                        continue
+                    }
+                    when (c.type) {
+                        CommandType.DEVICE_WIPE -> {
+                            record(JournalEntry(c.id, c.type.wire, "running", null, now)) // before the acknowledgement (RS-4)
+                            if (!actions.isAdminActive()) {
+                                finish(c.id, CommandResult(c.id, ResultStatus.ERROR, Codes.ADMIN_INACTIVE, emptyMap(), now))
+                            } else if (terminal !is Terminal.Wipe) {
+                                terminal?.let { supersede(it) }
+                                terminal = Terminal.Wipe(c.id, (c.params as Params.Wipe).wipeExternal)
+                            } else {
+                                finish(c.id, CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.WIPE_STARTED, emptyMap(), now))
+                            }
+                        }
+                        CommandType.DEVICE_REBOOT -> {
+                            record(JournalEntry(c.id, c.type.wire, "running", null, now))
+                            if (!actions.canReboot()) {
+                                finish(c.id, CommandResult(c.id, ResultStatus.REJECTED, Codes.KNOX_REQUIRED, emptyMap(), now))
+                            } else if (terminal == null) {
+                                terminal = Terminal.Reboot(c.id)
+                            } else {
+                                finish(c.id, CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.REBOOT_STARTED, emptyMap(), now))
+                            }
+                        }
+                        else -> runImmediate(c)
+                    }
+                }
+            }
+        }
+        return terminal
+    }
+
+    /** A reboot displaced by a wipe is answered as started (the wipe restarts the device anyway). */
+    private fun supersede(t: Terminal) {
+        if (t is Terminal.Reboot) finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.REBOOT_STARTED, mapOf("supersededByWipe" to true), now))
+    }
+
+    private fun resendKnown(known: JournalEntry, outboxIds: Set<String>) {
+        if (known.state == "done" && known.result != null && known.id !in outboxIds) addResult(known.result)
+    }
+
+    private fun runImmediate(c: Command) {
+        record(JournalEntry(c.id, c.type.wire, "running", null, now))
+        val result: CommandResult? = try {
+            when (c.type) {
+                CommandType.DEVICE_LOCK -> {
+                    if (!actions.isAdminActive()) err(c, Codes.ADMIN_INACTIVE)
+                    else actions.lockNow()?.let { err(c, it) } ?: ack(c, Codes.LOCK_DONE)
+                }
+                CommandType.DEVICE_MESSAGE -> {
+                    val m = c.params as Params.Message
+                    actions.showMessage(c.id, m.title, m.text, m.fullscreen)?.let { err(c, it) } ?: ack(c, Codes.MESSAGE_SHOWN)
+                }
+                CommandType.INVENTORY_REFRESH -> {
+                    // Answered once the inventory is accepted (see sendInventory).
+                    state.inventoryRequested = true
+                    null
+                }
+                else -> err(c, Codes.INTERNAL)
+            }
+        } catch (e: Exception) {
+            log.warn("${c.type.wire} failed: ${e.message}")
+            err(c, Codes.INTERNAL)
+        }
+        if (result != null) finish(c.id, result)
+    }
+
+    private fun runTerminal(t: Terminal) {
+        when (t) {
+            is Terminal.Wipe -> {
+                finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.WIPE_STARTED, emptyMap(), now))
+                flushBeforeTerminal()
+                log.warn("wiping the device (command ${t.id})")
+                val error = try { actions.wipe(t.external) } catch (e: Exception) { e.message ?: Codes.INTERNAL }
+                if (error != null) log.warn("wipe failed after acknowledgement: $error")
+            }
+            is Terminal.Reboot -> {
+                finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.REBOOT_STARTED, emptyMap(), now))
+                flushBeforeTerminal()
+                val error = try { actions.reboot() } catch (e: Exception) { e.message ?: Codes.INTERNAL }
+                if (error != null) log.warn("reboot failed after acknowledgement: $error")
+            }
+        }
+    }
+
+    /** Sends the acknowledgement first (15 s at most, by the transport time-outs), then acts whatever happens. */
+    private fun flushBeforeTerminal() {
+        try {
+            poll(timeoutMs = ACK_TIMEOUT_MS)
+        } catch (e: Exception) {
+            log.warn("acknowledgement not sent: ${e.message}")
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Inventory (§4.6)
+    // ------------------------------------------------------------------
+
+    private fun inventoryDue(): Boolean = clock() - state.lastInventoryAt >= state.inventorySeconds
+
+    fun sendInventory(): Boolean {
+        var withSystem = true
+        repeat(2) {
+            val body = LinkedHashMap<String, Any?>()
+            body["collectedAt"] = now
+            body.putAll(facts.inventory(withSystem))
+            val reply = client.call("POST", "/agent/v1/inventory", Json.bytes(body))
+            if (reply.status == 200 && reply.signed) {
+                state.lastInventoryAt = clock()
+                state.inventoryRequested = false
+                // inventory.refresh commands waiting for this inventory.
+                for (e in state.journal) if (e.state == "running" && e.type == CommandType.INVENTORY_REFRESH.wire) {
+                    finish(e.id, CommandResult(e.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, emptyMap(), now))
+                }
+                return true
+            }
+            if ((reply.status == 413 || reply.status == 415) && withSystem) {
+                withSystem = false
+                return@repeat
+            }
+            log.warn("inventory refused: ${reply.status} ${reply.code}")
+            return false
+        }
+        return false
+    }
+
+    // ------------------------------------------------------------------
+    // Install queue (§8.6, RS-2, RS-6, F-7): one item at a time, a pending
+    // prompt never blocks the queue.
+    // ------------------------------------------------------------------
+
+    /** Runs the queue until empty or [deadlineLocal] (local seconds) is passed. Returns true when work remains. */
+    fun runInstallQueue(deadlineLocal: Long): Boolean {
+        while (clock() < deadlineLocal) {
+            val head = synchronized(this) { state.installQueue.firstOrNull() } ?: return false
+            val outcome = try {
+                processInstall(head)
+            } catch (e: IOException) {
+                log.warn("download interrupted: ${e.message}")
+                return true // kept for the next job
+            }
+            synchronized(this) { state.installQueue = state.installQueue.drop(1) }
+            if (outcome != null) finish(outcome.commandId, outcome)
+        }
+        return synchronized(this) { state.installQueue.isNotEmpty() }
+    }
+
+    /** null = no result yet (prompt pending or self update launched). */
+    private fun processInstall(raw: Map<String, Any?>): CommandResult? {
+        val c = (CommandParser.parse(raw) as? ParsedCommand.Ok)?.command
+            ?: return CommandResult(raw.str("id") ?: "", ResultStatus.REJECTED, Codes.BAD_PARAMS, emptyMap(), now)
+        if (c.expiresAt <= now) return rej(c, Codes.EXPIRED_ON_DEVICE)
+        return when (val p = c.params) {
+            is Params.Uninstall -> uninstall(c, p)
+            is Params.Install -> installApp(c, p)
+            is Params.AgentUpdate -> updateSelf(c, p)
+            else -> rej(c, Codes.BAD_PARAMS)
+        }
+    }
+
+    private fun uninstall(c: Command, p: Params.Uninstall): CommandResult? {
+        if (ApkChecks.uninstallForbidden(p.packageName, ownPackage, actions.isSystemPackage(p.packageName))) return rej(c, Codes.FORBIDDEN_PACKAGE)
+        if (actions.installedVersion(p.packageName) == null) return ack(c, Codes.UNINSTALLED)
+        return when (val o = actions.uninstall(c.id, p.packageName)) {
+            InstallOutcome.Done -> ack(c, Codes.UNINSTALLED)
+            InstallOutcome.Pending -> { awaitUser(c, "uninstall", p.packageName, null, null); null }
+            is InstallOutcome.Failed -> err(c, o.code, o.detail)
+        }
+    }
+
+    private fun download(c: Command, sha: String, size: Long): Pair<File?, CommandResult?> {
+        updatesDir.mkdirs()
+        val part = File(updatesDir, "$sha.part")
+        val file = File(updatesDir, "$sha.apk")
+        file.delete()
+        val reply = client.call("GET", "/agent/v1/packages/$sha", null, downloadTo = part, maxDownloadBytes = size, timeoutMs = 60_000, expectedDownloadSha256 = sha)
+        if (reply.status != 200) {
+            part.delete()
+            if (reply.status == 404 || reply.status in 400..499) return null to err(c, Codes.DOWNLOAD_FAILED, "http ${reply.status}")
+            throw IOException("download ${reply.status}")
+        }
+        if (!reply.signed) {
+            part.delete()
+            return null to err(c, Codes.DOWNLOAD_FAILED, "unsigned")
+        }
+        if (!part.renameTo(file)) {
+            part.delete()
+            return null to err(c, Codes.DOWNLOAD_FAILED, "rename")
+        }
+        ApkChecks.checkFile(file, size, sha)?.let { file.delete(); return null to err(c, it) }
+        return file to null
+    }
+
+    private fun installApp(c: Command, p: Params.Install): CommandResult? {
+        if (p.packageName == ownPackage) return rej(c, Codes.FORBIDDEN_PACKAGE)
+        val (file, failure) = download(c, p.sha256, p.size)
+        if (failure != null) return failure
+        try {
+            ApkChecks.checkAppInstall(actions.inspectArchive(file!!), ownPackage, p.packageName, p.versionCode, p.signerSha256)
+                ?.let { return if (it == Codes.FORBIDDEN_PACKAGE) rej(c, it) else err(c, it) }
+            // RS-6: checked again right before the call.
+            ApkChecks.checkFile(file, p.size, p.sha256)?.let { return err(c, it) }
+            return when (val o = actions.install(c.id, file, p.packageName, false)) {
+                InstallOutcome.Done -> postInstallCheck(c.id, p.packageName, p.signerSha256)
+                InstallOutcome.Pending -> { awaitUser(c, "install", p.packageName, p.versionCode, p.signerSha256); null }
+                is InstallOutcome.Failed -> err(c, o.code, o.detail)
+            }
+        } finally {
+            file?.delete()
+        }
+    }
+
+    /** RS-6: after installation, the installed signer must be the announced one; otherwise uninstalled. */
+    private fun postInstallCheck(id: String, pkg: String, signer: String?): CommandResult {
+        if (signer != null) {
+            val installed = actions.installedSigners(pkg)
+            if (installed == null || installed.size != 1 || installed[0].lowercase() != signer) {
+                actions.uninstall(id, pkg)
+                return CommandResult(id, ResultStatus.ERROR, Codes.SIGNER_MISMATCH, emptyMap(), now)
+            }
+        }
+        return CommandResult(id, ResultStatus.ACKNOWLEDGED, Codes.INSTALLED, emptyMap(), now)
+    }
+
+    private fun updateSelf(c: Command, p: Params.AgentUpdate): CommandResult? {
+        if (p.versionCode <= versionCode) return rej(c, Codes.VERSION_NOT_HIGHER)
+        val (file, failure) = download(c, p.sha256, p.size)
+        if (failure != null) return failure
+        ApkChecks.checkAgentUpdate(actions.inspectArchive(file!!), ownPackage, versionCode, p.versionCode, pinnedSigners)
+            ?.let { file.delete(); return err(c, it) }
+        ApkChecks.checkFile(file, p.size, p.sha256)?.let { file.delete(); return err(c, it) }
+        // §8.6 step 4: persisted before the installation; the new version sends update_installed.
+        record(JournalEntry(c.id, c.type.wire, "self_update", null, now, targetVersion = p.versionCode))
+        log.info("installing agent ${p.versionCode}")
+        return when (val o = actions.install(c.id, file, ownPackage, true)) {
+            InstallOutcome.Done, InstallOutcome.Pending -> {
+                awaitUser(c, "self", ownPackage, p.versionCode, null)
+                null
+            }
+            is InstallOutcome.Failed -> { file.delete(); err(c, o.code, o.detail) }
+        }
+    }
+
+    @Synchronized
+    private fun awaitUser(c: Command, kind: String, pkg: String, versionCode: Long?, signer: String?) {
+        state.awaitingUser = state.awaitingUser + (c.id to linkedMapOf(
+            "kind" to kind, "package" to pkg, "versionCode" to versionCode, "signer" to signer, "since" to clock(),
+        ))
+        if (kind != "self") record(JournalEntry(c.id, c.type.wire, "awaiting_user", null, now))
+    }
+
+    /** Status of a system installer session (PackageInstaller callback). */
+    @Synchronized
+    fun onInstallerStatus(commandId: String, success: Boolean, aborted: Boolean, message: String?) {
+        val a = state.awaitingUser[commandId] ?: return
+        val kind = a.str("kind")
+        val result = when {
+            success && kind == "uninstall" -> CommandResult(commandId, ResultStatus.ACKNOWLEDGED, Codes.UNINSTALLED, emptyMap(), now)
+            success && kind == "install" -> postInstallCheck(commandId, a.str("package") ?: return, a.str("signer"))
+            success -> return // self update: the new version reports it
+            aborted -> CommandResult(commandId, ResultStatus.ERROR, Codes.USER_DECLINED, emptyMap(), now)
+            else -> CommandResult(commandId, ResultStatus.ERROR, Codes.INSTALL_FAILED, mapOf("message" to message?.take(200)), now)
+        }
+        state.awaitingUser = state.awaitingUser - commandId
+        finish(commandId, result)
+    }
+
+    // ------------------------------------------------------------------
+    // Journal and outbox
+    // ------------------------------------------------------------------
+
+    @Synchronized
+    private fun record(e: JournalEntry) {
+        state.journal = state.journal.filter { it.id != e.id } + e
+    }
+
+    @Synchronized
+    private fun finish(id: String, r: CommandResult, type: String? = null) {
+        val existing = state.journal.firstOrNull { it.id == id }
+        record(JournalEntry(id, existing?.type ?: type ?: "?", "done", r, now))
+        addResult(r)
+    }
+
+    @Synchronized
+    private fun addResult(r: CommandResult) {
+        state.outbox = state.outbox.filter { it.commandId != r.commandId } + r
+    }
+
+    private fun ack(c: Command, code: String) = CommandResult(c.id, ResultStatus.ACKNOWLEDGED, code, emptyMap(), now)
+    private fun rej(c: Command, code: String) = CommandResult(c.id, ResultStatus.REJECTED, code, emptyMap(), now)
+    private fun err(c: Command, code: String, detail: String? = null) =
+        CommandResult(c.id, ResultStatus.ERROR, code, if (detail == null) emptyMap() else mapOf("message" to detail.take(200)), now)
+
+    // ------------------------------------------------------------------
+    // Back-off (§4.8)
+    // ------------------------------------------------------------------
+
+    private fun backoff(reply: Reply?): CycleReport {
+        val delay = reply?.retryAfterSeconds ?: run {
+            val step = state.backoffStep
+            state.backoffStep = (step + 1).coerceAtMost(10)
+            jitter(Math.min(BACKOFF_MIN_S shl step.coerceAtMost(6), BACKOFF_MAX_S), 0.20)
+        }
+        state.notBefore = clock() + delay
+        return CycleReport(delay, installWork = state.installQueue.isNotEmpty())
+    }
+
+    private fun slow(seconds: Long): CycleReport {
+        state.notBefore = clock() + seconds
+        return CycleReport(seconds)
+    }
+
+    private fun jitter(base: Long, ratio: Double): Long {
+        val span = (base * ratio).toLong()
+        return if (span <= 0) base else base - span + random.nextLong(2 * span + 1)
+    }
+
+    companion object {
+        /** Connect + read: the acknowledgement of a wipe or reboot waits 15 s at most (§5.3). */
+        const val ACK_TIMEOUT_MS = 7_500
+        const val MAX_RESULTS = 100
+        const val MAX_EVENTS = 20
+        const val FOLLOW_UP_S = 10L
+        const val DAY_S = 86_400L
+        const val USER_TIMEOUT_S = 86_400L
+        const val CLOCK_EVENT_S = 120L
+        const val BACKOFF_MIN_S = 30L
+        const val BACKOFF_MAX_S = 1_800L
+    }
+}

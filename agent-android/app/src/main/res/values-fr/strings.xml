@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Agent Obligarth</string>
+    <string name="keepalive_title">Appareil géré par Obligarth</string>
+    <string name="admin_required_title">Administration requise</string>
+    <string name="admin_required_text">Touchez pour activer l\'administration de l\'appareil par l\'Agent Obligarth.</string>
+    <string name="admin_explanation">L\'Agent Obligarth gère cet appareil d\'entreprise : verrouillage de l\'écran, effacement en cas de perte et installation d\'applications, selon les décisions de votre service informatique.</string>
+    <string name="admin_disable_warning">Cet appareil d\'entreprise est géré par Obligarth. La désactivation de l\'administration est signalée à votre service informatique.</string>
+    <string name="admin_already_active">L\'administration est déjà activée.</string>
+    <string name="install_prompt_title">Installation en attente</string>
+    <string name="install_prompt_text">Votre service informatique demande une installation. Touchez pour confirmer.</string>
+    <string name="status_revoked">Appareil retiré de la gestion</string>
+    <string name="action_activate_admin">Activer l\'administration</string>
+    <string name="action_phone_permission">Autoriser la lecture des identifiants du téléphone</string>
+    <string name="action_poll_now">Contacter le serveur maintenant</string>
+    <string name="action_import_config">Importer la configuration</string>
+    <string name="toast_poll_requested">Contact demandé.</string>
+    <string name="manual_config_label">Configuration manuelle (dernier recours) :</string>
+    <string name="config_accepted">Configuration acceptée.</string>
+    <string name="config_refused">Configuration refusée : %1$s</string>
+    <string name="phase_new">Non configuré</string>
+    <string name="phase_configured">Enrôlement en cours</string>
+    <string name="phase_enrolled">Enrôlé</string>
+    <string name="phase_token_rejected">Jeton d\'enrôlement refusé : une nouvelle configuration est nécessaire</string>
+    <string name="label_state">État</string>
+    <string name="label_server">Serveur</string>
+    <string name="label_agent">Agent</string>
+    <string name="label_admin">Administration activée</string>
+    <string name="label_knox">Knox</string>
+    <string name="label_phone">Identifiants du téléphone</string>
+    <string name="label_last_poll">Dernier contact</string>
+    <string name="label_last_status">Dernier état</string>
+    <string name="label_version">Version</string>
+    <string name="yes">oui</string>
+    <string name="no">non</string>
+</resources>
