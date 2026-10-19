@@ -12,6 +12,28 @@ type Error struct {
 	Status  int
 	Code    string
 	Message string
+	// Targets names the enrollments an error is about (422 target_outside_tenant
+	// of the enqueue: README §10, point 19), at most MaxErrorTargets; nil for
+	// the other errors.
+	Targets []string
+	// TargetsTruncated reports that more targets were refused than Targets lists.
+	TargetsTruncated bool
+}
+
+// MaxErrorTargets bounds the targets an error names (the body stays small).
+const MaxErrorTargets = 1000
+
+// WithTargets returns a copy of e naming the refused targets (at most
+// MaxErrorTargets of them).
+func (e *Error) WithTargets(targets []string) *Error {
+	c := *e
+	if len(targets) > MaxErrorTargets {
+		c.Targets = append([]string(nil), targets[:MaxErrorTargets]...)
+		c.TargetsTruncated = true
+	} else {
+		c.Targets = append([]string(nil), targets...)
+	}
+	return &c
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }

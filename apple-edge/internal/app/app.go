@@ -34,6 +34,7 @@ import (
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/outbox"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/queue"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/ratelimit"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/scep"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/store"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/tenant"
@@ -278,6 +279,7 @@ func StartWithOptions(ctx context.Context, cfg *config.Config, sec Secrets, logg
 
 	// DDM: the relay is the DeclarativeManagement service of the core.
 	a.Relay = &ddm.Relay{URL: cfg.DDMURL, Key: sec.DDMKey, Timeout: opt.DDMTimeout, Logger: logger, Metrics: a.Metrics,
+		StatusLimiter: ratelimit.New(ddm.StatusRate, ddm.StatusBurst, 1000000),
 		Client: &http.Client{
 			Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second,
 				DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext},

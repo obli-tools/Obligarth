@@ -27,6 +27,7 @@ import (
 
 	"github.com/MeeJay/Obligarth/apple-edge/internal/ids"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/obs"
+	"github.com/MeeJay/Obligarth/apple-edge/internal/ratelimit"
 	"github.com/MeeJay/Obligarth/apple-edge/internal/reqctx"
 )
 
@@ -40,6 +41,15 @@ const (
 	signatureVersion = "v1="
 	// MinKeyBytes is the minimum size of the shared HMAC key.
 	MinKeyBytes = 32
+	// MaxStatusBytes is the largest status report relayed: a report of Apple
+	// weighs a few tens of KiB, and the brain refuses one beyond 1 MiB
+	// (integration-apple-edge, INT-B5a-R4).
+	MaxStatusBytes = 1 << 20
+	// StatusRate and StatusBurst bound the status reports of one device (per
+	// second, burst): a device that posts them in a loop occupies a worker of
+	// the brain's ingestion (INT-B5a-R4, option B).
+	StatusRate  = 1.0 / 15
+	StatusBurst = 20
 )
 
 // EndpointRe is the allow-list of the Endpoint sent by devices.
@@ -115,6 +125,8 @@ type Relay struct {
 	Logger  *obs.Logger
 	Metrics *obs.Metrics
 	Now     func() time.Time
+	// StatusLimiter bounds the status reports per device (nil: no bound).
+	StatusLimiter *ratelimit.Limiter
 }
 
 func (r *Relay) now() time.Time {
@@ -155,6 +167,16 @@ func (r *Relay) DeclarativeManagement(req *mdm.Request, m *mdm.DeclarativeManage
 	if !ValidEndpoint(m.Endpoint) {
 		outcome = "invalid_endpoint"
 		return nil, statusErr(http.StatusBadRequest, "endpoint not allowed")
+	}
+	if m.Endpoint == "status" {
+		if len(m.Data) > MaxStatusBytes {
+			outcome = "too_large"
+			return nil, statusErr(http.StatusRequestEntityTooLarge, "status report too large")
+		}
+		if r.StatusLimiter != nil && !r.StatusLimiter.Allow(device) {
+			outcome = "rate_limited"
+			return nil, statusErr(http.StatusTooManyRequests, "too many status reports")
+		}
 	}
 	body := Request{V: 1, TenantKey: key, EnrollmentID: req.ID, EnrollmentType: req.Type.String(), Endpoint: m.Endpoint}
 	if req.ParentID != "" {

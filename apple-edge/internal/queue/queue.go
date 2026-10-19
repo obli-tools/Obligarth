@@ -186,10 +186,16 @@ func (q *Queue) check(tenant string, plistBytes []byte, req EnqueueRequest) (*ch
 	targets := slices.Clone(req.Targets)
 	slices.Sort(targets)
 	targets = slices.Compact(targets)
+	var outside []string
 	for _, t := range targets {
 		if !ids.BelongsTo(tenant, t) {
-			return nil, apierr.Unprocessable("target_outside_tenant", "every target must be an enrollment of this tenant")
+			outside = append(outside, t)
 		}
+	}
+	if len(outside) > 0 {
+		// The refused targets are named (README §10, point 19): the brain drops
+		// them from the submission without asking for each one.
+		return nil, apierr.Unprocessable("target_outside_tenant", "every target must be an enrollment of this tenant").WithTargets(outside)
 	}
 	c := &checked{cmd: cmd, targets: targets, requestType: cmd.Command.RequestType, commandUUID: req.CommandUUID}
 	if bytes.Contains(plistBytes, []byte(placeholderPrefix)) {
@@ -263,10 +269,14 @@ func (q *Queue) checkTargets(ctx context.Context, tenant string, c *checked) err
 	if err != nil {
 		return err
 	}
+	var refused []string
 	for _, t := range c.targets {
 		if !enabled[t] {
-			return apierr.Unprocessable("target_outside_tenant", "every target must be an enabled enrollment of this tenant")
+			refused = append(refused, t)
 		}
+	}
+	if len(refused) > 0 {
+		return apierr.Unprocessable("target_outside_tenant", "every target must be an enabled enrollment of this tenant").WithTargets(refused)
 	}
 	if c.secretKind != "" {
 		ok, err := q.Secrets.Has(ctx, tenant, c.targets[0], c.secretKind)

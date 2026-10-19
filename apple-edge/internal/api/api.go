@@ -257,9 +257,25 @@ func writeErrorBody(w http.ResponseWriter, status int, code, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": msg}})
 }
 
+// writeAPIError writes an API error; the targets it names, if any, go in
+// "targets" (and "targets_truncated" when more were refused).
+func writeAPIError(w http.ResponseWriter, e *apierr.Error) {
+	if e.Targets == nil {
+		writeErrorBody(w, e.Status, e.Code, e.Message)
+		return
+	}
+	body := map[string]any{"code": e.Code, "message": e.Message, "targets": e.Targets}
+	if e.TargetsTruncated {
+		body["targets_truncated"] = true
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(e.Status)
+	_ = json.NewEncoder(w).Encode(map[string]any{"error": body})
+}
+
 func (s *Server) writeError(w http.ResponseWriter, r *http.Request, err error) {
 	if e, ok := apierr.As(err); ok {
-		writeErrorBody(w, e.Status, e.Code, e.Message)
+		writeAPIError(w, e)
 		return
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) || store.IsLockTimeout(err) {
