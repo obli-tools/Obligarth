@@ -333,7 +333,9 @@ export async function reconcileTenant(tenantId: number, o: ReconcileOptions): Pr
 
   // 3. The integrations.
   try {
-    const ade = await reconcileAdeServers(tenantId, key, o.actor);
+    // In the tenant's context: a job's handler runs outside of it (integration of lot C: the mirror read nothing and
+    // its insert was refused by the row level security, so the job failed whenever the tenant had an ADE server).
+    const ade = await asTenant(tenantId, o.actor, () => reconcileAdeServers(tenantId, key, o.actor));
     add(fixes, 'ade_mirror', ade.updated + ade.added + ade.removed);
     if (ade.updated + ade.added + ade.removed > 0) realtime.integrationChanged(tenantId, 'ade');
   } catch (err) {
