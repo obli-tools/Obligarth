@@ -44,5 +44,7 @@ export interface RetirementView {
   /** null: no retirement was started for the device. */
   startedAt: string | null;
   steps: Array<{ step: RetirementStep; at: string | null; outcome: string | null }>;
+  /** The late cancellation of the action stopped this retirement: the remaining steps are not run. */
+  cancelled: boolean;
   manual: Array<{ item: RetirementManualItem; at: string | null }>;
 }

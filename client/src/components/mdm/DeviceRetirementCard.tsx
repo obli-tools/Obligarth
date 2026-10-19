@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { CheckCircle2, Circle, ShieldOff } from 'lucide-react';
+import { CheckCircle2, Circle, ShieldOff, XCircle } from 'lucide-react';
 import { SocketEvents, type RetirementManualItem, type RetirementView } from '@obligarth/shared';
 import { appleApi } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
@@ -83,14 +83,15 @@ export function DeviceRetirementCard({ deviceId, canAct, isApple }: { deviceId: 
           <ul className="space-y-1.5 text-sm">
             {view.steps.map((s) => (
               <li key={s.step} className="flex items-start gap-2">
-                {s.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-text-muted" />}
+                {s.outcome === 'cancelled' ? <XCircle className="w-4 h-4 mt-0.5 text-amber-400" />
+                  : s.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-text-muted" />}
                 <span className={s.at ? 'text-text-primary' : 'text-text-muted'}>
                   {trCode(`deviceRetirement.step.${s.step}`, STEP_FALLBACK[s.step])}
                   {s.outcome && <span className="ml-2 text-[11px] text-text-muted">{trCode(`deviceRetirement.outcome.${s.outcome}`, s.outcome)}</span>}
                 </span>
               </li>
             ))}
-            {view.manual.map((m) => (
+            {!view.cancelled && view.manual.map((m) => (
               <li key={m.item} className="flex items-start gap-2">
                 {m.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-amber-400" />}
                 <span className={m.at ? 'text-text-primary' : 'text-text-secondary'}>{trCode(`deviceRetirement.manual.${m.item}`, MANUAL_FALLBACK[m.item])}</span>
@@ -103,6 +104,9 @@ export function DeviceRetirementCard({ deviceId, canAct, isApple }: { deviceId: 
               </li>
             ))}
           </ul>
+          {view.cancelled && (
+            <p className="text-xs text-amber-400">{t('deviceRetirement.cancelled') || 'Retirement cancelled: the remaining steps were not run and the device was not released.'}</p>
+          )}
         </>
       ) : (
         <p className="text-xs text-text-muted">{t('deviceRetirement.none') || 'No retirement started: « Remove from management » starts it.'}</p>

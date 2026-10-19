@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { config } from '../../config';
 import { jobIdFor, registerJob, type JobContext, type JobHandle, type JobResult } from '../../jobs';
 import { releaseDeviceLicenses } from '../../mdm/apps/licensing';
+import { lateCancelOf } from '../../guard/types';
 import { isFinalTargetState } from '../commands/targets';
 import { isAppleEdgeError } from '../edge/errors';
 import { appleEdge } from '../edge/instance';
@@ -29,6 +30,14 @@ import { onUnenrolled } from './lifecycle';
 //                             left, devices.unenroll-cleanup
 //   5. manual points          release in Apple Business, activation lock: ticked
 //                             by the operator (POST …/retirement/manual)
+// The late cancellation of the action (guard §10.5: result.lateCancel of its
+// pending action, then cancelAfterDispatch) stops the chain before anything
+// irreversible (finding INT-C5-R1): steps 1 to 3 look for it and, unless the
+// device already acknowledged the RemoveProfile or checked out, the step writes
+// its entry with the outcome 'cancelled' and sends no next step. A RemoveProfile
+// cancelled before its delivery stops the chain the same way, mark or not; once
+// delivered (cancel_after_delivery) with the mark, the chain stops too and the
+// CheckOut, if the device obeys, records the leaving.
 // Each step writes its entry of the device's timeline (retire_*), from which the
 // console draws the checklist (retirementOf). The state "retired" is seen on
 // the server side (P9): the record leaves management at the release, whether
@@ -83,7 +92,13 @@ async function next(ctx: JobContext<RetireJob>, step: number, round = 0, startAf
   await handle().send(p, { id: stepId(p), tenantId: p.tenantId, ...(startAfter ? { startAfter } : {}) });
 }
 
-interface Facts { key: string | null; enrollmentId: string | null; state: string | null; released: boolean; target: string | null }
+interface Facts {
+  key: string | null; enrollmentId: string | null; state: string | null; released: boolean; target: string | null;
+  /** reject_code of the target (cancel_after_delivery: cancelled once delivered). */
+  rejectCode: string | null;
+  /** The late cancellation of the action was asked (result.lateCancel of its pending action). */
+  lateCancel: boolean;
+}
 
 async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
   const { tenantId, deviceId, actionUuid } = ctx.payload;
@@ -95,10 +110,29 @@ async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
       .first('t.mdm_key', 'a.enrollment_id', 'a.id_released_at', 'd.enrollment_state') as
       { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; enrollment_state: string } | undefined;
     const target = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: jobIdFor('mdm.command', `${actionUuid.toLowerCase()}:${deviceId}`).toLowerCase(), device_id: deviceId })
-      .first('state') as { state: string } | undefined;
+      .first('state', 'reject_code') as { state: string; reject_code: string | null } | undefined;
+    const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: actionUuid.toLowerCase() }).first('result') as
+      { result: unknown } | undefined;
     return { key: r?.mdm_key ?? null, enrollmentId: r?.enrollment_id ?? null, state: r?.enrollment_state ?? null, released: !!r?.id_released_at,
-      target: target?.state ?? null };
+      target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null };
   });
+}
+
+/**
+ * Whether the retirement stops (INT-C5-R1): the action's late cancellation was asked and the device neither
+ * acknowledged the RemoveProfile nor checked out, or the RemoveProfile was cancelled before its delivery.
+ */
+export function retirementCancelled(f: Pick<Facts, 'state' | 'target' | 'rejectCode' | 'lateCancel'>): boolean {
+  if (f.state === 'unenrolled' || f.target === 'acknowledged') return false;
+  if (f.lateCancel) return true;
+  return f.target === 'cancelled' && f.rejectCode !== 'cancel_after_delivery';
+}
+
+/** The step stops the chain: its entry says 'cancelled', no next step. */
+async function stopCancelled(ctx: JobContext<RetireJob>, kind: 'retire_management_removed' | 'retire_licenses_released' | 'retire_released'): Promise<JobResult> {
+  await mark(ctx, kind, { outcome: 'cancelled' });
+  realtime.deviceChanged(ctx.payload.tenantId, ctx.payload.deviceId);
+  return { output: { step: ctx.payload.step, outcome: 'cancelled' } };
 }
 
 async function mark(ctx: JobContext<RetireJob>, kind: typeof RETIRE_EVENT_KINDS[number], details: Record<string, string | number | boolean> = {}): Promise<void> {
@@ -113,6 +147,7 @@ async function retire(ctx: JobContext<RetireJob>): Promise<JobResult> {
   if (f.state === null) return { output: { step, skipped: 'no_record' } };
   switch (step) {
     case 1: {
+      if (retirementCancelled(f)) return stopCancelled(ctx, 'retire_management_removed');
       const since = new Date(ctx.payload.since).getTime();
       const waited = Number.isFinite(since) ? Date.now() - since : REMOVE_WAIT_MS;
       const ended = f.state === 'unenrolled' ? 'checked_out' : f.target && isFinalTargetState(f.target) ? `command_${f.target}`
@@ -126,12 +161,15 @@ async function retire(ctx: JobContext<RetireJob>): Promise<JobResult> {
       return { output: { step, outcome: ended } };
     }
     case 2: {
+      if (retirementCancelled(f)) return stopCancelled(ctx, 'retire_licenses_released');
       const n = await ctx.withTenant((trx) => releaseDeviceLicenses(trx, tenantId, deviceId));
       await mark(ctx, 'retire_licenses_released', { count: n });
       await next(ctx, 3);
       return { output: { step, licenses: n } };
     }
     case 3: {
+      // Last look before the irreversible release (a cancellation asked while steps 1 and 2 ran, a stale job).
+      if (!f.released && retirementCancelled(f)) return stopCancelled(ctx, 'retire_released');
       let outcome = 'released';
       if (f.released) outcome = 'already';
       else if (config.apple.mode !== 'on') outcome = 'apple_edge_off';
@@ -171,6 +209,8 @@ export interface RetirementView {
   /** The last retirement started for the device (null: none). */
   startedAt: string | null;
   steps: Array<{ step: 'management_removed' | 'licenses_released' | 'released' | 'retired'; at: string | null; outcome: string | null }>;
+  /** The late cancellation of the action stopped this retirement (INT-C5-R1): nothing more is done. */
+  cancelled: boolean;
   manual: Array<{ item: RetireManualItem; at: string | null }>;
 }
 
@@ -188,9 +228,11 @@ export async function retirementOf(q: Knex | Knex.Transaction, tenantId: number,
   const map: Array<[RetirementView['steps'][number]['step'], string]> = [
     ['management_removed', 'retire_management_removed'], ['licenses_released', 'retire_licenses_released'], ['released', 'retire_released'], ['retired', 'retired'],
   ];
+  const steps = map.map(([step, kind]) => ({ step, at: iso(at(kind)), outcome: outcome(at(kind)) }));
   return {
     startedAt: iso(lastStart),
-    steps: map.map(([step, kind]) => ({ step, at: iso(at(kind)), outcome: outcome(at(kind)) })),
+    steps,
+    cancelled: steps.some((s) => s.outcome === 'cancelled'),
     manual: RETIRE_MANUAL_ITEMS.map((item) => ({ item, at: iso(at(`retire_manual_${item}`)) })),
   };
 }

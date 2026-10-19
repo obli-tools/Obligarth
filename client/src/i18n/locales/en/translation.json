@@ -3763,7 +3763,9 @@
       "already": "already released",
       "not_found": "unknown to the device service",
       "no_enrollment": "no enrollment",
-      "apple_edge_off": "integration turned off"
-    }
+      "apple_edge_off": "integration turned off",
+      "cancelled": "retirement cancelled"
+    },
+    "cancelled": "Retirement cancelled: the remaining steps were not run and the device was not released."
   }
 }

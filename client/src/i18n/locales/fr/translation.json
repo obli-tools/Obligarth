@@ -3763,7 +3763,9 @@
       "already": "déjà libéré",
       "not_found": "inconnu du service des appareils",
       "no_enrollment": "aucun enrôlement",
-      "apple_edge_off": "intégration désactivée"
-    }
+      "apple_edge_off": "intégration désactivée",
+      "cancelled": "retrait annulé"
+    },
+    "cancelled": "Retrait annulé : les étapes restantes n'ont pas été jouées et l'appareil n'a pas été libéré."
   }
 }
