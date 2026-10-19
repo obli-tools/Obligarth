@@ -1,6 +1,7 @@
 // Follow-ups of the enrollment and inventory handlers (G-A3: a handler never calls the network; its follow-ups are
-// durable jobs sent in its transaction). jobs.ts binds these hooks to the queues of section 22.7; the tests replace
-// them by recorders. Payloads: internal identifiers only (never an AMAPI name of a device in a job: G-A4).
+// durable jobs sent in its transaction). jobs.ts binds these hooks to the queues of section 22.7 (since the junction
+// AN-A2: onboard and push on android.policies.push-device; hold, quarantine, reject and cleanup on
+// android.device-decision, a kind each); the tests replace them by recorders. Payloads: internal identifiers only (never an AMAPI name of a device in a job: G-A4).
 import type { Knex } from 'knex';
 
 export interface DevicePayload { tenantId: number; deviceId: number }

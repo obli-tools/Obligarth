@@ -69,11 +69,22 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     drains: 0, interrupted: 0, expired: 0, purged: 0, orphans: null, tokensExpired: 0, signins: 0, commands: 0, apps: 0, kiosk: 0,
     reconciles: 0, offboardings: 0, operationsPurged: 0, quota: null, recount: null, key: null,
   };
-  const due = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id, inbox_due, signups_due, purge_due FROM obligarth.android_maintenance_due()') as
-      { rows: Array<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }> };
-    return r.rows;
+  // What is due, in one statement of the context none (file-durable L3, lot AN-A2: the run of every minute costs one
+  // round trip when nothing is due, whatever the number of sweeps).
+  const all = await asNone(MAINTENANCE_ACTOR, async () => {
+    const r = await db.raw(`SELECT
+      (SELECT COALESCE(json_agg(x), '[]') FROM obligarth.android_maintenance_due() x) AS maintenance,
+      (SELECT COALESCE(json_agg(x.tenant_id), '[]') FROM obligarth.android_enrollment_due() x) AS tokens,
+      (SELECT COALESCE(json_agg(x.tenant_id), '[]') FROM obligarth.android_signin_due() x) AS signins,
+      (SELECT COALESCE(json_agg(x), '[]') FROM obligarth.android_commands_due() x) AS commands,
+      (SELECT COALESCE(json_agg(x.tenant_id), '[]') FROM obligarth.android_apps_due() x) AS apps,
+      (SELECT COALESCE(json_agg(x.tenant_id), '[]') FROM obligarth.android_kiosk_due() x) AS kiosk,
+      (SELECT COALESCE(json_agg(x), '[]') FROM obligarth.android_operations_due() x) AS operations`) as { rows: Array<Record<string, unknown>> };
+    return r.rows[0] ?? {};
   });
+  const list = <T>(v: unknown): T[] => (Array.isArray(v) ? v : typeof v === 'string' ? JSON.parse(v) : []) as T[];
+  const ids = (v: unknown): number[] => list<number | string>(v).map(Number);
+  const due = list<{ tenant_id: number; inbox_due: boolean; signups_due: boolean; purge_due: boolean }>(all.maintenance);
   for (const t of due) {
     if (t.inbox_due) { await wakeDrain(t.tenant_id); out.drains += 1; }
     if (t.signups_due) {
@@ -109,10 +120,7 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
   }
   // Enrollment tokens (lot AN-C1b): active ones past their end expire here (their value destroyed); interrupted
   // creations (creating for 15 minutes and more) go to android.tokens-recover.
-  const tokenDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id FROM obligarth.android_enrollment_due()') as { rows: Array<{ tenant_id: number }> };
-    return r.rows.map((x) => Number(x.tenant_id));
-  });
+  const tokenDue = ids(all.tokens);
   for (const tenantId of tokenDue) {
     out.tokensExpired += await expireEnrollmentTokens(tenantId, MAINTENANCE_ACTOR);
     const stale = await asTenant(tenantId, MAINTENANCE_ACTOR, () => db('android_enrollment_tokens').where({ state: 'creating' })
@@ -120,18 +128,11 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     if (stale) await recoverTokens(tenantId);
   }
   // Sign-in sessions (lot AN-F2): past their end without a token → expired; failed and expired ones purged after 30 days.
-  const signinDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id FROM obligarth.android_signin_due()') as { rows: Array<{ tenant_id: number }> };
-    return r.rows.map((x) => Number(x.tenant_id));
-  });
+  const signinDue = ids(all.signins);
   for (const tenantId of signinDue) out.signins += await expireSigninSessions(tenantId, MAINTENANCE_ACTOR);
   // Commands (lot AN-D1, section 11.3): operations to poll and commands past their end (android.operations-poll),
   // submissions lost or interrupted (their job again), held commands to resume, reset-password secrets to sweep.
-  const commandDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id, submit_due, poll_due, expire_due, resume_due, secrets_due FROM obligarth.android_commands_due()') as
-      { rows: Array<{ tenant_id: number; submit_due: boolean; poll_due: boolean; expire_due: boolean; resume_due: boolean; secrets_due: boolean }> };
-    return r.rows;
-  });
+  const commandDue = list<{ tenant_id: number; submit_due: boolean; poll_due: boolean; expire_due: boolean; resume_due: boolean; secrets_due: boolean }>(all.commands);
   for (const t of commandDue) {
     const tenantId = Number(t.tenant_id);
     if (t.poll_due || t.expire_due) await pollOperations(tenantId);
@@ -141,23 +142,13 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
     out.commands += 1;
   }
   // Apps (lot AN-E1, section 9.6): metadata a day old or never read (android.app-metadata, once a day at most per app).
-  const appsDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id FROM obligarth.android_apps_due()') as { rows: Array<{ tenant_id: number }> };
-    return r.rows.map((x) => Number(x.tenant_id));
-  });
+  const appsDue = ids(all.apps);
   for (const tenantId of appsDue) { await refreshApps(tenantId); out.apps += 1; }
   // Kiosk exits (lot AN-G1, section 9.7): those past their end whose job was lost, those of devices that left.
-  const kioskDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id FROM obligarth.android_kiosk_due()') as { rows: Array<{ tenant_id: number }> };
-    return r.rows.map((x) => Number(x.tenant_id));
-  });
+  const kioskDue = ids(all.kiosk);
   for (const tenantId of kioskDue) { await expireKioskExits(tenantId, MAINTENANCE_ACTOR); out.kiosk += 1; }
   // Operation (lot AN-H1): reconciliations, forgets at 270 days, offboarding steps, purge of the operation rows.
-  const opsDue = await asNone(MAINTENANCE_ACTOR, async () => {
-    const r = await db.raw('SELECT tenant_id, reconcile_due, forget_due, offboarding_due, purge_due FROM obligarth.android_operations_due()') as
-      { rows: Array<{ tenant_id: number; reconcile_due: boolean; forget_due: boolean; offboarding_due: boolean; purge_due: boolean }> };
-    return r.rows;
-  });
+  const opsDue = list<{ tenant_id: number; reconcile_due: boolean; forget_due: boolean; offboarding_due: boolean; purge_due: boolean }>(all.operations);
   for (const t of opsDue) {
     const tenantId = Number(t.tenant_id);
     // A send that fails (queue unavailable) never stops the sweep of the other tenants: the next minute tries again.
