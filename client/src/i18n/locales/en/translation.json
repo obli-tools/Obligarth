@@ -1561,7 +1561,11 @@
       "mdm_command_relaunched": "MDM command relaunched",
       "mdm_command_cancelled": "MDM command cancelled",
       "mdm_command_acknowledged": "MDM command acknowledged",
-      "mdm_command_failed": "MDM command failed"
+      "mdm_command_failed": "MDM command failed",
+      "apple_enrollment_attached": "Enrollments attached to an enrollment profile",
+      "apple_enrollment_released": "Enrollments unknown to the brain released",
+      "apple_restore_check": "Device service checked after a restore",
+      "apple_device_identity_revoked": "Device identity revoked"
     },
     "families": {
       "auth": "Authentication",
@@ -2708,7 +2712,14 @@
       "command_error": "Command failed",
       "command_expired": "Command expired",
       "command_cancelled": "Command cancelled",
-      "command_rejected": "Command refused"
+      "command_rejected": "Command refused",
+      "retire_requested": "Retirement started",
+      "retire_management_removed": "Retirement: management profile removed",
+      "retire_licenses_released": "Retirement: licences released",
+      "retire_released": "Retirement: released at the device service",
+      "retired": "Retirement: record retired",
+      "retire_manual_apple_business": "Retirement: released in Apple Business",
+      "retire_manual_activation_lock": "Retirement: activation lock handled"
     },
     "status": {
       "app": {
@@ -3480,7 +3491,10 @@
     "appIdentifierExists": "An app of the catalog already has this identifier",
     "appHasAssignments": "Remove the assignments of this app before archiving it",
     "appConfigSecretUnsupported": "A managed app configuration carries no secret at this stage",
-    "licenseModeUnsupported": "An app without a licence of Apps and Books comes in a later version"
+    "licenseModeUnsupported": "An app without a licence of Apps and Books comes in a later version",
+    "retirementNotStarted": "No retirement was started for this device.",
+    "enrollmentNotFound": "Enrollment not found.",
+    "appleTopicMissing": "This tenant has no active push certificate yet."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -3489,7 +3503,8 @@
       "profiles": "Profiles",
       "tokens": "Links and invitations",
       "sessions": "Sessions",
-      "ade": "Apple Business devices"
+      "ade": "Apple Business devices",
+      "unknown": "Without session"
     },
     "method": {
       "ota": "Link or QR code (OTA)",
@@ -3621,7 +3636,33 @@
     "adeRegion": "Region of the setup assistant",
     "adeRegionHint": "Two letters (FR by default).",
     "skipSetupItems": "Setup assistant panes skipped",
-    "skipSetupItemsHint": "Keys of Apple, separated by commas (Location, Siri, Privacy…); empty: the recommended list."
+    "skipSetupItemsHint": "Keys of Apple, separated by commas (Location, Siri, Privacy…); empty: the recommended list.",
+    "unknownIntro": "Devices enrolled at the device service without an enrollment session of this tenant (a lost enrollment, a restore): their ownership is never guessed. Attach them to an enrollment profile, whose ownership they take, or release them.",
+    "unknownChooseProfile": "Enrollment profile…",
+    "unknownAttach": "Attach ({{count}})",
+    "unknownRelease": "Release",
+    "unknownReleaseTitle": "Release these enrollments?",
+    "unknownReleaseMessage": "{{count}} enrollment(s) will be released: their certificates are revoked and the devices must enroll again.",
+    "unknownNone": "Every enrollment of the device service has its record.",
+    "unknownSelectAll": "Select all",
+    "unknownSelect": "Select",
+    "unknownEnrollment": "Enrollment",
+    "unknownType": "Type",
+    "unknownLastSeen": "Last contact",
+    "unknownTypeDevice": "Device",
+    "unknownTypeUser": "User enrollment",
+    "unknownProofAde": "Apple Business proof",
+    "unknownOutcome": {
+      "attached": "Attached",
+      "already": "Already attached",
+      "not_found": "Not found",
+      "disabled": "Disabled at the device service",
+      "ownership": "Ownership not allowed by the profile",
+      "other_kind": "Identifier of another kind",
+      "managed": "Held by a managed device",
+      "failed": "Failed",
+      "released": "Released"
+    }
   },
   "apps": {
     "title": "Apps",
@@ -3686,6 +3727,42 @@
       "takeOverHint": "Never on a personal device enrolled with User Enrollment.",
       "config": "Managed configuration (JSON, optional, no secret)",
       "configInvalid": "The managed configuration must be a JSON object."
+    }
+  },
+  "deviceRetirement": {
+    "title": "Retirement",
+    "revoke": "Revoke the identity",
+    "revokeTitle": "Revoke the identity of this device?",
+    "revokeMessage": "For a stolen or lost device: its certificate is revoked and its enrollment released; it can no longer reach the service. Give the reason.",
+    "pendingApproval": "Request sent for approval",
+    "revoked": "Identity revoked",
+    "startedAt": "Started {{date}}",
+    "none": "No retirement started: « Remove from management » starts it.",
+    "markDone": "Mark as done",
+    "step": {
+      "management_removed": "Management profile removed",
+      "licenses_released": "Licences released",
+      "released": "Released at the device service",
+      "retired": "Record retired"
+    },
+    "manual": {
+      "apple_business": "Released in Apple Business",
+      "activation_lock": "Activation lock handled"
+    },
+    "outcome": {
+      "checked_out": "the device checked out",
+      "command_acknowledged": "acknowledged",
+      "command_error": "refused by the device",
+      "command_expired": "expired",
+      "command_cancelled": "cancelled",
+      "command_rejected": "rejected",
+      "no_command": "no command",
+      "timeout": "no answer within 24 h",
+      "released": "released",
+      "already": "already released",
+      "not_found": "unknown to the device service",
+      "no_enrollment": "no enrollment",
+      "apple_edge_off": "integration turned off"
     }
   }
 }

@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  AdeDevicePage, EnrollmentInvitationCreated, EnrollmentLinkCreated, EnrollmentProfileInput, EnrollmentProfileView, EnrollmentSessionState,
+  AdeDevicePage, AttachUnknownResult, ReleaseUnknownResult, UnknownEnrollmentView, EnrollmentInvitationCreated, EnrollmentLinkCreated, EnrollmentProfileInput, EnrollmentProfileView, EnrollmentSessionState,
   EnrollmentSessionView, EnrollmentTokenKind, EnrollmentTokenState, EnrollmentTokenView,
 } from '@obligarth/shared';
 
@@ -61,5 +61,18 @@ export const enrollmentApi = {
   },
   async setAdeDeviceProfile(id: number, profileId: string | null): Promise<void> {
     await apiClient.put(`/apple/enrollment/ade-devices/${id}/profile`, { profileId });
+  },
+  // Lot C5 (§13.1, §13.2): the enrollments apple-edge holds that no record of the tenant holds.
+  async unknownEnrollments(): Promise<UnknownEnrollmentView[]> {
+    const res = await apiClient.get<ApiResponse<UnknownEnrollmentView[]>>(`/apple/enrollments/unknown`);
+    return res.data.data ?? [];
+  },
+  async attachUnknown(profileId: string, enrollmentIds: string[]): Promise<AttachUnknownResult> {
+    const res = await apiClient.post<ApiResponse<AttachUnknownResult>>(`/apple/enrollments/unknown/attach`, { profileId, enrollmentIds });
+    return res.data.data!;
+  },
+  async releaseUnknown(enrollmentIds: string[]): Promise<ReleaseUnknownResult> {
+    const res = await apiClient.post<ApiResponse<ReleaseUnknownResult>>(`/apple/enrollments/unknown/release`, { enrollmentIds });
+    return res.data.data!;
   },
 };

@@ -1,7 +1,7 @@
 import apiClient from './client';
 import type {
   DdmSyncRequestOutcome, DeviceDeclarationsView, DeviceStatusItemView, GuardOutcome, MdmCancelOutcome, MdmCommandView,
-  MdmDeviceAction, MdmEnqueueResult, MdmRelaunchOutcome, MdmTargetView,
+  MdmDeviceAction, MdmEnqueueResult, MdmRelaunchOutcome, MdmTargetView, RetirementManualItem, RetirementView,
 } from '@obligarth/shared';
 
 // =============================================================================
@@ -92,5 +92,18 @@ export const appleApi = {
   async ddmSync(deviceId: number): Promise<DdmSyncRequestOutcome> {
     const res = await apiClient.post<ApiResponse<DdmSyncRequestOutcome>>(`/apple/devices/${deviceId}/ddm-sync`);
     return res.data.data ?? { requested: false };
+  },
+  // Lot C5 (§13.3): the checklist of the verified retirement, its manual points, the revocation of a stolen device.
+  async retirement(deviceId: number): Promise<RetirementView> {
+    const res = await apiClient.get<ApiResponse<RetirementView>>(`/apple/devices/${deviceId}/retirement`);
+    return res.data.data!;
+  },
+  async tickRetirement(deviceId: number, item: RetirementManualItem): Promise<RetirementView> {
+    const res = await apiClient.post<ApiResponse<RetirementView>>(`/apple/devices/${deviceId}/retirement/manual`, { item });
+    return res.data.data!;
+  },
+  async revokeIdentity(deviceId: number, body: { reason: string; ticket?: string }): Promise<{ revoked: boolean; released: boolean } | { approvalId: number; status: 'pending_approval' }> {
+    const res = await apiClient.post<ApiResponse<{ revoked: boolean; released: boolean } | { approvalId: number; status: 'pending_approval' }>>(`/apple/devices/${deviceId}/revoke-identity`, body);
+    return res.data.data!;
   },
 };

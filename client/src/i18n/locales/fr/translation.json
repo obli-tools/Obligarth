@@ -1561,7 +1561,11 @@
       "mdm_command_relaunched": "Commande MDM relancée",
       "mdm_command_cancelled": "Commande MDM annulée",
       "mdm_command_acknowledged": "Commande MDM acquittée",
-      "mdm_command_failed": "Commande MDM en échec"
+      "mdm_command_failed": "Commande MDM en échec",
+      "apple_enrollment_attached": "Enrôlements rattachés à un profil d'enrôlement",
+      "apple_enrollment_released": "Enrôlements inconnus du cerveau libérés",
+      "apple_restore_check": "Service des appareils vérifié après une restauration",
+      "apple_device_identity_revoked": "Identité d'appareil révoquée"
     },
     "families": {
       "auth": "Authentification",
@@ -2708,7 +2712,14 @@
       "command_error": "Commande en échec",
       "command_expired": "Commande expirée",
       "command_cancelled": "Commande annulée",
-      "command_rejected": "Commande refusée"
+      "command_rejected": "Commande refusée",
+      "retire_requested": "Retrait commencé",
+      "retire_management_removed": "Retrait : profil de gestion retiré",
+      "retire_licenses_released": "Retrait : licences rendues",
+      "retire_released": "Retrait : libéré au service des appareils",
+      "retired": "Retrait : fiche retirée",
+      "retire_manual_apple_business": "Retrait : libéré dans Apple Business",
+      "retire_manual_activation_lock": "Retrait : verrou d'activation traité"
     },
     "status": {
       "app": {
@@ -3480,7 +3491,10 @@
     "appIdentifierExists": "Une app du catalogue a déjà cet identifiant",
     "appHasAssignments": "Retirez les affectations de cette app avant de l’archiver",
     "appConfigSecretUnsupported": "Une configuration gérée d’app ne porte aucun secret à ce stade",
-    "licenseModeUnsupported": "Une app sans licence Apps and Books viendra dans une version ultérieure"
+    "licenseModeUnsupported": "Une app sans licence Apps and Books viendra dans une version ultérieure",
+    "retirementNotStarted": "Aucun retrait n'a été commencé pour cet appareil.",
+    "enrollmentNotFound": "Enrôlement introuvable.",
+    "appleTopicMissing": "Ce tenant n'a pas encore de certificat push actif."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -3489,7 +3503,8 @@
       "profiles": "Profils",
       "tokens": "Liens et invitations",
       "sessions": "Sessions",
-      "ade": "Appareils Apple Business"
+      "ade": "Appareils Apple Business",
+      "unknown": "Sans session"
     },
     "method": {
       "ota": "Lien ou QR code (OTA)",
@@ -3621,7 +3636,33 @@
     "adeRegion": "Région de l'assistant de configuration",
     "adeRegionHint": "Deux lettres (FR par défaut).",
     "skipSetupItems": "Écrans de l'assistant ignorés",
-    "skipSetupItemsHint": "Clés d'Apple séparées par des virgules (Location, Siri, Privacy…) ; vide : la liste recommandée."
+    "skipSetupItemsHint": "Clés d'Apple séparées par des virgules (Location, Siri, Privacy…) ; vide : la liste recommandée.",
+    "unknownIntro": "Appareils enrôlés auprès du service des appareils sans session d'enrôlement de ce tenant (un enrôlement perdu, une restauration) : leur propriété n'est jamais devinée. Rattachez-les à un profil d'enrôlement, dont ils prennent la propriété, ou libérez-les.",
+    "unknownChooseProfile": "Profil d'enrôlement…",
+    "unknownAttach": "Rattacher ({{count}})",
+    "unknownRelease": "Libérer",
+    "unknownReleaseTitle": "Libérer ces enrôlements ?",
+    "unknownReleaseMessage": "{{count}} enrôlement(s) seront libérés : leurs certificats sont révoqués et les appareils devront s'enrôler de nouveau.",
+    "unknownNone": "Chaque enrôlement du service des appareils a sa fiche.",
+    "unknownSelectAll": "Tout sélectionner",
+    "unknownSelect": "Sélectionner",
+    "unknownEnrollment": "Enrôlement",
+    "unknownType": "Type",
+    "unknownLastSeen": "Dernier contact",
+    "unknownTypeDevice": "Appareil",
+    "unknownTypeUser": "Inscription d'utilisateur",
+    "unknownProofAde": "Preuve Apple Business",
+    "unknownOutcome": {
+      "attached": "Rattachés",
+      "already": "Déjà rattachés",
+      "not_found": "Introuvables",
+      "disabled": "Désactivés au service des appareils",
+      "ownership": "Propriété refusée par le profil",
+      "other_kind": "Identifiant d'un autre type",
+      "managed": "Tenus par un appareil géré",
+      "failed": "En échec",
+      "released": "Libérés"
+    }
   },
   "apps": {
     "title": "Apps",
@@ -3686,6 +3727,42 @@
       "takeOverHint": "Jamais sur un appareil personnel inscrit en User Enrollment.",
       "config": "Configuration gérée (JSON, facultative, sans secret)",
       "configInvalid": "La configuration gérée doit être un objet JSON."
+    }
+  },
+  "deviceRetirement": {
+    "title": "Retrait",
+    "revoke": "Révoquer l'identité",
+    "revokeTitle": "Révoquer l'identité de cet appareil ?",
+    "revokeMessage": "Pour un appareil volé ou perdu : son certificat est révoqué et son enrôlement libéré ; il ne peut plus joindre le service. Indiquez le motif.",
+    "pendingApproval": "Demande envoyée pour approbation",
+    "revoked": "Identité révoquée",
+    "startedAt": "Commencé le {{date}}",
+    "none": "Aucun retrait commencé : « Retirer de la gestion » le lance.",
+    "markDone": "Marquer comme fait",
+    "step": {
+      "management_removed": "Profil de gestion retiré",
+      "licenses_released": "Licences rendues",
+      "released": "Libéré au service des appareils",
+      "retired": "Fiche retirée"
+    },
+    "manual": {
+      "apple_business": "Libéré dans Apple Business",
+      "activation_lock": "Verrou d'activation traité"
+    },
+    "outcome": {
+      "checked_out": "l'appareil s'est désinscrit",
+      "command_acknowledged": "acquitté",
+      "command_error": "refusé par l'appareil",
+      "command_expired": "expiré",
+      "command_cancelled": "annulé",
+      "command_rejected": "rejeté",
+      "no_command": "aucune commande",
+      "timeout": "sans réponse en 24 h",
+      "released": "libéré",
+      "already": "déjà libéré",
+      "not_found": "inconnu du service des appareils",
+      "no_enrollment": "aucun enrôlement",
+      "apple_edge_off": "intégration désactivée"
     }
   }
 }

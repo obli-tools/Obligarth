@@ -27,6 +27,7 @@ import { DeviceConfigurationTab } from '@/components/mdm/DeviceConfigurationTab'
 import { DeviceAppsTab, DeviceCertificatesTab, DeviceProfilesTab } from '@/components/mdm/DeviceInventoryTabs';
 import { DeviceActionsTab, DeviceCommandsTab } from '@/components/mdm/DeviceCommands';
 import { DeviceHistoryTab } from '@/components/mdm/DeviceHistoryTab';
+import { DeviceRetirementCard } from '@/components/mdm/DeviceRetirementCard';
 import { anonymize } from '@/utils/anonymize';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
 
@@ -301,6 +302,7 @@ export function DeviceSummaryPage() {
           )}
 
           {apple && <DdmCard deviceId={device.id} enabled={apple.ddmEnabled} canSync={canWrite} />}
+          {apple && <DeviceRetirementCard deviceId={device.id} canAct={canWrite} isApple />}
         </div>
       )}
 

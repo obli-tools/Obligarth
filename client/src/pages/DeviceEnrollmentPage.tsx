@@ -24,15 +24,17 @@ import { anonymize } from '@/utils/anonymize';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
 import { integrationsApi } from '@/api/integrations.api';
 import { ReadinessPanel } from '@/pages/IntegrationsPage';
+import { UnknownEnrollmentsTab } from '@/components/mdm/UnknownEnrollmentsTab';
 import type { ReadinessItem } from '@obligarth/shared';
 
 // Device enrollment (integration-apple-edge §10.9, lot C1): enrollment profiles, OTA links (URL and QR code
 // shown once), invitations of an account-driven enrollment (code and link shown once, e-mailed when a channel is
 // configured), revocation, sessions. Lot C2: the ADE settings of a profile and where it is defined at Apple, the
 // devices of Apple Business and the enrollment profile chosen for each (§10.6). Tenant capability
-// mdm.enrollment.manage.
+// mdm.enrollment.manage. Lot C5: the enrollments apple-edge holds that no record of the tenant holds, to attach to an
+// enrollment profile (the record is born with its ownership) or to release (§13.1, §13.2).
 
-type Tab = 'profiles' | 'tokens' | 'sessions' | 'ade';
+type Tab = 'profiles' | 'tokens' | 'sessions' | 'ade' | 'unknown';
 const METHOD_FALLBACK: Record<EnrollmentProfileMethod, string> = { ota: 'Link or QR code (OTA)', ade: 'Automated (ADE)', byod_account: 'Personal device (account)' };
 const OWNERSHIP_FALLBACK: Record<Ownership, string> = { corporate: 'Corporate', corporate_personal: 'Corporate, personal use', personal: 'Personal' };
 const TOKEN_TONE: Record<EnrollmentTokenState, 'green' | 'gray' | 'amber' | 'red'> = { active: 'green', exhausted: 'gray', expired: 'amber', revoked: 'red' };
@@ -77,13 +79,14 @@ export function DeviceEnrollmentPage() {
       </div>
       {readiness && <ReadinessPanel items={readiness} compact />}
       <div className="flex gap-1 border-b border-border">
-        {(['profiles', 'tokens', 'sessions', 'ade'] as const).map((k) => (
+        {(['profiles', 'tokens', 'sessions', 'ade', 'unknown'] as const).map((k) => (
           <button key={k} type="button" onClick={() => setTab(k)}
             className={`px-3 py-2 text-sm font-medium border-b-2 -mb-px coarse:min-h-10 ${tab === k ? 'border-accent text-accent' : 'border-transparent text-text-muted hover:text-text-primary'}`}>
             {k === 'profiles' ? (t('deviceEnrollment.tabs.profiles') || 'Profiles')
               : k === 'tokens' ? (t('deviceEnrollment.tabs.tokens') || 'Links and invitations')
                 : k === 'sessions' ? (t('deviceEnrollment.tabs.sessions') || 'Sessions')
-                  : (t('deviceEnrollment.tabs.ade') || 'Apple Business devices')}
+                  : k === 'ade' ? (t('deviceEnrollment.tabs.ade') || 'Apple Business devices')
+                    : (t('deviceEnrollment.tabs.unknown') || 'Without session')}
           </button>
         ))}
       </div>
@@ -91,6 +94,7 @@ export function DeviceEnrollmentPage() {
       {tab === 'tokens' && <TokensTab />}
       {tab === 'sessions' && <SessionsTab />}
       {tab === 'ade' && <AdeDevicesTab />}
+      {tab === 'unknown' && <UnknownEnrollmentsTab />}
     </PageContainer>
   );
 }
