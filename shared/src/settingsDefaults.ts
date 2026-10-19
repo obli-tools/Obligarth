@@ -7,6 +7,7 @@ export const SETTINGS_KEYS = {
   INVENTORY_RETENTION_DAYS: 'inventoryRetentionDays', // how long to keep inventory snapshots
   TFA_TRUST_HOURS:          'tfaTrustHours',          // how long a "trust this IP" 2FA grant lasts
   MDM_STALE_AFTER_DAYS:     'mdmStaleAfterDays',      // device contact: stale after (MDM data model)
+  PUBLISH_FLEET_SHARE_FLOOR: 'publishFleetShareFloor', // DM23: devices touched before the 10 % share of the fleet counts
 } as const;
 
 export type SettingKey = typeof SETTINGS_KEYS[keyof typeof SETTINGS_KEYS];
@@ -70,6 +71,19 @@ export const SETTINGS_DEFINITIONS: SettingDefinition[] = [
     defaultValue: 7,
     globalOnly: true,
   },
+  {
+    // DM23 (modele-donnees-mdm §7.12; decision of the owners of 15/10/2026): on a small fleet, 10 % would ask a
+    // second approver for almost every change. Bounded by the absolute threshold of 25 devices, which applies anyway.
+    key: SETTINGS_KEYS.PUBLISH_FLEET_SHARE_FLOOR,
+    label: 'Second approver: share of the fleet counted from',
+    description: 'A change of the configuration (publication, assignments, group, devices moved) asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices.',
+    type: 'number',
+    unit: 'devices',
+    min: 1,
+    max: 25,
+    defaultValue: 5,
+    globalOnly: true,
+  },
 ];
 
 export const HARDCODED_DEFAULTS: Record<SettingKey, number | boolean> = {
@@ -77,4 +91,5 @@ export const HARDCODED_DEFAULTS: Record<SettingKey, number | boolean> = {
   [SETTINGS_KEYS.INVENTORY_RETENTION_DAYS]: 90,
   [SETTINGS_KEYS.TFA_TRUST_HOURS]:          24,
   [SETTINGS_KEYS.MDM_STALE_AFTER_DAYS]:     7,
+  [SETTINGS_KEYS.PUBLISH_FLEET_SHARE_FLOOR]: 5,
 };

@@ -6,7 +6,9 @@
 // =============================================================================
 import type { SourceScope } from './effective';
 
-export type ImpactApprovalReason = 'devices_threshold' | 'fleet_share' | 'removal_threshold' | 'restriction';
+/** cumulative: the thresholds are reached by this change together with those written without a second approver in
+ *  the tenant over the last hour (PUBLISH_APPROVAL_THRESHOLDS.cumulativeWindowMinutes). */
+export type ImpactApprovalReason = 'devices_threshold' | 'fleet_share' | 'removal_threshold' | 'restriction' | 'cumulative';
 
 export interface PolicyConflict {
   settingKey: string;
@@ -29,6 +31,11 @@ export interface PolicyImpact {
   approval: { required: boolean; reasons: ImpactApprovalReason[] };
   /** Devices with at least one removal (artifact, kiosk lock, app): the measure of the removal threshold. */
   removalDevices?: number;
+  /** What the changes written without a second approver touched in the tenant over the window, this one included
+   *  (distinct devices): the measure of the reason 'cumulative'. */
+  cumulative?: { windowMinutes: number; devicesTouched: number; removalDevices: number };
+  /** The floor of the share of the fleet in this tenant (devices touched before 10 % counts). */
+  fleetShareFloor?: number;
   /** Signed token of the full list of touched devices (GET /api/mdm/impact/:token/devices), 15 minutes. */
   devicesToken?: string | null;
 }

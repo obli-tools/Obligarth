@@ -28,15 +28,21 @@ export const ASSIGNMENT_PRIORITY = { min: 0, max: 1000, default: 100 } as const;
 
 /**
  * Second approver of a publication or of a change of assignments (DM23): 25 touched devices or more, or
- * 10 % of the tenant's enrolled fleet or more, or a removal (profile, app, kiosk lock) on 3 devices or more;
- * a step-up below. At the execution of an approved request, an impact grown by more than 20 % (touched
- * devices or removals) is refused (impactChanged).
+ * 10 % of the tenant's enrolled fleet or more once at least `fleetShareFloor` devices are touched (a floor each
+ * tenant sets, 1 to 25, 5 by default: setting publishFleetShareFloor; decision of the owners of 15/10/2026), or a
+ * removal (profile, app, kiosk lock) on 3 devices or more; a step-up below. The thresholds also bear on what the
+ * changes written without a second approver touched in the tenant over the last hour, with this one
+ * (`cumulativeWindowMinutes`: the devices of 7 batches of 9 add up; MDM-B5b-C7). At the execution of an approved
+ * request, an impact grown by more than 20 % (touched devices or removals) is refused (impactChanged).
  */
 export const PUBLISH_APPROVAL_THRESHOLDS = {
   devicesTouched: 25,
   fleetShare: 0.10,
+  fleetShareFloorDefault: 5,
+  fleetShareFloorMax: 25,
   removalDevices: 3,
   recheckTolerance: 0.20,
+  cumulativeWindowMinutes: 60,
 } as const;
 
 /** Restriction of the matrix that guards a publication or a change of assignments. */
