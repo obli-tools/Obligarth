@@ -270,6 +270,30 @@ const newSecret = (): { secret: string; hash: string } => {
 
 export { mdmInfoIsOurs };
 
+/**
+ * The claim of a location of Apple Business by the tenant (decision of the owners of 19/10/2026, INT-INTC-R9 B):
+ * obligarth.vpp_location_claim, instance-wide, in the tenant's context. True when the location is free, already
+ * this tenant's or taken over (`takeover`: the caller holds the guard of the takeover); false when another tenant
+ * of this instance holds it (never which one). An unknown location (no uId) claims nothing.
+ */
+export async function claimLocation(q: Knex | Knex.Transaction, tokenId: string, uid: string | null | undefined, takeover: boolean): Promise<boolean> {
+  if (!uid) return true;
+  const res = await q.raw('SELECT obligarth.vpp_location_claim(?::uuid, ?, ?) AS ok', [tokenId, uid, takeover]) as { rows: Array<{ ok: boolean }> };
+  return res.rows[0]?.ok === true;
+}
+
+/** The token is another MDM's, or its location another tenant's of this instance: 'foreign_mdm', alert. */
+async function markForeign(tenantId: number, id: string, label: string, location?: { name: string | null; uid: string | null }): Promise<void> {
+  let moved = 0;
+  await db.transaction(async (trx) => {
+    moved = await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id }).whereNot('state', 'removed').update({
+      state: 'foreign_mdm', state_at: new Date(), ...(location ? { location_name: location.name, location_uid: location.uid } : {}), updated_at: new Date(),
+    });
+    await raiseInTx(trx, tenantId, 'vpp.foreign_mdm', { discriminant: id, params: { label }, navigateTo: '/integrations' });
+  });
+  if (moved) realtime.integrationChanged(tenantId, 'vpp');
+}
+
 type ConfigureOutcome = 'configured' | 'foreign';
 
 /**
@@ -282,16 +306,12 @@ async function configureClient(tenantId: number, id: string, o: { takeover?: boo
   const calls = await callsOf(r);
   const current = await calls.getClientConfig();
   const t = await db('tenants').where({ id: tenantId }).first('uuid') as { uuid: string } | undefined;
-  // Another MDM's, or another tenant's of this instance (its metadata): a takeover only, under its guard.
-  if (!o.takeover && !mdmInfoIsOurs(current, r.mdm_info_id, t?.uuid ?? null)) {
-    await db.transaction(async (trx) => {
-      await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id }).whereNot('state', 'removed').update({
-        state: 'foreign_mdm', state_at: new Date(), location_name: current.locationName ?? r.location_name, location_uid: current.uId ?? r.location_uid,
-        updated_at: new Date(),
-      });
-      await raiseInTx(trx, tenantId, 'vpp.foreign_mdm', { discriminant: id, params: { label: r.label }, navigateTo: '/integrations' });
-    });
-    realtime.integrationChanged(tenantId, 'vpp');
+  // Another MDM's, or another tenant's of this instance (its metadata, or its claim of the location whether Apple
+  // echoes the metadata or not: INT-INTC-R9): a takeover only, under its guard. The claim comes before anything is
+  // written at Apple.
+  const location = { name: current.locationName ?? r.location_name, uid: current.uId ?? r.location_uid };
+  if ((!o.takeover && !mdmInfoIsOurs(current, r.mdm_info_id, t?.uuid ?? null)) || !(await claimLocation(db, id, location.uid, o.takeover === true))) {
+    await markForeign(tenantId, id, r.label, location);
     return 'foreign';
   }
   const key = (await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined)?.mdm_key;
@@ -465,6 +485,8 @@ export async function removeVppToken(tenantId: number, id: string): Promise<{ la
     await trx('vpp_assignments').where({ tenant_id: tenantId, vpp_token_id: id }).whereIn('state', ['associating', 'disassociating'])
       .update({ state: 'failed', pending_operation_id: null, updated_at: now });
     await retireDeadline(trx, tenantId, 'vpp_token', id);
+    // Its location is free again for the instance (INT-INTC-R9).
+    await trx.raw('SELECT obligarth.vpp_location_release(?::uuid)', [id]);
     for (const k of ['vpp.foreign_mdm', 'vpp.token_invalid', 'vpp.notification_auth_failed'] as const) await resolveInTx(trx, tenantId, k, id);
     for (const fn of syncedHooks) await fn(trx, tenantId, id);
     return { label: r.label };
@@ -819,16 +841,16 @@ export async function syncToken(tenantId: number, id: string, o: { full: boolean
     const cfg = await calls.getClientConfig();
     const tenantUuid = (await db('tenants').where({ id: tenantId }).first('uuid') as { uuid: string } | undefined)?.uuid ?? null;
     if (!mdmInfoIsOurs(cfg, r.mdm_info_id, tenantUuid)) {
-      if (r.state !== 'foreign_mdm') {
-        await db.transaction(async (trx) => {
-          await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id }).update({ state: 'foreign_mdm', state_at: new Date(), updated_at: new Date() });
-          await raiseInTx(trx, tenantId, 'vpp.foreign_mdm', { discriminant: id, params: { label: r!.label }, navigateTo: '/integrations' });
-        });
-        realtime.integrationChanged(tenantId, 'vpp');
-      }
+      if (r.state !== 'foreign_mdm') await markForeign(tenantId, id, r.label);
       return { ...skip, outcome: 'foreign_mdm' };
     }
     if (r.state === 'foreign_mdm') return { ...skip, outcome: 'foreign_mdm' };
+    // A location another tenant of this instance claimed (taken over by it, or configured first), whether Apple echoes
+    // the metadata or not (INT-INTC-R9): 'foreign_mdm' here too.
+    if (!(await claimLocation(db, id, cfg.uId ?? r.location_uid, false))) {
+      await markForeign(tenantId, id, r.label);
+      return { ...skip, outcome: 'foreign_mdm' };
+    }
     if (!cfg.mdmInfo?.id) {
       // Our configuration was cleared (by an administrator at Apple): written again, with a new secret.
       await configureClient(tenantId, id, { actor: o.actor });
