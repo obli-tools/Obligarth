@@ -266,14 +266,21 @@ async function floodReached(trx: Knex.Transaction, tenantId: number, now: Date):
 }
 
 /** Counts a wrong code of the address and of the tenant (its own short transaction: the answer's transaction may roll
- *  back). An address over its own cap never reaches here (refused before the code is read). */
+ *  back). The address is checked before the code is read, but answers of one address racing each other all pass that
+ *  check: the count of the address only grows while under its cap (the row lock of the upsert serialises them), and a
+ *  wrong code beyond it no longer counts for the tenant, so that one address never brings more than
+ *  ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR to the count of the tenant (review of lot D-1910). */
 async function countWrongCode(tenantId: number, address: string, now: Date): Promise<void> {
   const alert = await asTenant(tenantId, BYOD_ACTOR, () => db.transaction(async (trx) => {
     const hour = hourStart(now);
-    await trx.raw(
+    const counted = await trx.raw(
       `INSERT INTO obligarth.android_byod_address_attempts AS a (tenant_id, hour_start, address_hmac, wrong_codes) VALUES (?, ?, ?, 1)
-       ON CONFLICT (tenant_id, hour_start, address_hmac) DO UPDATE SET wrong_codes = LEAST(a.wrong_codes + 1, 1000000)`, [tenantId, hour, address]);
+       ON CONFLICT (tenant_id, hour_start, address_hmac) DO UPDATE SET wrong_codes = a.wrong_codes + 1
+       WHERE a.wrong_codes < ?
+       RETURNING wrong_codes`, [tenantId, hour, address, ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR])
+      .then((r: { rows: unknown[] }) => r.rows.length > 0);
     await trx('android_byod_address_attempts').where({ tenant_id: tenantId }).where('hour_start', '<', new Date(hour.getTime() - 48 * 3_600_000)).delete();
+    if (!counted) return false;
     const [row] = await trx.raw(
       `INSERT INTO obligarth.android_byod_attempts AS a (tenant_id, hour_start, wrong_codes) VALUES (?, ?, 1)
        ON CONFLICT (tenant_id, hour_start) DO UPDATE SET wrong_codes = LEAST(a.wrong_codes + 1, 1000000)

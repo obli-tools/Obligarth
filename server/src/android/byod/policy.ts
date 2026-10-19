@@ -53,6 +53,12 @@ const profileScope = (r: Json): boolean => isObj(r) && r.passwordScope === 'SCOP
 const separateWorkLock = (pp: Json): boolean => Array.isArray(pp) && pp.some((r) => profileScope(r) && (r as Record<string, Json>).unifiedLockSettings === BYOD_WORK_LOCK)
   && !pp.some((r) => profileScope(r) && (r as Record<string, Json>).unifiedLockSettings !== BYOD_WORK_LOCK);
 
+/** The path byodPolicyViolations gives when an entry other than SCOPE_PROFILE carries unifiedLockSettings. */
+export const BYOD_FOREIGN_LOCK_PATH = 'passwordPolicies[not SCOPE_PROFILE].unifiedLockSettings';
+/** An entry of another scope that asks for a lock setting (AMAPI admits unifiedLockSettings under SCOPE_PROFILE only;
+ *  an entry of unspecified scope designates the work profile of a personal device): never (review of lot D-1910). */
+const foreignLockSetting = (r: Json): boolean => isObj(r) && !profileScope(r) && r.unifiedLockSettings !== undefined;
+
 /** A password policy whose failed attempts wipe the whole device (scope device, or the deprecated requirements). */
 const deviceScopeWipe = (r: Json): boolean => isObj(r) && r.maximumFailedPasswordsForWipe !== undefined && r.passwordScope === 'SCOPE_DEVICE';
 
@@ -68,6 +74,7 @@ export function byodPolicyViolations(body: Record<string, Json>): string[] {
   const pr = body.passwordRequirements;
   if (isObj(pr) && pr.maximumFailedPasswordsForWipe !== undefined) out.push('passwordRequirements.maximumFailedPasswordsForWipe');
   if (!separateWorkLock(pp)) out.push(BYOD_WORK_LOCK_PATH);
+  if (Array.isArray(pp) && pp.some(foreignLockSetting)) out.push(BYOD_FOREIGN_LOCK_PATH);
   const srs = body.statusReportingSettings;
   if (isObj(srs)) {
     for (const k of REPORTS_OFF) if (srs[k] !== undefined && srs[k] !== false) out.push(`statusReportingSettings.${k}`);
@@ -89,9 +96,16 @@ export function byodPolicy(body: Record<string, Json>): { body: Record<string, J
   const pp = out.passwordPolicies;
   const kept = Array.isArray(pp)
     ? pp.map((r) => {
-      if (!deviceScopeWipe(r)) return r;
-      const { maximumFailedPasswordsForWipe: _m, ...rest } = r as Record<string, Json>;
-      return rest;
+      let e = r;
+      if (deviceScopeWipe(e)) {
+        const { maximumFailedPasswordsForWipe: _m, ...rest } = e as Record<string, Json>;
+        e = rest;
+      }
+      if (foreignLockSetting(e)) {
+        const { unifiedLockSettings: _u, ...rest } = e as Record<string, Json>;
+        e = rest;
+      }
+      return e;
     })
     : [];
   // F1R-3: every SCOPE_PROFILE entry requires the separate challenge of the work profile (AMAPI admits
