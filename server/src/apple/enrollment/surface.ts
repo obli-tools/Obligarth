@@ -401,7 +401,9 @@ export function createAppleDeviceSurface(): Router {
     // The form token binds the account of the web view (or none: typed in the page) to this answer.
     const tokenOk = !!account && (checkFormToken(b.form_token, t.key, account) || checkFormToken(b.form_token, t.key, null));
     if (!account || !tokenOk || b.ack !== '1' || !versionId) { await byodPage(res, 400, { locale, account }); return; }
-    const out = await byodAuthenticate(t, { account, code: b.code, noticeVersionId: versionId, locale }, ENROLL_BYOD);
+    // The address counts the wrong codes per invitation (decision of 19/10/2026); it is never stored in clear.
+    const out = await byodAuthenticate(t, { account, code: b.code, noticeVersionId: versionId, locale, address: req.ip ?? 'unknown' }, ENROLL_BYOD);
+    if (out.kind === 'address_locked') { tooManyHandler(req, res); return; }
     if (out.kind === 'notice_changed') { await byodPage(res, 409, { locale, account, noticeChanged: true }); return; }
     if (out.kind === 'wrong_code') { await byodPage(res, 400, { locale, account, wrongCode: true }); return; }
     // The bearer goes back to the device by the redirection only (no body that would repeat it).

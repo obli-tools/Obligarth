@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import { config } from '../../config';
 import { audit } from '../../audit';
@@ -27,8 +27,9 @@ import { invitationHash, newAccessToken, normalizeInvitationCode, sha256Hex } fr
 //      EnrollmentMode BYOD, no AccessRights: §10.2), profile_issued; the outbox does the rest (User Enrollment:
 //      an EnrollmentID, never a UDID nor a serial number: INV-01).
 // A wrong code counts on every live invitation of the account (and on the invitation of the code when another
-// account presents it): five wrong codes revoke an invitation (alert enrollment.invitation_locked, protective
-// audit entry). The form token of the web view binds the account of the GET to its POST (HMAC of a key derived
+// account presents it), per (invitation, address) first: five wrong codes from one address shut it out of the
+// invitation, thirty counted from addresses under their own cap revoke the invitation (alert
+// enrollment.invitation_locked, protective audit entry; decision of the owners of 19/10/2026). The form token of the web view binds the account of the GET to its POST (HMAC of a key derived
 // from SESSION_SECRET, 30 minutes): no state before the code. Every statement runs in the tenant's context,
 // actor enrollment:byod.
 // =============================================================================
@@ -36,8 +37,19 @@ import { invitationHash, newAccessToken, normalizeInvitationCode, sha256Hex } fr
 export const BYOD_SESSION_TTL_MS = 60 * 60_000;
 export const ACCESS_TOKEN_TTL_MS = 15 * 60_000;
 export const BYOD_CHALLENGE_TTL_S = 900;
-/** Wrong codes that revoke an invitation (§10.5). */
-export const MAX_WRONG_CODES = 5;
+/** Wrong codes from one address that shut this address out of an invitation (decision of the owners of 19/10/2026,
+ *  review of lot C2, invitation option A). */
+export const MAX_WRONG_CODES_PER_ADDRESS = 5;
+/** Wrong codes, counted from addresses still under their own cap, that revoke an invitation (§10.5; the global cap,
+ *  higher than one address's since 19/10/2026: one third party alone no longer revokes it). */
+export const MAX_WRONG_CODES = 30;
+
+/** The HMAC of an address (never stored in clear), with the tenant's uuid: 32 hex characters. */
+export function addressHmac(tenantUuid: string, address: string): string {
+  const key = createHmac('sha256', String(config.sessionSecret)).update('obligarth.invitation-address.v1').digest();
+  return createHmac('sha256', key).update(`${tenantUuid}
+${address}`).digest('hex').slice(0, 32);
+}
 
 export { normalizeAccount } from './adeRules';
 
@@ -63,18 +75,37 @@ export type ByodAuthOutcome =
   | { kind: 'ok'; sessionId: string; accessToken: string }
   /** The code is not one of a live invitation of this account (counted). */
   | { kind: 'wrong_code' }
+  /** This address gave MAX_WRONG_CODES_PER_ADDRESS wrong codes for the invitations at stake: refused, not counted. */
+  | { kind: 'address_locked' }
   /** The notice changed since the page. */
   | { kind: 'notice_changed'; notice: EnrollmentNotice | null };
 
 interface LiveInvitation { id: string; profile_id: string; managed_apple_account: string; end_user_id: number | null; prefix: string }
 
+/** The wrong codes of `address` for each of `ids` (0 when none). */
+async function addressFailures(trx: Knex.Transaction, tenantId: number, ids: string[], address: string): Promise<Map<string, number>> {
+  if (!ids.length) return new Map();
+  const rows = await trx('enrollment_invitation_address_attempts').where({ tenant_id: tenantId, address_hmac: address })
+    .whereIn('token_id', ids).select('token_id', 'failed') as Array<{ token_id: string; failed: number }>;
+  return new Map(rows.map((r) => [String(r.token_id), Number(r.failed)]));
+}
+
 /**
- * Counts a wrong code on `ids` (locked: FOR UPDATE by the caller's read); an invitation that reaches
- * MAX_WRONG_CODES is revoked, its alert raised and the protective entry written (in the transaction). An
- * invitation counted here is live (a use left): it has no open session to end.
+ * Counts a wrong code on `ids` (locked: FOR UPDATE by the caller's read), per (invitation, address) first: an address
+ * under MAX_WRONG_CODES_PER_ADDRESS also counts on the invitation itself, an address over it no longer does (it is
+ * shut out of the invitation). An invitation that reaches MAX_WRONG_CODES is revoked, its alert raised and the
+ * protective entry written (in the transaction). An invitation counted here is live (a use left): it has no open
+ * session to end.
  */
-async function countWrongCode(trx: Knex.Transaction, tenantId: number, invitations: LiveInvitation[]): Promise<void> {
+async function countWrongCode(trx: Knex.Transaction, tenantId: number, invitations: LiveInvitation[], address: string): Promise<void> {
+  const before = await addressFailures(trx, tenantId, invitations.map((x) => x.id), address);
   for (const inv of invitations) {
+    const prior = before.get(inv.id) ?? 0;
+    await trx.raw(`INSERT INTO enrollment_invitation_address_attempts (tenant_id, token_id, address_hmac, failed, updated_at)
+      VALUES (?, ?, ?, 1, now())
+      ON CONFLICT (tenant_id, token_id, address_hmac) DO UPDATE
+        SET failed = LEAST(enrollment_invitation_address_attempts.failed + 1, 1000), updated_at = now()`, [tenantId, inv.id, address]);
+    if (prior >= MAX_WRONG_CODES_PER_ADDRESS) continue;
     const [row] = await trx('enrollment_tokens').where({ tenant_id: tenantId, id: inv.id })
       .update({ failed_attempts: trx.raw('LEAST(failed_attempts + 1, 1000)') }, ['failed_attempts', 'revoked_at']) as
       Array<{ failed_attempts: number; revoked_at: Date | null }>;
@@ -96,9 +127,10 @@ const LIVE = (q: Knex.QueryBuilder): Knex.QueryBuilder => q.where('t.kind', 'inv
  * uuid), live, of a BYOD profile that serves, whose Managed Apple Account is `account` (case ignored); one use
  * reserved; the session acknowledged with a single-use bearer. Otherwise a wrong code, counted.
  */
-export async function byodAuthenticate(t: TenantFacts, a: { account: string; code: unknown; noticeVersionId: string; locale: SurfaceLocale },
+export async function byodAuthenticate(t: TenantFacts, a: { account: string; code: unknown; noticeVersionId: string; locale: SurfaceLocale; address: string },
   actor: DbActor): Promise<ByodAuthOutcome> {
   const code = normalizeInvitationCode(a.code);
+  const address = addressHmac(t.uuid, a.address);
   const out = await asTenant(t.tenantId, actor, () => db.transaction(async (trx): Promise<ByodAuthOutcome> => {
     const notice = await enrollmentNotice().noticeFor(trx, t.tenantId, 'personal', a.locale, { method: 'byod_account', organization: t.name });
     if (!notice || notice.versionId !== a.noticeVersionId) return { kind: 'notice_changed', notice };
@@ -116,13 +148,18 @@ export async function byodAuthenticate(t: TenantFacts, a: { account: string; cod
     const ofAccount = locked.filter((x) => String(x.managed_apple_account).toLowerCase() === a.account).map(strip);
     const found = codeHash ? locked.find((x) => x.token_hash === codeHash) : undefined;
     const inv = found ? strip(found) : undefined;
+    // The address shut out of the invitation of the code, or of every invitation of the account without a code of its
+    // own: refused before anything is checked or counted (a right code from this address no longer serves).
+    const failures = await addressFailures(trx, t.tenantId, locked.map((x) => String(x.id)), address);
+    const shut = (id: string): boolean => (failures.get(id) ?? 0) >= MAX_WRONG_CODES_PER_ADDRESS;
+    if (inv ? shut(inv.id) : ofAccount.length > 0 && ofAccount.every((x) => shut(x.id))) return { kind: 'address_locked' };
     const serves = inv ? !(await withdrawalOf(trx, t.tenantId, inv.profile_id, null))
       && !!(await trx('enrollment_profiles').where({ tenant_id: t.tenantId, id: inv.profile_id, method: 'byod_account' }).first('id')) : false;
     if (!inv || !serves || String(inv.managed_apple_account).toLowerCase() !== a.account) {
       const counted = [...ofAccount];
       // A right code presented with another account: the code leaked, its invitation counts too.
       if (inv && serves && !counted.some((x) => x.id === inv.id)) counted.push(inv);
-      await countWrongCode(trx, t.tenantId, counted);
+      await countWrongCode(trx, t.tenantId, counted, address);
       return { kind: 'wrong_code' };
     }
     const reserved = await trx('enrollment_tokens').where({ tenant_id: t.tenantId, id: inv.id })
