@@ -344,7 +344,8 @@ export async function cancelOpenOfDevice(trx: Knex.Transaction, tenantId: number
 
 export interface DeliveredCommand { id: string; type: string; params: Record<string, unknown>; issuedAt: number; expiresAt: number }
 
-const PRIORITY_SQL = "CASE request_type WHEN 'device.wipe' THEN 0 WHEN 'device.lock' THEN 1 ELSE 2 END";
+/** Delivery order (RS-2): erase, lock, then by age. A constant: no value interpolated. */
+const DELIVERY_ORDER_SQL = "CASE request_type WHEN 'device.wipe' THEN 0 WHEN 'device.lock' THEN 1 ELSE 2 END, created_at, id";
 export const MAX_DELIVERED = 20;
 
 /**
@@ -368,7 +369,7 @@ export async function deliver(trx: Knex.Transaction, tenantId: number, deviceId:
         .orWhere((s) => s.where('state', 'sent').where('delivered_at', '<', redeliverBefore));
     });
   if (o.onlyTypes) q = q.whereIn('request_type', o.onlyTypes as string[]);
-  const rows = await q.orderByRaw(`${PRIORITY_SQL}, created_at, id`).limit(MAX_DELIVERED).forUpdate()
+  const rows = await q.orderByRaw(DELIVERY_ORDER_SQL).limit(MAX_DELIVERED).forUpdate()
     .select('id', 'request_type', 'params', 'created_at', 'expires_at') as
     Array<{ id: string; request_type: string; params: unknown; created_at: Date; expires_at: Date }>;
   if (rows.length === 0) return [];
