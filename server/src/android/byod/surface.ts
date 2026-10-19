@@ -111,7 +111,8 @@ export function createAndroidByodSurface(): Router {
     const tx = byodTexts(locale);
     // The acknowledgement is required: without it nothing is read nor counted.
     if (b.ack !== '1' || !versionId) { await show(res, t, locale, 400); return; }
-    const out = await acknowledgeInvitation(t, { code: b.code, noticeVersionId: versionId, locale });
+    // The address counts the wrong codes first (F1R-4); never stored in clear.
+    const out = await acknowledgeInvitation(t, { code: b.code, noticeVersionId: versionId, locale, address: req.ip ?? 'unknown' });
     switch (out.kind) {
       case 'redirect':
         if (!isGoogleEnrollUrl(out.url)) { sendPage(res, 503, byodMessagePage(tx, tx.retryTitle, tx.retryBody)); return; }
@@ -119,7 +120,7 @@ export function createAndroidByodSurface(): Router {
         return;
       case 'wrong_code': await show(res, t, locale, 400, { wrongCode: true }); return;
       case 'notice_changed': await show(res, t, locale, 409, { noticeChanged: true }); return;
-      case 'flood': sendPage(res, 429, byodMessagePage(tx, tx.tooMany, tx.tooMany)); return;
+      case 'flood': case 'address_flood': sendPage(res, 429, byodMessagePage(tx, tx.tooMany, tx.tooMany)); return;
       case 'busy': case 'retry': sendPage(res, 503, byodMessagePage(tx, tx.retryTitle, tx.retryBody)); return;
       default: sendPage(res, 503, byodMessagePage(tx, tx.unavailableTitle, fill(tx.unavailableBody, { org: t.name })));
     }

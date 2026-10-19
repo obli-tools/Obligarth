@@ -22,8 +22,13 @@ export const ANDROID_BYOD_INVITATION_STATES = ['active', 'issuing', 'issued', 'u
 export type AndroidByodInvitationState = typeof ANDROID_BYOD_INVITATION_STATES[number];
 
 /** Wrong codes per tenant and per hour beyond which the device surface refuses every code of the tenant until the
- *  hour ends (alert android.byod_code_flood): a code of 10 characters of 32 is never guessed below that. */
-export const ANDROID_BYOD_WRONG_CODES_PER_HOUR = 20;
+ *  hour ends (alert android.byod_code_flood): a code of 10 characters of 32 (50 bits) is never guessed below that.
+ *  200 since the decision of the owners of 19/10/2026 on F1R-4 (20 let two addresses block the tenant every hour). */
+export const ANDROID_BYOD_WRONG_CODES_PER_HOUR = 200;
+
+/** Wrong codes per address and per hour beyond which the device surface refuses every code from this address until
+ *  the hour ends; checked first, before the count of the tenant (decision of 19/10/2026 on F1R-4). */
+export const ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR = 10;
 
 /** POST /api/android/byod/invitations */
 export interface AndroidByodInvitationRequest {

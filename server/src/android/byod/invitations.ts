@@ -9,15 +9,20 @@
 // device enrolled with the token, the invitation is used and the code serves no more. The enrollment handler accepts
 // a device of a byod_link token only when the token belongs to an invitation issued after an acknowledged notice
 // (invitationForEnrollment): no BYOD enrollment without the notice, whatever the path.
-// Guessing: a code has 50 bits; wrong codes are counted per tenant and per hour, beyond the threshold every code of
-// the tenant is refused until the hour ends (alert android.byod_code_flood), and the surface limits each address.
+// Guessing: a code has 50 bits; wrong codes are counted per address and per hour first (beyond
+// ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR every code from this address is refused until the hour ends), then per
+// tenant and per hour (beyond ANDROID_BYOD_WRONG_CODES_PER_HOUR, 200, every code of the tenant is refused until the hour
+// ends, alert android.byod_code_flood): decision of the owners of 19/10/2026 on F1R-4. The surface also limits each
+// address (10 answers a minute). The address is never stored: an HMAC of it.
 // Every statement of the surface runs in the tenant's context, actor enrollment:android-byod. Never logged nor audited:
 // the code, the token's value, the Google link.
+import { createHmac } from 'node:crypto';
 import type { Knex } from 'knex';
 import {
-  ANDROID_BYOD_INVITATION_TTL_HOURS, ANDROID_BYOD_WRONG_CODES_PER_HOUR, type AndroidByodInvitationState, type AndroidByodInvitationView,
+  ANDROID_BYOD_INVITATION_TTL_HOURS, ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR, ANDROID_BYOD_WRONG_CODES_PER_HOUR, type AndroidByodInvitationState, type AndroidByodInvitationView,
 } from '@obligarth/shared';
 import { audit } from '../../audit';
+import { config } from '../../config';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
@@ -229,6 +234,8 @@ export type AcknowledgeOutcome =
   | { kind: 'wrong_code' }
   /** Too many wrong codes this hour: every code of the tenant refused until the hour ends. */
   | { kind: 'flood' }
+  /** Too many wrong codes from this address this hour: every code from it refused until the hour ends (F1R-4). */
+  | { kind: 'address_flood' }
   /** The notice changed since the page. */
   | { kind: 'notice_changed'; notice: AndroidNotice | null }
   /** Another answer is creating the token right now. */
@@ -239,16 +246,34 @@ export type AcknowledgeOutcome =
 
 const hourStart = (now: Date): Date => new Date(Math.floor(now.getTime() / 3_600_000) * 3_600_000);
 
+/** The HMAC of an address (never stored in clear), with the tenant's uuid: 32 hex characters. */
+export function byodAddressHmac(tenantUuid: string, address: string): string {
+  const key = createHmac('sha256', String(config.sessionSecret)).update('obligarth.android-byod-address.v1').digest();
+  return createHmac('sha256', key).update(`${tenantUuid}
+${address}`).digest('hex').slice(0, 32);
+}
+
+async function addressFloodReached(trx: Knex.Transaction, tenantId: number, address: string, now: Date): Promise<boolean> {
+  const row = await trx('android_byod_address_attempts').where({ tenant_id: tenantId, hour_start: hourStart(now), address_hmac: address })
+    .first('wrong_codes') as { wrong_codes: number } | undefined;
+  return Number(row?.wrong_codes ?? 0) >= ANDROID_BYOD_WRONG_CODES_PER_ADDRESS_HOUR;
+}
+
 async function floodReached(trx: Knex.Transaction, tenantId: number, now: Date): Promise<boolean> {
   const row = await trx('android_byod_attempts').where({ tenant_id: tenantId, hour_start: hourStart(now) }).first('wrong_codes') as
     { wrong_codes: number } | undefined;
   return Number(row?.wrong_codes ?? 0) >= ANDROID_BYOD_WRONG_CODES_PER_HOUR;
 }
 
-/** Counts a wrong code of the tenant (its own short transaction: the answer's transaction may roll back). */
-async function countWrongCode(tenantId: number, now: Date): Promise<void> {
+/** Counts a wrong code of the address and of the tenant (its own short transaction: the answer's transaction may roll
+ *  back). An address over its own cap never reaches here (refused before the code is read). */
+async function countWrongCode(tenantId: number, address: string, now: Date): Promise<void> {
   const alert = await asTenant(tenantId, BYOD_ACTOR, () => db.transaction(async (trx) => {
     const hour = hourStart(now);
+    await trx.raw(
+      `INSERT INTO obligarth.android_byod_address_attempts AS a (tenant_id, hour_start, address_hmac, wrong_codes) VALUES (?, ?, ?, 1)
+       ON CONFLICT (tenant_id, hour_start, address_hmac) DO UPDATE SET wrong_codes = LEAST(a.wrong_codes + 1, 1000000)`, [tenantId, hour, address]);
+    await trx('android_byod_address_attempts').where({ tenant_id: tenantId }).where('hour_start', '<', new Date(hour.getTime() - 48 * 3_600_000)).delete();
     const [row] = await trx.raw(
       `INSERT INTO obligarth.android_byod_attempts AS a (tenant_id, hour_start, wrong_codes) VALUES (?, ?, 1)
        ON CONFLICT (tenant_id, hour_start) DO UPDATE SET wrong_codes = LEAST(a.wrong_codes + 1, 1000000)
@@ -288,13 +313,16 @@ async function linkOf(trx: Knex.Transaction, tenantId: number, tokenId: string):
  * current notice. Returns where to send the device, or why not. The acknowledgement is recorded in the transaction
  * that moves the invitation to issuing; the token is created outside it (G-A1) and recorded in a third one.
  */
-export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; noticeVersionId: string; locale: ByodLocale },
+export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; noticeVersionId: string; locale: ByodLocale; address: string },
   o: { gateway?: AndroidGateway; now?: () => Date } = {}): Promise<AcknowledgeOutcome> {
   const clock = o.now ?? (() => new Date());
   const code = normalizeInvitationCode(a.code);
+  const address = byodAddressHmac(t.uuid, a.address);
   let wrong = false;
   const step = await asTenant(t.tenantId, BYOD_ACTOR, () => db.transaction(async (trx): Promise<Step> => {
     const now = clock();
+    // The address first (F1R-4): a third party exhausts its own budget, then only the tenant's.
+    if (await addressFloodReached(trx, t.tenantId, address, now)) return { kind: 'done', out: { kind: 'address_flood' } };
     if (await floodReached(trx, t.tenantId, now)) return { kind: 'done', out: { kind: 'flood' } };
     const notice = await androidNotice().noticeFor(trx, t.tenantId, 'personal', a.locale, { method: 'android_byod_link', organization: t.name });
     if (!notice || notice.versionId !== a.noticeVersionId) return { kind: 'done', out: { kind: 'notice_changed', notice } };
@@ -350,7 +378,7 @@ export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; 
     }, byodAuditCtx());
     return { kind: 'issue', inv, seconds };
   }));
-  if (wrong) await countWrongCode(t.tenantId, clock());
+  if (wrong) await countWrongCode(t.tenantId, address, clock());
   if (step.kind === 'done') return step.out;
   if (step.kind === 'reuse') {
     const url = await asTenant(t.tenantId, BYOD_ACTOR, () => db.transaction((trx) => linkOf(trx, t.tenantId, String(step.inv.token_id))));
