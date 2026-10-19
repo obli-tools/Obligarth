@@ -37,7 +37,9 @@ import { onUnenrolled } from './lifecycle';
 // its entry with the outcome 'cancelled' and sends no next step. A RemoveProfile
 // cancelled before its delivery stops the chain the same way, mark or not; once
 // delivered (cancel_after_delivery) with the mark, the chain stops too and the
-// CheckOut, if the device obeys, records the leaving.
+// CheckOut, if the device obeys, records the leaving. An action cancelled while
+// paused or scheduled after an interrupted run (state 'cancelled', no mark: its
+// withdrawal may not have been taken yet) stops it the same way (second review).
 // Each step writes its entry of the device's timeline (retire_*), from which the
 // console draws the checklist (retirementOf). The state "retired" is seen on
 // the server side (P9): the record leaves management at the release, whether
@@ -96,7 +98,8 @@ interface Facts {
   key: string | null; enrollmentId: string | null; state: string | null; released: boolean; target: string | null;
   /** reject_code of the target (cancel_after_delivery: cancelled once delivered). */
   rejectCode: string | null;
-  /** The late cancellation of the action was asked (result.lateCancel of its pending action). */
+  /** The late cancellation of the action was asked (result.lateCancel of its pending action), or the action itself
+   *  was cancelled (state 'cancelled': cancelled while paused or scheduled after an interrupted run, no mark). */
   lateCancel: boolean;
 }
 
@@ -111,10 +114,10 @@ async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
       { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; enrollment_state: string } | undefined;
     const target = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: jobIdFor('mdm.command', `${actionUuid.toLowerCase()}:${deviceId}`).toLowerCase(), device_id: deviceId })
       .first('state', 'reject_code') as { state: string; reject_code: string | null } | undefined;
-    const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: actionUuid.toLowerCase() }).first('result') as
-      { result: unknown } | undefined;
+    const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: actionUuid.toLowerCase() }).first('result', 'state') as
+      { result: unknown; state: string } | undefined;
     return { key: r?.mdm_key ?? null, enrollmentId: r?.enrollment_id ?? null, state: r?.enrollment_state ?? null, released: !!r?.id_released_at,
-      target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null };
+      target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null || action?.state === 'cancelled' };
   });
 }
 

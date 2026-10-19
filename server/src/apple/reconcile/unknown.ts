@@ -198,6 +198,9 @@ export async function attachUnknownEnrollments(tenantId: number, actor: DbActor,
       }
     } catch (err) {
       if (err instanceof AttachRefused) { results[id] = err.outcome; continue; }
+      // A refusal of this enrollment alone (a uniqueness or check of the records, a missing prerequisite) is its
+      // outcome, not the batch's: what was attached before stays attached and is journaled (review of lot C5, R5).
+      if (attachRefusalOf(err)) { results[id] = 'failed'; continue; }
       throw err;
     }
   }
@@ -207,6 +210,13 @@ export async function attachUnknownEnrollments(tenantId: number, actor: DbActor,
 
 class AttachRefused extends Error {
   constructor(readonly outcome: AttachOutcome) { super(outcome); }
+}
+
+/** An error that refuses one enrollment only: a client error of the lifecycle, or an integrity violation (class 23). */
+function attachRefusalOf(err: unknown): boolean {
+  if (err instanceof AppError) return err.statusCode >= 400 && err.statusCode < 500;
+  const code = (err as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.startsWith('23');
 }
 
 /** Releases enrollments unknown to the brain at apple-edge (never one a record under management holds). */
