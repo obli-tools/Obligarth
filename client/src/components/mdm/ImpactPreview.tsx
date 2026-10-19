@@ -19,6 +19,7 @@ const REASON_FALLBACK: Record<ImpactApprovalReason, string> = {
   fleet_share: '10 % of the fleet or more is touched',
   removal_threshold: 'something is removed from 3 devices or more',
   restriction: 'the restriction of this tenant requires it',
+  cumulative: 'with the changes made without a second approver over the last hour, the thresholds are reached',
 };
 
 export const approvalReasonLabel = (t: TFunction, r: ImpactApprovalReason): string =>
@@ -108,6 +109,12 @@ export function ImpactPreview({ impact, compact = false }: { impact: PolicyImpac
             {' · '}
             {t('mdm.impact.computedAt', { at: new Date(impact.computedAt).toLocaleTimeString() }) || `computed at ${new Date(impact.computedAt).toLocaleTimeString()}`}
           </p>
+          {impact.cumulative && impact.cumulative.devicesTouched > impact.devicesTouched && (
+            <p className="mt-0.5 text-[11px] text-text-muted">
+              {t('mdm.impact.cumulative', { devices: impact.cumulative.devicesTouched, minutes: impact.cumulative.windowMinutes })
+                || `${impact.cumulative.devicesTouched} devices touched over the last ${impact.cumulative.windowMinutes} minutes by the changes made without a second approver, this one included`}
+            </p>
+          )}
         </div>
       </div>
 

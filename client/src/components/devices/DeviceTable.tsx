@@ -38,6 +38,7 @@ import { IconButton } from '@/components/common/IconButton';
 import { Button } from '@/components/common/Button';
 import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import { AssignmentCreateDialog } from '@/components/mdm/Assignments';
+import { useDeviceMove } from '@/components/mdm/DeviceMoveChange';
 import {
   COMPLIANCE_TONE, CONFIG_TONE, CONTACT_TONE, complianceLabel, configLabel, contactLabel, enrollmentLabel, toneDot,
 } from '@/components/mdm/DeviceStateBadges';
@@ -365,6 +366,7 @@ export function DeviceTable({
   const someChecked = selectedIds.size > 0 && !allChecked;
   const selectedDevices = useMemo(() => devices.filter((d) => selectedIds.has(d.id)), [devices, selectedIds]);
   const clearSelection = () => setSelectedIds(new Set());
+  const deviceMove = useDeviceMove((_m, outcome) => { if (outcome !== 'failed') { clearSelection(); void load(true); } });
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
     + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0);
@@ -985,19 +987,16 @@ export function DeviceTable({
             setChangeGroupOpen(false);
             setIsBatchRunning(true);
             try {
-              const r = await mdmApi.batchSetGroup(Array.from(selectedIds), newGroupId);
-              if (r === null) toast(t('mdm.outcome.awaitingApproval') || 'Waiting for a second approver: nothing has changed yet.', { duration: 7000 });
-              else toast.success(t('devices.batch.groupChanged', { count: r.changed, defaultValue: `Moved ${r.changed} device${r.changed > 1 ? 's' : ''}` }));
-              clearSelection();
-              await load(true);
-            } catch (err) {
-              if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+              // Previewed and guarded like a change of assignments (S12): the confirmation of the preview when the move
+              // touches a configuration; the toasts and the step-up are told by useDeviceMove.
+              await deviceMove.request({ deviceIds: Array.from(selectedIds), groupId: newGroupId });
             } finally {
               setIsBatchRunning(false);
             }
           }}
         />
       )}
+      {deviceMove.dialog}
 
       {/* ── Batch: assign a policy (through the impact preview) ───────── */}
       <AssignmentCreateDialog

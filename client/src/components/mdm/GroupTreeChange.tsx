@@ -67,7 +67,16 @@ export function useGroupTreeChange(onDone?: (change: GroupTreeChange, outcome: G
   }, [t, onDone]);
 
   const request = useCallback(async (change: GroupTreeChange): Promise<void> => {
-    if (change.kind === 'delete') { setPending({ change, impact: null }); return; }
+    if (change.kind === 'delete') {
+      // A group with subgroups is not deleted: its subgroups are moved first (the server answers 409 groupHasSubgroups).
+      if (change.hasSubgroups) {
+        toast.error(t('errors.groupHasSubgroups') || 'This group has subgroups: move them first, then delete the group.', { duration: 7000 });
+        onDone?.(change, 'failed');
+        return;
+      }
+      setPending({ change, impact: null });
+      return;
+    }
     let impact: PolicyImpact;
     try {
       impact = await groupsApi.previewMove(change.groupId, change.newParentId);
@@ -95,10 +104,7 @@ export function useGroupTreeChange(onDone?: (change: GroupTreeChange, outcome: G
         ? (t('groups.deletePreviewTitle', { name }) || `Delete the group "${name}"`)
         : (t('groups.movePreviewTitle', { name }) || `Move the group "${name}"`)}
       intro={change?.kind === 'delete'
-        ? [
-          t('groups.deletePreviewIntro') || 'The assignments of this group are removed with it and its devices become ungrouped: they lose what they inherited from it.',
-          change.hasSubgroups ? (t('groups.deleteSubgroupsNote') || 'Its subgroups are not deleted: they are detached and shown at the root.') : '',
-        ].filter(Boolean).join(' ')
+        ? (t('groups.deletePreviewIntro') || 'The assignments of this group are removed with it and its devices become ungrouped: they lose what they inherited from it.')
         : change?.kind === 'move'
           ? (t('groups.movePreviewIntro', { parent: change.newParentName ? anonymize(change.newParentName) : (t('groupPanel.rootLevel') || 'Root level (no parent)') })
             || 'The devices of this group and of its subgroups stop inheriting the policies of the groups it leaves, and inherit those of its new parent.')

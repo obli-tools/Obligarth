@@ -75,8 +75,11 @@ export interface PolicyValidation { valid: boolean; issues: PolicyValidationIssu
 export interface RawProfileImport {
   version: PolicyVersion;
   itemId: string;
-  /** The file came inside a signed envelope (removed at import; the signature is not verified: MDM-B5c-R8). */
+  /** The file came inside a signed envelope whose signature verifies (removed at import: MDM-B5c-R8). */
   signed: boolean;
+  /** The check of that signature; null when the file was not signed. 'unsupported': an algorithm not verified here. */
+  signature?: { status: 'valid' | 'invalid' | 'unsupported'; trusted?: boolean;
+    signer?: { subject: string; issuer: string; notAfter: string; sha256: string } } | null;
   /** Names of the keys whose values were moved to the vault. */
   movedSecrets: string[];
   /** Keys that look like secrets and stay in clear in the policy (no rule moved them: MDM-B5c-R9). Names only. */
@@ -118,9 +121,22 @@ export const mdmApi = {
     const res = await apiClient.patch<ApiResponse<DeviceDetail>>(`/mdm/devices/${id}`, patch);
     return res.data.data!;
   },
-  async setGroup(id: number, groupId: number | null): Promise<{ changed: boolean }> {
+  /** `null`: the move waits for a second approver (202), nothing has moved yet (modele-donnees-mdm S12). */
+  async setGroup(id: number, groupId: number | null): Promise<{ changed: boolean } | null> {
     const res = await apiClient.post<ApiResponse<{ changed: boolean }>>(`/mdm/devices/${id}/group`, { groupId });
-    return res.data.data ?? { changed: false };
+    return res.status === 202 ? null : (res.data.data ?? { changed: false });
+  },
+  /** What moving devices into a group would change for them (the policies they inherit): nothing is written. */
+  async previewSetGroup(deviceIds: number[], groupId: number | null): Promise<PolicyImpact> {
+    const res = await apiClient.post<ApiResponse<{ outcome: string; impact: PolicyImpact }>>('/mdm/devices/batch/group', { deviceIds, groupId },
+      { params: { dryRun: true } });
+    return res.data.data!.impact;
+  },
+  /** The same preview for one device (from the global view too: the device's tenant). */
+  async previewSetGroupOne(id: number, groupId: number | null): Promise<PolicyImpact> {
+    const res = await apiClient.post<ApiResponse<{ outcome: string; impact: PolicyImpact }>>(`/mdm/devices/${id}/group`, { groupId },
+      { params: { dryRun: true } });
+    return res.data.data!.impact;
   },
   /** `null`: the move waits for a second approver (202), nothing has moved yet. */
   async batchSetGroup(deviceIds: number[], groupId: number | null): Promise<{ updated: number; changed: number } | null> {

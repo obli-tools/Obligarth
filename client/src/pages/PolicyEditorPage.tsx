@@ -462,8 +462,16 @@ export function PolicyEditorPage() {
                 <p className="mt-1 font-mono text-text-primary break-all">{imported.suspectKeys!.join(', ')}</p>
               </div>
             )}
-            {imported.signed && (
-              <p className="text-xs text-amber-400">{t('policies.editor.importedSigned') || 'The file was signed: its signature was removed and was not verified. The profile is delivered by this server, encrypted for each device.'}</p>
+            {imported.signed && imported.signature?.signer && (
+              <p className="text-xs text-text-secondary">
+                {(imported.signature.trusted
+                  ? t('policies.editor.importedSignedTrusted', { signer: imported.signature.signer.subject })
+                  : t('policies.editor.importedSignedUntrusted', { signer: imported.signature.signer.subject }))
+                  || `The file was signed by ${imported.signature.signer.subject}: the signature verifies${imported.signature.trusted ? ' and its certificate chains to a public root' : ', but its certificate does not chain to a public root'}. The signature was removed: the profile is delivered by this server, encrypted for each device.`}
+              </p>
+            )}
+            {imported.signature?.status === 'unsupported' && (
+              <p className="text-xs text-amber-400">{t('policies.editor.importedSignedUnverified') || 'The file was signed with an algorithm this server does not verify: the signature was removed without being checked. The profile is delivered by this server, encrypted for each device.'}</p>
             )}
             <p className="text-xs text-text-muted">{t('policies.editor.importedHint') || 'Check the payloads before publishing: a raw profile is delivered as it is.'}</p>
           </div>

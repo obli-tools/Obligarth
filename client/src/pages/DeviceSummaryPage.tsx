@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import type { CollectedField, DeviceDeclarationsView, DeviceDetail, DeviceStatusItemView, EndUser } from '@obligarth/shared';
 import { SocketEvents } from '@obligarth/shared';
+import { useDeviceMove } from '@/components/mdm/DeviceMoveChange';
 import { mdmApi } from '@/api/mdm.api';
 import { appleApi } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
@@ -301,7 +302,7 @@ export function DeviceSummaryPage() {
             </Card>
           )}
 
-          {apple && <DdmCard deviceId={device.id} enabled={apple.ddmEnabled} canSync={canWrite} />}
+          {apple && <DdmCard deviceId={device.id} enabled={apple.ddmEnabled} canSync={canWrite && device.tenantId === currentTenantId} />}
           {apple && <DeviceRetirementCard deviceId={device.id} canAct={canWrite} isApple />}
         </div>
       )}
@@ -500,20 +501,20 @@ function GroupDialog({ open, onClose, device, onDone }: { open: boolean; onClose
   const [groupId, setGroupId] = useState<number | null>(device.groupId);
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (open) setGroupId(device.groupId); }, [open, device.groupId]);
+  // The move is previewed and guarded like a change of assignments (S12): useDeviceMove asks for its confirmation
+  // when it touches the configuration of the device.
+  const move = useDeviceMove((_m, outcome) => { if (outcome !== 'failed') { onDone(); onClose(); } });
   const save = async () => {
     setBusy(true);
     try {
-      await mdmApi.setGroup(device.id, groupId);
-      toast.success(t('devices.batch.groupChanged', { count: 1 }) || 'Moved 1 device');
-      onDone();
-      onClose();
-    } catch (err) {
-      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+      await move.request({ deviceIds: [device.id], groupId, single: true });
     } finally {
       setBusy(false);
     }
   };
   return (
+    <>
+    {move.dialog}
     <Modal
       open={open}
       onClose={() => { if (!busy) onClose(); }}
@@ -531,6 +532,7 @@ function GroupDialog({ open, onClose, device, onDone }: { open: boolean; onClose
       </p>
       <GroupTreePicker value={groupId} onChange={(id) => setGroupId(id)} />
     </Modal>
+    </>
   );
 }
 

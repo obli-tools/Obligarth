@@ -318,7 +318,6 @@
     "movePreviewIntro": "The devices of this group and of its subgroups stop inheriting the policies of the groups it leaves, and inherit those of its new parent ({{parent}}).",
     "deletePreviewTitle": "Delete the group \"{{name}}\"",
     "deletePreviewIntro": "The assignments of this group are removed with it and its devices become ungrouped: they lose what they inherited from it.",
-    "deleteSubgroupsNote": "Its subgroups are not deleted: they are detached and shown at the root.",
     "settingsFor": "Settings for \"{{name}}\"",
     "notificationsFor": "Notifications for \"{{name}}\"",
     "maintenanceFor": "Maintenance for \"{{name}}\""
@@ -459,6 +458,10 @@
       "mdmStaleAfterDays": {
         "label": "Device contact: stale after",
         "description": "A managed device without any contact for this many days is shown and counted as without contact."
+      },
+      "publishFleetShareFloor": {
+        "label": "Second approver: share of the fleet counted from",
+        "description": "A change of the configuration (publication, assignments, group, devices moved) asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
       }
     }
   },
@@ -934,6 +937,10 @@
     "state": {
       "managed": "Under management",
       "enrolling": "Enrolling"
+    },
+    "move": {
+      "previewTitle": "Move {{count}} device(s)",
+      "previewIntro": "The devices stop inheriting the policies of the group they leave, and inherit those of the group they join and of its ancestors."
     }
   },
   "deviceSummary": {
@@ -1147,10 +1154,12 @@
       "importedPayloads": "Payloads",
       "importedSecrets_one": "{{count}} secret moved to the vault",
       "importedSecrets_other": "{{count}} secrets moved to the vault",
-      "importedSigned": "The file was signed: its signature was removed and was not verified. The profile is delivered by this server, encrypted for each device.",
       "importedHint": "Check the payloads before publishing: a raw profile is delivered as it is.",
       "importedSuspect_one": "{{count}} key looks like a secret but was kept in clear in the policy (the profile is still delivered encrypted to each device). Check it before publishing; delete the item to remove it.",
-      "importedSuspect_other": "{{count}} keys look like secrets but were kept in clear in the policy (the profile is still delivered encrypted to each device). Check them before publishing; delete the item to remove them."
+      "importedSuspect_other": "{{count}} keys look like secrets but were kept in clear in the policy (the profile is still delivered encrypted to each device). Check them before publishing; delete the item to remove them.",
+      "importedSignedTrusted": "The file was signed by {{signer}}: the signature verifies and its certificate chains to a public root. The signature was removed: the profile is delivered by this server, encrypted for each device.",
+      "importedSignedUntrusted": "The file was signed by {{signer}}: the signature verifies, but its certificate does not chain to a public root. The signature was removed: the profile is delivered by this server, encrypted for each device.",
+      "importedSignedUnverified": "The file was signed with an algorithm this server does not verify: the signature was removed without being checked. The profile is delivered by this server, encrypted for each device."
     }
   },
   "supervision": {
@@ -1565,7 +1574,8 @@
       "apple_enrollment_attached": "Enrollments attached to an enrollment profile",
       "apple_enrollment_released": "Enrollments unknown to the brain released",
       "apple_restore_check": "Device service checked after a restore",
-      "apple_device_identity_revoked": "Device identity revoked"
+      "apple_device_identity_revoked": "Device identity revoked",
+      "apple_ddm_sync_requested": "DDM synchronisation forced"
     },
     "families": {
       "auth": "Authentication",
@@ -3353,8 +3363,10 @@
         "devices_threshold": "25 devices or more are touched",
         "fleet_share": "10 % of the fleet or more is touched",
         "removal_threshold": "something is removed from 3 devices or more",
-        "restriction": "the restriction of this tenant requires it"
-      }
+        "restriction": "the restriction of this tenant requires it",
+        "cumulative": "with the changes made without a second approver over the last hour, the thresholds are reached"
+      },
+      "cumulative": "{{devices}} devices touched over the last {{minutes}} minutes by the changes made without a second approver, this one included"
     },
     "outcome": {
       "awaitingApproval": "Waiting for a second approver: nothing has changed yet.",
@@ -3396,7 +3408,8 @@
       "too_large": "The profile is larger than 1 MiB.",
       "too_many_payloads": "The profile holds too many payloads.",
       "unreadable_signature": "The signed envelope of the profile cannot be read: export the profile unsigned.",
-      "invalid_upload": "The upload is not valid."
+      "invalid_upload": "The upload is not valid.",
+      "invalid_signature": "The signature of the profile does not verify: the file was changed after it was signed. Export it again from its author."
     }
   },
   "errors": {
@@ -3494,7 +3507,9 @@
     "licenseModeUnsupported": "An app without a licence of Apps and Books comes in a later version",
     "retirementNotStarted": "No retirement was started for this device.",
     "enrollmentNotFound": "Enrollment not found.",
-    "appleTopicMissing": "This tenant has no active push certificate yet."
+    "appleTopicMissing": "This tenant has no active push certificate yet.",
+    "policyTargetNotWritable": "You cannot publish this policy: it is assigned to a target you cannot write. Ask an administrator of the tenant.",
+    "groupHasSubgroups": "This group has subgroups: move them first, then delete the group."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",

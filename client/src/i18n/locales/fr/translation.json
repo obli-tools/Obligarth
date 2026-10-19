@@ -318,7 +318,6 @@
     "movePreviewIntro": "Les appareils de ce groupe et de ses sous-groupes cessent d'hériter des politiques des groupes qu'il quitte, et héritent de celles de son nouveau parent ({{parent}}).",
     "deletePreviewTitle": "Supprimer le groupe « {{name}} »",
     "deletePreviewIntro": "Les affectations de ce groupe sont retirées avec lui et ses appareils se retrouvent sans groupe : ils perdent ce qu'ils héritaient de lui.",
-    "deleteSubgroupsNote": "Ses sous-groupes ne sont pas supprimés : ils sont détachés et affichés à la racine.",
     "settingsFor": "Réglages de « {{name}} »",
     "notificationsFor": "Notifications de « {{name}} »",
     "maintenanceFor": "Maintenance de « {{name}} »"
@@ -459,6 +458,10 @@
       "mdmStaleAfterDays": {
         "label": "Contact des appareils : sans contact après",
         "description": "Un appareil géré sans aucun contact depuis ce nombre de jours est affiché et compté comme sans contact."
+      },
+      "publishFleetShareFloor": {
+        "label": "Second approbateur : part du parc comptée à partir de",
+        "description": "Un changement de configuration (publication, affectations, groupe, appareils déplacés) demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
       }
     }
   },
@@ -934,6 +937,10 @@
     "state": {
       "managed": "Sous gestion",
       "enrolling": "En cours d'enrôlement"
+    },
+    "move": {
+      "previewTitle": "Déplacer {{count}} appareil(s)",
+      "previewIntro": "Les appareils n'héritent plus des politiques du groupe qu'ils quittent, et héritent de celles du groupe qu'ils rejoignent et de ses ancêtres."
     }
   },
   "deviceSummary": {
@@ -1147,10 +1154,12 @@
       "importedPayloads": "Charges",
       "importedSecrets_one": "{{count}} secret déplacé au coffre",
       "importedSecrets_other": "{{count}} secrets déplacés au coffre",
-      "importedSigned": "Le fichier était signé : sa signature a été retirée et n'a pas été vérifiée. Le profil est livré par ce serveur, chiffré pour chaque appareil.",
       "importedHint": "Vérifiez les charges avant de publier : un profil brut est livré tel quel.",
       "importedSuspect_one": "{{count}} clé ressemble à un secret mais est restée en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-la avant de publier ; supprimez l'élément pour la retirer.",
-      "importedSuspect_other": "{{count}} clés ressemblent à des secrets mais sont restées en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-les avant de publier ; supprimez l'élément pour les retirer."
+      "importedSuspect_other": "{{count}} clés ressemblent à des secrets mais sont restées en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-les avant de publier ; supprimez l'élément pour les retirer.",
+      "importedSignedTrusted": "Le fichier était signé par {{signer}} : la signature est valide et son certificat remonte à une racine publique. La signature a été retirée : le profil est livré par ce serveur, chiffré pour chaque appareil.",
+      "importedSignedUntrusted": "Le fichier était signé par {{signer}} : la signature est valide, mais son certificat ne remonte pas à une racine publique. La signature a été retirée : le profil est livré par ce serveur, chiffré pour chaque appareil.",
+      "importedSignedUnverified": "Le fichier était signé avec un algorithme que ce serveur ne vérifie pas : la signature a été retirée sans contrôle. Le profil est livré par ce serveur, chiffré pour chaque appareil."
     }
   },
   "supervision": {
@@ -1565,7 +1574,8 @@
       "apple_enrollment_attached": "Enrôlements rattachés à un profil d'enrôlement",
       "apple_enrollment_released": "Enrôlements inconnus du cerveau libérés",
       "apple_restore_check": "Service des appareils vérifié après une restauration",
-      "apple_device_identity_revoked": "Identité d'appareil révoquée"
+      "apple_device_identity_revoked": "Identité d'appareil révoquée",
+      "apple_ddm_sync_requested": "Synchronisation DDM forcée"
     },
     "families": {
       "auth": "Authentification",
@@ -3353,8 +3363,10 @@
         "devices_threshold": "25 appareils ou plus sont touchés",
         "fleet_share": "10 % du parc ou plus est touché",
         "removal_threshold": "un retrait touche 3 appareils ou plus",
-        "restriction": "la restriction de ce tenant l'exige"
-      }
+        "restriction": "la restriction de ce tenant l'exige",
+        "cumulative": "avec les changements faits sans second approbateur depuis une heure, les seuils sont atteints"
+      },
+      "cumulative": "{{devices}} appareils touchés ces {{minutes}} dernières minutes par les changements faits sans second approbateur, celui-ci compris"
     },
     "outcome": {
       "awaitingApproval": "En attente d'un second approbateur : rien n'a encore changé.",
@@ -3396,7 +3408,8 @@
       "too_large": "Le profil dépasse 1 Mio.",
       "too_many_payloads": "Le profil contient trop de charges.",
       "unreadable_signature": "L'enveloppe signée du profil ne peut pas être lue : exportez le profil sans signature.",
-      "invalid_upload": "Le téléversement n'est pas valide."
+      "invalid_upload": "Le téléversement n'est pas valide.",
+      "invalid_signature": "La signature du profil n'est pas valide : le fichier a été modifié après sa signature. Exportez-le de nouveau depuis son auteur."
     }
   },
   "errors": {
@@ -3494,7 +3507,9 @@
     "licenseModeUnsupported": "Une app sans licence Apps and Books viendra dans une version ultérieure",
     "retirementNotStarted": "Aucun retrait n'a été commencé pour cet appareil.",
     "enrollmentNotFound": "Enrôlement introuvable.",
-    "appleTopicMissing": "Ce tenant n'a pas encore de certificat push actif."
+    "appleTopicMissing": "Ce tenant n'a pas encore de certificat push actif.",
+    "policyTargetNotWritable": "Vous ne pouvez pas publier cette politique : elle est affectée à une cible sur laquelle vous n'avez pas l'écriture. Demandez à un administrateur du tenant.",
+    "groupHasSubgroups": "Ce groupe a des sous-groupes : déplacez-les d'abord, puis supprimez le groupe."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
