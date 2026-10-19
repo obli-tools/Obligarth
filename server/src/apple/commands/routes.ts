@@ -383,8 +383,8 @@ router.post('/devices/:id/inventory-refresh', enqueueLimiter, async (req, res, n
 const REENROLL_TTL_S = 86_400;
 
 async function reenrollTarget(req: Request): Promise<{ id: number; key: string; enrollmentId: string }> {
+  const id = await deviceOf(req, 'mdm:remove', true);       // out of reach: 404 first
   if (config.apple.mode !== 'on') throw new AppError(503, 'The Apple integration is turned off on this instance', 'appleIntegrationDisabled');
-  const id = await deviceOf(req, 'mdm:remove', true);
   const tenantId = req.tenantId!;
   const row = await db('apple_devices as a')
     .join('devices as d', function joinDevice() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
