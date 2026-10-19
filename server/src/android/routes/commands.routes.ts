@@ -47,13 +47,19 @@ const dto = (r: Record<string, unknown>) => ({
   createdAt: r.created_at, deliveredAt: r.delivered_at, completedAt: r.completed_at, expiresAt: r.expires_at,
 });
 
+/** A device of the request's tenant (under its RLS), else 404: an id of another tenant names nothing (rls-tenant §11.5). */
+async function ownDevice(tenantId: number, deviceId: number): Promise<void> {
+  if (!(await db('devices').where({ tenant_id: tenantId, id: deviceId }).first('id'))) throw new AppError(404, 'Not found', 'notFound');
+}
+
 export function createAndroidCommandsRouter(): Router {
   const router = Router();
   const capability = requireTenantCapability('devices.manage');
 
   router.get('/devices/:id/commands', capability, wrap(async (req, res) => {
     const deviceId = deviceIdOf(req);
-    const rows = await db('android_commands').where({ device_id: deviceId }).orderBy('created_at', 'desc').limit(200)
+    await ownDevice(Number(req.tenantId), deviceId);
+    const rows = await db('android_commands').where({ tenant_id: Number(req.tenantId), device_id: deviceId }).orderBy('created_at', 'desc').limit(200)
       .select('id', 'request_type', 'state', 'submit_state', 'hold_reason', 'reject_code', 'amapi_error_code', 'origin', 'guard_action_uuid',
         'amapi_operation', 'created_at', 'delivered_at', 'completed_at', 'expires_at');
     res.json({ success: true, data: rows.map(dto) });
@@ -61,6 +67,7 @@ export function createAndroidCommandsRouter(): Router {
 
   router.post('/devices/:id/commands', capability, wrap(async (req, res) => {
     const deviceId = deviceIdOf(req);
+    await ownDevice(Number(req.tenantId), deviceId);
     const parsed = CreateBody.safeParse(req.body);
     if (!parsed.success || !isAndroidCommandType(parsed.data.type)) throw new AppError(400, 'Invalid input', 'invalidInput');
     const type = parsed.data.type;
@@ -130,6 +137,7 @@ export function createAndroidCommandsRouter(): Router {
     const id = UUID.safeParse(req.params.id);
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
     const tenantId = Number(req.tenantId);
+    if (!(await db('android_commands').where({ tenant_id: tenantId, id: id.data }).first('id'))) throw new AppError(404, 'Not found', 'notFound');
     const r = await releaseHeldCommand(tenantId, id.data, { type: 'user', userId: Number(req.session.userId) });
     if (r === 'frozen') throw new AppError(423, 'The tenant is frozen', 'tenantFrozen');
     if (r === 'not_held') throw new AppError(409, 'This command is not held by the last-resort cap', 'commandNotHeld');

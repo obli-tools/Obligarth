@@ -82,6 +82,8 @@ export function createAndroidEnrollmentRouter(): Router {
       const deviceId = Number(req.params.id);
       if (!Number.isSafeInteger(deviceId) || deviceId <= 0) throw new AppError(404, 'Not found', 'notFound');
       const tenantId = Number(req.tenantId);
+      // A device of another tenant names nothing here (404, never a state of it: rls-tenant §11.5).
+      if (!(await db('android_devices').where({ tenant_id: tenantId, device_id: deviceId }).first('device_id'))) throw new AppError(404, 'Not found', 'notFound');
       try {
         const r = await fn(tenantId, Number(req.session.userId), deviceId, await audit.fromRequest(req, tenantId));
         res.json({ success: true, data: { result: r } });

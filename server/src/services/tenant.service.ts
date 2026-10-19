@@ -10,7 +10,6 @@ import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type 
 import { vault } from '../vault';
 import { audit, type AuditWriteContext } from '../audit';
 import { appleTenants } from '../apple/tenants/registry';
-import { assertTenantDeletable } from '../android/operations/offboarding';
 import { requestTenantResolution } from '../mdm/policies/triggers';
 import { logger } from '../utils/logger';
 
@@ -236,7 +235,8 @@ export const tenantService = {
     });
     // A tenant that still has an Android enterprise is unlinked first (android-amapi §6.5, AN27): 409, before
     // anything changes at apple-edge.
-    if (allowed) await assertTenantDeletable(id);
+    // (imported here: the Android module imports the tenant registry, a static import would close a cycle)
+    if (allowed) await (await import('../android/operations/offboarding')).assertTenantDeletable(id);
     const edge = allowed ? await switchToNone(() => appleTenants.retireBeforeDeletion(id, actor)) : 'no_edge_tenant';
     try {
       await tenantService.deleteHere(id, userId, ctx);
