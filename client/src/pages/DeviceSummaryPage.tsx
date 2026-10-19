@@ -183,6 +183,12 @@ export function DeviceSummaryPage() {
           </p>
           <div className="mt-2"><DeviceStateBadges device={device} size="md" all={managed} /></div>
         </div>
+        {device.managementMode === 'device_admin' && (
+          // The Android bridge agent (agent-pont-android §7): its panel, actions and queue live on its own page.
+          <Link to={`/legacy-agent?device=${device.id}`} className="text-sm text-accent hover:underline mt-1">
+            {t('legacyAgent.openPanel') || 'Android agent panel'}
+          </Link>
+        )}
         {canWrite && (
           <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
             <Pencil size={14} className="mr-1.5" />{t('common.edit') || 'Edit'}

@@ -488,6 +488,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     { label: t('nav.policies'),                   path: '/policies',   icon: <ScrollText size={18} /> },
     // Apps (lot C4): any member reads the catalog (writing needs mdm.apps.manage).
     { label: t('nav.apps', 'Apps'),               path: '/apps',       icon: <AppWindow size={18} /> },
+    // The Android bridge agent (agent-pont-android §7): any member reads its devices (the API checks each capability).
+    { label: t('nav.legacyAgent', 'Android agent'), path: '/legacy-agent', icon: <Smartphone size={18} /> },
     // End users: the reader gate of the routes (users.manage or devices.manage).
     ...(admin || hasEndUsersCap
       ? [{ label: t('nav.endUsers', 'End users'), path: '/end-users',  icon: <Contact size={18} /> } as NavItem]

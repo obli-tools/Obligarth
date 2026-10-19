@@ -72,7 +72,8 @@
     "deviceEnrollment": "Inscription",
     "integrations": "Intégrations",
     "apps": "Apps",
-    "androidPlatform": "Android"
+    "androidPlatform": "Android",
+    "legacyAgent": "Agent Android"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -2073,6 +2074,10 @@
         "remove_management": "Retirer la gestion",
         "device_lock": "Verrouiller l'appareil",
         "lost_mode_enable": "Activer le mode perdu"
+      },
+      "legacy_agent": {
+        "erase_device": "Effacer l'appareil (agent Android)",
+        "device_lock": "Verrouiller l'appareil (agent Android)"
       }
     },
     "state": {
@@ -2658,6 +2663,24 @@
           "title": "Profils d'enrôlement non signés",
           "message": "Aucune identité de signature des profils n'est importée : les profils d'enrôlement sont servis sans signature."
         }
+      },
+      "legacy_agent": {
+        "admin_disabled": {
+          "title": "Administrateur de l'appareil désactivé",
+          "message": "L'administrateur de l'appareil de l'agent Android a été désactivé sur un appareil : il ne peut plus être verrouillé ni effacé."
+        },
+        "identity_conflict": {
+          "title": "Conflit d'identité d'un agent Android",
+          "message": "Un agent Android a déclaré un numéro de série ou un IMEI déjà porté par un autre appareil géré : vérifiez qu'il s'agit du même appareil."
+        },
+        "silent": {
+          "title": "Agents Android silencieux",
+          "message": "{{count}} agent(s) Android n'ont pas contacté le serveur depuis 24 heures."
+        },
+        "license_error": {
+          "title": "Licence Knox refusée",
+          "message": "La licence Knox n'a pas pu être activée sur un appareil de l'agent Android : installation silencieuse et redémarrage indisponibles."
+        }
       }
     },
     "errors": {
@@ -3174,7 +3197,8 @@
       "android_zero_touch": "Android zero-touch",
       "android_kme": "Knox Mobile Enrollment",
       "android_byod_link": "Lien BYOD Android",
-      "android_signin_url": "URL de connexion Android"
+      "android_signin_url": "URL de connexion Android",
+      "agent_token": "Jeton de l'agent Android"
     },
     "managementMode": {
       "device": "Appareil",
@@ -3182,7 +3206,8 @@
       "fully_managed": "Entièrement géré",
       "dedicated": "Dédié",
       "work_profile_corporate": "Profil professionnel (entreprise)",
-      "work_profile_personal": "Profil professionnel (personnel)"
+      "work_profile_personal": "Profil professionnel (personnel)",
+      "device_admin": "Administrateur de l'appareil (agent Android)"
     },
     "unenrollReason": {
       "checkout": "profil de gestion retiré sur l'appareil",
@@ -3900,5 +3925,168 @@
       "lastRecount": "Dernier recalage hebdomadaire",
       "gap": "écart"
     }
+  },
+  "legacyAgent": {
+    "title": "Agent Android",
+    "subtitle": "Appareils Android gérés par l'agent pont d'Obligarth (administrateur de l'appareil, Knox si une licence existe).",
+    "yes": "Oui",
+    "no": "Non",
+    "search": "Nom, numéro de série, modèle",
+    "empty": "Aucun agent enrôlé pour l'instant.",
+    "send": "Envoyer",
+    "cancel": "Annuler",
+    "copied": "Copié",
+    "selected": "{{count}} sélectionné(s)",
+    "queued": "Mis en file pour {{count}} appareil(s)",
+    "refused": "{{count}} appareil(s) écarté(s)",
+    "awaitingApproval": "Demande envoyée pour approbation",
+    "revokeTitle": "Révoquer l'agent",
+    "revokeMessage": "L'agent de {{name}} ne recevra plus d'ordres et oubliera sa clé. Motif :",
+    "revoked": "Agent révoqué",
+    "revokedState": "Révoqué",
+    "confirmReboot": "Redémarrer les appareils sélectionnés (Knox requis) ?",
+    "tabs": {
+      "devices": "Appareils",
+      "tokens": "Jetons d'enrôlement",
+      "packages": "Paquets",
+      "platform": "Plateforme"
+    },
+    "filters": {
+      "conflict": "Conflit d'identité",
+      "adminInactive": "Administrateur inactif",
+      "silent": "Silencieux depuis 24 h",
+      "revoked": "Inclure les révoqués"
+    },
+    "actions": {
+      "message": "Message",
+      "inventory": "Inventaire",
+      "reboot": "Redémarrer",
+      "install": "Installer une app",
+      "uninstall": "Désinstaller une app",
+      "update": "Mettre à jour l'agent",
+      "lock": "Verrouiller",
+      "wipe": "Effacer",
+      "revoke": "Révoquer"
+    },
+    "cols": {
+      "name": "Nom",
+      "model": "Modèle",
+      "android": "Android",
+      "patch": "Correctif de sécurité",
+      "agent": "Agent",
+      "admin": "Admin actif",
+      "knox": "Knox",
+      "unknownSources": "Sources inconnues",
+      "lastPoll": "Dernière interrogation",
+      "battery": "Batterie",
+      "conflict": "Conflit"
+    },
+    "knox": {
+      "absent": "Absent",
+      "present": "Présent",
+      "licensed": "Licencié",
+      "license_error": "Erreur de licence",
+      "title": "Licence Knox",
+      "set": "Une clé de licence est définie (scellée ; jamais réaffichée).",
+      "unset": "Aucune clé de licence : les agents fonctionnent sans Knox (pas d'installation silencieuse, pas de redémarrage).",
+      "placeholder": "Clé de licence",
+      "saved": "Licence Knox enregistrée",
+      "remove": "Retirer"
+    },
+    "state": {
+      "pending": "En attente",
+      "sent": "Livrée",
+      "acknowledged": "Faite",
+      "error": "Erreur",
+      "rejected": "Refusée",
+      "expired": "Expirée",
+      "cancelled": "Annulée"
+    },
+    "message": {
+      "title": "Titre",
+      "text": "Texte",
+      "mode": "Affichage",
+      "notification": "Notification",
+      "fullscreen": "Plein écran"
+    },
+    "packages": {
+      "choose": "Paquet",
+      "packageName": "Nom du paquet",
+      "file": "APK",
+      "versionCode": "versionCode",
+      "versionName": "Nom de version",
+      "signer": "SHA-256 du signataire (facultatif)",
+      "label": "Libellé",
+      "upload": "Téléverser",
+      "uploaded": "Paquet téléversé",
+      "version": "Version",
+      "size": "Taille",
+      "mib": "{{size}} Mio"
+    },
+    "releases": {
+      "choose": "Version de l'agent",
+      "title": "Versions de l'agent",
+      "noSigners": "LEGACY_AGENT_SIGNERS est vide : aucune version ne peut être ajoutée.",
+      "signer": "SHA-256 du signataire",
+      "add": "Ajouter",
+      "added": "Version ajoutée",
+      "withdrawn": "Retirée",
+      "confirmWithdraw": "Retirer la version {{version}} ?"
+    },
+    "detail": {
+      "conflict": "Conflit d'identité : le numéro de série ou l'IMEI déclaré par cet agent est porté par un autre appareil géré.",
+      "agentId": "Agent",
+      "serial": "Numéro de série",
+      "samsungSerial": "Série Samsung",
+      "claimedSerial": "Série Build",
+      "androidId": "Android ID",
+      "keyStorage": "Stockage de la clé",
+      "clock": "Décalage d'horloge",
+      "lastInventory": "Dernier inventaire",
+      "enrolledAt": "Enrôlé",
+      "status": "État",
+      "queue": "Commandes",
+      "apps": "Apps ({{count}})"
+    },
+    "tokens": {
+      "label": "Libellé",
+      "labelHint": "Vague 1",
+      "group": "Groupe",
+      "days": "Validité (jours)",
+      "maxUses": "Quota",
+      "create": "Nouveau jeton",
+      "uses": "Usages",
+      "expires": "Expire",
+      "state": "État",
+      "states": {
+        "active": "Actif",
+        "expired": "Expiré",
+        "revoked": "Révoqué",
+        "used_up": "Épuisé"
+      },
+      "confirmRevoke": "Révoquer le jeton {{label}} ?",
+      "createdTitle": "Jeton créé : copiez-le maintenant",
+      "onceWarning": "Le jeton, la configuration et le script ne sont montrés qu'une fois.",
+      "script": "Script MobiControl (après installation)",
+      "config": "Configuration encodée (extra « config »)",
+      "configJson": "Fichier de configuration (obligarth-agent.json)",
+      "token": "Jeton"
+    },
+    "serverKey": {
+      "title": "Clé de l'instance (à épingler dans l'APK)",
+      "missing": "La clé de l'instance manque au coffre : restaurez la clé sous séquestre.",
+      "copyPin": "Copier l'empreinte",
+      "exportedAt": "Exportée le {{at}}",
+      "export": "Exporter pour le séquestre",
+      "confirmExport": "Exporter la clé de l'instance pour le séquestre ? Elle ne peut être exportée qu'une fois.",
+      "exportWarning": "Clé privée PKCS#8 (base64) : rangez-la avec la clé de signature de l'APK, maintenant. Elle ne sera plus montrée."
+    },
+    "settings": {
+      "title": "Réglages de l'instance",
+      "pollSeconds": "Période d'interrogation (s)",
+      "minVersionCode": "versionCode minimal",
+      "inventorySeconds": "Période d'inventaire (s)"
+    },
+    "openPanel": "Panneau de l'agent Android"
   }
 }

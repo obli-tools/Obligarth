@@ -31,6 +31,7 @@ import { AuditLogPage } from '@/pages/AuditLogPage';
 import { SecurityPage } from '@/pages/SecurityPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { DownloadPage } from '@/pages/DownloadPage';
+import { LegacyAgentPage } from '@/pages/LegacyAgentPage';
 import { TwoFactorGate } from '@/components/common/TwoFactorGate';
 import { ConfirmProvider } from '@/components/common/ConfirmDialog';
 import '@/i18n';
@@ -64,6 +65,8 @@ export default function App() {
  <Route path="/policies/:id" element={<PolicyEditorPage />} />
  {/* Apps (lot C4): any member reads the catalog; writing needs mdm.apps.manage (checked by the page and the server). */}
  <Route path="/apps" element={<AppsPage />} />
+ {/* The Android bridge agent (agent-pont-android §7): any member reads; the API checks each capability. */}
+ <Route path="/legacy-agent" element={<LegacyAgentPage />} />
  {/* Groups */}
  <Route path="/group/:id" element={<GroupDetailPage />} />
  <Route path="/group/:id/edit" element={<GroupEditPage />} />

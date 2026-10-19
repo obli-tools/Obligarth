@@ -72,7 +72,8 @@
     "deviceEnrollment": "Enrollment",
     "integrations": "Integrations",
     "apps": "Apps",
-    "androidPlatform": "Android"
+    "androidPlatform": "Android",
+    "legacyAgent": "Android agent"
   },
   "login": {
     "title": "Sign in to your account",
@@ -2073,6 +2074,10 @@
         "remove_management": "Remove management",
         "device_lock": "Lock device",
         "lost_mode_enable": "Enable lost mode"
+      },
+      "legacy_agent": {
+        "erase_device": "Erase Android agent device",
+        "device_lock": "Lock Android agent device"
       }
     },
     "state": {
@@ -2658,6 +2663,24 @@
           "title": "Enrollment profiles not signed",
           "message": "No profile signing identity is imported: enrollment profiles are served unsigned."
         }
+      },
+      "legacy_agent": {
+        "admin_disabled": {
+          "title": "Device administrator disabled",
+          "message": "The device administrator of the Android agent was disabled on a device: it can no longer be locked nor erased."
+        },
+        "identity_conflict": {
+          "title": "Android agent identity conflict",
+          "message": "An Android agent declared a serial number or an IMEI already held by another managed device: check that it is the same device."
+        },
+        "silent": {
+          "title": "Android agents silent",
+          "message": "{{count}} Android agent(s) have not contacted the server for 24 hours."
+        },
+        "license_error": {
+          "title": "Knox licence refused",
+          "message": "The Knox licence could not be activated on an Android agent device: silent installation and restart are unavailable."
+        }
       }
     },
     "errors": {
@@ -3174,7 +3197,8 @@
       "android_zero_touch": "Android zero-touch",
       "android_kme": "Knox Mobile Enrollment",
       "android_byod_link": "Android BYOD link",
-      "android_signin_url": "Android sign-in URL"
+      "android_signin_url": "Android sign-in URL",
+      "agent_token": "Android agent token"
     },
     "managementMode": {
       "device": "Device",
@@ -3182,7 +3206,8 @@
       "fully_managed": "Fully managed",
       "dedicated": "Dedicated",
       "work_profile_corporate": "Work profile (corporate)",
-      "work_profile_personal": "Work profile (personal)"
+      "work_profile_personal": "Work profile (personal)",
+      "device_admin": "Device administrator (Android agent)"
     },
     "unenrollReason": {
       "checkout": "management profile removed on the device",
@@ -3900,5 +3925,168 @@
       "lastRecount": "Last weekly recount",
       "gap": "gap"
     }
+  },
+  "legacyAgent": {
+    "title": "Android agent",
+    "subtitle": "Android devices managed by the Obligarth bridge agent (device administrator, Knox when licensed).",
+    "yes": "Yes",
+    "no": "No",
+    "search": "Name, serial number, model",
+    "empty": "No agent enrolled yet.",
+    "send": "Send",
+    "cancel": "Cancel",
+    "copied": "Copied",
+    "selected": "{{count}} selected",
+    "queued": "Queued for {{count}} device(s)",
+    "refused": "{{count}} device(s) set aside",
+    "awaitingApproval": "Request sent for approval",
+    "revokeTitle": "Revoke the agent",
+    "revokeMessage": "The agent of {{name}} will stop receiving orders and forget its key. Reason:",
+    "revoked": "Agent revoked",
+    "revokedState": "Revoked",
+    "confirmReboot": "Restart the selected devices (Knox required)?",
+    "tabs": {
+      "devices": "Devices",
+      "tokens": "Enrollment tokens",
+      "packages": "Packages",
+      "platform": "Platform"
+    },
+    "filters": {
+      "conflict": "Identity conflict",
+      "adminInactive": "Administrator inactive",
+      "silent": "Silent for 24 h",
+      "revoked": "Include revoked"
+    },
+    "actions": {
+      "message": "Message",
+      "inventory": "Inventory",
+      "reboot": "Restart",
+      "install": "Install an app",
+      "uninstall": "Uninstall an app",
+      "update": "Update the agent",
+      "lock": "Lock",
+      "wipe": "Erase",
+      "revoke": "Revoke"
+    },
+    "cols": {
+      "name": "Name",
+      "model": "Model",
+      "android": "Android",
+      "patch": "Security patch",
+      "agent": "Agent",
+      "admin": "Admin active",
+      "knox": "Knox",
+      "unknownSources": "Unknown sources",
+      "lastPoll": "Last interrogation",
+      "battery": "Battery",
+      "conflict": "Conflict"
+    },
+    "knox": {
+      "absent": "Absent",
+      "present": "Present",
+      "licensed": "Licensed",
+      "license_error": "Licence error",
+      "title": "Knox licence",
+      "set": "A licence key is set (sealed; never shown again).",
+      "unset": "No licence key: the agents work without Knox (no silent installation, no restart).",
+      "placeholder": "Licence key",
+      "saved": "Knox licence saved",
+      "remove": "Remove"
+    },
+    "state": {
+      "pending": "Pending",
+      "sent": "Delivered",
+      "acknowledged": "Done",
+      "error": "Error",
+      "rejected": "Rejected",
+      "expired": "Expired",
+      "cancelled": "Cancelled"
+    },
+    "message": {
+      "title": "Title",
+      "text": "Text",
+      "mode": "Display",
+      "notification": "Notification",
+      "fullscreen": "Full screen"
+    },
+    "packages": {
+      "choose": "Package",
+      "packageName": "Package name",
+      "file": "APK",
+      "versionCode": "versionCode",
+      "versionName": "Version name",
+      "signer": "Signer SHA-256 (optional)",
+      "label": "Label",
+      "upload": "Upload",
+      "uploaded": "Package uploaded",
+      "version": "Version",
+      "size": "Size",
+      "mib": "{{size}} MiB"
+    },
+    "releases": {
+      "choose": "Version of the agent",
+      "title": "Versions of the agent",
+      "noSigners": "LEGACY_AGENT_SIGNERS is empty: no version can be added.",
+      "signer": "Signer SHA-256",
+      "add": "Add",
+      "added": "Version added",
+      "withdrawn": "Withdrawn",
+      "confirmWithdraw": "Withdraw the version {{version}}?"
+    },
+    "detail": {
+      "conflict": "Identity conflict: the serial number or the IMEI declared by this agent is held by another managed device.",
+      "agentId": "Agent",
+      "serial": "Serial number",
+      "samsungSerial": "Samsung serial",
+      "claimedSerial": "Build serial",
+      "androidId": "Android ID",
+      "keyStorage": "Key storage",
+      "clock": "Clock offset",
+      "lastInventory": "Last inventory",
+      "enrolledAt": "Enrolled",
+      "status": "Status",
+      "queue": "Commands",
+      "apps": "Apps ({{count}})"
+    },
+    "tokens": {
+      "label": "Label",
+      "labelHint": "Wave 1",
+      "group": "Group",
+      "days": "Validity (days)",
+      "maxUses": "Quota",
+      "create": "New token",
+      "uses": "Uses",
+      "expires": "Expires",
+      "state": "State",
+      "states": {
+        "active": "Active",
+        "expired": "Expired",
+        "revoked": "Revoked",
+        "used_up": "Used up"
+      },
+      "confirmRevoke": "Revoke the token {{label}}?",
+      "createdTitle": "Token created: copy it now",
+      "onceWarning": "The token, the configuration and the script are shown only once.",
+      "script": "MobiControl script (after installation)",
+      "config": "Encoded configuration (extra \"config\")",
+      "configJson": "Configuration file (obligarth-agent.json)",
+      "token": "Token"
+    },
+    "serverKey": {
+      "title": "Instance key (to pin in the APK)",
+      "missing": "The instance key is missing from the vault: restore the escrowed key.",
+      "copyPin": "Copy the fingerprint",
+      "exportedAt": "Exported on {{at}}",
+      "export": "Export for escrow",
+      "confirmExport": "Export the instance key for the escrow? It can be exported only once.",
+      "exportWarning": "PKCS#8 private key (base64): store it with the APK signing key, now. It will not be shown again."
+    },
+    "settings": {
+      "title": "Instance settings",
+      "pollSeconds": "Interrogation period (s)",
+      "minVersionCode": "Minimal versionCode",
+      "inventorySeconds": "Inventory period (s)"
+    },
+    "openPanel": "Android agent panel"
   }
 }

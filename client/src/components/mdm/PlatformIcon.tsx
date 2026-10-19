@@ -39,6 +39,7 @@ const METHOD_FALLBACK: Record<EnrollmentMethod, string> = {
   android_qr: 'Android QR code', android_nfc: 'Android NFC', android_afw: 'Android afw#setup', android_token: 'Android token',
   android_zero_touch: 'Android zero-touch', android_kme: 'Knox Mobile Enrollment', android_byod_link: 'Android BYOD link',
   android_signin_url: 'Android sign-in URL',
+  agent_token: 'Android agent token',
 };
 export const enrollmentMethodLabel = (t: TFunction, m: EnrollmentMethod | string): string =>
   t(`mdm.enrollmentMethod.${m}`) || METHOD_FALLBACK[m as EnrollmentMethod] || m;
@@ -46,6 +47,7 @@ export const enrollmentMethodLabel = (t: TFunction, m: EnrollmentMethod | string
 const MODE_FALLBACK: Record<ManagementMode, string> = {
   device: 'Device', user_enrollment: 'User Enrollment', fully_managed: 'Fully managed', dedicated: 'Dedicated',
   work_profile_corporate: 'Work profile (corporate)', work_profile_personal: 'Work profile (personal)',
+  device_admin: 'Device administrator (Android agent)',
 };
 export const managementModeLabel = (t: TFunction, m: ManagementMode | string): string =>
   t(`mdm.managementMode.${m}`) || MODE_FALLBACK[m as ManagementMode] || m;
