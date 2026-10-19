@@ -10,6 +10,24 @@ export function setLiveAlertIO(io: SocketIOServer): void {
   _io = io;
 }
 
+// Alerts of the platform (integration-apple-edge §12.1, scope 'master'): filed in the master tenant, read by the
+// platform administrators only (users.role 'admin'), never by the other members of the master tenant. A module
+// registers their kinds (registerAppleModule); the lists of the current tenant and of all the user's tenants leave
+// them out for anyone else, and the delivery announces them to the platform administrators' room (role:admin).
+const platformOnlyKinds = new Set<string>();
+export function registerPlatformOnlyAlertKinds(kinds: readonly string[]): void {
+  for (const k of kinds) platformOnlyKinds.add(k);
+}
+export function isPlatformOnlyAlertKind(kind: unknown): boolean {
+  return typeof kind === 'string' && platformOnlyKinds.has(kind);
+}
+/** Leaves the platform's alerts out of a query of live_alerts (column prefix `col`) unless the reader is a platform
+ *  administrator. */
+function hidePlatformOnly(q: Knex.QueryBuilder, platformAdmin: boolean, col = 'kind'): Knex.QueryBuilder {
+  if (platformAdmin || platformOnlyKinds.size === 0) return q;
+  return q.where((w) => { w.whereNull(col).orWhereNotIn(col, [...platformOnlyKinds]); });
+}
+
 // The DB column is `alert_severity` ENUM ('info','warning','critical')
 // — the previous typing claimed 'down' / 'up' which would have
 // triggered a Postgres enum-cast error if anything ever inserted them.
@@ -234,9 +252,10 @@ export async function announce(row: Record<string, unknown>, tenantId: number): 
   const alert = rowToAlert(row);
   const tenantRow = await db('tenants').where({ id: tenantId }).select('name').first() as { name: string } | undefined;
   const enriched: LiveAlertRow = { ...alert, tenantName: tenantRow?.name ?? '' };
-  // Emit to all users subscribed to this tenant's notifications
+  // Emit to all users subscribed to this tenant's notifications; an alert of the platform to its administrators only.
   if (_io) {
-    _io.to(`tenant:${tenantId}:notifications`).emit(SocketEvents.NOTIFICATION_NEW, enriched);
+    const room = isPlatformOnlyAlertKind(row.kind) ? 'role:admin' : `tenant:${tenantId}:notifications`;
+    _io.to(room).emit(SocketEvents.NOTIFICATION_NEW, enriched);
   }
   return enriched;
 }
@@ -315,10 +334,10 @@ export const liveAlertService = {
    * a few ms between concurrent raises, and a 200-row window cut by date
    * could skip an id newer than its oldest row.
    */
-  async getForTenant(tenantId: number, limit = 100): Promise<LiveAlertRow[]> {
-    const rows = await db('live_alerts')
+  async getForTenant(tenantId: number, limit = 100, opts: { platformAdmin?: boolean } = {}): Promise<LiveAlertRow[]> {
+    const rows = await hidePlatformOnly(db('live_alerts')
       .where({ tenant_id: tenantId })
-      .whereNull('resolved_at')
+      .whereNull('resolved_at'), opts.platformAdmin === true)
       .orderBy('id', 'desc')
       .limit(limit);
     return rows.map(rowToAlert);
@@ -329,12 +348,12 @@ export const liveAlertService = {
    * tenant name (newest id first, see getForTenant). Used for the
    * multi-tenant notification panel and the app.
    */
-  async getForTenants(tenantIds: number[], limit = 200): Promise<LiveAlertRow[]> {
+  async getForTenants(tenantIds: number[], limit = 200, opts: { platformAdmin?: boolean } = {}): Promise<LiveAlertRow[]> {
     if (tenantIds.length === 0) return [];
-    const rows = await db('live_alerts')
+    const rows = await hidePlatformOnly(db('live_alerts')
       .join('tenants', 'live_alerts.tenant_id', 'tenants.id')
       .whereIn('live_alerts.tenant_id', tenantIds)
-      .whereNull('live_alerts.resolved_at')
+      .whereNull('live_alerts.resolved_at'), opts.platformAdmin === true, 'live_alerts.kind')
       .orderBy('live_alerts.id', 'desc')
       .limit(limit)
       .select('live_alerts.*', 'tenants.name as tenant_name');
@@ -346,11 +365,11 @@ export const liveAlertService = {
    * getForTenants). The app uses it to withdraw the phone notification of
    * an alert that left a full 200-row list (`activeIds` of GET /all).
    */
-  async getActiveIds(tenantIds: number[]): Promise<number[]> {
+  async getActiveIds(tenantIds: number[], opts: { platformAdmin?: boolean } = {}): Promise<number[]> {
     if (tenantIds.length === 0) return [];
-    const ids = await db('live_alerts')
+    const ids = await hidePlatformOnly(db('live_alerts')
       .whereIn('tenant_id', tenantIds)
-      .whereNull('resolved_at')
+      .whereNull('resolved_at'), opts.platformAdmin === true)
       .pluck('id') as Array<number | string>;
     return ids.map(Number);
   },
@@ -359,11 +378,11 @@ export const liveAlertService = {
     await db('live_alerts').where({ id, tenant_id: tenantId }).update({ read_at: new Date() });
   },
 
-  async markAllRead(tenantId: number): Promise<void> {
-    await db('live_alerts')
+  async markAllRead(tenantId: number, opts: { platformAdmin?: boolean } = {}): Promise<void> {
+    await hidePlatformOnly(db('live_alerts')
       .where({ tenant_id: tenantId })
       .whereNull('read_at')
-      .whereNull('resolved_at')
+      .whereNull('resolved_at'), opts.platformAdmin === true)
       .update({ read_at: new Date() });
   },
 
@@ -371,8 +390,8 @@ export const liveAlertService = {
     await db('live_alerts').where({ id, tenant_id: tenantId }).delete();
   },
 
-  async clearAll(tenantId: number): Promise<void> {
-    await db('live_alerts').where({ tenant_id: tenantId }).delete();
+  async clearAll(tenantId: number, opts: { platformAdmin?: boolean } = {}): Promise<void> {
+    await hidePlatformOnly(db('live_alerts').where({ tenant_id: tenantId }), opts.platformAdmin === true).delete();
   },
 
   /**

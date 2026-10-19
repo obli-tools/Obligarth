@@ -4,13 +4,14 @@ import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { db } from '../../db';
 import type { DbActor } from '../../db/context';
 import { applyTenantContext, withTenantTransaction } from '../../db/tenantContext';
-import { jobIdFor, registerJob, type JobHandle } from '../../jobs';
+import { jobIdFor, registerJob, type JobContext, type JobHandle } from '../../jobs';
 import { announce, emitResolved, trimTenant } from '../../services/liveAlert.service';
 import { logger } from '../../utils/logger';
 import {
   APPLE_ALERTS, cleanParams, isAppleAlertKind, render, stableKeyOf, type AlertParams, type AppleAlertKind,
   type AppleAlertSeverity,
 } from './catalog';
+import { deliverToChannels } from './channels';
 
 // =============================================================================
 // Alerts of the Apple integration (docs: integration-apple-edge §12.2, §12.3):
@@ -19,10 +20,10 @@ import {
 // not: its parameters are refreshed, nothing new is announced), resolved by
 // what ends them. Delivery after the commit by the durable job alerts.deliver
 // (one per alert and event): NOTIFICATION_NEW / NOTIFICATION_RESOLVED to the
-// tenant's notifications room, then the trim of the tenant to 200 rows. The
-// external channels of a warning or critical alert (notification_bindings of
-// the tenant, rendered in its language, throttled) come with the operations
-// lot (C5).
+// tenant's notifications room, the external channels of a warning or critical
+// alert (notification_bindings of the tenant at the global level, rendered in
+// its language, throttled: channels.ts), then the trim of the tenant to 200
+// rows. The alerts that end by time: maintenance.ts (lot C5).
 //   raiseInTx / resolveInTx    the transaction's context is the alert's tenant
 //   raiseMasterInTx            a platform alert from another context of the
 //                              transaction (rule G-6: the master tenant's
@@ -174,7 +175,7 @@ const SPIKE_FACTOR = 5;
 /**
  * enrollment.spike (§12.1): APPLE_ENROLLMENT_SPIKE_COUNT enrollments of the tenant ended in the last 10 minutes
  * (episodes enrolled up to `at`), and more than five times the average of the seven previous days per 10 minutes.
- * Counted from the episodes: idempotent. Resolved automatically after 24 h (alerts.auto-resolve, lot C5).
+ * Counted from the episodes: idempotent. Resolved automatically after 24 h (alerts.auto-resolve, maintenance.ts).
  */
 export async function checkEnrollmentSpike(trx: Knex.Transaction, tenantId: number, at: Date, threshold: number): Promise<boolean> {
   const since = new Date(at.getTime() - SPIKE_WINDOW_MINUTES * 60_000);
@@ -201,6 +202,20 @@ export async function resolveInTx(trx: Knex.Transaction, tenantId: number, kindN
   const rows = await trx('live_alerts')
     .where({ tenant_id: tenantId, stable_key: stableKey })
     .whereNull('resolved_at')
+    .update({ resolved_at: new Date() })
+    .returning('id') as Array<{ id: number }>;
+  const ids = rows.map((r) => Number(r.id));
+  for (const id of ids) await sendDelivery(trx, tenantId, id, 'resolved');
+  return ids;
+}
+
+/** Resolves the unresolved rows of the kind (any discriminant) that `where` selects, in the caller's transaction
+ *  (tenant context): the alerts resolved by time (alerts.auto-resolve, §12.5). */
+export async function resolveWhereInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind,
+  where: (q: Knex.QueryBuilder) => Knex.QueryBuilder): Promise<number[]> {
+  const kind = requireKind(kindName);
+  checkScope(kind, tenantId);
+  const rows = await where(trx('live_alerts').where({ tenant_id: tenantId, kind }).whereNull('resolved_at'))
     .update({ resolved_at: new Date() })
     .returning('id') as Array<{ id: number }>;
   const ids = rows.map((r) => Number(r.id));
@@ -248,16 +263,24 @@ export async function resolveAlert(actor: DbActor, tenantId: number, kind: Apple
   }
 }
 
-/** alerts.deliver: Socket.io, then the trim of the tenant. */
-async function deliver(tenantId: number, alertId: number, event: 'raised' | 'resolved'): Promise<void> {
+/** alerts.deliver: Socket.io, the external channels of a raised warning or critical alert, then the trim of the
+ *  tenant. */
+async function deliver(ctx: Pick<JobContext<unknown>, 'once'>, tenantId: number, alertId: number, event: 'raised' | 'resolved'):
+  Promise<Record<string, string | number | boolean | null>> {
   const row = await db('live_alerts').where({ id: alertId, tenant_id: tenantId }).first() as Record<string, unknown> | undefined;
-  if (!row) return;                                   // trimmed or deleted meanwhile
+  if (!row) return { skipped: 'gone' };               // trimmed or deleted meanwhile
+  let channels: Record<string, string | number | boolean | null> = {};
   if (event === 'raised') {
-    if (row.resolved_at === null) await announce(row, tenantId);
+    if (row.resolved_at === null) {
+      await announce(row, tenantId);
+      const c = await deliverToChannels(ctx, tenantId, row);
+      channels = { sent: c.sent, failed: c.failed, channels: c.skipped };
+    }
   } else {
     emitResolved([{ id: alertId, tenant_id: tenantId }]);
   }
   await trimTenant(tenantId);
+  return channels;
 }
 
 let registered = false;
@@ -276,7 +299,8 @@ export function registerAppleAlertJobs(): void {
     retry: { limit: 5, delaySeconds: 10, backoff: true, maxDelaySeconds: 600 },
     timeoutSeconds: 60,
     handler: async (ctx) => {
-      await ctx.inTenant(() => deliver(ctx.payload.tenantId, ctx.payload.alertId, ctx.payload.event));
+      const output = await ctx.inTenant(() => deliver(ctx, ctx.payload.tenantId, ctx.payload.alertId, ctx.payload.event));
+      return { output };
     },
   });
 }

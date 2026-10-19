@@ -8,6 +8,7 @@ import { toAppError } from '../edge/appError';
 import { isAppleEdgeError, type AppleEdgeError } from '../edge/errors';
 import { mdmCommands, refusalOf } from './bus';
 import { commandSpecOrNull, enrollmentProfileIdentifier, REMOVE_MANAGEMENT_ACTION } from './catalog';
+import { startRetirementInTx } from '../devices/retire';
 import { cancelAtEdge } from './submit';
 
 // =============================================================================
@@ -201,7 +202,7 @@ let registered = false;
  * The guarded MDM actions of the MVP (annex E.15, decision of the owners for lot B: registered by the
  * integration with the values of audit-durci §10.2). After registerMvpCommandSpecs. Their floors are not stored in
  * a tenant's matrix (no defaultLevel): a floor holds for every tenant, whatever its matrix says. The verified retirement that
- * follows a removal from management (§13.3, apple.device-retire) comes with its lot (afterDispatch).
+ * follows a removal from management (§13.3, apple.device-retire) starts in the execution's transaction (afterDispatch).
  */
 export function registerGuardedMdmActions(): void {
   if (registered) return;
@@ -231,6 +232,7 @@ export function registerGuardedMdmActions(): void {
       return { identifier: enrollmentProfileIdentifier(c.mdmKey) };
     },
     expiresAfterSeconds: 14 * DAY,
+    afterDispatch: (trx, tenantId, actionUuid, deviceIds) => startRetirementInTx(trx, tenantId, actionUuid, deviceIds),
   }));
 
   // Lock: 'sensitive', no delay; a batch 'restricted'.

@@ -68,6 +68,9 @@ export function registerAppleAuditActions(): void {
     { name: 'apple.device_identity_revoked', criticality: 'critical', label: 'Device identity revoked' },
     { name: 'apple.device_transfer_executed', criticality: 'critical', label: 'Device transfer executed' },
     { name: 'apple.restore_check', criticality: 'standard', label: 'Device service checked after a restore' },
+    // Lot C5: the enrollments unknown to the brain, attached to an enrollment profile or released (§13.1, §13.2).
+    { name: 'apple.enrollment_attached', criticality: 'standard', label: 'Enrollments attached to an enrollment profile' },
+    { name: 'apple.enrollment_released', criticality: 'standard', label: 'Enrollments unknown to the brain released' },
     { name: 'apple.support_refs_requested', criticality: 'standard', label: 'Support references of devices requested' },
   ]);
 }

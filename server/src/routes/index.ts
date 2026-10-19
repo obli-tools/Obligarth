@@ -41,6 +41,7 @@ import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
 import { createAppleDdmRouter } from '../apple/ddm/routes';
+import { createAppleOperationsRouter } from '../apple/reconcile/routes';
 import { createEnrollmentRouter } from '../apple/enrollment';
 import { createAppleAdminIntegrationsRouter, createAppleIntegrationsRouter } from '../apple/integrations';
 import { createMdmRouter } from '../mdm';
@@ -105,6 +106,9 @@ tenantRouter.use('/apple', createAppleIntegrationsRouter());
 // The MDM command queue of the console (integration-apple-edge §8.12): actions and queue of a device, commands,
 // cancellation, relaunch, timeline (apple/commands/routes.ts).
 tenantRouter.use('/apple',       createAppleCommandsRouter());
+// Operations (integration-apple-edge §13, lot C5): enrollments unknown to the brain (attach, release), the
+// verified retirement of a device, the revocation of a stolen device's identity (apple/reconcile/routes.ts).
+tenantRouter.use('/apple', createAppleOperationsRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));

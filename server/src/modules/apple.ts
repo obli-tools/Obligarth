@@ -2,9 +2,12 @@ import { db } from '../db';
 import { asIdentity, currentDbContext, type DbActor } from '../db/context';
 import { registerEdgeFreezeHandler } from '../guard';
 import { registerBootTask, registerStartTask } from '../lifecycle';
+import { registerPlatformOnlyAlertKinds } from '../services/liveAlert.service';
+import { APPLE_ALERTS } from '../apple/alerts/catalog';
 import { logger } from '../utils/logger';
 import { registerSecretColumn, setEdgeKekIdSource } from '../vault';
 import { registerAppleEdgeAdmin } from '../apple/admin.routes';
+import { registerAlertMaintenanceJobs } from '../apple/alerts/maintenance';
 import { registerAppleAlertJobs } from '../apple/alerts/service';
 import { registerAppleAuditActions } from '../apple/audit';
 import { registerAppleCommands, sendDdmSyncCommand } from '../apple/commands';
@@ -15,6 +18,8 @@ import { registerAppleEnrollment } from '../apple/enrollment';
 import { registerAppleIntegrations } from '../apple/integrations';
 import { registerDdmSyncSender } from '../apple/ddm/sync';
 import { registerDeviceJobs } from '../apple/devices/jobs';
+import { registerRetireJob } from '../apple/devices/retire';
+import { registerReconcileJobs } from '../apple/reconcile/jobs';
 import { checkEdgeAtStart, edgeKekId, onEdgeRecovered } from '../apple/edge/health';
 import { registerAppleOutboxHandlers } from '../apple/outbox';
 import { registerTenantJobs } from '../apple/tenants/jobs';
@@ -38,7 +43,9 @@ import { appleTenants } from '../apple/tenants/registry';
 // plan). Lot C1: OTA enrollment (device surface mounted by app.ts, console
 // routes by routes/index.ts, enrollment.sessions-expire). Lot C3: the push
 // certificate, the ADE servers, the échéancier and the readiness of a tenant
-// (apple/integrations). Apps and Books comes with lot C4.
+// (apple/integrations). Lot C4: Apps and Books. Lot C5: the operations (alerts
+// housekeeping and external channels, reconciliation, recovery after a
+// restore, verified retirement).
 // =============================================================================
 
 let registered = false;
@@ -80,6 +87,14 @@ export function registerAppleModule(): void {
   registerDdmSyncSender(sendDdmSyncCommand);   // §9.4: the DDM engine announces a set through the command queue
   registerAppleEnrollment();      // §10 (lot C1): enrollment.sessions-expire
   registerAppleIntegrations();    // §11 (lot C3): integrations.* jobs, approvals of a topic change and of an ADE deletion
+  // §12, §13 (lot C5): alerts.inactive-devices, alerts.auto-resolve; apple-edge.reconcile-all, reconcile-tenant,
+  // open-targets-check, restore-check; apple.device-retire
+  registerAlertMaintenanceJobs();
+  registerReconcileJobs();
+  registerRetireJob();
+
+  // ── Alerts of the platform (scope 'master'): read by the platform administrators only (§12.1, lot C5) ──
+  registerPlatformOnlyAlertKinds(Object.entries(APPLE_ALERTS).filter(([, d]) => d.scope === 'master').map(([k]) => k));
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
   registerAppleAuditActions();

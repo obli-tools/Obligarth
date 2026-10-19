@@ -385,16 +385,24 @@ async function handleSeenBatch(ctx: Ctx<'mdm.seen_batch'>): Promise<void> {
     seen.push(new Date(e.last_seen_at).toISOString());
   }
   if (ids.length === 0) return;
-  // One statement (§7.4): the latest contact of each device, never an older one.
+  // One statement (§7.4): the latest contact of each device, never an older one. The rows are locked first, in
+  // ascending order (MDM-B5c-R13: the resolution of a tenant locks its slices in that order; an UPDATE alone locks
+  // them in the order of its plan), and only those whose contact moves forward.
   await trx.raw(`
+    WITH s AS (SELECT a.device_id, max(u.seen) AS seen
+                 FROM unnest(?::text[], ?::timestamptz[]) AS u(enrollment_id, seen)
+                 JOIN obligarth.apple_devices a ON a.enrollment_id = u.enrollment_id AND a.tenant_id = ?
+                GROUP BY a.device_id),
+         l AS (SELECT d.id, s.seen
+                 FROM obligarth.devices d JOIN s ON s.device_id = d.id
+                WHERE d.tenant_id = ? AND (d.last_checkin_at IS NULL OR d.last_checkin_at < s.seen)
+                ORDER BY d.id
+                  FOR NO KEY UPDATE OF d)
     UPDATE obligarth.devices d
-       SET last_checkin_at = s.seen
-      FROM (SELECT a.device_id, max(u.seen) AS seen
-              FROM unnest(?::text[], ?::timestamptz[]) AS u(enrollment_id, seen)
-              JOIN obligarth.apple_devices a ON a.enrollment_id = u.enrollment_id AND a.tenant_id = ?
-             GROUP BY a.device_id) s
-     WHERE d.id = s.device_id AND d.tenant_id = ?
-       AND (d.last_checkin_at IS NULL OR d.last_checkin_at < s.seen)`, [ids, seen, tenantId, tenantId]);
+       SET last_checkin_at = l.seen
+      FROM l
+     WHERE d.id = l.id AND d.tenant_id = ?
+       AND (d.last_checkin_at IS NULL OR d.last_checkin_at < l.seen)`, [ids, seen, tenantId, tenantId, tenantId]);
 }
 
 // ── scep.certificate_issued ─────────────────────────────────────────────────────

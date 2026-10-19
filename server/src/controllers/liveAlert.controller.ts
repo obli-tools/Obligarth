@@ -1,26 +1,28 @@
 import type { Request, Response, NextFunction } from 'express';
-import { liveAlertService } from '../services/liveAlert.service';
+import { isPlatformOnlyAlertKind, liveAlertService } from '../services/liveAlert.service';
 import { db } from '../db';
 import { asMember, asTenant, userActor } from '../db/context';
 
 /** An alert of one of the user's tenants (read in the context 'member'),
- *  or undefined. */
-async function alertOfUser(userId: number, id: number): Promise<{ id: number; tenant_id: number } | undefined> {
+ *  or undefined; an alert of the platform for its administrators only. */
+async function alertOfUser(userId: number, id: number, platformAdmin = false): Promise<{ id: number; tenant_id: number } | undefined> {
   return asMember(userId, async () => {
     const userTenantIds = await db('user_tenants')
       .where('user_id', userId)
       .pluck('tenant_id') as number[];
-    return await db('live_alerts')
+    const row = await db('live_alerts')
       .where({ id })
       .whereIn('tenant_id', userTenantIds)
-      .first('id', 'tenant_id') as { id: number; tenant_id: number } | undefined;
+      .first('id', 'tenant_id', 'kind') as { id: number; tenant_id: number; kind: string | null } | undefined;
+    if (!row || (!platformAdmin && isPlatformOnlyAlertKind(row.kind))) return undefined;
+    return { id: row.id, tenant_id: row.tenant_id };
   });
 }
 
 /** GET /api/live-alerts — current tenant */
 export async function getAlerts(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const alerts = await liveAlertService.getForTenant(req.tenantId, 100);
+    const alerts = await liveAlertService.getForTenant(req.tenantId, 100, { platformAdmin: req.session.role === 'admin' });
     res.json(alerts);
   } catch (err) { next(err); }
 }
@@ -53,7 +55,7 @@ export async function markRead(req: Request, res: Response, next: NextFunction):
     const id = parseInt(req.params.id, 10);
     // Verify the alert belongs to a tenant the user can access
     const userId = Number(req.session.userId);
-    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id) : undefined;
+    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id, req.session.role === 'admin') : undefined;
     if (!alert) { res.status(404).json({ error: 'Alert not found' }); return; }
 
     await asTenant(Number(alert.tenant_id), userActor(userId), () => liveAlertService.markRead(id, alert.tenant_id));
@@ -64,7 +66,7 @@ export async function markRead(req: Request, res: Response, next: NextFunction):
 /** POST /api/live-alerts/read-all — mark all as read for current tenant */
 export async function markAllRead(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await liveAlertService.markAllRead(req.tenantId);
+    await liveAlertService.markAllRead(req.tenantId, { platformAdmin: req.session.role === 'admin' });
     res.json({ ok: true });
   } catch (err) { next(err); }
 }
@@ -74,7 +76,7 @@ export async function deleteAlert(req: Request, res: Response, next: NextFunctio
   try {
     const id = parseInt(req.params.id, 10);
     const userId = Number(req.session.userId);
-    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id) : undefined;
+    const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id, req.session.role === 'admin') : undefined;
     if (!alert) { res.status(404).json({ error: 'Alert not found' }); return; }
 
     await asTenant(Number(alert.tenant_id), userActor(userId), () => liveAlertService.deleteAlert(id, Number(alert.tenant_id)));
@@ -85,7 +87,7 @@ export async function deleteAlert(req: Request, res: Response, next: NextFunctio
 /** DELETE /api/live-alerts — clear all for current tenant */
 export async function clearAll(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await liveAlertService.clearAll(req.tenantId);
+    await liveAlertService.clearAll(req.tenantId, { platformAdmin: req.session.role === 'admin' });
     res.json({ ok: true });
   } catch (err) { next(err); }
 }

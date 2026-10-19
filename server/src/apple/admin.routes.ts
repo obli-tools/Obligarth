@@ -16,6 +16,7 @@ import { appleEdge } from './edge/instance';
 import { serverVersion } from './edge/version';
 import { appleTenants } from './tenants/registry';
 import { provisionTenantNow } from './tenants/jobs';
+import { sendRestoreCheck, sendTenantReconcile } from './reconcile/jobs';
 
 // =============================================================================
 // /api/admin/apple-edge: the tenant registry seen by the platform
@@ -30,6 +31,8 @@ import { provisionTenantNow } from './tenants/jobs';
 //                                          (floor 'sensitive'), apple.tenant_state_changed (critical, P2)
 //   POST /tenants/:tenantId/ca-rotate      rotation of the device CA: restriction apple_edge.ca_rotate (floor
 //                                          'sensitive'), apple.tenant_ca_rotated (critical, P2)
+//   POST /tenants/:tenantId/reconcile      a full reconciliation of the tenant now (§13.1, lot C5)
+//   POST /restore-check                    the check after a restore (§13.2, FND-09; apple-edge.restore-check)
 // The commands freeze has no route here: it belongs to the guard engine
 // (POST /api/guard/freeze, job actions.edge-freeze-sync). The audit entries
 // go to the chain of the tenant concerned. At 'restricted', a second platform
@@ -201,6 +204,20 @@ export function createAppleEdgeAdminRouter(): Router {
   }));
 
   router.post('/tenants/:tenantId/ca-rotate', change('apple_edge.ca_rotate', (req) => ({ op: 'ca_rotate', tenantId: tenantIdOf(req) })));
+
+  router.post('/tenants/:tenantId/reconcile', wrap(async (req, res) => {
+    const tenantId = tenantIdOf(req);
+    await requireTenantRow(tenantId);
+    if (config.apple.mode !== 'on') throw new AppError(503, 'The Apple integration is turned off on this instance', 'appleIntegrationDisabled');
+    const jobId = await sendTenantReconcile(tenantId, true);
+    res.status(202).json({ data: { jobId } });
+  }));
+
+  router.post('/restore-check', wrap(async (_req, res) => {
+    if (config.apple.mode !== 'on') throw new AppError(503, 'The Apple integration is turned off on this instance', 'appleIntegrationDisabled');
+    const jobId = await sendRestoreCheck();
+    res.status(202).json({ data: { jobId } });
+  }));
 
   return router;
 }

@@ -42,6 +42,8 @@ export interface AppleConfig {
   pushMaxPerTarget: number;
   enrollmentSpikeCount: number;
   inactiveDays: number;
+  /** APPLE_RECONCILE_SPREAD_S: spread of the per-tenant reconciliations sent by apple-edge.reconcile-all (§13.1). */
+  reconcileSpreadS: number;
 }
 
 export const APPLE_DEFAULTS = Object.freeze({
@@ -55,6 +57,7 @@ export const APPLE_DEFAULTS = Object.freeze({
   pushMaxPerTarget: 8,
   enrollmentSpikeCount: 50,
   inactiveDays: 14,
+  reconcileSpreadS: 600,
 });
 
 type Env = Record<string, string | undefined>;
@@ -207,6 +210,7 @@ export function readAppleConfig(env: Env = process.env, nodeEnv = env.NODE_ENV ?
       pushMaxPerTarget: intIn(env, 'APPLE_PUSH_MAX_PER_TARGET', 1, 20, APPLE_DEFAULTS.pushMaxPerTarget, errors),
       enrollmentSpikeCount: intIn(env, 'APPLE_ENROLLMENT_SPIKE_COUNT', 5, 10_000, APPLE_DEFAULTS.enrollmentSpikeCount, errors),
       inactiveDays: intIn(env, 'APPLE_INACTIVE_DAYS', 1, 365, APPLE_DEFAULTS.inactiveDays, errors),
+      reconcileSpreadS: intIn(env, 'APPLE_RECONCILE_SPREAD_S', 0, 3_600, APPLE_DEFAULTS.reconcileSpreadS, errors),
     },
     errors,
   };

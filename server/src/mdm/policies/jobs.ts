@@ -1,3 +1,4 @@
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import { SocketEvents } from '@obligarth/shared';
@@ -58,29 +59,79 @@ export function emitConfigChanged(tenantId: number, deviceIds: number[]): void {
   } catch { /* no Socket.io in this process */ }
 }
 
-/** Resolution of every device of the tenant, by slices (each slice locked, loaded, resolved and written in its
- *  transaction). The assignments and resources are read once. */
+/** Rounds of a tenant's resolution that skip the device rows another transaction holds (MDM-B5c-R13). */
+const SKIP_LOCKED_ROUNDS = 4;
+/** Attempts of one slice when PostgreSQL chooses it as the victim of a deadlock (40P01). */
+const DEADLOCK_ATTEMPTS = 5;
+
+const isDeadlock = (err: unknown): boolean => (err as { code?: unknown })?.code === '40P01';
+
+/** fn again when PostgreSQL cancels it to break a deadlock (40P01), a few times, with a short growing pause. */
+export async function retryOnDeadlock<T>(fn: () => Promise<T>, attempts = DEADLOCK_ATTEMPTS): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (!isDeadlock(err) || attempt >= attempts) throw err;
+      await sleep(50 * attempt + Math.floor(Math.random() * 50));
+    }
+  }
+}
+
+/**
+ * Resolution of every device of the tenant, by slices (each slice locked, loaded, resolved and written in its
+ * transaction). The assignments and resources are read once.
+ *
+ * Locks (review of the integration of lot B, MDM-B5c-R13): a slice writes the rows of its devices (their effective
+ * state, their artifacts) under their row locks, taken in ascending order; the outbox consumer keeps the rows its
+ * events locked (mdm.seen_batch, the results of commands) until its batch commits, in the order of the events. A
+ * slice that waited on a row the consumer holds, while holding one the consumer wants, ended in a deadlock and the
+ * whole tenant was retried. Now a slice takes only the rows nobody holds (FOR UPDATE SKIP LOCKED: it never waits
+ * on a row lock), and the devices it skipped are taken by the next rounds; the last round waits for them, in
+ * ascending order, and a slice cancelled by a deadlock is played again alone (retryOnDeadlock) rather than the
+ * tenant.
+ */
 export async function resolveTenant(ctx: Pick<JobContext<unknown>, 'inTenant' | 'withTenant' | 'throwIfAborted'>, tenantId: number):
-  Promise<{ devices: number; changed: number[]; upserted: number; deleted: number }> {
+  Promise<{ devices: number; changed: number[]; upserted: number; deleted: number; deferred: number }> {
   const ids = await ctx.inTenant(async () => (await db('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled')
     .orderBy('id').pluck('id') as number[]).map(Number));
   const state = await ctx.inTenant(() => loadPolicyState(db, tenantId));
-  const out = { devices: ids.length, changed: [] as number[], upserted: 0, deleted: 0 };
-  for (let i = 0; i < ids.length; i += SLICE) {
-    ctx.throwIfAborted();
-    const slice = ids.slice(i, i + SLICE);
-    const s = await ctx.withTenant(async (trx) => {
-      await lockDevices(trx, slice);
-      const set = await loadDevices(trx, tenantId, slice);
-      const catalog = appleCatalog();
-      return writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
-    });
-    out.changed.push(...new Set([...s.changedDeviceIds, ...s.artifactDeviceIds]));
-    out.upserted += s.upserted;
-    out.deleted += s.deleted;
+  const out = { devices: ids.length, changed: [] as number[], upserted: 0, deleted: 0, deferred: 0 };
+  let pending = ids;
+  for (let round = 1; pending.length > 0; round++) {
+    const wait = round > SKIP_LOCKED_ROUNDS;
+    const skipped: number[] = [];
+    for (let i = 0; i < pending.length; i += SLICE) {
+      ctx.throwIfAborted();
+      const slice = pending.slice(i, i + SLICE);
+      const s = await retryOnDeadlock(() => ctx.withTenant(async (trx) => {
+        await lockDevices(trx, slice);
+        // The rows of the slice nobody else holds (all of them in the last round, waited for in ascending order).
+        const held = await trx('devices').where({ tenant_id: tenantId }).whereRaw('id = ANY (?::int[])', [slice]).orderBy('id')
+          .modify((q) => { if (wait) q.forUpdate(); else q.forUpdate().skipLocked(); })
+          .pluck('id') as number[];
+        const mine = new Set(held.map(Number));
+        const busy = slice.filter((d) => !mine.has(d));
+        if (mine.size === 0) return { busy, w: null };
+        const set = await loadDevices(trx, tenantId, slice.filter((d) => mine.has(d)));
+        const catalog = appleCatalog();
+        const w = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
+        return { busy, w };
+      }));
+      skipped.push(...s.busy);
+      if (s.w) {
+        out.changed.push(...new Set([...s.w.changedDeviceIds, ...s.w.artifactDeviceIds]));
+        out.upserted += s.w.upserted;
+        out.deleted += s.w.deleted;
+      }
+    }
+    if (round === 1) out.deferred = skipped.length;
+    pending = wait ? [] : skipped;
+    // The transactions that held them commit in a moment (a batch of the consumer): a short pause between rounds.
+    if (pending.length > 0) await sleep(100 * round);
   }
   // The conflicts stored for the tenant: their alerts raised, those of the conflicts gone resolved (section 7.7).
-  await ctx.withTenant((trx) => syncConflictAlerts(trx, tenantId, null));
+  await retryOnDeadlock(() => ctx.withTenant((trx) => syncConflictAlerts(trx, tenantId, null)));
   return out;
 }
 
@@ -100,7 +151,7 @@ async function runTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): Promis
   try {
     const r = await resolveTenant(ctx, ctx.payload.tenantId);
     emitConfigChanged(ctx.payload.tenantId, r.changed);
-    return { output: { devices: r.devices, changed: r.changed.length, upserted: r.upserted, deleted: r.deleted } };
+    return { output: { devices: r.devices, changed: r.changed.length, upserted: r.upserted, deleted: r.deleted, deferred: r.deferred } };
   } finally {
     fetchNext(TENANT_QUEUE);
   }
@@ -108,7 +159,7 @@ async function runTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): Promis
 
 async function runDevice(ctx: JobContext<z.infer<typeof DevicePayload>>): Promise<JobResult> {
   try {
-    const r = await ctx.withTenant((trx) => resolveDeviceInTx(trx, ctx.payload.tenantId, [ctx.payload.deviceId]));
+    const r = await retryOnDeadlock(() => ctx.withTenant((trx) => resolveDeviceInTx(trx, ctx.payload.tenantId, [ctx.payload.deviceId])));
     emitConfigChanged(ctx.payload.tenantId, r.changed);
     return { output: { changed: r.changed.length, upserted: r.upserted, deleted: r.deleted } };
   } finally {

@@ -17,6 +17,7 @@
 //                                                held (frozen, apple-edge unavailable), failed (refused by
 //                                                apple-edge), retried (a later attempt follows)
 //   obligarth_apple_push_relaunches_total{outcome}      relaunch pushes asked of apple-edge (§8.7), by its answer
+//   obligarth_apple_reconcile_fixes_total{kind}  corrections made by the reconciliation with apple-edge (§13.1)
 // =============================================================================
 
 const calls = new Map<string, number>();
@@ -24,6 +25,7 @@ const provisioning = new Map<string, number>();
 const ignored = new Map<string, number>();
 const submissions = new Map<string, number>();
 const relaunches = new Map<string, number>();
+const reconcileFixes = new Map<string, number>();
 let duplicateResults = 0;
 let tokenUpdateAfterUnenroll = 0;
 let apnsThrottled = 0;
@@ -56,6 +58,11 @@ export const appleMetrics = {
     const o = /^[a-z_]{1,24}$/.test(outcome) ? outcome : 'other';
     relaunches.set(o, (relaunches.get(o) ?? 0) + count);
   },
+  /** Corrections of the reconciliation with apple-edge (§13.1), by kind. */
+  reconcileFix(kind: string, count = 1): void {
+    const k = /^[a-z_]{1,32}$/.test(kind) ? kind : 'other';
+    if (Number.isFinite(count) && count > 0) reconcileFixes.set(k, (reconcileFixes.get(k) ?? 0) + Math.floor(count));
+  },
   duplicateResult(): void {
     duplicateResults += 1;
   },
@@ -86,6 +93,7 @@ export const appleMetrics = {
       commandDuplicateResults: duplicateResults,
       commandSubmissions: [...submissions.entries()].map(([outcome, value]) => ({ outcome, value })),
       pushRelaunches: [...relaunches.entries()].map(([outcome, value]) => ({ outcome, value })),
+      reconcileFixes: [...reconcileFixes.entries()].map(([kind, value]) => ({ kind, value })),
       tokenUpdateAfterUnenroll,
       apnsThrottled,
     };
