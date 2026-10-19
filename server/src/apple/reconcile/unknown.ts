@@ -44,8 +44,8 @@ export interface UnknownEnrollmentView {
   lastSeenAt: string;
 }
 
-export type AttachOutcome = 'attached' | 'already' | 'not_found' | 'disabled' | 'ownership' | 'other_kind' | 'managed' | 'failed';
-export type ReleaseOutcome = 'released' | 'not_found' | 'managed' | 'failed';
+export type AttachOutcome = 'attached' | 'already' | 'not_found' | 'disabled' | 'ownership' | 'other_kind' | 'managed' | 'pending' | 'failed';
+export type ReleaseOutcome = 'released' | 'not_found' | 'managed' | 'pending' | 'failed';
 
 interface Ctx { tenantId: number; key: string; actor: DbActor; requestId?: string }
 
@@ -135,7 +135,11 @@ export async function attachUnknownEnrollments(tenantId: number, actor: DbActor,
   if (!topic) throw new AppError(409, 'This tenant has no active push certificate', 'appleTopicMissing');
   const results: Record<string, AttachOutcome> = {};
   const deviceIds: number[] = [];
+  // An enrollment with an event still waiting in the outbox is left to the consumer (its Authenticate may carry the
+  // session that says its ownership): never attached under another profile, nor released (review of lot C5).
+  const pending = await pendingEnrollments(key);
   for (const id of ids) {
+    if (pending.has(id)) { results[id] = 'pending'; continue; }
     let e: EdgeEnrollment;
     try {
       e = (await appleEdge.getEnrollment(key, id, opts(c))).enrollment;
@@ -216,8 +220,10 @@ export async function releaseUnknownEnrollments(tenantId: number, actor: DbActor
     .where('a.tenant_id', tenantId).whereIn('a.enrollment_id', ids).whereIn('d.enrollment_state', [...MANAGED])
     .pluck('a.enrollment_id') as string[]).map(String));
   const results: Record<string, ReleaseOutcome> = {};
+  const pending = await pendingEnrollments(key);
   for (const id of ids) {
     if (managed.has(id)) { results[id] = 'managed'; continue; }
+    if (pending.has(id)) { results[id] = 'pending'; continue; }
     try {
       await appleEdge.releaseEnrollment(key, id, opts(c));
       results[id] = 'released';

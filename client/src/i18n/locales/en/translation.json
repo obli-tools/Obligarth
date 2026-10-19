@@ -3660,6 +3660,7 @@
       "ownership": "Ownership not allowed by the profile",
       "other_kind": "Identifier of another kind",
       "managed": "Held by a managed device",
+      "pending": "Event still being processed",
       "failed": "Failed",
       "released": "Released"
     }

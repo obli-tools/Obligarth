@@ -17,9 +17,9 @@ export interface UnknownEnrollmentView {
   lastSeenAt: string;
 }
 
-export const ATTACH_OUTCOMES = ['attached', 'already', 'not_found', 'disabled', 'ownership', 'other_kind', 'managed', 'failed'] as const;
+export const ATTACH_OUTCOMES = ['attached', 'already', 'not_found', 'disabled', 'ownership', 'other_kind', 'managed', 'pending', 'failed'] as const;
 export type AttachOutcome = typeof ATTACH_OUTCOMES[number];
-export const RELEASE_OUTCOMES = ['released', 'not_found', 'managed', 'failed'] as const;
+export const RELEASE_OUTCOMES = ['released', 'not_found', 'managed', 'pending', 'failed'] as const;
 export type ReleaseOutcome = typeof RELEASE_OUTCOMES[number];
 
 export interface AttachUnknownResult {

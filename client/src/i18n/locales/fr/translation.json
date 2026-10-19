@@ -3660,6 +3660,7 @@
       "ownership": "Propriété refusée par le profil",
       "other_kind": "Identifiant d'un autre type",
       "managed": "Tenus par un appareil géré",
+      "pending": "Événement en cours de traitement",
       "failed": "En échec",
       "released": "Libérés"
     }
