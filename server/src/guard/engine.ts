@@ -82,7 +82,7 @@ function form(input: Partial<GuardRequestInput> | undefined, o: { forPreview?: b
   const key = typeof input?.actionKey === 'string' ? input.actionKey : '';
   const def = guardedActionDef(key);
   if (!def) throw new AppError(400, 'Unknown guarded action', 'unknownGuardedAction');
-  const parsed = def.paramsSchema.safeParse(input?.params ?? {});
+  const parsed = (def.requestParamsSchema ?? def.paramsSchema).safeParse(input?.params ?? {});
   if (!parsed.success) throw new AppError(400, 'Invalid parameters for this action', 'invalidParams');
   let reason = '';
   let ticket: string | null = null;
@@ -291,6 +291,8 @@ async function requestInTenant(req: Request, f: ReturnType<typeof form>, tenantI
   const { approval, executeAfter } = await db.transaction(async (trx): Promise<{ approval: PendingApproval | null; executeAfter: Date | null }> => {
     let approval: PendingApproval | null = null;
     let executeAfter: Date | null = null;
+    // A secret typed in the request is sealed first: never stored nor journaled in clear (android-amapi §22.9).
+    if (a.def.prepareParams) a.params = await a.def.prepareParams(trx, tenantId, a.params, requesterId);
     const base = {
       uuid, tenant_id: tenantId, action_key: a.def.key, family: a.def.family, requested_by: requesterId,
       requester_side: a.requester.side, approver_fallback: approver.fallback, selection: JSON.stringify(selection),

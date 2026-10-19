@@ -45,6 +45,16 @@ import { createAppleOperationsRouter } from '../apple/reconcile/routes';
 import { createEnrollmentRouter } from '../apple/enrollment';
 import { createAppleAdminIntegrationsRouter, createAppleIntegrationsRouter } from '../apple/integrations';
 import { createMdmRouter } from '../mdm';
+import { createAndroidAdminRouter } from '../android/routes/admin.routes';
+import { createAndroidAppsRouter } from '../android/routes/apps.routes';
+import { createAndroidByodRouter } from '../android/routes/byod.routes';
+import { createAndroidCommandsRouter } from '../android/routes/commands.routes';
+import { createAndroidEnrollmentRouter } from '../android/routes/enrollment.routes';
+import { createAndroidEnrollmentFlowsRouter } from '../android/routes/enrollmentFlows.routes';
+import { createAndroidTenantRouter } from '../android/routes/enterprise.routes';
+import { createAndroidKioskRouter } from '../android/routes/kiosk.routes';
+import { createAndroidOperationsAdminRouter, createAndroidOperationsRouter } from '../android/routes/operations.routes';
+import { createAndroidSignupCallbackRouter } from '../android/routes/signupCallback.routes';
 
 const router = Router();
 
@@ -54,6 +64,9 @@ router.use('/auth', obligateCallbackRoutes);  // sso-config, connected-apps, app
 router.use('/mobile', mobileAppRoutes);    // Public: Android app version + APK download (/api/mobile/android/*)
 router.use('/repo', repoPublicRoutes);   // script-facing software repo (per-tenant access key auth)
 router.use('/system', systemRoutes);       // system info / about (admin only, no tenant required)
+// Return of Google after the signup of an Android enterprise (android-amapi §6.2, AN48): public and mute, no session
+// (the customer's administrator may have no account here), its own limiter, never logged (client/nginx.conf).
+router.use('/android/signup', createAndroidSignupCallbackRouter());
 
 // ── Authenticated, no tenant required ───────────────────────────────────────
 // Device-bound 2FA (the account's phones) — before /profile. A 404 here tells
@@ -109,6 +122,23 @@ tenantRouter.use('/apple',       createAppleCommandsRouter());
 // Operations (integration-apple-edge §13, lot C5): enrollments unknown to the brain (attach, release), the
 // verified retirement of a device, the revocation of a stolen device's identity (apple/reconcile/routes.ts).
 tenantRouter.use('/apple', createAppleOperationsRouter());
+// Android (android-amapi §3.3, lot AN-A2): the enterprise of the tenant and its operation (mdm.integrations.manage),
+// enrollment tokens, approvals, BYOD invitations, sign-in URL, zero-touch and KME (mdm.enrollment.manage and
+// mdm.integrations.manage), apps of the catalog and iframes (mdm.apps.manage), commands and kiosks of a device
+// (devices.manage); each router names its own capability. A tenant without a linked enterprise, or an instance with
+// ANDROID_MODE off, is answered by the routes themselves (404, 409 or 503 androidDisabled).
+tenantRouter.use('/android', createAndroidTenantRouter());
+tenantRouter.use('/android', createAndroidOperationsRouter());
+tenantRouter.use('/android', createAndroidEnrollmentRouter());
+tenantRouter.use('/android', createAndroidEnrollmentFlowsRouter());
+tenantRouter.use('/android', createAndroidByodRouter());
+tenantRouter.use('/android', createAndroidAppsRouter());
+tenantRouter.use('/android', createAndroidCommandsRouter());
+tenantRouter.use('/android', createAndroidKioskRouter());
+// The platform side of Android (master tenant, platform administrators): identity, health, quota, orphan
+// enterprises, deadline of the service account key.
+tenantRouter.use('/admin/android', createAndroidAdminRouter());
+tenantRouter.use('/admin/android', createAndroidOperationsAdminRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));

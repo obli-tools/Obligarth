@@ -4,6 +4,7 @@ import {
   type ComplianceReason, type ComplianceState,
 } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
+import { evaluateAndroidDevices } from '../../android/inventory/compliance';
 
 // =============================================================================
 // Minimal compliance (docs: modele-donnees-mdm §4.4; the compliance engine is
@@ -120,9 +121,19 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
   const ids = [...new Set(deviceIds.filter((n) => Number.isSafeInteger(n) && n > 0))].sort((a, b) => a - b);
   const out: EvaluationSummary = { evaluated: 0, changed: [] };
   if (ids.length === 0) return out;
+  // The devices of the channel amapi have their own reasons (android-amapi §8.4; lot AN-A2): never the Apple facts.
+  // Their alert of a compromised integrity is raised by the status report that brings it.
+  const amapi = (await trx('devices').where({ tenant_id: tenantId, management_channel: 'amapi' }).whereRaw('id = ANY (?::int[])', [ids])
+    .pluck('id') as Array<number | string>).map(Number);
+  if (amapi.length) {
+    const r = await evaluateAndroidDevices(trx, tenantId, amapi, { now });
+    out.evaluated += amapi.length;
+    out.changed.push(...r.changed);
+  }
   const devices = await trx('devices as d')
     .leftJoin('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId).whereRaw('d.id = ANY (?::int[])', [ids]).whereIn('d.enrollment_state', ['enrolled', 'awaiting_configuration'])
+    .whereNot('d.management_channel', 'amapi')
     .select('d.id', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'd.os_version', 'd.last_checkin_at', 'd.enrolled_at', 'd.config_state',
       'd.compliance_state', 'd.compliance_reasons', 'a.last_device_info_at') as Array<Record<string, any>>;
   if (devices.length === 0) return out;

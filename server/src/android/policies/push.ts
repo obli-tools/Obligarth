@@ -46,7 +46,7 @@ import { kioskAppInCatalog, readAndroidProfile, snapshotOf } from '../enrollment
 import {
   endKioskExitForWipePolicy, kioskLockPendingUnderFreeze, markKioskLockRestored, markKioskWipeSettingsApplied, runningKioskExit,
 } from '../kiosk/exits';
-import { policyHasWipeSettings, PRIVATE_SPACE_DISALLOWED } from '../../mdm/android/overlay';
+import { FAILED_PASSWORDS_FOR_WIPE, policyHasWipeSettings, PRIVATE_SPACE_DISALLOWED } from '../../mdm/android/overlay';
 import { androidSenders } from '../enrollment/senders';
 import { byodPolicy } from '../byod/policy';
 
@@ -80,9 +80,8 @@ function variablesOf(d: ResolutionDevice, tenant: { name: string; slug: string }
 }
 
 /**
- * The default source: the common resolver, keeping the android:* keys. The contributions of the android section are
- * wired into the resolver at the junction AN-A2 (mdm/policies/contributions.ts, an existing file): until then it
- * gives no Android key and the policy carries Obligarth's base only.
+ * The default source: the common resolver, keeping the android:* keys (the contributions of the android section,
+ * mdm/policies/contributions.ts since the junction AN-A2).
  */
 export const resolverDeviceSource: AndroidDeviceSettingsSource = async (trx, tenantId, deviceId) => {
   const input = await loadResolutionInput(trx, tenantId, [deviceId]);
@@ -215,7 +214,7 @@ export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { 
       compiled = compileAndroid(desired.settings, facts, {
         purpose: 'device', variables: desired.variables,
         privacy: { networkInfo: DEFAULT_PRIVACY[row.ownership as 'corporate' | 'corporate_personal' | 'personal']?.networkInfo ?? false },
-        guards: { adminDomain: prep.adminDomain }, ...(prep.kiosk ? { kiosk: prep.kiosk } : {}),
+        guards: { adminDomain: prep.adminDomain, minFailedPasswordsForWipe: FAILED_PASSWORDS_FOR_WIPE.defaultFloor }, ...(prep.kiosk ? { kiosk: prep.kiosk } : {}),
       });
     } catch (err) {
       await setPolicyError(tenantId, deviceId, [`compile:${err instanceof AndroidCompileError ? err.code : 'invalid_value'}`], false);

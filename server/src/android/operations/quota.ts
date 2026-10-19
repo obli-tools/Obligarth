@@ -9,7 +9,7 @@
 //     tenants counted within 8 days; the gap with the instance's own count is kept in android_quota_recounts and shown
 //     on « Platform > Android » (readQuotaView).
 // Context 'none' of the maintenance; counts only, never a tenant datum.
-import { ANDROID_QUOTA_WARNING_PERCENT, type AndroidQuotaView } from '@obligarth/shared/dist/android/operations.js';
+import { ANDROID_QUOTA_WARNING_PERCENT, type AndroidQuotaView } from '@obligarth/shared';
 import { db } from '../../db';
 import { asNone } from '../../db/context';
 import { raiseAndroidPlatformAlert, resolveAndroidPlatformAlert } from '../alerts';

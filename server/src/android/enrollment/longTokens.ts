@@ -11,7 +11,7 @@
 import {
   ANDROID_DPC_PACKAGE, ANDROID_ENROLLMENT_TOKEN_EXTRA, ANDROID_ZERO_TOUCH_FEATURES, ANDROID_ZERO_TOUCH_PAGE, androidProvisioningExtras,
   androidZeroTouchIframeUrl, type AndroidKmeConfiguration, type AndroidZeroTouchIframe,
-} from '@obligarth/shared/dist/android/enrollment.js';
+} from '@obligarth/shared';
 import type { Knex } from 'knex';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';

@@ -1,7 +1,7 @@
 import {
-  availabilityAndroid, type AndroidAvailability, type AndroidAvailabilityFacts, type AndroidFieldSupport,
-} from '@obligarth/shared/dist/android/availability.js';
-import { parseAndroidSettingKey } from '@obligarth/shared/dist/android/policy.js';
+  type AndroidAvailability, type AndroidAvailabilityFacts, type AndroidFieldSupport, availabilityAndroid,
+  parseAndroidSettingKey,
+} from '@obligarth/shared';
 import { androidCatalog, type AndroidCatalogView } from './catalog';
 import { fieldSupport, ownershipForbidden } from './overlay';
 

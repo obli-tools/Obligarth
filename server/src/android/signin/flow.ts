@@ -15,7 +15,7 @@
 // The enrollment handler accepts a device of a signin token only when its session is issued (signin/guard.ts). Every
 // statement runs in the tenant's context, actor enrollment:android-signin. Never logged nor audited: the state, the
 // code, the nonce, the provisioning id, the e-mail, the token's value, the Google link.
-import { ANDROID_SIGNIN_INVALID_URL, ANDROID_SIGNIN_TTL_SECONDS } from '@obligarth/shared/dist/android/enrollment.js';
+import { ANDROID_SIGNIN_INVALID_URL, ANDROID_SIGNIN_TTL_SECONDS } from '@obligarth/shared';
 import type { Knex } from 'knex';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';

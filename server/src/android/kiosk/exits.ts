@@ -34,7 +34,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   ANDROID_KIOSK_EXIT_ACTION, ANDROID_KIOSK_EXIT_MINUTES, type AndroidKioskExitEndReason, type AndroidKioskExitView, type AndroidKioskState,
-} from '@obligarth/shared/dist/android/kiosk.js';
+} from '@obligarth/shared';
 import { randomUUID } from 'node:crypto';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';

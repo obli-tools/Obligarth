@@ -6,7 +6,7 @@
 //   - race guard (review AN-H1, R1): only a record created and enrolled before the listing started (one second of
 //     margin) may be declared gone; a device enrolled or renewed while the list is read is left to the next pass.
 // Runs in the tenant context of the caller, never inside an open transaction (G-A1). No device datum in a log.
-import type { AmapiDevice } from '@obligarth/shared/dist/android/amapi';
+import type { AmapiDevice } from '@obligarth/shared';
 import { db } from '../../db';
 import type { AndroidEnterpriseRef } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';

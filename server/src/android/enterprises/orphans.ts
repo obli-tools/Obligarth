@@ -4,7 +4,7 @@
 // is offered only when its display name carries the marker of that signup and its name never belonged to any tenant
 // (RR-3); the adoption itself (restriction android.enterprise_adopt) comes with lot AN-H.
 import { createHash } from 'node:crypto';
-import type { AmapiEnterpriseBasic } from '@obligarth/shared/dist/android/amapi';
+import type { AmapiEnterpriseBasic } from '@obligarth/shared';
 import { db } from '../../db';
 import { asNone, type DbActor } from '../../db/context';
 import { raiseAndroidPlatformAlert } from '../alerts';

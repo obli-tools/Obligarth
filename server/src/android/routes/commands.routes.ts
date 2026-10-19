@@ -1,5 +1,5 @@
-// /api/android (tenant router: requireAuth, requireTenant), commands of the channel amapi (section 11.5). Not mounted:
-// at the junction AN-P the routes of the queue (integration §8.12: /api/mdm/devices/:id/commands,
+// /api/android (tenant router: requireAuth, requireTenant), commands of the channel amapi (section 11.5). Mounted under
+// /api/android by routes/index.ts (lot AN-A2); at the lot AN-P the routes of the queue (integration §8.12: /api/mdm/devices/:id/commands,
 // /api/mdm/commands/:id/cancel, relaunch) gain the channel amapi and take these functions, with the checks of
 // capabilities per device and of the restrictions matrix of those routes (mdm.reboot, mdm.lost_mode_disable,
 // mdm.clear_app_data: restriction 'sensitive'). Until then this router is their shape, behind devices.manage.

@@ -1,6 +1,6 @@
 // Pub/Sub operations on the project's subscription only (section 7.1): synchronous pull, acknowledge,
 // modifyAckDeadline, seek, testIamPermissions. The subscription is the configured one, never a received name.
-import type { PubsubReceived } from '@obligarth/shared/dist/android/amapi';
+import type { PubsubReceived } from '@obligarth/shared';
 import type { GoogleHttp } from './http';
 
 export const PUBSUB_OPERATIONS = ['pull', 'acknowledge', 'modifyAckDeadline', 'seek', 'testIamPermissions'] as const;

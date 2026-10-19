@@ -1,4 +1,4 @@
-// Routes of the Android operation (lot AN-H1), mounted at the junction AN-A2:
+// Routes of the Android operation (lot AN-H1), mounted by routes/index.ts (junction AN-A2):
 // /api/android (tenant router: requireAuth, requireTenant; capability of the integrations, devices.manage until
 // mdm.integrations.manage exists, AN41):
 //   POST /enterprise/unlink                   restricted request of the unlink (reason, step-up; a second approver)

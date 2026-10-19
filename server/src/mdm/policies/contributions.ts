@@ -3,8 +3,10 @@ import {
   artifactOf, settingKeyOf, settingKeysOf, variablesOf,
   type JsonValue, type MergeDescriptor, type PolicyContentV1, type PolicyVariable, type SchemaEntry, type SettingKind,
 } from '@obligarth/shared';
+import { AMAPI_ARTIFACT_KEY } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import type { AppleCatalogView } from '../apple/catalog';
+import { androidContributions } from '../android/contributions';
 
 // =============================================================================
 // What a resource brings to the resolution (docs: modele-donnees-mdm §7.3,
@@ -19,7 +21,9 @@ import type { AppleCatalogView } from '../apple/catalog';
 export interface Contribution {
   settingKey: string;
   type: string;
-  kind: SettingKind;
+  /** 'android': a key of the Android section (android:<field>, android:app[<package>], android:onc[<GUID>]), delivered
+   *  as the artifact amapi:policy by the Android module (lot AN-A2). */
+  kind: SettingKind | 'android';
   /** Keyed types: the top-level key. */
   key: string | null;
   /** Collections and raw profiles: the instance. */
@@ -82,6 +86,15 @@ export function policyContributions(content: PolicyContentV1, catalog: AppleCata
         requiresAsset: part.remove ? false : usesAsset(entry, part.key, part.value),
       });
     }
+  }
+  // The Android section (android-amapi §9.2; lot AN-A2): one key per top-level field, app and ONC network.
+  for (const a of androidContributions(content.sections?.android)) {
+    if (seen.has(a.settingKey)) continue;
+    seen.add(a.settingKey);
+    out.push({
+      settingKey: a.settingKey, type: 'android', kind: 'android', key: null, instance: null, artifactKey: AMAPI_ARTIFACT_KEY,
+      valueHash: a.valueHash, value: a.value, removed: false, variables: a.variables, requiresAsset: false,
+    });
   }
   return out;
 }

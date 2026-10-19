@@ -7,9 +7,9 @@
 //                       messaging apps consume nothing)
 //   POST /a/:key/byod   the code and the acknowledgement → 303 to Google's enrollment page (the token of the
 //                       invitation); a wrong code, a changed notice, a missing acknowledgement → the page again
-// Mounted at /a/:key by app.ts at the junction AN-A2 (point of junction: the router is built here, never mounted on the
-// branch), right after helmet like /t/:key; the key is the tenant's MDM key (tenants.mdm_key, lookup function of
-// context none), resolved by the resolver the junction may replace (setByodKeyResolver).
+// Mounted at /a/:key by app.ts (junction AN-A2), right after helmet like /t/:key; the key is the tenant's MDM key
+// (tenants.mdm_key, lookup function of context none), resolved by the resolver the junction may replace
+// (setByodKeyResolver).
 import express, { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { appleTenants } from '../../apple/tenants/registry';

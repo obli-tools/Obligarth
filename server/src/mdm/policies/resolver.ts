@@ -84,7 +84,7 @@ export interface ResolutionInput {
 /** A retained setting, with what the writer and the impact preview need besides the stored row. */
 export interface ResolvedSetting extends EffectiveSetting {
   type: string;
-  kind: SettingKind;
+  kind: SettingKind | 'android';
   key: string | null;
   instance: string | null;
   /** The winning value (secrets as references, variables as templates); absent for a tombstone. For the
@@ -145,6 +145,13 @@ export function appViaDeclaration(d: ResolutionDevice, app: NonNullable<Contribu
 
 function availabilityOf(input: ResolutionInput, d: ResolutionDevice, c: Contribution): SettingAvailability {
   const unresolved = c.variables.find((v) => variableValue(v, d, input.tenant) === null) ?? null;
+  // An Android key (lot AN-A2): Android devices only; the compilation of the Android module checks each field
+  // against the device (API level, mode, ownership: mdm/android/availability.ts).
+  if (c.kind === 'android') {
+    if (d.platform !== 'android') return { status: 'not_applicable', reason: 'platform_unsupported' };
+    if (unresolved) return { status: 'not_applicable', reason: 'variable_unresolved', detail: unresolved };
+    return { status: 'available' };
+  }
   if (c.kind === 'app' && c.app) {
     if (c.app.supportedPlatforms.length > 0 && !c.app.supportedPlatforms.includes(d.platform)) {
       return { status: 'not_applicable', reason: 'platform_unsupported' };

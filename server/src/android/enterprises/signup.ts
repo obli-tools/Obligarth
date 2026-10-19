@@ -202,7 +202,9 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
   const enterpriseToken = typeof query.enterpriseToken === 'string' ? query.enterpriseToken : '';
   if (!enterpriseToken) {
     await asTenant(tenantId, CALLBACK_ACTOR, () => audit.append({ tenantId, action: 'android.signup_callback_rejected', details: { reason: 'token_missing' } }, ctxAudit))
-      .catch(() => undefined);
+      // Never silent: the refusal goes on, the lost entry is said (no token, no URL in the line).
+      .catch((err: unknown) => logger.error({ android: { signup: 'audit_failed', tenantId, code: (err as { code?: string })?.code ?? 'error' } },
+        'android: audit entry of a refused signup callback not written'));
     return fail('token_missing', 'android.signup_failed');
   }
   if (!s.signup_url_name) return fail('google_error', 'android.signup_failed');

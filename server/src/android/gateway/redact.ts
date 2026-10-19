@@ -4,7 +4,7 @@
 //   - provisioningInfo: refused when its enterprise is not the tenant's, then reduced to six fields (never imei,
 //     meid nor serialNumber).
 // Pure, erasable TypeScript.
-import type { AmapiEnrollmentToken, AmapiEnterprise, AmapiProvisioningInfoMin } from '@obligarth/shared/dist/android/amapi';
+import type { AmapiEnrollmentToken, AmapiEnterprise, AmapiProvisioningInfoMin } from '@obligarth/shared';
 import { AndroidNotFoundError } from './errors';
 
 export function redactEnterprise<T extends Partial<AmapiEnterprise>>(e: T): T {

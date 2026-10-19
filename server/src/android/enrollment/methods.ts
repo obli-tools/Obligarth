@@ -3,7 +3,7 @@
 // snapshot of a profile frozen in a token, the checks of an enrolled Device against that snapshot (never against the
 // current profile), the additionalData of a token, the approval of a long token, the hourly caps, the payload shown
 // to the administrator. No database, no logger: the unit tests load it (U-A09).
-import { androidProvisioningExtras } from '@obligarth/shared/dist/android/enrollment.js';
+import { androidProvisioningExtras } from '@obligarth/shared';
 
 export const ANDROID_METHODS = [
   'android_qr', 'android_token', 'android_afw', 'android_nfc', 'android_zero_touch', 'android_kme',

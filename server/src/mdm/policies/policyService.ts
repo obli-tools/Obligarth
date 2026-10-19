@@ -17,8 +17,12 @@ import {
 } from '../apple/plistRead';
 import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
+import { androidContributions } from '../android/contributions';
+import { FAILED_PASSWORDS_FOR_WIPE } from '../android/overlay';
+import type { AndroidValidationOptions } from '../android/validate';
 import {
-  contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, RAW_SECRET_PURPOSE, rawProfilesOf, validatePolicyContent, withSecretRefs,
+  ANDROID_SECTION_ITEM, androidNodeAt, androidPathText, contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, RAW_SECRET_PURPOSE,
+  rawProfilesOf, validatePolicyContent, withSecretRefs,
   type SecretRefSite,
 } from './validate';
 
@@ -222,13 +226,31 @@ export function validationFailed(issues: PolicyValidationIssue[]): never {
   throw new AppError(422, 'The content of the policy is not valid', 'validationFailed', issues as unknown as Record<string, unknown>);
 }
 
+/** The sections a content holds (policies.sections): apple with items, android with at least one setting key. */
+export function sectionsOf(content: PolicyContentV1 | null | undefined): string[] {
+  const out: string[] = [];
+  if (content?.sections?.apple?.items.length) out.push('apple');
+  if (content?.sections?.android && androidContributions(content.sections.android).length) out.push('android');
+  return out;
+}
+
+/** The guards of the Android validation of a tenant (android-amapi §22.4; lot AN-A2): the domain of its live
+ *  enterprise (FRP administrators) and the floor of maximumFailedPasswordsForWipe (the default floor until the tenant
+ *  setting androidMinFailedPasswordsForWipe exists). In the tenant's context of the caller. */
+export async function androidValidationOptions(q: Knex | Knex.Transaction, tenantId: number): Promise<AndroidValidationOptions> {
+  const e = await q('android_enterprises').where({ tenant_id: tenantId }).whereNot('state', 'unlinked').first('admin_domain') as
+    { admin_domain: string | null } | undefined;
+  return { adminDomain: e?.admin_domain ?? null, minFailedPasswordsForWipe: FAILED_PASSWORDS_FOR_WIPE.defaultFloor };
+}
+
 /** Validates a content for a submission or a publication (no secret typed in; references must exist). */
 export async function validateForSubmission(q: Knex | Knex.Transaction, tenantId: number, policyUuid: string, content: unknown):
-  Promise<{ issues: PolicyValidationIssue[]; content: PolicyContentV1 | null }> {
-  const v = validatePolicyContent(content, { catalog: appleCatalog(), policyUuid, allowSecretValues: false, allowRawProfiles: true });
+  Promise<{ issues: PolicyValidationIssue[]; content: PolicyContentV1 | null; androidWipeRules: string[] }> {
+  const v = validatePolicyContent(content, { catalog: appleCatalog(), policyUuid, allowSecretValues: false, allowRawProfiles: true,
+    android: await androidValidationOptions(q, tenantId) });
   const issues = [...v.issues, ...(await missingSecrets(q, tenantId, v.secretRefs))];
-  if (!v.content?.sections.apple?.items.length && !issues.length) issues.push({ itemId: null, path: 'sections.apple.items', code: 'invalid_content' });
-  return { issues, content: v.content };
+  if (!sectionsOf(v.content).length && !issues.length) issues.push({ itemId: null, path: 'sections.apple.items', code: 'invalid_content' });
+  return { issues, content: v.content, androidWipeRules: v.androidWipeRules };
 }
 
 export const policyService = {
@@ -289,7 +311,7 @@ export const policyService = {
       created = await db.transaction(async (trx) => {
         const [policy] = await trx('policies').insert({
           tenant_id: tenantId, name, description, category, state: 'draft',
-          sections: content.sections.apple?.items.length ? ['apple'] : [], version_counter: 1,
+          sections: sectionsOf(content), version_counter: 1,
           created_by: actor.userId, updated_by: actor.userId,
         }).returning('*') as Array<Record<string, any>>;
         const [version] = await trx('policy_versions').insert({
@@ -368,6 +390,7 @@ export const policyService = {
       const stored = parse<PolicyContentV1>(row.content);
       const v = validatePolicyContent(withStoredRawProfiles(rawContent, stored), {
         catalog: appleCatalog(), policyUuid: policy.uuid, allowSecretValues: true, keptRawProfiles: rawProfilesOf(stored),
+        android: await androidValidationOptions(trx, tenantId),
       });
       const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs))];
       if (issues.length || !v.content) validationFailed(issues);
@@ -387,7 +410,7 @@ export const policyService = {
         impact: null,
       }).returning('*') as Array<Record<string, any>>;
       await trx('policies').where({ tenant_id: tenantId, id: policyId }).update({
-        sections: content.sections.apple?.items.length ? ['apple'] : [], updated_by: actor.userId, updated_at: new Date(),
+        sections: sectionsOf(content), updated_by: actor.userId, updated_at: new Date(),
       });
       return { row: updated, secrets: sites.length, summary: v.summary };
     });
@@ -518,7 +541,8 @@ export const policyService = {
         displayName: profile.displayName, originalIdentifier: profile.originalIdentifier, payloads: withRawSecretRefs(profile.payloads, sites, ids),
       } };
       const next: PolicyContentV1 = { format: 1, sections: { ...stored.sections, apple: { items: [...(stored.sections?.apple?.items ?? []), item] } } };
-      const v = validatePolicyContent(next, { catalog, policyUuid: policy.uuid, allowSecretValues: false, allowRawProfiles: true });
+      const v = validatePolicyContent(next, { catalog, policyUuid: policy.uuid, allowSecretValues: false, allowRawProfiles: true,
+        android: await androidValidationOptions(trx, tenantId) });
       const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs))];
       if (issues.length || !v.content) validationFailed(issues);
       if (hasSecretValue(v.content)) throw new Error('a secret value would be stored');
@@ -527,7 +551,7 @@ export const policyService = {
         content: JSON.stringify(v.content), content_sha256: contentSha(v.content), summary: JSON.stringify(v.summary),
         schema_release: JSON.stringify({ apple: catalog.release.commit }), impact: null,
       }).returning('*') as Array<Record<string, any>>;
-      await trx('policies').where({ tenant_id: tenantId, id: policyId }).update({ sections: ['apple'], updated_by: actor.userId, updated_at: new Date() });
+      await trx('policies').where({ tenant_id: tenantId, id: policyId }).update({ sections: sectionsOf(v.content), updated_by: actor.userId, updated_at: new Date() });
       return updated;
     });
     const payloadTypes = [...new Set(profile.payloads.map((p) => String(p.PayloadType)))].sort();
@@ -557,8 +581,14 @@ export const policyService = {
 
 /** The value at a path of an item (a secret typed in). */
 function valueAt(content: PolicyContentV1, itemId: string, path: Array<string | number>): string {
-  let node: unknown = content.sections.apple?.items.find((i) => i.id === itemId);
-  for (const p of path) node = (node as Record<string | number, unknown>)?.[p as string];
+  let node: unknown;
+  if (itemId === ANDROID_SECTION_ITEM) {
+    const at = androidNodeAt(content.sections.android, androidPathText(path));
+    node = at ? at.parent[at.key] : undefined;
+  } else {
+    node = content.sections.apple?.items.find((i) => i.id === itemId);
+    for (const p of path) node = (node as Record<string | number, unknown>)?.[p as string];
+  }
   const v = (node as { $secretValue?: unknown })?.$secretValue;
   if (typeof v !== 'string') throw new Error('secret value not found at its site');
   return v;

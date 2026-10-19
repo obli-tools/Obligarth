@@ -7,7 +7,7 @@
 // (disabled_in_edge, which section 13.1 proposes to rename missing_in_provider). The junction replaces the mapping by
 // the identity once 3b is applied.
 import type { Knex } from 'knex';
-import type { AndroidReleaseReason } from '@obligarth/shared/dist/android/operations.js';
+import type { AndroidReleaseReason } from '@obligarth/shared';
 
 /** Core reasons known by the CHECKs of main (devices and device_enrollments). */
 type CoreReason = 'superseded' | 'removed_by_command' | 'disabled_in_edge' | 'retired';

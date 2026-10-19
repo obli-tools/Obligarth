@@ -3,7 +3,7 @@
 //   DELETE /devices/:id/kiosk-exit   ends the running kiosk exit of a device now (the lock is pushed back), audited
 // The exit itself is the guarded action mdm.android_kiosk_exit, requested by POST /api/guard/actions (restriction
 // matrix, step-up and approvals of the guard engine), never by a route of this module. Capability devices.manage on
-// each route. Mounted at lot AN-A2.
+// each route. Mounted under /api/android by routes/index.ts (lot AN-A2).
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { audit } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';

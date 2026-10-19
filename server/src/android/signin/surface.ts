@@ -10,8 +10,7 @@
 //   POST /a/:key/signin                         the acknowledgement of the notice (personal device) → 303 to Obligate
 //   GET  /a/:key/signin/callback?code&state     the answer of Obligate → 303 to Google's enrollment page (the token),
 //                                               or to Google's invalid page
-// Mounted at /a/:key by app.ts at the junction AN-A2 (beside the BYOD surface; point of junction: the router is built
-// here, never mounted on the branch). Limiters: per key BEFORE the resolution of the key (F1R-8), then per address.
+// Mounted at /a/:key by app.ts (junction AN-A2), beside the BYOD surface. Limiters: per key BEFORE the resolution of the key (F1R-8), then per address.
 import express, { Router, type NextFunction, type Request, type RequestHandler, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { appleTenants } from '../../apple/tenants/registry';
@@ -26,7 +25,7 @@ import { signinIdentity } from './identity';
 import { signinMessagePage, signinNoticePage, signinPageCsp, signinTexts } from './pages';
 import { isRandomToken, SIGNIN_COOKIE, signinCallbackOf } from './rules';
 import { ENROLL_URL } from '../enrollment/methods';
-import { ANDROID_SIGNIN_TTL_SECONDS } from '@obligarth/shared/dist/android/enrollment.js';
+import { ANDROID_SIGNIN_TTL_SECONDS } from '@obligarth/shared';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

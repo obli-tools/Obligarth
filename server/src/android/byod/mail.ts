@@ -6,7 +6,7 @@
 // which must not be stored in a job's data). Never logged: the recipient, the link, the code. At the junction the
 // channel of lot C (enrollmentMailChannel) may replace byodMailChannel.
 import nodemailer from 'nodemailer';
-import type { AndroidByodMailOutcome } from '@obligarth/shared/dist/android/byod.js';
+import type { AndroidByodMailOutcome } from '@obligarth/shared';
 import { db } from '../../db';
 import { logger } from '../../utils/logger';
 import { smtpServerService, type SmtpTransport } from '../../services/smtpServer.service';

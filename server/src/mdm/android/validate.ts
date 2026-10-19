@@ -1,7 +1,7 @@
 import {
-  POLICY_MAX_ITEMS, POLICY_MAX_SECRET_VALUE_LENGTH, isSecretRef, isSecretValue, looksLikeSecretMarker, variablesInString, type JsonValue,
+  ANDROID_ONC_GUID_RE, isAndroidPackage, isSecretRef, isSecretValue, type JsonValue, looksLikeSecretMarker,
+  POLICY_MAX_ITEMS, POLICY_MAX_SECRET_VALUE_LENGTH, variablesInString,
 } from '@obligarth/shared';
-import { ANDROID_ONC_GUID_RE, isAndroidPackage } from '@obligarth/shared/dist/android/policy.js';
 import { androidCatalog, type AndroidCatalogView, type SchemaIssue } from './catalog';
 import {
   APP_CONFIG_SECRET_PURPOSE, DEPRECATED_APP_FIELDS, DEPRECATED_FIELDS, FAILED_PASSWORDS_FOR_WIPE, MIN_WIPE_AFTER_DAYS,

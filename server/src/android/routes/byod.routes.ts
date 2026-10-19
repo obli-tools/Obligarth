@@ -3,14 +3,14 @@
 //                                       201 { id, code (once), prefix, link, expiresAt, mail }
 //   GET  /byod/invitations              the tenant's invitations (never a code)
 //   POST /byod/invitations/:id/revoke   revokes an invitation (and its token at Google), audited
-// Capability: mdm.enrollment.manage once it exists (AN41, §22.8); devices.manage until then. Mounted at lot AN-A2. The
+// Capability: mdm.enrollment.manage (AN41, §22.8). Mounted under /api/android by routes/index.ts (lot AN-A2). The
 // code is in the body of the answer only, with Cache-Control no-store; never logged. The link names the notice page of
 // the device surface (<base>/a/<MDM key>/byod), which carries no secret.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import { ANDROID_BYOD_INVITATION_STATES, ANDROID_BYOD_INVITATION_TTL_HOURS, type AndroidByodInvitationCreated, type AndroidByodMailOutcome }
-  from '@obligarth/shared/dist/android/byod.js';
+  from '@obligarth/shared';
 import { audit } from '../../audit';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
@@ -51,7 +51,7 @@ function routeError(err: unknown): unknown {
 
 export function createAndroidByodRouter(): Router {
   const router = Router();
-  const capability = requireTenantCapability('devices.manage');
+  const capability = requireTenantCapability('mdm.enrollment.manage');
   /** 30 invitations a minute and per user (lot C's rule for links and invitations). */
   const createLimiter = rateLimit({
     windowMs: 60_000, limit: 30, standardHeaders: false, legacyHeaders: false,

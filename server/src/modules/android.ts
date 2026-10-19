@@ -23,13 +23,15 @@ import { registerEnrollmentHandler } from '../android/enrollment/handler';
 import { registerStatusReportHandler } from '../android/inventory/statusReport';
 import { registerUsageLogsHandler } from '../android/inventory/usageLogs';
 import { setAndroidDeviceCounter } from '../android/gateway/google';
+import { plugAndroidJunction } from '../android/junction';
 
 // =============================================================================
 // ANDROID (Android Management API, called directly by the instance) — its hooks into the core's registries,
 // registered here and only here, without I/O: the vault's instance secret name, the audit actions, the handlers of
-// the notifications; the durable jobs, the start check of the Google identity and the pull loop only when
-// ANDROID_MODE is not off (an instance without Android adds no queue, no statement at rest). index.ts calls it after
-// registerAppleModule() and registerPrivacyModule() (lot AN-A2); until then only the testbed calls it.
+// the notifications, the hooks of the junction (android/junction.ts); the durable jobs, the start check of the Google
+// identity and the pull loop only when ANDROID_MODE is not off (an instance without Android adds no queue, no
+// statement at rest). index.ts calls it after registerAppleModule() and registerPrivacyModule() (lot AN-A2); its
+// routes are mounted by routes/index.ts and app.ts.
 // Start (google, fake): android.google-check obtains an access token, checks the permission on the subscription and
 // refuses to start when ANDROID_GCP_PROJECT_ID differs from the pinned project; an absent or refused identity, or
 // Google out of reach, starts degraded with a platform alert. Stop: the loop finishes its pull without acknowledging
@@ -43,6 +45,7 @@ export function registerAndroidModule(): void {
   if (registered) return;
   registered = true;
 
+  plugAndroidJunction();
   registerInstanceSecretName(GOOGLE_CREDENTIALS_SECRET, 'JSON key of the Google service account of the Android integration (vault_key mode)');
   registerAndroidAuditActions();
   registerEnterpriseHandlers();
@@ -64,6 +67,11 @@ export function registerAndroidModule(): void {
   registerSecretColumn({
     table: 'android_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
     owner: 'android.commands', onLoss: 'null', lossPatch: { state: 'rejected', reject_code: 'secret_lost', submit_state: 'failed', hold_reason: null },
+  });
+  // The queue widened to Android (migration android_junction): its sealed newPassword, written by the bus of lot AN-P.
+  registerSecretColumn({
+    table: 'mdm_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
+    owner: 'android.commands', onLoss: 'delete',
   });
   registerSecretReferenceHolder({ table: 'pending_actions', column: 'params', tenantColumn: 'tenant_id', refs: (v) => findSecretRefs(typeof v === 'string' ? JSON.parse(v) : v) });
   registerCommandHandler();

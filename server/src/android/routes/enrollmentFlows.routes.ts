@@ -4,12 +4,12 @@
 //   PUT  /enterprise/signin              { enabled, allowPersonalUsage? } → signinDetails of the enterprise; step-up
 //   POST /zero-touch/iframe-token        { tokenId } → the zero-touch iframe URL (web token + extras of a long token); step-up
 //   GET  /enrollment-tokens/:id/kme      the Knox Mobile Enrollment configuration of a KME token; step-up
-// Capabilities: mdm.integrations.manage (sign-in URL, zero-touch) and mdm.enrollment.manage (KME) once they exist
-// (AN41, §22.8); devices.manage until then. Mounted at lot AN-A2. The iframe URL and the KME JSON carry the value of a
+// Capabilities (AN41, §22.8): mdm.integrations.manage (sign-in URL, zero-touch) and mdm.enrollment.manage (KME).
+// Mounted under /api/android by routes/index.ts (lot AN-A2). The iframe URL and the KME JSON carry the value of a
 // long token: in the body of the answer only, Cache-Control no-store, never logged.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { ANDROID_SIGNIN_PERSONAL_USAGE } from '@obligarth/shared/dist/android/enrollment.js';
+import { ANDROID_SIGNIN_PERSONAL_USAGE } from '@obligarth/shared';
 import { audit } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
@@ -36,7 +36,8 @@ function routeError(err: unknown): unknown {
 
 export function createAndroidEnrollmentFlowsRouter(): Router {
   const router = Router();
-  const capability = requireTenantCapability('devices.manage');
+  const capability = requireTenantCapability('mdm.integrations.manage');
+  const enrollment = requireTenantCapability('mdm.enrollment.manage');
 
   router.get('/enterprise/signin', capability, wrap(async (req, res) => {
     res.json({ success: true, data: await readSigninConfig(Number(req.tenantId), Number(req.session.userId)) });
@@ -68,7 +69,7 @@ export function createAndroidEnrollmentFlowsRouter(): Router {
     } catch (err) { throw routeError(err); }
   }));
 
-  router.get('/enrollment-tokens/:id/kme', capability, wrap(async (req, res) => {
+  router.get('/enrollment-tokens/:id/kme', enrollment, wrap(async (req, res) => {
     const id = UUID.safeParse(req.params.id);
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
     const step = await checkSecondFactor(req, { actionKey: 'android.enrollment_token_reveal', allowTrustedIp: false, allowDevice: true });

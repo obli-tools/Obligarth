@@ -4,7 +4,7 @@
 import type {
   AmapiApplication, AmapiCommand, AmapiDevice, AmapiEnrollmentToken, AmapiEnrollmentTokenPartial, AmapiEnterprise,
   AmapiEnterpriseBasic, AmapiOperation, AmapiPolicy, AmapiProvisioningInfoMin, Page, PubsubReceived,
-} from '@obligarth/shared/dist/android/amapi';
+} from '@obligarth/shared';
 import type { BreakerStatus } from '../google/http';
 import type { IdentityStatus } from '../google/token';
 import type { AndroidEnterpriseRef, PolicyId } from './names';

@@ -4,7 +4,7 @@
 import type {
   AmapiApplication, AmapiCommand, AmapiDevice, AmapiEnrollmentToken, AmapiEnterprise, AmapiEnterpriseBasic, AmapiOperation,
   AmapiPolicy, AmapiSignupUrl,
-} from '@obligarth/shared/dist/android/amapi';
+} from '@obligarth/shared';
 import type { GoogleHttp } from './http';
 
 export type AmapiOp =

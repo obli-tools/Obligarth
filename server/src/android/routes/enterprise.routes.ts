@@ -1,7 +1,7 @@
 // /api/android (tenant router: requireAuth, requireTenant):
 //   GET  /enterprise           the tenant's Android enterprise card (state, type, domain; never a Google token)
 //   POST /enterprise/signups   starts a signup: publisher terms accepted, step-up; answers the URL of Google
-// Capability: mdm.integrations.manage once it exists (AN41); devices.manage until then. Mounted at lot AN-A2.
+// Capability: mdm.integrations.manage (AN41). Mounted under /api/android by routes/index.ts (lot AN-A2).
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { audit } from '../../audit';
@@ -39,7 +39,7 @@ export function toRouteError(err: unknown): unknown {
 
 export function createAndroidTenantRouter(): Router {
   const router = Router();
-  const capability = requireTenantCapability('devices.manage');
+  const capability = requireTenantCapability('mdm.integrations.manage');
 
   router.get('/enterprise', capability, wrap(async (_req, res) => {
     const row = await readEnterpriseRow(db);

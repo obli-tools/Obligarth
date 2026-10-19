@@ -3,7 +3,7 @@
 // profile chosen by rule for those facts, the hashed forms of the state, of the cookie's nonce and of the provisioning
 // id, the sign-in URL of a tenant. No database, no logger: the unit tests load it.
 import { createHash, randomBytes } from 'node:crypto';
-import type { AmapiProvisioningInfoMin } from '@obligarth/shared/dist/android/amapi';
+import type { AmapiProvisioningInfoMin } from '@obligarth/shared';
 import type { AndroidOwnership, AndroidUsage } from '../enrollment/methods';
 
 const ID_RE = /^[A-Za-z0-9_-]{1,100}$/;

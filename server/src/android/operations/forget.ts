@@ -13,7 +13,7 @@
 //     caps of the gateway), floor sensitive, typed confirmation, bulk from 3 devices, never the whole fleet.
 // Both audit android.device_forgotten (critical: device, motif) and delete the device's own policy d-<uuid>.
 import { z } from 'zod';
-import { ANDROID_FORGET_ACTION } from '@obligarth/shared/dist/android/operations.js';
+import { ANDROID_FORGET_ACTION } from '@obligarth/shared';
 import { audit } from '../../audit';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';

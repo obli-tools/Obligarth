@@ -1,13 +1,12 @@
 import { createHash } from 'node:crypto';
-import { variablesOf, type JsonValue, type UnavailableReason } from '@obligarth/shared';
-import type { AndroidAvailabilityFacts, AndroidUnavailableReason } from '@obligarth/shared/dist/android/availability.js';
 import {
-  AMAPI_ARTIFACT_KEY, AMAPI_CHANNEL, devicePolicyId, enrollmentPolicyId, parseAndroidSettingKey,
-} from '@obligarth/shared/dist/android/policy.js';
+  AMAPI_ARTIFACT_KEY, AMAPI_CHANNEL, type AndroidAvailabilityFacts, type AndroidKioskLock,
+  type AndroidUnavailableReason, devicePolicyId, enrollmentPolicyId, type JsonValue, parseAndroidSettingKey,
+  type UnavailableReason, variablesOf,
+} from '@obligarth/shared';
 import { CanonicalJsonError, canonicalize } from '../../apple/ddm/canonical';
 import { secretRefsOf } from '../apple/compile';
 import type { VariableValues } from '../apple/variables';
-import type { AndroidKioskLock } from '@obligarth/shared/dist/android/kiosk.js';
 import { androidKeyAvailability } from './availability';
 import { androidCatalog, type AndroidCatalogView } from './catalog';
 import { FAILED_PASSWORDS_FOR_WIPE, POLICY_LIMITS, RESERVED_FIELDS, RESERVED_PACKAGES, RESERVED_ROLES } from './overlay';

@@ -1,4 +1,4 @@
-import type { AndroidFieldSupport, AndroidMode } from '@obligarth/shared/dist/android/availability.js';
+import type { AndroidFieldSupport, AndroidMode } from '@obligarth/shared';
 
 // =============================================================================
 // Local overlay of the AMAPI Policy schema, versioned with the code: what the

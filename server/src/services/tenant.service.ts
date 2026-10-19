@@ -10,6 +10,7 @@ import { currentDbContext, switchToIdentity, switchToNone, switchToTenant, type 
 import { vault } from '../vault';
 import { audit, type AuditWriteContext } from '../audit';
 import { appleTenants } from '../apple/tenants/registry';
+import { assertTenantDeletable } from '../android/operations/offboarding';
 import { requestTenantResolution } from '../mdm/policies/triggers';
 import { logger } from '../utils/logger';
 
@@ -233,6 +234,9 @@ export const tenantService = {
       const res = await db.raw('SELECT obligarth.ctx_actor_is_platform_admin() AS ok') as { rows: Array<{ ok: boolean }> };
       return res.rows[0]?.ok === true;
     });
+    // A tenant that still has an Android enterprise is unlinked first (android-amapi §6.5, AN27): 409, before
+    // anything changes at apple-edge.
+    if (allowed) await assertTenantDeletable(id);
     const edge = allowed ? await switchToNone(() => appleTenants.retireBeforeDeletion(id, actor)) : 'no_edge_tenant';
     try {
       await tenantService.deleteHere(id, userId, ctx);

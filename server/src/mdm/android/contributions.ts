@@ -1,7 +1,7 @@
-import { variablesOf, type JsonValue, type PolicyVariable } from '@obligarth/shared';
 import {
-  ANDROID_ONC_GUID_RE, androidAppKey, androidFieldKey, androidOncKey, isAndroidPackage, type AndroidPolicySection,
-} from '@obligarth/shared/dist/android/policy.js';
+  ANDROID_ONC_GUID_RE, androidAppKey, androidFieldKey, androidOncKey, type AndroidPolicySection, isAndroidPackage,
+  type JsonValue, type PolicyVariable, variablesOf,
+} from '@obligarth/shared';
 import { valueHashOf } from '../policies/contributions';
 
 // =============================================================================

@@ -8,7 +8,7 @@
 //   base of the device surface (https), the MDM key of the tenant and at least one enabled sign-in URL profile;
 //   disabled sends an empty list (Google drops the sign-in token). Audited android.signin_configured.
 import { ANDROID_SIGNIN_PERSONAL_USAGE, type AndroidSigninConfig, type AndroidSigninConfigRequest, type AndroidSigninPersonalUsage }
-  from '@obligarth/shared/dist/android/enrollment.js';
+  from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { appleTenants } from '../../apple/tenants/registry';

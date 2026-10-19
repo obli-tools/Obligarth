@@ -12,6 +12,8 @@ import type { JobDefinition, JobPolicy, JobRetry, RegisteredJob } from './types'
 export const JOB_MODULES: readonly string[] = [
   'core', 'jobs', 'devices', 'reports', 'apple-edge', 'apple', 'mdm', 'vpp', 'integrations', 'privacy', 'audit',
   'actions', 'enrollment', 'alerts', 'vault', 'tenants', 'restore', 'notifications', 'maintenance',
+  // Lot AN-A2 (android-amapi §3.4): the queues of the Android module, registered only when ANDROID_MODE is not off.
+  'android',
 ];
 
 /** The shared dead letter queue (no worker). */

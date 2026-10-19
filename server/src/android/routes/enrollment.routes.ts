@@ -4,7 +4,7 @@
 //   DELETE /enrollment-tokens/:id           revokes a token (deleted at Google, value destroyed), audited
 //   POST   /devices/:id/approve             approves a device enrolled with a token that requires it
 //   POST   /devices/:id/refuse              refuses it (its deletion: android.device_forget, lot AN-D)
-// Capability: mdm.enrollment.manage once it exists (AN41, §22.8); devices.manage until then. Mounted at lot AN-A2.
+// Capability: mdm.enrollment.manage (AN41, §22.8). Mounted under /api/android by routes/index.ts (lot AN-A2).
 // The value of a token is never logged: the payload is in the body of the answer only, with Cache-Control no-store.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -34,7 +34,7 @@ function routeError(err: unknown): unknown {
 
 export function createAndroidEnrollmentRouter(): Router {
   const router = Router();
-  const capability = requireTenantCapability('devices.manage');
+  const capability = requireTenantCapability('mdm.enrollment.manage');
 
   router.post('/enrollment-tokens', capability, wrap(async (req, res) => {
     const parsed = CreateBody.safeParse(req.body);

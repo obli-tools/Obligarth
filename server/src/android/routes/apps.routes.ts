@@ -6,12 +6,12 @@
 //   DELETE /apps/:id                 archives it (refused while assigned), audited
 //   POST   /web-tokens               a token for one iframe of the console (screen, page), audited, never stored
 // The assignments themselves go through POST /api/mdm/assignments/changes (preview, step-up, approval): junction
-// AN-A2/AN-P (apps/assignments.ts). Capability: mdm.apps.manage once it exists (AN41, §22.8); mdm.policies.manage
-// (write the policies and their assignments) until then. Mounted at lot AN-A2 (the common catalog, POST /api/mdm/apps,
+// AN-A2/AN-P (apps/assignments.ts). Capability: mdm.apps.manage (AN41, §22.8). Mounted under /api/android by
+// routes/index.ts (lot AN-A2) (the common catalog, POST /api/mdm/apps,
 // calls the same functions for the family android). A web token is in the body of the answer only, no-store.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { ANDROID_APP_KINDS } from '@obligarth/shared/dist/android/apps.js';
+import { ANDROID_APP_KINDS } from '@obligarth/shared';
 import { audit } from '../../audit';
 import { db } from '../../db';
 import { asTenant } from '../../db/context';
@@ -48,7 +48,7 @@ function routeError(err: unknown): unknown {
 
 export function createAndroidAppsRouter(): Router {
   const router = Router();
-  const capability = requireTenantCapability('mdm.policies.manage');
+  const capability = requireTenantCapability('mdm.apps.manage');
 
   router.get('/apps', capability, wrap(async (req, res) => {
     const tenantId = Number(req.tenantId);

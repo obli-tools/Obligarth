@@ -1,4 +1,5 @@
 import type { PolicyConflict, SourceScope } from '@obligarth/shared';
+import { preferredActivityConflicts } from '../android/validate';
 import { appContribution, type Contribution } from './contributions';
 import { resourceKey, type ResolutionAssignment, type ResolvedResource } from './resolver';
 
@@ -12,6 +13,9 @@ import { resourceKey, type ResolutionAssignment, type ResolvedResource } from '.
 // version and at a change of priority. `focus`: only the conflicts that
 // involve one of the resources being changed (an older conflict elsewhere
 // does not block an unrelated change; the resolution breaks it and lists it).
+// Android (android-amapi §9.7, REV-C1a-4; lot AN-A2): a persistent preferred activity of one resource and a default
+// application of another on the same intent domain are a conflict too (two keys, one effect on the device),
+// reported under android:persistentPreferredActivities.
 // =============================================================================
 
 const SCOPE_OF: Record<ResolutionAssignment['targetScope'], SourceScope> = { tenant: 'tenant', group: 'group', device: 'device' };
@@ -47,6 +51,7 @@ export function findConflicts(assignments: ResolutionAssignment[], resources: Ma
         byKey.set(c.settingKey, hashes);
       }
     }
+    preferredActivitiesConflict(byKey);
     for (const [settingKey, hashes] of byKey) {
       if (hashes.size < 2) continue;
       const involved = [...hashes.values()].flat();
@@ -70,4 +75,33 @@ export function findConflicts(assignments: ResolutionAssignment[], resources: Ma
   }
   return out.sort((x, y) => (x.settingKey < y.settingKey ? -1 : x.settingKey > y.settingKey ? 1 : 0)
     || x.target.scope.localeCompare(y.target.scope) || Number(x.target.id ?? 0) - Number(y.target.id ?? 0) || x.priority - y.priority);
+}
+
+const PREFERRED = 'android:persistentPreferredActivities';
+const DEFAULTS = 'android:defaultApplicationSettings';
+
+type Holders = Map<string, Map<string, Array<{ res: ResolvedResource; a: ResolutionAssignment }>>>;
+
+/** Adds, under android:persistentPreferredActivities, the resources of a default application that claims the domain
+ *  of a preferred activity of another resource (same target, same priority). */
+function preferredActivitiesConflict(byKey: Holders): void {
+  const preferred = byKey.get(PREFERRED);
+  const defaults = byKey.get(DEFAULTS);
+  if (!preferred || !defaults) return;
+  const valueOf = (x: { res: ResolvedResource; a: ResolutionAssignment }, key: string): unknown =>
+    contributionsFor(x.res, x.a).find((c) => c.settingKey === key)?.value;
+  for (const ps of [...preferred.values()]) {
+    for (const p of ps) {
+      for (const [hd, ds] of defaults.entries()) {
+        for (const d of ds) {
+          if (d.res === p.res) continue;   // one section: its validation refuses it
+          if (!preferredActivityConflicts(valueOf(p, PREFERRED), valueOf(d, DEFAULTS)).length) continue;
+          const tag = `d:${hd}`;
+          const who = preferred.get(tag) ?? [];
+          if (!who.some((x) => x.res === d.res)) who.push(d);
+          preferred.set(tag, who);
+        }
+      }
+    }
+  }
 }

@@ -1,8 +1,7 @@
-import type { JsonValue } from '@obligarth/shared';
-import { isAndroidPackage, parseAndroidSettingKey } from '@obligarth/shared/dist/android/policy.js';
 import {
-  ANDROID_KIOSK_LOCK_TYPE, ANDROID_KIOSK_UPDATE_WINDOW, ANDROID_SYSTEM_UPDATE_LIMITS, type AndroidKioskForm, type AndroidKioskLock,
-} from '@obligarth/shared/dist/android/kiosk.js';
+  ANDROID_KIOSK_LOCK_TYPE, ANDROID_KIOSK_UPDATE_WINDOW, ANDROID_SYSTEM_UPDATE_LIMITS, type AndroidKioskForm,
+  type AndroidKioskLock, isAndroidPackage, type JsonValue, parseAndroidSettingKey,
+} from '@obligarth/shared';
 import { policyHasWipeSettings, RESERVED_PACKAGES } from './overlay';
 import { defaultApplicationDomain, preferredDomains } from './validate';
 

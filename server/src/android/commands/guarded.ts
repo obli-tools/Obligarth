@@ -28,7 +28,8 @@ import { androidGateway } from '../gateway';
 import { AndroidError } from '../gateway/errors';
 import { parseOwnedName } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
-import { ANDROID_COMMANDS, checkNewPassword, refusalOf, type AndroidCommandType } from './catalog';
+import { AppError } from '../../middleware/errorHandler';
+import { ANDROID_COMMANDS, AndroidCommandParamError, checkNewPassword, refusalOf, type AndroidCommandType } from './catalog';
 import { AndroidCommandError, cancelAndroidCommand, enqueueAndroidCommands, registerAndroidCommandFinalHook, type FinalTargetEvent } from './bus';
 import { RESET_PASSWORD_PURPOSE } from './submit';
 
@@ -344,6 +345,83 @@ export function defineAndroidGuardedAction(key: AndroidGuardedKey, o: { gateway?
   if (key !== 'mdm.android_disable') {
     def.cancelAfterDispatch = (ctx) => androidGuardedChannel.cancelAfterDispatch(key, ctx, { gateway: gw() });
     def.cancelWindowSeconds = WINDOW[key] ?? ANDROID_COMMANDS.WIPE.durationSeconds;
+  }
+  if (key === 'mdm.reset_password') {
+    // The request may type the new password (checked, then sealed in the tenant's vault in its transaction: the
+    // stored and journaled parameters carry its reference only); a reference stays accepted as it is.
+    def.requestParamsSchema = RESET_PASSWORD_REQUEST;
+    def.prepareParams = async (trx, tenantId, params, userId) => {
+      // A reference already sealed goes as it is (its purpose and its tenant are checked by the execution).
+      if (params.newPassword !== undefined && typeof params.newPassword !== 'string') return params;
+      try {
+        return await prepareResetPasswordParams(trx, tenantId, params, userId);
+      } catch (err) {
+        if (err instanceof AndroidCommandParamError) throw new AppError(400, 'Invalid parameters for this action', 'invalidParams', { reason: err.code });
+        throw err;
+      }
+    };
+  }
+  return def;
+}
+
+const RESET_PASSWORD_REQUEST = z.object({
+  newPassword: z.union([z.string().max(4096), UUID_REF]).optional(),
+  flags: z.array(z.enum(['REQUIRE_ENTRY', 'DO_NOT_ASK_CREDENTIALS_ON_BOOT', 'LOCK_NOW'])).max(3).optional(),
+}).strict();
+
+/** The four keys Apple and Android share (§11.4): the actions of the Apple module take the channel amapi. */
+export const SHARED_GUARDED_KEYS: ReadonlySet<string> = new Set(['mdm.erase_device', 'mdm.remove_management', 'mdm.device_lock', 'mdm.lost_mode_enable']);
+
+/**
+ * A guarded action of the Apple module that also serves the devices of the channel amapi (junction AN-A2, §11.4): the
+ * targets are split by channel, the Apple ones go to the Apple definition unchanged (its revalidation, its execution,
+ * its cancellation), the amapi ones to androidGuardedChannel. The parameters are those of either channel: each channel
+ * reads them again with its own schema and sets its targets aside when they do not fit it (params_invalid). An action
+ * whose targets are all Apple behaves exactly as before.
+ */
+export function withAmapiChannel<P>(apple: GuardedActionDef<P>): GuardedActionDef<P> {
+  if (!SHARED_GUARDED_KEYS.has(apple.key)) return apple;
+  const key = apple.key as AndroidGuardedKey;
+  const androidSchema = ANDROID_GUARDED_PARAMS[key];
+  const split = async (tenantId: number, ids: number[]): Promise<{ apple: number[]; amapi: number[] }> => {
+    if (!ids.length) return { apple: [], amapi: [] };
+    const amapi = new Set((await db('devices').where({ tenant_id: tenantId, management_channel: 'amapi' }).whereIn('id', ids)
+      .pluck('id') as Array<number | string>).map(Number));
+    return { apple: ids.filter((d) => !amapi.has(d)), amapi: ids.filter((d) => amapi.has(d)) };
+  };
+  const fits = (schema: z.ZodTypeAny, params: unknown): boolean => schema.safeParse(params ?? {}).success;
+  const def: GuardedActionDef<P> = {
+    ...apple,
+    paramsSchema: z.union([apple.paramsSchema as z.ZodTypeAny, androidSchema]) as unknown as z.ZodType<P>,
+    async revalidate(ctx) {
+      const s = await split(ctx.tenantId, ctx.deviceIds);
+      if (!s.amapi.length) return apple.revalidate(ctx);
+      const out = new Map<number, 'ok' | GuardTargetRefusal>();
+      if (s.apple.length) {
+        const r = fits(apple.paramsSchema as z.ZodTypeAny, ctx.params) ? await apple.revalidate({ ...ctx, deviceIds: s.apple }) : null;
+        for (const d of s.apple) out.set(d, r ? r.get(d) ?? { code: 'not_found' } : { code: 'params_invalid' });
+      }
+      const ok = fits(androidSchema, ctx.params);
+      const r = ok ? await androidGuardedChannel.revalidate(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>, s.amapi) : null;
+      for (const d of s.amapi) out.set(d, r ? r.get(d) ?? { code: 'not_found' } : { code: 'params_invalid' });
+      return out;
+    },
+    async execute(ctx, deviceIds) {
+      const s = await split(ctx.tenantId, deviceIds);
+      if (!s.amapi.length) return apple.execute(ctx, deviceIds);
+      const out = new Map<number, GuardTargetResult>(s.apple.length ? await apple.execute(ctx, s.apple) : []);
+      for (const [d, x] of await androidGuardedChannel.execute(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>, s.amapi)) out.set(d, x);
+      return out;
+    },
+  };
+  if (apple.cancelAfterDispatch) {
+    const cancelApple = apple.cancelAfterDispatch;
+    def.cancelAfterDispatch = async (ctx) => {
+      const out = await cancelApple(ctx);
+      const mine = await db('android_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid }).first('id');
+      if (mine) for (const [d, x] of await androidGuardedChannel.cancelAfterDispatch(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>)) out.set(d, x);
+      return out;
+    };
   }
   return def;
 }

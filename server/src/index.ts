@@ -29,6 +29,7 @@ import { registerGuardModule } from './guard/module';
 import { registerAppleModule } from './modules/apple';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
+import { registerAndroidModule } from './modules/android';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -100,6 +101,9 @@ async function main() {
   registerMdmModule();
   registerAppleModule();
   registerPrivacyModule();
+  // Android (android-amapi §3.4, lot AN-A2): after the Apple and privacy modules. Without I/O; its queues, handlers,
+  // start check of the Google identity and pull loop only when ANDROID_MODE is not off (AN39).
+  registerAndroidModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.

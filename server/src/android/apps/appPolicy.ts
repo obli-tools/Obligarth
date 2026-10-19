@@ -12,11 +12,10 @@
 //   - the iframe's template: templateId digits only (Google, note of July 2026), its variables bounded.
 // Pure: the vault and the database are the caller's (apps/assignments.ts). Unit tests: appPolicy.test.ts.
 import {
-  POLICY_MAX_SECRET_VALUE_LENGTH, isSecretRef, isSecretValue, looksLikeSecretMarker, variablesInString, variablesOf,
-  type JsonValue, type PolicyVariable,
+  AMAPI_ARTIFACT_KEY, ANDROID_INSTALL_TYPES, androidAppKey, type AndroidAppOptions, isAndroidPackage, isSecretRef,
+  isSecretValue, type JsonValue, looksLikeSecretMarker, POLICY_MAX_SECRET_VALUE_LENGTH, type PolicyVariable,
+  variablesInString, variablesOf,
 } from '@obligarth/shared';
-import { ANDROID_INSTALL_TYPES, type AndroidAppOptions } from '@obligarth/shared/dist/android/apps.js';
-import { AMAPI_ARTIFACT_KEY, androidAppKey, isAndroidPackage } from '@obligarth/shared/dist/android/policy.js';
 import { valueHashOf } from '../../mdm/policies/contributions';
 import { APP_CONFIG_SECRET_PURPOSE, RESERVED_PACKAGES } from '../../mdm/android/overlay';
 import type { AndroidAppMetadata, AndroidManagedProperty } from './metadata';

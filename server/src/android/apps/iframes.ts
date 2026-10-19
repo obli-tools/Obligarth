@@ -1,6 +1,6 @@
 // The screens of the managed Google Play iframes and the pages allowed to host them (android-amapi §9.6, §12.3; lot
 // AN-E1). Pure (unit tests: appPolicy.test.ts); the token itself is webTokens.ts's.
-import { ANDROID_IFRAME_PAGES, ANDROID_IFRAME_SCREENS, type AndroidIframeScreen } from '@obligarth/shared/dist/android/apps.js';
+import { ANDROID_IFRAME_PAGES, ANDROID_IFRAME_SCREENS, type AndroidIframeScreen } from '@obligarth/shared';
 import type { IframeFeature } from '../gateway/types';
 
 const PATH_MAX = 200;

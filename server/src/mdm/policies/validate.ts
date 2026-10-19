@@ -1,5 +1,5 @@
 import {
-  POLICY_CONTENT_FORMAT, POLICY_MAX_CONTENT_BYTES, POLICY_MAX_ITEMS, POLICY_MAX_SECRET_VALUE_LENGTH, RAW_PROFILE_TYPE,
+  POLICY_CONTENT_FORMAT, POLICY_MAX_CONTENT_BYTES, POLICY_MAX_ITEMS, POLICY_MAX_SECRET_VALUE_LENGTH, POLICY_VALIDATION_CODES, RAW_PROFILE_TYPE,
   SETTING_KEY_MAX, artifactOf, identifierFits, isSecretRef, isSecretValue, looksLikeSecretMarker, settingKeysOf, subkeyNamed,
   typedValueKind, variablesInString,
   type AppleItem, type JsonValue, type PolicyContentV1, type PolicyValidationCode, type PolicyValidationIssue,
@@ -7,6 +7,8 @@ import {
 } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import type { AppleCatalogView } from '../apple/catalog';
+import { androidContributions } from '../android/contributions';
+import { validateAndroidSection, type AndroidValidationOptions } from '../android/validate';
 
 // =============================================================================
 // Validation of the content of a policy version (docs: modele-donnees-mdm
@@ -41,6 +43,9 @@ export interface ValidateOptions {
   /** Saving a draft: the raw profiles it already holds (item id → rawProfileFingerprint of the stored item) are
    *  accepted as they are, never changed nor added by the editor. */
   keptRawProfiles?: ReadonlyMap<string, string>;
+  /** The Android section (lot AN-A2): the tenant's guards (domain of its enterprise, floor of
+   *  maximumFailedPasswordsForWipe); absent: no domain bound, the default floor. */
+  android?: AndroidValidationOptions;
 }
 
 /** What identifies a stored raw profile item: the canonical JSON of the item (its note apart). */
@@ -77,6 +82,9 @@ export interface ValidationOutcome {
   secretValues: SecretValueSite[];
   secretRefs: SecretRefSite[];
   summary: PolicyVersionSummary;
+  /** The setting keys of the wipe-capable settings the Android section sets (android-amapi §22.4): impact preview
+   *  (wipeRules) and publication at the restricted level. */
+  androidWipeRules: string[];
 }
 
 const ITEM_PROPS = new Set(['id', 'type', 'instance', 'remove', 'values', 'note']);
@@ -328,8 +336,9 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
   const done = (content: PolicyContentV1 | null): ValidationOutcome => {
     summary.secretRefs = c.secretRefs.length + c.secretValues.length;
     summary.variables = c.variables;
-    return { issues: c.issues, content, secretValues: c.secretValues, secretRefs: c.secretRefs, summary };
+    return { issues: c.issues, content, secretValues: c.secretValues, secretRefs: c.secretRefs, summary, androidWipeRules };
   };
+  let androidWipeRules: string[] = [];
   if (!isPlainObject(raw)) { c.add(null, '', 'invalid_content'); return done(null); }
   // Before anything serialises or hashes the content: sections, items, values and their own nesting.
   if (nestedDeeperThan(raw, MAX_DEPTH + 8)) { c.add(null, '', 'invalid_content'); return done(null); }
@@ -338,15 +347,16 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
   const sections = raw.sections;
   if (!isPlainObject(sections)) { c.add(null, 'sections', 'invalid_content'); return done(null); }
   for (const k of Object.keys(sections)) {
-    // The android section (AMAPI fragment) is v1 (section 7.14).
-    if (k !== 'apple') c.add(null, `sections.${k}`, 'invalid_content');
+    // The apple section, and the android section since the junction AN-A2 (android-amapi §9.2).
+    if (k !== 'apple' && k !== 'android') c.add(null, `sections.${k}`, 'invalid_content');
   }
   if (c.issues.length) return done(null);
   // A guard before anything heavy (the stored content is measured again once the secrets are replaced).
   if (contentBytes(raw) > 2 * POLICY_MAX_CONTENT_BYTES) { c.add(null, '', 'content_too_large'); return done(null); }
 
   const content: PolicyContentV1 = { format: 1, sections: {} };
-  if (sections.apple === undefined) return done(content);
+  if (sections.android !== undefined) androidWipeRules = validateAndroid(c, sections.android, o, content, summary);
+  if (sections.apple === undefined) return done(c.issues.length ? null : content);
   const apple = sections.apple;
   if (!isPlainObject(apple) || Object.keys(apple).some((k) => k !== 'items') || !Array.isArray(apple.items)) {
     c.add(null, 'sections.apple', 'invalid_content');
@@ -422,11 +432,99 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
   return done(c.issues.length ? null : content);
 }
 
+
+// ── The Android section (lot AN-A2, android-amapi §9.2) ─────────────────────
+
+/** The pseudo item of the Android section in the sites of the secrets and in the issues (one section, no item). */
+export const ANDROID_SECTION_ITEM = 'android';
+
+/** The tokens of a path of the Android validation ('fragment.openNetworkConfiguration.NetworkConfigurations[0].WiFi',
+ *  'applications[com.example.app].managedConfiguration.key'): names, indexes and package names. */
+export function androidPathTokens(path: string): Array<string | number> | null {
+  const out: Array<string | number> = [];
+  const re = /([^.[\]]+)|\[([^\]]*)\]|(\.)/gy;
+  let m: RegExpExecArray | null;
+  let last = 0;
+  while ((m = re.exec(path)) !== null) {
+    if (m[1] !== undefined) out.push(m[1]);
+    else if (m[2] !== undefined) out.push(/^[0-9]{1,6}$/.test(m[2]) ? Number(m[2]) : `@${m[2]}`);
+    last = re.lastIndex;
+    if (last >= path.length) break;
+  }
+  return last === path.length && out.length > 0 ? out : null;
+}
+
+/** The parent and the key of the value at `path` in an Android section; null when the path names nothing. */
+export function androidNodeAt(section: unknown, path: string): { parent: Record<string | number, unknown>; key: string | number } | null {
+  const tokens = androidPathTokens(path);
+  if (!tokens) return null;
+  let node: unknown = section;
+  let parent: Record<string | number, unknown> | null = null;
+  let key: string | number | null = null;
+  for (const t of tokens) {
+    if (node === null || typeof node !== 'object') return null;
+    parent = node as Record<string | number, unknown>;
+    if (typeof t === 'string' && t.startsWith('@')) {
+      // An app named by its package (applications[<package>]).
+      if (!Array.isArray(node)) return null;
+      const i = node.findIndex((a) => !!a && typeof a === 'object' && (a as Record<string, unknown>).packageName === t.slice(1));
+      if (i < 0) return null;
+      key = i;
+    } else {
+      key = t;
+    }
+    node = (parent as Record<string | number, unknown>)[key];
+  }
+  return parent && key !== null ? { parent, key } : null;
+}
+
+const ANDROID_CODES: ReadonlySet<string> = new Set(POLICY_VALIDATION_CODES);
+
+/** Validates the Android section into the collector: issues (codes of the closed list), secrets with their purpose,
+ *  the summary (one item per setting key). Returns the wipe-capable setting keys it sets. */
+function validateAndroid(c: Collector, raw: unknown, o: ValidateOptions, content: PolicyContentV1, summary: PolicyVersionSummary): string[] {
+  const r = validateAndroidSection(raw, o.android ?? {});
+  for (const x of r.issues) {
+    c.add(ANDROID_SECTION_ITEM, x.path, (ANDROID_CODES.has(x.code) ? x.code : 'invalid_content') as PolicyValidationCode);
+  }
+  if (r.issues.length) return r.wipeRules;
+  for (const s of r.secrets) {
+    const at = androidNodeAt(raw, s.path);
+    const value = at ? at.parent[at.key] : undefined;
+    if (s.kind === 'ref') {
+      if (!at || !isSecretRef(value)) { c.add(ANDROID_SECTION_ITEM, s.path, 'secret_invalid'); continue; }
+      c.secretRefs.push({ itemId: ANDROID_SECTION_ITEM, path: s.path, id: String(value.$secret).toLowerCase(), purpose: s.purpose });
+    } else if (!o.allowSecretValues) {
+      c.add(ANDROID_SECTION_ITEM, s.path, 'secret_expected');
+    } else if (!at || !isSecretValue(value)) {
+      c.add(ANDROID_SECTION_ITEM, s.path, 'secret_invalid');
+    } else {
+      c.secretValues.push({ itemId: ANDROID_SECTION_ITEM, path: androidPathTokens(s.path)!, purpose: s.purpose });
+    }
+  }
+  const section = raw as NonNullable<PolicyContentV1['sections']['android']>;
+  const keys = androidContributions(section);
+  for (const k of keys) {
+    summary.items++;
+    c.variables += k.variables.length;
+  }
+  if (keys.length) summary.types.android = keys.length;
+  content.sections.android = section;
+  return r.wipeRules;
+}
+
 /** A content whose `$secretValue` markers (sites of validatePolicyContent) are replaced by references. */
 export function withSecretRefs(content: PolicyContentV1, sites: Array<SecretValueSite & { id: string }>): PolicyContentV1 {
   const copy = JSON.parse(JSON.stringify(content)) as PolicyContentV1;
   const items = copy.sections.apple?.items ?? [];
   for (const s of sites) {
+    if (s.itemId === ANDROID_SECTION_ITEM) {
+      // The Android section: the path of its validation, apps named by their package.
+      const at = androidNodeAt(copy.sections.android, androidPathText(s.path));
+      if (!at || !isSecretValue(at.parent[at.key])) throw new Error('secret site without a secret value');
+      at.parent[at.key] = { $secret: s.id };
+      continue;
+    }
     const item = items.find((i) => i.id === s.itemId);
     if (!item) throw new Error('secret site of an unknown item');
     let node: unknown = item;
@@ -445,6 +543,17 @@ export function hasSecretValue(v: unknown, depth = 0): boolean {
   if (Array.isArray(v)) return v.some((x) => hasSecretValue(x, depth + 1));
   if (Object.prototype.hasOwnProperty.call(v, '$secretValue')) return true;
   return Object.values(v as Record<string, unknown>).some((x) => hasSecretValue(x, depth + 1));
+}
+
+/** The text of a path of the Android section from its tokens (androidPathTokens). */
+export function androidPathText(tokens: Array<string | number>): string {
+  let out = '';
+  for (const t of tokens) {
+    if (typeof t === 'number') out += `[${t}]`;
+    else if (t.startsWith('@')) out += `[${t.slice(1)}]`;
+    else out += out ? `.${t}` : t;
+  }
+  return out;
 }
 
 export { POLICY_MAX_CONTENT_BYTES };

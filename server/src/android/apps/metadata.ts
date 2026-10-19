@@ -3,8 +3,9 @@
 // (bounded), the permissions and the tracks. Nothing else (descriptions, screenshots, prices, countries): Google's
 // answer can be large and its text is not ours to store. The kind of an app (play, private, web) is derived from the
 // distribution channel and the package, never taken from the client. Pure (unit tests: metadata.test.ts).
-import type { AmapiApplication, AmapiManagedProperty } from '@obligarth/shared/dist/android/amapi';
-import { ANDROID_WEB_APP_PREFIX, type AndroidAppKind } from '@obligarth/shared/dist/android/apps.js';
+import {
+  type AmapiApplication, type AmapiManagedProperty, ANDROID_WEB_APP_PREFIX, type AndroidAppKind,
+} from '@obligarth/shared';
 
 export const MANAGED_PROPERTY_TYPES = ['BOOL', 'STRING', 'INTEGER', 'CHOICE', 'MULTISELECT', 'HIDDEN', 'BUNDLE', 'BUNDLE_ARRAY'] as const;
 export type ManagedPropertyType = typeof MANAGED_PROPERTY_TYPES[number];

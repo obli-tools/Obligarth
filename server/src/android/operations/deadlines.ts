@@ -11,7 +11,7 @@
 import {
   ANDROID_KEY_MAX_AGE_DAYS, ANDROID_KEY_WARNING_DAYS, ANDROID_LONG_TOKEN_ROTATION_DAYS, ANDROID_TOKEN_WARNING_DAYS,
   type AndroidDeadline,
-} from '@obligarth/shared/dist/android/operations.js';
+} from '@obligarth/shared';
 import { db } from '../../db';
 import { asNone, asTenant, type DbActor } from '../../db/context';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert, resolveAndroidPlatformAlert, resolveAndroidTenantAlert } from '../alerts';

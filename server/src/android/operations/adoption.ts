@@ -12,8 +12,7 @@
 //     admits), the project pinned, android.enterprise-setup sent (topic, display name without the marker, default
 //     policy). The type is read at Google once bound: a managed Google Play Accounts enterprise without the exception
 //     ends unlinked at once (its name stays in the registry, never bound again).
-import { MASTER_TENANT_ID } from '@obligarth/shared';
-import { ANDROID_APPROVAL_TYPES } from '@obligarth/shared/dist/android/operations.js';
+import { ANDROID_APPROVAL_TYPES, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';

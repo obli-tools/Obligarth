@@ -33,7 +33,7 @@
 import type { Request } from 'express';
 import {
   ANDROID_APPROVAL_TYPES, ANDROID_OFFBOARDING_GUIDE, type AndroidOffboardingStep, type AndroidOffboardingView,
-} from '@obligarth/shared/dist/android/operations.js';
+} from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
@@ -56,8 +56,8 @@ import { exitManagement } from './exit';
 import { releaseDevicesGoneAtGoogle } from './gone';
 
 export const OFFBOARD_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.offboard-tenant' }) as DbActor;
-/** Capability of the integrations: mdm.integrations.manage once it exists (AN41); devices.manage until then. */
-export const INTEGRATIONS_CAPABILITY = 'devices.manage' as const;
+/** Capability of the integrations (AN41). */
+export const INTEGRATIONS_CAPABILITY = 'mdm.integrations.manage' as const;
 const WAIT_MINUTES = 10;
 const RETRY_MINUTES = 5;
 

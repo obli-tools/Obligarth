@@ -16,7 +16,7 @@
 import type { Knex } from 'knex';
 import {
   ANDROID_BYOD_INVITATION_TTL_HOURS, ANDROID_BYOD_WRONG_CODES_PER_HOUR, type AndroidByodInvitationState, type AndroidByodInvitationView,
-} from '@obligarth/shared/dist/android/byod.js';
+} from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';

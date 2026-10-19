@@ -12,7 +12,7 @@
 // more than 7 days, seek first (AN37). The only timer of the module (G-A5), like the outbox consumer.
 import type { Knex } from 'knex';
 import pg from 'pg';
-import type { PubsubReceived } from '@obligarth/shared/dist/android/amapi';
+import type { PubsubReceived } from '@obligarth/shared';
 import { config } from '../../config';
 import { db } from '../../db';
 import { asNone, asTenant, type DbActor } from '../../db/context';

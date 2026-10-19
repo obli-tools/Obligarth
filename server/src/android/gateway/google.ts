@@ -3,10 +3,12 @@
 // registry; identifiers validated; names built by names.ts), freeze lock, last-resort caps, limiter, call, removal of
 // the sensitive fields of the answer. Never inside an open transaction of the caller (G-A1): the short transactions
 // of the freeze lock and the caps are its own.
-import type {
-  AmapiApplication, AmapiCommand, AmapiDevice, AmapiEnrollmentToken, AmapiEnrollmentTokenPartial, AmapiEnterprise,
-  AmapiEnterpriseBasic, AmapiOperation, AmapiPolicy, AmapiProvisioningInfoMin, Page, PubsubReceived,
-} from '@obligarth/shared/dist/android/amapi';
+import {
+  type AmapiApplication, type AmapiCommand, type AmapiDevice, type AmapiEnrollmentToken,
+  type AmapiEnrollmentTokenPartial, type AmapiEnterprise, type AmapiEnterpriseBasic, type AmapiOperation,
+  type AmapiPolicy, type AmapiProvisioningInfoMin, ANDROID_ZERO_TOUCH_PAGE as ZERO_TOUCH_PAGE, type Page,
+  type PubsubReceived,
+} from '@obligarth/shared';
 import { db } from '../../db';
 import { currentDbContext } from '../../db/context';
 import { autoFreeze } from '../../guard/freeze';
@@ -15,7 +17,6 @@ import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert } from '../alerts';
 import { byodCommandRefusal, byodPolicyViolations } from '../byod/policy';
-import { ANDROID_ZERO_TOUCH_PAGE as ZERO_TOUCH_PAGE } from '@obligarth/shared/dist/android/enrollment.js';
 import type { AndroidConfig } from '../config';
 import { amapiClient, type AmapiClient } from '../google/amapi';
 import { GoogleHttp } from '../google/http';

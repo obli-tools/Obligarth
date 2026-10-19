@@ -25,6 +25,8 @@ import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
 import { createDdmRelayRouter } from './apple/ddm/relay';
 import { createAppleDeviceSurface } from './apple/enrollment';
+import { createAndroidByodSurface } from './android/byod/surface';
+import { createAndroidSigninSurface } from './android/signin/surface';
 import { jobs } from './jobs';
 import { logger } from './utils/logger';
 
@@ -86,6 +88,12 @@ export function createApp() {
   // deviceKeySession: its own parsers, limits and limiters, no session, no cookie; it sets its own CSP on its
   // pages. Reached through the edge proxy (mdm.<domain>) only.
   app.use('/t/:key', createAppleDeviceSurface());
+  // The Android pages of the same surface (android-amapi §10.5, lot AN-A2): the notice and the code of a BYOD
+  // invitation (/a/<key>/byod), the sign-in URL (/a/<key>/signin…), each router with its own parsers, limiters, CSP
+  // and the same bodiless 404; nothing is served while ANDROID_MODE is off.
+  const androidByod = createAndroidByodSurface();
+  const androidSignin = createAndroidSigninSurface();
+  app.use('/a/:key', (req, res, next) => (req.path === '/signin' || req.path.startsWith('/signin/') ? androidSignin : androidByod)(req, res, next));
   app.use(
     cors({
       origin: config.clientOrigin,

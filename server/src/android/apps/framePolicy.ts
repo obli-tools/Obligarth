@@ -8,7 +8,7 @@
 // get androidFrameCsp(base) instead; androidFramePolicy is the middleware for a console served by Express.
 // Pure apart from the middleware.
 import type { NextFunction, Request, Response } from 'express';
-import { ANDROID_FRAME_SOURCES, ANDROID_IFRAME_PAGES, ANDROID_SCRIPT_SOURCES } from '@obligarth/shared/dist/android/apps.js';
+import { ANDROID_FRAME_SOURCES, ANDROID_IFRAME_PAGES, ANDROID_SCRIPT_SOURCES } from '@obligarth/shared';
 
 /** Pages hosting a Google iframe: those of ANDROID_IFRAME_PAGES and the zero-touch page (lot AN-F2). */
 const ZERO_TOUCH_PAGE = /^\/enrollment\/android\/zero-touch$/;

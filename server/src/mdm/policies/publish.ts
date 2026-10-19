@@ -3,7 +3,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   ASSIGNMENT_PRIORITY, POLICY_PUBLISH_REQUEST_TYPE,
-  type AssignmentChange, type PolicyConflict, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
+  type AssignmentChange, type PolicyConflict, type PolicyContentV1, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { userActor } from '../../db/context';
@@ -32,6 +32,8 @@ import {
 import type { ResolutionAssignment } from './resolver';
 import { requestTenantResolution } from './triggers';
 import { assignableApp, normalizeAppOptions } from '../apps/appCatalogService';
+import { androidContributions } from '../android/contributions';
+import { validateAndroidSection } from '../android/validate';
 
 // =============================================================================
 // Submission, publication and approval (docs: modele-donnees-mdm §7.11,
@@ -152,12 +154,38 @@ async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policy
     { content: unknown; content_sha256: string } | undefined;
   if (!row) throw new AppError(404, 'Policy version not found');
   const contentSha256 = String(row.content_sha256).trim();
-  const { issues } = await validateForSubmission(q, tenantId, policy.uuid, typeof row.content === 'string' ? JSON.parse(row.content) : row.content);
+  const { issues, content, androidWipeRules } = await validateForSubmission(q, tenantId, policy.uuid, typeof row.content === 'string' ? JSON.parse(row.content) : row.content);
   const result = await computeImpact(q, tenantId, { kind: 'version', policyId, versionId },
     { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: o.visibleDeviceIds ?? 'all' });
+  // Android (android-amapi §22.4, lot AN-A2): a version that adds, removes or changes a wipe-capable setting is
+  // published at the restricted level (a second approver), whatever the thresholds.
+  if (!issues.length && await wipeSettingsChanged(q, tenantId, policyId, content, androidWipeRules)) {
+    result.impact.approval.required = true;
+    if (!result.impact.approval.reasons.includes('wipe_settings')) result.impact.approval.reasons.push('wipe_settings');
+  }
   const after = await q('policy_versions').where({ tenant_id: tenantId, id: versionId }).first('content_sha256') as { content_sha256: string } | undefined;
   if (!after || String(after.content_sha256).trim() !== contentSha256) versionChanged();
   return { ...result, issues, contentSha256 };
+}
+
+/** Does a version add, remove or change a wipe-capable Android setting against the policy's published version
+ *  (android-amapi §22.4)? Compared by setting key and value hash. */
+async function wipeSettingsChanged(q: Knex | Knex.Transaction, tenantId: number, policyId: number,
+  content: PolicyContentV1 | null, wipeRules: string[]): Promise<boolean> {
+  const current = await q('policies as p').join('policy_versions as v', function joinVersion() {
+    this.on('v.id', '=', 'p.current_version_id').andOn('v.tenant_id', '=', 'p.tenant_id');
+  }).where({ 'p.tenant_id': tenantId, 'p.id': policyId }).first('v.content') as { content: unknown } | undefined;
+  const before = current ? (typeof current.content === 'string' ? JSON.parse(current.content) : current.content) as PolicyContentV1 : null;
+  const beforeWipe = before?.sections?.android ? validateAndroidSection(before.sections.android).wipeRules : [];
+  if (!wipeRules.length && !beforeWipe.length) return false;
+  const hashes = (c: PolicyContentV1 | null): Map<string, string> =>
+    new Map(androidContributions(c?.sections?.android).map((x) => [x.settingKey, x.valueHash]));
+  const now = hashes(content);
+  const was = hashes(before);
+  for (const key of new Set([...wipeRules, ...beforeWipe])) {
+    if (!wipeRules.includes(key) || !beforeWipe.includes(key) || now.get(key) !== was.get(key)) return true;
+  }
+  return false;
 }
 
 /** POST /api/mdm/policies/:id/versions/:v/submit (section 7.12). */

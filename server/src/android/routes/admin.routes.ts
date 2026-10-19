@@ -2,7 +2,7 @@
 //   POST /google-credentials   deposit of the service account key (vault_key mode): strict step-up, escrow guard,
 //                              checks before any write; answers the fingerprint and the account, never the key
 //   GET  /health               health of the link (section 5.6)
-// Mounted at lot AN-A2.
+// Mounted under /api/admin/android by routes/index.ts (lot AN-A2).
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { isMasterTenant, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../../audit';

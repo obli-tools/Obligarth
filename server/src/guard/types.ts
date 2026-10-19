@@ -1,5 +1,6 @@
 // Types of the guard engine (docs: audit-durci §10). No database import: the
 // unit tests load this module without a server.
+import type { Knex } from 'knex';
 import type { z } from 'zod';
 import type { DeviceCapability, GuardFamily, GuardLevel, GuardSide, TenantCapability } from '@obligarth/shared';
 
@@ -67,6 +68,12 @@ export interface GuardedActionDef<P = Record<string, unknown>> {
   confirmation: 'typed' | 'none';
   /** Non-secret parameters, strict. */
   paramsSchema: z.ZodType<P>;
+  /** The parameters as a request may type them, when they differ from what is stored (paramsSchema): a secret typed
+   *  in, sealed by prepareParams before anything stores or journals the request (android-amapi §22.9, COH-7). */
+  requestParamsSchema?: z.ZodTypeAny;
+  /** In the transaction of the request, before the action, its approval and its entries are written: the stored
+   *  parameters (a typed secret replaced by its reference in the tenant's vault). */
+  prepareParams?(trx: Knex.Transaction, tenantId: number, params: Record<string, unknown>, userId: number): Promise<Record<string, unknown>>;
   /** Capability the requester must hold on each target (team scopes);
    *  platform administrators pass. */
   deviceCapability?: DeviceCapability;

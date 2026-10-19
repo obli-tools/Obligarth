@@ -8,8 +8,7 @@
 // The common catalog (POST /api/mdm/apps, mdm.apps.manage) is a junction point (AN-A2/AN-P): it calls addAndroidApp
 // for the family android. Until then only the router of this module (not mounted) and the testbed call it.
 import type { Knex } from 'knex';
-import { isAndroidPackage } from '@obligarth/shared/dist/android/policy.js';
-import { ANDROID_APP_KINDS, type AndroidAppKind } from '@obligarth/shared/dist/android/apps.js';
+import { ANDROID_APP_KINDS, type AndroidAppKind, isAndroidPackage } from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';

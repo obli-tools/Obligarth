@@ -11,7 +11,7 @@
 //     an audit entry nor a job payload; the audit entry names the screen, its features and the page.
 // The console (lot AN-C2) asks for a token when it opens the iframe; the route of this module is not mounted
 // (junction AN-A2/AN-P, capability mdm.apps.manage).
-import { androidIframeUrl, type AndroidIframeScreen } from '@obligarth/shared/dist/android/apps.js';
+import { androidIframeUrl, type AndroidIframeScreen } from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';

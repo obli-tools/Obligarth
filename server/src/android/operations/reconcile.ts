@@ -21,11 +21,10 @@
 // with the critical alert android.enterprise_unlinked_externally (offboarding.ts), nothing deleted.
 // No device datum in a log, an alert or a job payload (G-A4): identifiers and counts only.
 import { createHash } from 'node:crypto';
-import type { AmapiDevice } from '@obligarth/shared/dist/android/amapi';
 import {
-  ANDROID_FORGET_AFTER_DAYS, ANDROID_FORGET_PER_RUN, ANDROID_OFFLINE_ALERT_DAYS, ANDROID_STALE_DAYS, ANDROID_STALE_DEFAULT_DAYS,
-  type AndroidReconcileResult, type AndroidReconcileTrigger,
-} from '@obligarth/shared/dist/android/operations.js';
+  type AmapiDevice, ANDROID_FORGET_AFTER_DAYS, ANDROID_FORGET_PER_RUN, ANDROID_OFFLINE_ALERT_DAYS,
+  ANDROID_STALE_DAYS, ANDROID_STALE_DEFAULT_DAYS, type AndroidReconcileResult, type AndroidReconcileTrigger,
+} from '@obligarth/shared';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { logger } from '../../utils/logger';
