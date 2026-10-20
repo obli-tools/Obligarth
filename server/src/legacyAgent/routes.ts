@@ -7,6 +7,7 @@ import {
   type DeviceCapability, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated, type LegacyAgentTokenView,
 } from '@obligarth/shared';
+import { tenantFrozen } from '../apple/commands/bus';
 import { audit } from '../audit';
 import { config } from '../config';
 import { db } from '../db';
@@ -39,7 +40,8 @@ import { sha256Hex } from './signature';
 //   POST /commands/bulk                 the same on 500 devices at most
 //   POST /commands/:commandId/cancel    a pending command, not guarded
 //   POST /actions                       lock / erase: the guard engine (its floors, delays, confirmation)
-//   POST /devices/:id/revoke            restriction legacy_agent.revoke (floor sensitive)
+//   POST /devices/:id/revoke            restriction legacy_agent.revoke (floor sensitive); 423 tenantFrozen
+//                                       during a freeze, here and at the execution of an approval (PONT-R-RV2)
 //   GET  /tokens, POST /tokens, POST /tokens/:id/revoke     mdm.enrollment.manage
 //   GET  /packages, POST /packages      mdm.apps.manage (POST: the raw APK)
 //   GET  /releases                      the versions of the agent offered to agent.update
@@ -337,12 +339,18 @@ router.post('/actions', enqueueLimiter, async (req, res, next) => {
 
 const RevokeBody = z.object({ reason: z.string().trim().min(3).max(500) }).strict();
 
-/** The revocation itself, in one transaction of the tenant: the satellite, the open commands, the record. */
+/** A revocation during a freeze (decision of the owners of 20/10/2026, PONT-R-RV2): once MobiControl is gone, a
+ *  revoked agent wipes its key and the device is lost to remote management, like mdm.remove_management, which a
+ *  freeze stops too. */
+const frozenRefusal = (): AppError => new AppError(423, 'The tenant is frozen: no agent is revoked until it is unfrozen', 'tenantFrozen');
+
+/** The revocation itself, in one transaction of the tenant: the freeze, the satellite, the open commands, the record. */
 async function revokeDevice(tenantId: number, deviceId: number, reason: string, actorUserId: number, auditCtx: Awaited<ReturnType<typeof audit.fromRequest>>): Promise<boolean> {
   return db.transaction(async (trx) => {
     const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, device_id: deviceId }).forUpdate().first('revoked_at') as { revoked_at: Date | null } | undefined;
     if (!sat) throw new AppError(404, 'Device not found');
     if (sat.revoked_at) return false;
+    if (await tenantFrozen(trx, tenantId)) throw frozenRefusal();
     const now = new Date();
     await trx('legacy_agent_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ revoked_at: now, revoke_reason: 'console', updated_at: now });
     const cancelled = await cancelOpenOfDevice(trx, tenantId, deviceId);
@@ -361,6 +369,8 @@ router.post('/devices/:id/revoke', wrap(async (req, res) => {
   const b = body(RevokeBody, req);
   const tenantId = req.tenantId!;
   if ((await lacking(req, [id], 'mdm:remove')).length > 0) throw new AppError(403, "Capability 'mdm:remove' not permitted for your team", 'capabilityMissing');
+  // Refused during a freeze before anything is asked (no request for approval either): PONT-R-RV2.
+  if (await db.transaction((trx) => tenantFrozen(trx, tenantId))) throw frozenRefusal();
   const ok = await applyRestriction(res, {
     req, actionKey: 'legacy_agent.revoke', deviceIds: [id], approvalRequestType: 'legacy_agent_action',
     approvalDescription: 'Revoke 1 Android agent', approvalPayload: { action: 'legacy_agent.revoke', deviceIds: [id], reason: b.reason },
@@ -557,8 +567,18 @@ export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<st
     if (!requester.isPlatformAdmin && (await permissionService.devicesLackingCapability(x.requesterId, ids, 'mdm:remove')).length > 0) {
       refuse('The requester no longer holds the capability to remove these devices');
     }
+    // An approval executed during a freeze revokes nothing (PONT-R-RV2): the request stays approved with its refusal.
+    const frozen = 'tenantFrozen: the tenant is frozen — no agent was revoked';
+    if (await db.transaction((trx) => tenantFrozen(trx, x.tenantId))) refuse(frozen);
     let n = 0;
-    for (const id of ids) if (await revokeDevice(x.tenantId, id, typeof p.reason === 'string' ? p.reason : 'approved revocation', x.requesterId, auditCtx)) n++;
+    for (const id of ids) {
+      try {
+        if (await revokeDevice(x.tenantId, id, typeof p.reason === 'string' ? p.reason : 'approved revocation', x.requesterId, auditCtx)) n++;
+      } catch (err) {
+        if (err instanceof AppError && err.code === 'tenantFrozen') refuse(n ? `tenantFrozen: the tenant was frozen meanwhile — ${n} of ${ids.length} agent(s) revoked before it` : frozen);
+        throw err;
+      }
+    }
     return n === ids.length ? undefined : `${ids.length - n} device(s) already revoked`;
   }
   if (p.action !== 'legacy_agent.command' || typeof p.type !== 'string') refuse('Malformed request');
