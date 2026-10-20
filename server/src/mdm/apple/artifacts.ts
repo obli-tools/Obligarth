@@ -87,6 +87,11 @@ const COMMAND_CHANNELS = ['profile', 'setting', 'app'] as const;
 export const appleArtifactProvider: ArtifactChannelProvider = {
   name: 'apple',
   channels: ['profile', 'ddm', 'app', 'setting'],
+  // The devices of the channel apple_mdm only (review AN-P): an app without declared platforms, or any Apple
+  // setting the resolution finds available, never becomes an Apple artifact of a device of the channel amapi or of
+  // the bridge agent (its aggregate state, the licences of the apps, the reconciliation). A device without a channel
+  // (the fictitious device of an enrollment profile) is Apple's.
+  servesDevice: (d) => d.channel === undefined || d.channel === 'apple_mdm',
   removedAtOnce: (channel) => channel === 'setting',
   compile(devices, ctx) {
     const catalog = appleCatalog();

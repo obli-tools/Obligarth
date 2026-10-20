@@ -135,7 +135,8 @@ async function purgeChannelRecords(ctx: JobContext<unknown>, pctx: DevicePurgeCo
   return { deleted, deferred, skipped: null };
 }
 
-/** The records due of every channel, each by its purger (registration order, apple_mdm first); a channel without a
+/** The records due of every channel, each by its purger (registration order of the purgers: legacy_agent, apple_mdm,
+ *  amapi as index.ts loads the modules; each channel independent of the others); a channel without a
  *  purger keeps its records (no_purger). `skipped`: the first reason a channel waited. */
 async function purgeDeviceRecords(ctx: JobContext<unknown>, tenantId: number, now: Date): Promise<DeviceRecordsResult> {
   const channels = await ctx.inTenant(() => channelsDueForPurge(db, tenantId, now));
