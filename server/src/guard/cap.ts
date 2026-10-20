@@ -35,21 +35,26 @@ export async function quotaOf(tenantId: number, o: { trx?: Knex.Transaction; exc
   const params: Array<string | number | string[]> = [tenantId, CAPPED_FAMILY, COUNTED_STATES];
   let exclude = '';
   if (o.excludeUuid) { exclude = ' AND a.uuid <> ?'; params.push(o.excludeUuid); }
-  const window = `a.tenant_id = ? AND a.family = ? AND a.state = ANY (?::text[])
-        AND COALESCE(a.executed_at, a.execute_after) BETWEEN now() - interval '60 minutes' AND now() + interval '60 minutes'${exclude}`;
   // A channel: its devices among the targets of the counted actions (whatever their key, a shared one included).
-  if (o.channel) params.push(o.channel);
-  const res = await q.raw(o.channel
-    ? `SELECT count(*)::integer AS used,
-            min(COALESCE(a.executed_at, a.execute_after)) AS oldest
-       FROM pending_actions a
-       JOIN devices d ON d.tenant_id = a.tenant_id AND d.id = ANY (a.target_device_ids)
-      WHERE ${window} AND d.management_channel = ?`
-    : `SELECT COALESCE(sum(a.target_count), 0)::integer AS used,
-            min(COALESCE(a.executed_at, a.execute_after)) AS oldest
-       FROM pending_actions a
-      WHERE ${window}`,
-    params,
+  const res = await (o.channel
+    ? q.raw(
+      `SELECT count(*)::integer AS used,
+              min(COALESCE(a.executed_at, a.execute_after)) AS oldest
+         FROM pending_actions a
+         JOIN devices d ON d.tenant_id = a.tenant_id AND d.id = ANY (a.target_device_ids)
+        WHERE a.tenant_id = ? AND a.family = ? AND a.state = ANY (?::text[])
+          AND COALESCE(a.executed_at, a.execute_after) BETWEEN now() - interval '60 minutes' AND now() + interval '60 minutes'${exclude}
+          AND d.management_channel = ?`,
+      [...params, o.channel],
+    )
+    : q.raw(
+      `SELECT COALESCE(sum(a.target_count), 0)::integer AS used,
+              min(COALESCE(a.executed_at, a.execute_after)) AS oldest
+         FROM pending_actions a
+        WHERE a.tenant_id = ? AND a.family = ? AND a.state = ANY (?::text[])
+          AND COALESCE(a.executed_at, a.execute_after) BETWEEN now() - interval '60 minutes' AND now() + interval '60 minutes'${exclude}`,
+      params,
+    )
   ) as { rows: Array<{ used: number; oldest: Date | string | null }> };
   const used = Number(res.rows[0]?.used ?? 0);
   const oldest = res.rows[0]?.oldest ? new Date(res.rows[0].oldest) : null;
