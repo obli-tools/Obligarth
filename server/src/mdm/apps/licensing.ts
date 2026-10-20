@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { requestAssets, requestUsers, type VppOperationView } from '../../apple/integrations/vpp.service';
-import { lockDeviceRows, reasonsOf, rollupConfigState } from '../apple/artifacts';
+import { lockDeviceRows, reasonsOf, rollupConfigState } from '../policies/artifacts';
 import { LICENSE_PENDING } from '../apple/reconcile';
 import { requestArtifactReconcile } from '../apple/requests';
 import { LICENSE_REASONS } from './delivery';

@@ -2,7 +2,7 @@ import type { Knex } from 'knex';
 import { appArtifactKey } from '@obligarth/shared';
 import { db } from '../../db';
 import { requestDdmRecompute } from '../../apple/ddm/engine';
-import { lockDeviceRows, reasonsOf, rollupConfigState, type ArtifactRow } from '../apple/artifacts';
+import { lockDeviceRows, reasonsOf, rollupConfigState, type ArtifactRow } from '../policies/artifacts';
 import { AWAITING_INVENTORY, LICENSE_PENDING, requestManagedAppList } from '../apple/reconcile';
 import { requestArtifactReconcile, requestComplianceEvaluation } from '../apple/requests';
 

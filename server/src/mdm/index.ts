@@ -35,7 +35,8 @@ import policyRoutes from './routes/policies.routes';
 import appRoutes from './routes/apps.routes';
 import { onOperationFinal, onTokenSynced } from '../apple/integrations/vpp.service';
 import { onManagedAppsIngested } from './inventory/ingestors';
-import { registerAppLicenseGate } from './apple/artifacts';
+import { appleArtifactProvider, registerAppLicenseGate } from './apple/artifacts';
+import { registerArtifactChannel } from './policies/artifacts';
 import { registerAppRemovedHook } from './apple/reconcile';
 import { applyManagedApps } from './apps/delivery';
 import { licenseGate, onLicenseOperationFinal, onLicenseTokenSynced, releaseDeviceLicenses } from './apps/licensing';
@@ -102,6 +103,9 @@ export function registerMdmModule(): void {
   registerComplianceJobs();        // mdm.compliance.evaluate-device, mdm.compliance.evaluate-all
 
   // ── Delivery (§7.10): the extension points of the integration, and only them ─
+  // The Apple channels of the common artifact store (profile, ddm, app, setting: lot AN-P, COH-2), the default
+  // provider: every setting no other module claims.
+  registerArtifactChannel(appleArtifactProvider);
   // The 'ddm' artifacts of a device are its declarations obg.cfg.pol-…, with their activation.
   registerDeclarationProvider(policiesDeclarationProvider);
   // What the device reports of them is their state; a passcode or update status that changes, its compliance.

@@ -1,10 +1,8 @@
 import type { Knex } from 'knex';
 import { canonicalJson } from '../../audit/canonical';
-import { writeArtifacts, type DeliveryContext } from '../apple/artifacts';
+import { writeArtifacts, type DeliveryContext } from './artifacts';
 import { evaluateDevices } from '../compliance/evaluate';
 import { requestComplianceEvaluation } from '../apple/requests';
-import { ANDROID_SETTING_PREFIX } from '@obligarth/shared';
-import { androidSenders } from '../../android/enrollment/senders';
 import type { ResolutionOutput, ResolvedSetting } from './resolver';
 
 // =============================================================================
@@ -13,10 +11,11 @@ import type { ResolutionOutput, ResolvedSetting } from './resolver';
 // (one per slice of 200 devices, motif M8). A row is written only when one of
 // its columns changes (computed_at says when the effective value last
 // changed), the keys no longer retained are deleted. With the delivery
-// context of the resolution (its devices, the tenant, the catalog), the same
-// call compiles the artifacts, writes their desired state per device and the
-// aggregate configuration state, and requests their delivery (steps 2 to 6:
-// apple/artifacts.ts); the compliance of the devices that changed follows.
+// context of the resolution (its devices, the tenant), the same call has the
+// providers of the channels compile the artifacts, writes their desired state
+// per device and the aggregate configuration state, and requests their
+// delivery (steps 2 to 6: the common store, policies/artifacts.ts, lot AN-P);
+// the compliance of the devices that changed follows.
 // Concurrent writers of a device (a resolution of the tenant and one of the
 // device) are serialised by a transaction lock per device, taken in ascending
 // order before reading what is stored.
@@ -91,23 +90,6 @@ export async function lockDevices(trx: Knex.Transaction, deviceIds: number[]): P
                    FROM (SELECT d FROM unnest(?::integer[]) AS d ORDER BY d) AS s`, [RESOLVE_LOCK_SPACE, ids]);
 }
 
-const isAndroidKey = (key: unknown): boolean => typeof key === 'string' && key.startsWith(ANDROID_SETTING_PREFIX);
-
-/** The output without the Android keys (the Apple artifacts never see them). */
-function withoutAndroid(out: ResolutionOutput): ResolutionOutput {
-  if (!out.devices.some((d) => d.settings.some((s) => isAndroidKey(s.settingKey)))) return out;
-  return { ...out, devices: out.devices.map((d) => ({ ...d, settings: d.settings.filter((s) => !isAndroidKey(s.settingKey)) })) };
-}
-
-/** The devices one of whose Android keys was written or deleted. */
-function androidChanged(out: ResolutionOutput, upserts: Row[], deletes: Array<{ deviceId: number; settingKey: string }>): number[] {
-  const ids = new Set<number>();
-  for (const r of upserts) if (isAndroidKey(r.setting_key)) ids.add(Number(r.device_id));
-  for (const x of deletes) if (isAndroidKey(x.settingKey)) ids.add(x.deviceId);
-  const known = new Set(out.devices.map((d) => d.deviceId));
-  return [...ids].filter((id) => known.has(id)).sort((a, b) => a - b);
-}
-
 /**
  * writeResolution(trx, tenantId, out, delivery): the effective state of the output's devices (section 7.10, step
  * 1) and, with the delivery context, their artifacts and what delivers them (steps 2 to 6).
@@ -163,12 +145,10 @@ export async function writeResolution(trx: Knex.Transaction, tenantId: number, o
   summary.upserted = upserts.length;
   summary.deleted = deletes.length;
   summary.changedDeviceIds = [...changed].sort((a, b) => a - b);
-  // Android (lot AN-A2): the keys of the artifact amapi:policy are delivered by the Android module (its own policy per
-  // device, android.policies.push-device), never by the Apple artifacts; a device whose Android keys changed gets
-  // a push (a no-op sender while ANDROID_MODE is off).
-  for (const deviceId of androidChanged(out, upserts, deletes)) await androidSenders.push(trx, { tenantId, deviceId });
   if (delivery) {
-    summary.artifactDeviceIds = (await writeArtifacts(trx, tenantId, withoutAndroid(out), delivery)).changedDeviceIds;
+    // Each channel compiles the settings it claims (the android:* keys are the channel amapi's: its own policy per
+    // device, pushed by android.policies.push-device, lot AN-P), never another channel's.
+    summary.artifactDeviceIds = (await writeArtifacts(trx, tenantId, out, delivery)).changedDeviceIds;
     // What applies to a device, or the state of its configuration, changed: its compliance is evaluated again.
     const touched = [...new Set([...summary.changedDeviceIds, ...summary.artifactDeviceIds])];
     if (touched.length > COMPLIANCE_JOBS_MAX) await evaluateDevices(trx, tenantId, touched);

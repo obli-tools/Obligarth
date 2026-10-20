@@ -115,7 +115,7 @@ export async function resolveTenant(ctx: Pick<JobContext<unknown>, 'inTenant' | 
         if (mine.size === 0) return { busy, w: null };
         const set = await loadDevices(trx, tenantId, slice.filter((d) => mine.has(d)));
         const catalog = appleCatalog();
-        const w = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
+        const w = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant });
         return { busy, w };
       }));
       skipped.push(...s.busy);
@@ -142,7 +142,7 @@ export async function resolveDeviceInTx(trx: Knex.Transaction, tenantId: number,
   const state = await loadPolicyState(trx, tenantId);
   const set = await loadDevices(trx, tenantId, deviceIds);
   const catalog = appleCatalog();
-  const s = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant, catalog });
+  const s = await writeResolution(trx, tenantId, resolveDevices({ ...state, ...set, catalog }), { devices: set.devices, tenant: state.tenant });
   if (s.changedDeviceIds.length) await syncConflictAlerts(trx, tenantId, s.changedDeviceIds);
   return { changed: [...new Set([...s.changedDeviceIds, ...s.artifactDeviceIds])].sort((a, b) => a - b), upserted: s.upserted, deleted: s.deleted };
 }

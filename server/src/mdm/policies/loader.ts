@@ -205,7 +205,7 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
     .where('d.tenant_id', tenantId)
     .whereNot('d.enrollment_state', 'unenrolled')
     .orderBy('d.id')
-    .select('d.id', 'd.uuid', 'd.label', 'd.group_id', 'd.platform', 'd.os_version', 'd.management_mode', 'd.supervised',
+    .select('d.id', 'd.uuid', 'd.label', 'd.group_id', 'd.platform', 'd.management_channel', 'd.os_version', 'd.management_mode', 'd.supervised',
       'd.ownership', 'd.serial_number', 'd.model_name', 'a.udid', 'a.ddm_enabled', 'a.ddm_client_capabilities',
       'u.id as end_user_id', 'u.email', 'u.display_name as end_user_name', 'u.managed_apple_account', 'u.external_id');
   if (deviceIds) query.whereIn('d.id', deviceIds);
@@ -216,6 +216,7 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
     label: String(r.label ?? ''),
     groupId: r.group_id === null ? null : Number(r.group_id),
     platform: r.platform,
+    channel: r.management_channel,
     osVersion: r.os_version ?? null,
     mode: r.management_mode,
     supervised: !!r.supervised,

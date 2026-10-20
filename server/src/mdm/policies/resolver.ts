@@ -32,6 +32,9 @@ export interface ResolutionDevice {
   label: string;
   groupId: number | null;
   platform: string;
+  /** devices.management_channel (apple_mdm, amapi, legacy_agent): the artifact providers serve by channel (lot AN-P);
+   *  absent for a fictitious device (the enrollment policy of a profile). */
+  channel?: string;
   osVersion: string | null;
   mode: string;
   supervised: boolean;

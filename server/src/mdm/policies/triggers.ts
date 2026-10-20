@@ -3,7 +3,7 @@ import { db } from '../../db';
 import { logger } from '../../utils/logger';
 import { defaultRuntime } from '../../jobs';
 import { requestDdmRecompute } from '../../apple/ddm/engine';
-import { lockDeviceRows, rollupConfigState } from '../apple/artifacts';
+import { lockDeviceRows, rollupConfigState } from './artifacts';
 import { requestArtifactReconcile } from '../apple/requests';
 import { resolveDeviceJob, resolveTenantJob } from './jobs';
 

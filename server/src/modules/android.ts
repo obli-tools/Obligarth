@@ -24,6 +24,8 @@ import { registerStatusReportHandler } from '../android/inventory/statusReport';
 import { registerUsageLogsHandler } from '../android/inventory/usageLogs';
 import { setAndroidDeviceCounter } from '../android/gateway/google';
 import { plugAndroidJunction } from '../android/junction';
+import { registerArtifactChannel } from '../mdm/policies/artifacts';
+import { amapiArtifactProvider } from '../android/policies/channel';
 
 // =============================================================================
 // ANDROID (Android Management API, called directly by the instance) — its hooks into the core's registries,
@@ -46,6 +48,9 @@ export function registerAndroidModule(): void {
   registered = true;
 
   plugAndroidJunction();
+  // Lot AN-P (§22.6, COH-2): the channel amapi of the common artifact store (the android:* settings, one own policy
+  // per device, pushed by android.policies.push-device; a no-op sender while ANDROID_MODE is off).
+  registerArtifactChannel(amapiArtifactProvider);
   registerInstanceSecretName(GOOGLE_CREDENTIALS_SECRET, 'JSON key of the Google service account of the Android integration (vault_key mode)');
   registerAndroidAuditActions();
   registerEnterpriseHandlers();

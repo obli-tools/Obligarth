@@ -1,9 +1,8 @@
-// Delivery of the Android policies (sections 9.1, 9.3, 9.4; §22.6): the provider of the channel 'amapi' as an
-// autonomous module. The common artifact store of lot AN-P (mdm/policies/artifacts.ts, registerArtifactChannel) does
-// not exist yet: this module compiles with the compiler of AN-C1a from the settings a source gives it, keeps the
-// state of the device's policy in android_devices (policy_state, pushed version and rendered hash) until part 5
-// widens mdm_artifacts and device_artifacts to the channel amapi, and exposes the provider shape of §22.6
-// (amapiChannelProvider) for registerArtifactChannel at the junction.
+// Delivery of the Android policies (sections 9.1, 9.3, 9.4; §22.6). The desired state of a device's own policy is the
+// artifact amapi:policy of the common store (provider of the channel amapi, android/policies/channel.ts, lot AN-P);
+// this module compiles with the compiler of AN-C1a from the settings a source gives it, keeps the state of the push
+// in android_devices (policy_state, pushed version and rendered hash) and mirrors it on the artifact once the push of
+// the desired version is settled (syncPolicyArtifact).
 //   android.policies.push-device: compile, render (variables, then the secrets read from the tenant's vault in the
 //     job), rendered hash (secrets excluded); same hash and same policy name: nothing; else policies.patch
 //     d-<device uuid> (never logged nor stored), then devices.patch policyName at the first push; a device pending
@@ -49,6 +48,7 @@ import {
 import { FAILED_PASSWORDS_FOR_WIPE, policyHasWipeSettings, PRIVATE_SPACE_DISALLOWED } from '../../mdm/android/overlay';
 import { androidSenders } from '../enrollment/senders';
 import { byodPolicy } from '../byod/policy';
+import { policyArtifactHash, syncPolicyArtifact } from './channel';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
 export const ENROLLMENT_POLICY_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.enrollment-policy' }) as DbActor;
@@ -180,6 +180,16 @@ function withoutWipeSettings(body: Record<string, JsonValue>): { body: Record<st
  * approval (devices.patch policyName, and state ACTIVE for a device approved while DISABLED).
  */
 export async function pushDevicePolicy(tenantId: number, deviceId: number, o: { gateway?: AndroidGateway; actor?: DbActor } = {}): Promise<PushResult> {
+  const actor = o.actor ?? PUSH_ACTOR;
+  // The desired version of the artifact amapi:policy this push serves (read before the settings: a change of the
+  // policies meanwhile leaves the artifact pending, and its own push follows).
+  const desired = await asTenant(tenantId, actor, () => policyArtifactHash(db, tenantId, deviceId));
+  const r = await pushOnce(tenantId, deviceId, o);
+  if (r !== 'not_managed' && desired) await asTenant(tenantId, actor, () => db.transaction((trx) => syncPolicyArtifact(trx, tenantId, deviceId, { desiredHash: desired })));
+  return r;
+}
+
+async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: AndroidGateway; actor?: DbActor }): Promise<PushResult> {
   const gw = o.gateway ?? androidGateway();
   return asTenant(tenantId, o.actor ?? PUSH_ACTOR, async () => {
     const prep = await db.transaction(async (trx) => {
@@ -415,15 +425,3 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
     return 'pushed';
   });
 }
-
-/**
- * The provider shape of the channel 'amapi' (§22.6) for registerArtifactChannel (lot AN-P): onDesiredChanged sends the
- * push of each device in the caller's transaction (stately per device: the changes that arrive while a push waits are
- * absorbed by it).
- */
-export const amapiChannelProvider = {
-  channel: 'amapi' as const,
-  async onDesiredChanged(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): Promise<void> {
-    for (const deviceId of deviceIds) await androidSenders.push(trx, { tenantId, deviceId });
-  },
-};

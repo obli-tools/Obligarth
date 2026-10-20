@@ -13,6 +13,8 @@ import { DeviceSchema } from '../inbox/schemas';
 import { evaluateAndroidDevices } from './compliance';
 import { filterInventory } from './privacy';
 import { byodApps } from '../byod/policy';
+import { policyArtifactHash, syncPolicyArtifact } from '../policies/channel';
+import { rollupConfigState } from '../../mdm/policies/artifacts';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -117,6 +119,12 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   }
   cols.config_state = policyState === 'applied' ? 'applied' : policyState === 'error' ? 'error' : 'pending';
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
+  // Lot AN-P: the state of the policy on the artifact amapi:policy when the version pushed is the one desired; the
+  // aggregate state then follows the artifacts of the device (a desired version not pushed yet keeps it pending).
+  if (await policyArtifactHash(trx, tenantId, deviceId)) {
+    await syncPolicyArtifact(trx, tenantId, deviceId, { delivered: true });
+    await rollupConfigState(trx, [deviceId]);
+  }
   // Apps: the whole set replaced (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
   // device keeps the apps of the tenant's catalog only (lot AN-F1, criterion 6): never a personal app, whatever the
   // report carries. A COPE device (work profile on a company device) too (lot AN-F2, section 10.5: « apps
