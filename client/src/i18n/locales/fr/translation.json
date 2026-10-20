@@ -964,7 +964,8 @@
       "certificates": "Certificats",
       "commands": "Commandes",
       "history": "Historique",
-      "actions": "Actions"
+      "actions": "Actions",
+      "android": "Android"
     },
     "cards": {
       "management": "Gestion",
@@ -3605,7 +3606,64 @@
     "guardActionUnknown": "Action protégée inconnue.",
     "invalidCommandParams": "Paramètres de commande invalides.",
     "androidUnknownCommand": "Commande Android inconnue.",
-    "androidGoogleUnavailable": "Google n'a pas encore confirmé ; la demande sera reprise."
+    "androidGoogleUnavailable": "Google n'a pas encore confirmé ; la demande sera reprise.",
+    "androidAdminEmailOutsideDomain": "L'e-mail de l'administrateur n'appartient pas au domaine du client.",
+    "androidAlreadyLinked": "Ce tenant a déjà une entreprise Android liée.",
+    "androidAppAssigned": "Cette app est encore affectée : retirez d'abord ses affectations.",
+    "androidAppKindInvalid": "Type d'app Android inconnu.",
+    "androidAppKindMismatch": "Ce paquet est déjà au catalogue sous un autre type.",
+    "androidAppNoManagedConfiguration": "Cette app n'a pas de configuration gérée.",
+    "androidAppNotFound": "App Android absente du catalogue.",
+    "androidByodByInvitation": "Le lien d'un appareil personnel n'est remis que par son invitation.",
+    "androidByodProfileRequired": "Choisissez un profil d'appareils personnels (lien BYOD).",
+    "androidByodSurfaceUnavailable": "La surface des appareils de ce tenant n'est pas disponible.",
+    "androidCopeApiTooLow": "Un appareil d'entreprise avec profil professionnel demande Android 11 (API 30) au moins.",
+    "androidDisabled": "Android est désactivé sur cette instance.",
+    "androidDomainClaimed": "Ce domaine est déjà lié à un autre tenant.",
+    "androidEndUserRequired": "Choisissez l'utilisateur de l'appareil.",
+    "androidEnrollmentPolicyMissing": "La politique d'enrôlement du profil n'est pas encore chez Google : réessayez dans une minute.",
+    "androidEnterpriseAccessLost": "Google refuse l'accès à l'entreprise Android de ce tenant.",
+    "androidEnterpriseChanged": "L'entreprise Android a changé entre-temps : relisez-la.",
+    "androidEnterpriseNotInError": "L'entreprise Android n'est pas en erreur.",
+    "androidIframeParentInvalid": "La page de la console qui héberge le cadre de Google n'est pas admise.",
+    "androidIframeScreenInvalid": "Écran de managed Google Play inconnu.",
+    "androidInvalidDomain": "Domaine invalide.",
+    "androidInvalidDuration": "Durée invalide.",
+    "androidInvalidRequest": "Google a donné une réponse inattendue : réessayez.",
+    "androidKioskAppNotInCatalog": "L'app du kiosque doit être dans le catalogue Android du tenant.",
+    "androidKioskAppWithoutKiosk": "Une app de kiosque est réglée sur un profil qui n'est pas un kiosque.",
+    "androidKioskApprovalRequired": "Un profil de kiosque avec un jeton long demande l'approbation des nouveaux appareils.",
+    "androidKioskCorporateOnly": "Un kiosque n'est possible que sur un appareil d'entreprise.",
+    "androidKioskExitNotFound": "Aucune sortie temporaire du kiosque n'est en cours sur cet appareil.",
+    "androidKioskMethod": "Cette méthode d'enrôlement ne peut pas enrôler un kiosque.",
+    "androidKioskProfileInUse": "Ce profil de kiosque a encore des appareils enrôlés : changez leur kiosque par une politique.",
+    "androidMarkerMismatch": "Cette entreprise ne porte pas le marqueur d'une inscription échouée du tenant.",
+    "androidMdmKeyMissing": "Ce tenant n'a pas encore de surface des appareils.",
+    "androidMethodOwnership": "Cette propriété n'est pas possible avec cette méthode d'enrôlement.",
+    "androidNotAnOrphan": "Cette entreprise n'est pas orpheline.",
+    "androidNotPendingApproval": "Cet appareil n'attend pas d'approbation.",
+    "androidOffboardingInProgress": "La déliaison de l'entreprise Android est en cours.",
+    "androidOffboardingNotWaiting": "La déliaison n'attend pas les appareils.",
+    "androidPackageInvalid": "Nom de paquet invalide.",
+    "androidPackageReserved": "Ce paquet est réservé.",
+    "androidPersonalDomainRefused": "Un domaine de messagerie public ne peut pas être lié : utilisez un domaine du client.",
+    "androidPublicOriginNotHttps": "La console n'a pas d'adresse publique HTTPS : réglez-la d'abord.",
+    "androidQuotaReached": "Le quota d'appareils Android du projet est atteint.",
+    "androidRateLimited": "Trop de requêtes vers Google : réessayez dans un instant.",
+    "androidSigninProfileMissing": "Créez d'abord un profil avec la méthode « connexion Google ».",
+    "androidSigninSurfaceUnavailable": "La surface des appareils de ce tenant n'est pas disponible pour la connexion.",
+    "androidSigninTokenByFlow": "Un jeton de connexion n'est remis qu'à l'appareil de sa session.",
+    "androidSignupInProgress": "Une liaison est déjà en cours pour ce tenant.",
+    "androidSignupNotFound": "Inscription introuvable.",
+    "androidSignupNotInterrupted": "Cette inscription n'a pas été interrompue.",
+    "androidTermsNotAccepted": "Les conditions de l'éditeur doivent être acceptées.",
+    "androidTokenCreating": "Le jeton est encore en création chez Google : réessayez dans un instant.",
+    "androidUnknownMethod": "Méthode d'enrôlement Android inconnue.",
+    "deadLetterNotFound": "Lettre morte introuvable.",
+    "invalidOwnership": "Propriété invalide.",
+    "invalidSerial": "Numéro de série invalide.",
+    "invalidSetting": "Réglage du profil invalide.",
+    "tenantHasAndroidEnterprise": "Ce tenant a encore une entreprise Android : déliez-la d'abord."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -3615,7 +3673,8 @@
       "tokens": "Liens et invitations",
       "sessions": "Sessions",
       "ade": "Appareils Apple Business",
-      "unknown": "Sans session"
+      "unknown": "Sans session",
+      "android": "Android"
     },
     "method": {
       "ota": "Lien ou QR code (OTA)",
@@ -3941,6 +4000,49 @@
       "percent": "Utilisé",
       "lastRecount": "Dernier recalage hebdomadaire",
       "gap": "écart"
+    },
+    "key": {
+      "deposited": "Clé déposée ({{fingerprint}})",
+      "title": "Clé du compte de service",
+      "deposit": "Déposer une clé",
+      "help": "La clé JSON est scellée dans le coffre et jamais relue par une route ; seule son empreinte est affichée. Renouvelez-la tous les 90 jours (règle d'organisation du projet Google).",
+      "due": "Renouvellement dû le {{at}}",
+      "seal": "Sceller dans le coffre",
+      "json": "Clé JSON (ou collez-la ici)",
+      "jsonHint": "Envoyée une fois dans la session, scellée aussitôt ; un second facteur est demandé."
+    },
+    "orphans": {
+      "adoptTitle": "Adopter l'entreprise orpheline",
+      "adoptHint": "Motif (audité). Un autre administrateur de plateforme approuve l'adoption.",
+      "requested": "Adoption demandée : un autre administrateur de plateforme doit l'approuver.",
+      "title": "Entreprises orphelines",
+      "help": "Une entreprise créée chez Google dont l'inscription a été interrompue avant d'atteindre le registre. Seule celle qui porte le marqueur d'une inscription échouée du tenant peut être adoptée.",
+      "tenant": "Tenant",
+      "chooseTenant": "— choisir —",
+      "search": "Chercher les orphelines",
+      "none": "Aucune entreprise adoptable pour ce tenant.",
+      "adopt": "Adopter…"
+    },
+    "deadLetters": {
+      "viewConfirm": "La notification porte des données d'appareil : sa consultation est écrite au journal d'audit. L'ouvrir ?",
+      "title": "Lettres mortes de la boîte de réception",
+      "help": "Notifications de Google dont l'application a échoué cinq fois. Appliquez-en une de nouveau une fois sa cause corrigée, ou écartez-la.",
+      "none": "Aucune lettre morte.",
+      "view": "Voir",
+      "redriven": "Notification appliquée de nouveau",
+      "redrive": "Appliquer de nouveau",
+      "discard": "Écarter",
+      "discardConfirm": "Écarter cette notification ? Elle n'est pas appliquée.",
+      "discarded": "Notification écartée",
+      "detail": "Lettre morte",
+      "types": {
+        "amapi_enrollment": "Enrôlement",
+        "amapi_status_report": "Rapport d'état",
+        "amapi_command": "Commande",
+        "amapi_usage_logs": "Journaux d'usage",
+        "amapi_enterprise_upgrade": "Mise à niveau de l'entreprise",
+        "amapi_oversized": "Notification trop volumineuse"
+      }
     }
   },
   "legacyAgent": {
@@ -4105,5 +4207,487 @@
       "inventorySeconds": "Période d'inventaire (s)"
     },
     "openPanel": "Panneau de l'agent Android"
+  },
+  "android": {
+    "device": {
+      "unavailable": "Les données Android de cet appareil ne peuvent pas être lues.",
+      "title": "Android Enterprise",
+      "mode": "Mode",
+      "ownership": "Propriété chez Google",
+      "apiLevel": "Niveau d'API",
+      "patch": "Correctif de sécurité",
+      "state": "État chez Google",
+      "approval": "Approbation",
+      "lastReport": "Dernier rapport d'état",
+      "enrolledAt": "Enrôlé",
+      "posture": "Posture de sécurité",
+      "released": "Sorti de la gestion",
+      "policy": "Politique de l'appareil",
+      "nonCompliant": "non conforme",
+      "compliant": "conforme",
+      "policyName": "Nom chez Google",
+      "pushedVersion": "Version poussée",
+      "appliedVersion": "Version appliquée",
+      "pushedAt": "Poussée",
+      "lastSync": "Dernière synchronisation de la politique",
+      "nonCompliance": "Non-conformités signalées par l'appareil",
+      "amapiOwnership": {
+        "COMPANY_OWNED": "Propriété de l'entreprise",
+        "PERSONALLY_OWNED": "Propriété personnelle"
+      },
+      "states": {
+        "ACTIVE": "actif",
+        "DISABLED": "désactivé",
+        "DELETED": "supprimé",
+        "PROVISIONING": "en provisionnement",
+        "LOST": "mode perdu"
+      },
+      "approvalStates": {
+        "none": "non requise",
+        "pending": "en attente d'approbation",
+        "approved": "approuvé",
+        "rejected": "refusé"
+      },
+      "policyStates": {
+        "pending": "en attente",
+        "delivering": "en livraison",
+        "applied": "appliquée",
+        "error": "en erreur"
+      },
+      "releaseReasons": {
+        "superseded": "remplacé par un nouvel enrôlement",
+        "missing_in_provider": "disparu chez Google",
+        "removed_by_command": "retiré par une commande",
+        "presumed_gone": "présumé disparu",
+        "forgotten": "oublié",
+        "offboarding": "client délié"
+      },
+      "androidVersion": "Android {{version}}"
+    },
+    "kiosk": {
+      "ended": "Verrou du kiosque demandé de nouveau",
+      "title": "Kiosque",
+      "exitRunning": "sortie temporaire en cours",
+      "endNow": "Terminer maintenant",
+      "locked": "L'appareil est tenu dans son kiosque.",
+      "lockPending": "La politique qui reverrouille le kiosque n'est pas encore appliquée.",
+      "wipeWithheld": "Les réglages effaçants de la politique sont retenus jusqu'au dégel du tenant.",
+      "until": "jusqu'au {{at}}"
+    },
+    "commands": {
+      "queued": "Commande en file : Google la remet à l'appareil.",
+      "passwordHint": "Scellé aussitôt dans le coffre, jamais réaffiché. Vide : le mot de passe est retiré.",
+      "packagesHint": "Paquets séparés par des espaces ou des virgules.",
+      "factoryReset": "Réinitialiser l'appareil (sinon seul le profil professionnel est retiré et l'appareil est rendu à son utilisateur)",
+      "lostModeContact": "Un message, un numéro de téléphone, un e-mail ou une adresse est requis : il s'affiche sur l'appareil verrouillé.",
+      "retried": "Une nouvelle commande a été mise en file",
+      "platform": "Android",
+      "retry": "Relancer",
+      "param": {
+        "message": "Message",
+        "phoneNumber": "Numéro de téléphone",
+        "email": "E-mail",
+        "streetAddress": "Adresse",
+        "organization": "Organisation",
+        "wipeReason": "Motif montré à l'utilisateur",
+        "newPassword": "Nouveau mot de passe",
+        "packageNames": "Paquets"
+      },
+      "group": {
+        "power": "Appareil",
+        "security": "Sécurité",
+        "destructive": "Actions destructives"
+      },
+      "types": {
+        "LOCK": "Verrouiller l'appareil",
+        "RESET_PASSWORD": "Réinitialiser le mot de passe",
+        "REBOOT": "Redémarrer",
+        "START_LOST_MODE": "Activer le mode perdu",
+        "STOP_LOST_MODE": "Désactiver le mode perdu",
+        "WIPE": "Effacer l'appareil",
+        "RELINQUISH_OWNERSHIP": "Céder la propriété (garder la partie personnelle)",
+        "CLEAR_APP_DATA": "Effacer les données d'apps",
+        "REMOVE_MANAGEMENT": "Retirer de la gestion",
+        "DISABLE": "Désactiver l'appareil",
+        "ENABLE": "Réactiver l'appareil"
+      },
+      "unavailable": {
+        "capabilityMissing": "Votre équipe ne peut pas faire cela sur cet appareil.",
+        "frozen": "Les commandes de ce tenant sont gelées.",
+        "ownership": "Impossible pour la propriété de cet appareil.",
+        "mode": "Impossible dans le mode de gestion de cet appareil.",
+        "api_level_unknown": "La version d'Android de l'appareil n'est pas encore connue.",
+        "api_level_too_low": "La version d'Android de l'appareil est trop ancienne.",
+        "not_enrolled": "L'appareil n'est plus géré.",
+        "not_amapi": "Pas un appareil Android Enterprise.",
+        "not_found": "Appareil introuvable.",
+        "use_erase": "Un appareil d'entreprise sort de la gestion par un effacement."
+      },
+      "flags": {
+        "PRESERVE_RESET_PROTECTION_DATA": "Garder la protection contre la réinitialisation",
+        "WIPE_EXTERNAL_STORAGE": "Effacer aussi le stockage externe",
+        "WIPE_ESIMS": "Effacer aussi les eSIM (irréversible)",
+        "REQUIRE_ENTRY": "L'utilisateur doit saisir le mot de passe avant d'utiliser l'appareil",
+        "DO_NOT_ASK_CREDENTIALS_ON_BOOT": "Ne pas demander le mot de passe au démarrage",
+        "LOCK_NOW": "Verrouiller l'appareil aussitôt"
+      }
+    },
+    "enrollment": {
+      "unavailable": "L'enrôlement Android n'est pas disponible (aucune entreprise Android liée ?)."
+    },
+    "tokens": {
+      "confirmRevoke": "Révoquer ce jeton ? Un appareil qui ne s'est pas encore enrôlé avec lui ne pourra plus l'utiliser.",
+      "revoked": "Jeton révoqué",
+      "create": "Nouveau jeton",
+      "title": "Jetons d'enrôlement Android",
+      "empty": "Aucun jeton pour l'instant.",
+      "profile": "Profil",
+      "kind": "Type",
+      "state": "État",
+      "uses": "Utilisations",
+      "expires": "Expire",
+      "approval": "Approbation",
+      "approvalShort": "approbation",
+      "kme": "JSON KME",
+      "reveal": "Afficher",
+      "zeroTouch": "Portail zero-touch",
+      "revoke": "Révoquer",
+      "shownTitle": "Jeton d'enrôlement Android",
+      "secretWarning": "Quiconque détient ce jeton peut enrôler un appareil dans ce tenant jusqu'à son expiration : ne le remettez qu'aux personnes qui enrôlent les appareils. Il n'est pas réaffiché sans nouvelle demande auditée.",
+      "qrAlt": "Code QR de l'enrôlement",
+      "qrStep1": "Sur un appareil neuf ou réinitialisé, touchez six fois l'écran d'accueil pour ouvrir le lecteur QR.",
+      "qrStep2": "Scannez ce code : l'appareil se connecte, télécharge Android Device Policy et s'enrôle.",
+      "afwStep": "Sans lecteur QR : à l'étape du compte Google, saisissez afw#setup, puis cette valeur quand un code est demandé.",
+      "value": "Valeur à saisir (afw#setup, NFC)",
+      "provisioningJson": "JSON de provisionnement",
+      "link": "Lien d'enrôlement",
+      "kmeJson": "JSON personnalisé du profil Knox",
+      "dpcExtras": "Extras du DPC de la configuration zero-touch",
+      "kinds": {
+        "qr": "Code QR, valeur",
+        "byod_link": "Lien d'appareil personnel",
+        "zero_touch": "Zero-touch",
+        "kme": "Knox Mobile Enrollment",
+        "signin": "Connexion Google"
+      },
+      "states": {
+        "creating": "en création",
+        "active": "actif",
+        "used": "utilisé",
+        "expired": "expiré",
+        "revoked": "révoqué",
+        "failed": "en échec"
+      }
+    },
+    "profiles": {
+      "confirmArchive": "Archiver le profil « {{name}} » ? Ses jetons actifs sont révoqués.",
+      "archived": "Profil archivé",
+      "title": "Profils d'enrôlement Android",
+      "showArchived": "Afficher les archivés",
+      "new": "Nouveau profil Android",
+      "empty": "Aucun profil Android pour l'instant.",
+      "kiosk": "kiosque",
+      "disabled": "désactivé",
+      "archivedBadge": "archivé",
+      "archive": "Archiver",
+      "group": "Groupe",
+      "activeTokens": "{{count}} jeton(s) actif(s)",
+      "requireApproval": "nouveaux appareils approuvés à la main",
+      "minApi": "API {{level}} au moins",
+      "edit": "Modifier le profil Android",
+      "name": "Nom",
+      "method": "Méthode",
+      "methodFixed": "La méthode d'un profil ne change jamais.",
+      "ownership": "Propriété",
+      "noGroup": "— aucun —",
+      "locale": "Langue des messages",
+      "googleAuth": "Authentification Google à l'enrôlement",
+      "minimumApiLevel": "Niveau d'API minimal",
+      "copeMinApi": "30 au moins pour un appareil d'entreprise avec profil professionnel.",
+      "usage": "Usage",
+      "usageStandard": "Standard (un utilisateur)",
+      "usageKiosk": "Kiosque (appareil dédié, sans utilisateur)",
+      "kioskApp": "App du kiosque (paquet du catalogue)",
+      "requireApprovalLabel": "Les nouveaux appareils attendent une approbation (désactivés jusque-là)",
+      "serials": "Numéros de série admis (un par ligne ; vide : tous)",
+      "enabled": "Profil actif (des jetons peuvent être créés)",
+      "policyState": {
+        "pending": "politique en cours d'envoi",
+        "pushed": "prêt",
+        "error": "politique en erreur"
+      },
+      "googleAuthValues": {
+        "UNSPECIFIED": "Selon la console Google du client",
+        "OPTIONAL": "Facultative",
+        "REQUIRED": "Obligatoire"
+      },
+      "approvalDefault": "Selon la méthode (jetons longs : oui)"
+    },
+    "approvals": {
+      "title": "Appareils Android en attente d'approbation",
+      "approved": "Appareil approuvé",
+      "approve": "Approuver",
+      "confirmRefuse": "Refuser cet appareil ? Il reste désactivé ; son retrait se décide ensuite.",
+      "refused": "Appareil refusé",
+      "refuse": "Refuser"
+    },
+    "byod": {
+      "invite": "Inviter",
+      "title": "Invitations BYOD",
+      "revoked": "Invitation révoquée",
+      "revoke": "Révoquer",
+      "inviteTitle": "Inviter à l'enrôlement d'un appareil personnel",
+      "create": "Créer l'invitation",
+      "codeOnce": "Le code n'est affiché qu'une fois : remettez-le à l'utilisateur avec le lien.",
+      "code": "Code",
+      "link": "Lien",
+      "endUser": "Utilisateur",
+      "chooseUser": "— choisir —",
+      "label": "Libellé (facultatif)",
+      "email": "Envoyer à (facultatif)",
+      "states": {
+        "active": "active",
+        "issuing": "en émission",
+        "issued": "émise",
+        "used": "utilisée",
+        "revoked": "révoquée",
+        "expired": "expirée"
+      },
+      "mail": {
+        "sent": "L'invitation a été envoyée par e-mail.",
+        "not_configured": "Aucun canal de messagerie n'est réglé : remettez vous-même le code et le lien.",
+        "failed": "L'e-mail n'a pas pu partir : remettez vous-même le code et le lien.",
+        "not_requested": "Aucun e-mail demandé."
+      }
+    },
+    "common": {
+      "yes": "Oui",
+      "no": "Non",
+      "copied": "Copié",
+      "copy": "Copier"
+    },
+    "kme": {
+      "title": "Knox Mobile Enrollment",
+      "profileType": "Type de profil dans le portail Knox",
+      "androidEnterprise": "Android Enterprise",
+      "dpc": "Agent EMM"
+    },
+    "enterprise": {
+      "reasonHint": "Motif (gardé au journal d'audit, montré au second approbateur).",
+      "unlinkTitle": "Délier l'entreprise Android",
+      "unlinkRequested": "Déliaison demandée : un second approbateur doit l'approuver.",
+      "forceUnlinkTitle": "Continuer sans les appareils restants",
+      "title": "Android Enterprise",
+      "link": "Lier",
+      "unavailable": "Android n'est pas disponible sur cette instance.",
+      "linkHelp": "Liez le compte managed Google Play de ce client (son domaine) pour enrôler des appareils Android. Google s'ouvre dans un nouvel onglet ; la carte passe à « liée » quand Google renvoie le navigateur.",
+      "type": "Type",
+      "domain": "Domaine",
+      "displayName": "Nom affiché sur les appareils",
+      "linkedAt": "Liée",
+      "topic": "Notifications",
+      "topicSet": "réglées",
+      "topicPending": "en cours de réglage",
+      "testMessage": "Dernière notification de test",
+      "backupAdmins": "Rappel : le client garde au moins deux administrateurs de son compte managed Google Play (ses propres comptes). Sans eux, personne ne peut récupérer l'entreprise si cette instance perd son accès.",
+      "errorHelp": "Google refuse l'accès de cette instance à l'entreprise (déliée depuis la console Google du client, ou supprimée). Vérifiez de nouveau, ou confirmez qu'elle a été déliée hors d'Obligarth.",
+      "rechecked": "Vérifiée de nouveau",
+      "recheck": "Vérifier de nouveau",
+      "externalConfirmed": "Déliaison confirmée",
+      "confirmExternal": "Confirmer la déliaison",
+      "deadlines": "Échéances",
+      "reconcileRequested": "Réconciliation demandée : elle s'exécute dans la minute.",
+      "reconcile": "Réconcilier maintenant",
+      "unlink": "Délier…",
+      "state": {
+        "none": "non liée",
+        "pending": "liaison en cours",
+        "linked": "liée",
+        "unlinking": "déliaison en cours",
+        "unlinked": "déliée",
+        "error": "accès perdu"
+      },
+      "enterpriseType": {
+        "MANAGED_GOOGLE_DOMAIN": "Domaine Google géré",
+        "MANAGED_GOOGLE_PLAY_ACCOUNTS_ENTERPRISE": "Comptes managed Google Play",
+        "ENTERPRISE_TYPE_UNSPECIFIED": "Non précisé"
+      }
+    },
+    "onboarding": {
+      "title": "Mise en service d'Android",
+      "identity": "Identité Google de l'instance",
+      "enterprise_linked": "Entreprise Android liée",
+      "topic_set": "Notifications de l'entreprise réglées",
+      "test_message": "Première notification reçue",
+      "enrollment_profile": "Profil d'enrôlement Android prêt",
+      "first_device": "Premier appareil Android enrôlé"
+    },
+    "signin": {
+      "saved": "Enrôlement par connexion Google enregistré",
+      "title": "Enrôlement par connexion Google",
+      "enabled": "activé",
+      "disabled": "désactivé",
+      "help": "Un utilisateur qui ajoute un compte professionnel sur un appareil neuf est envoyé vers Obligarth pour s'authentifier (Obligate), puis reçoit un enrôlement à usage unique.",
+      "personalUsage": "Usage personnel",
+      "enable": "Activer",
+      "disable": "Désactiver",
+      "usage": {
+        "PERSONAL_USAGE_ALLOWED": "Autorisé (profil professionnel sur un appareil d'entreprise)",
+        "PERSONAL_USAGE_DISALLOWED": "Interdit (appareil entièrement géré)"
+      }
+    },
+    "offboarding": {
+      "title": "Déliaison en cours",
+      "devicesLeft": "{{count}} appareil(s) encore géré(s)",
+      "releaseFailed": "Google a refusé la libération de l'entreprise : elle est retentée.",
+      "force": "Continuer sans les appareils restants…",
+      "step": {
+        "revoking": "révocation des jetons",
+        "waiting_devices": "attente des appareils",
+        "deleting": "suppression",
+        "releasing": "libération de l'entreprise",
+        "done": "terminée"
+      },
+      "guide": {
+        "open_admin_console": "Ouvrez la console d'administration Google de votre organisation (ou managed Google Play).",
+        "remove_emm_link": "Retirez le lien vers ce service de gestion dans les réglages de la gestion Android.",
+        "data_deletion_is_yours": "La suppression des données que votre organisation garde chez Google relève de votre décision.",
+        "other_emm_without_reenrollment": "Un autre service de gestion ne reprend les appareils qu'en les enrôlant de nouveau."
+      }
+    },
+    "signup": {
+      "linked": "Entreprise Android liée",
+      "title": "Lier une entreprise Android",
+      "start": "Continuer chez Google",
+      "waiting": "Google s'est ouvert dans un nouvel onglet : l'administrateur du client se connecte avec un compte du domaine et accepte les conditions de managed Google Play. Cette fenêtre se met à jour quand Google renvoie le navigateur (le lien vaut une heure).",
+      "waitingShort": "En attente de Google…",
+      "openAgain": "Rouvrir Google",
+      "domain": "Domaine du client",
+      "domainHint": "Un domaine que le client possède (jamais un domaine de messagerie public) : Google le vérifie.",
+      "domainPlaceholder": "example.com",
+      "adminEmail": "E-mail de l'administrateur du client (facultatif)",
+      "displayName": "Nom affiché sur les appareils",
+      "color": "Couleur",
+      "onBehalf": "Vous agissez pour le client : motif (facultatif, audité)",
+      "terms": "Le client accepte les conditions de l'éditeur (version {{version}}) pour la gestion de ses appareils Android par cette instance."
+    },
+    "policy": {
+      "title": "Réglages Android",
+      "revision": "Catalogue AMAPI {{revision}}",
+      "json": "JSON",
+      "addSetting": "Ajouter un réglage",
+      "catalogUnavailable": "Le catalogue des réglages Android ne peut pas être lu : modifiez la section en JSON.",
+      "empty": "Aucun réglage Android dans cette version.",
+      "unknownField": "champ inconnu",
+      "deprecatedFor": "obsolète : {{replacement}}",
+      "deprecated": "obsolète",
+      "wipeCapable": "peut effacer un appareil",
+      "wipeCapableHint": "Publié au niveau restreint (un second approbateur), retenu tant que le tenant est gelé.",
+      "secretSlots": "secrets",
+      "secretHint": "Un secret s'écrit {\"$secretValue\": \"…\"} : déplacé dans le coffre à l'enregistrement.",
+      "minApi": "API {{level}}+",
+      "durationPlaceholder": "3600s",
+      "onePerLine": "une valeur par ligne",
+      "invalidJson": "JSON invalide : la dernière valeur valide est gardée.",
+      "apps": "Apps de la politique",
+      "appsHint": "Les apps affectées depuis le catalogue sont ajoutées par les affectations ; les entrées ici appartiennent à cette politique (type d'installation, permissions, configuration gérée).",
+      "packagePlaceholder": "com.example.app",
+      "addApp": "Ajouter une app",
+      "search": "Rechercher",
+      "jsonShape": "La section est { \"fragment\": { … }, \"applications\": [ … ] }",
+      "jsonTitle": "Section Android en JSON",
+      "applyJson": "Appliquer",
+      "groups": {
+        "security": "Sécurité",
+        "password": "Mots de passe",
+        "apps": "Apps",
+        "network": "Réseaux et connectivité",
+        "restrictions": "Restrictions",
+        "device": "Appareil",
+        "updates": "Mises à jour",
+        "kiosk": "Appareils dédiés",
+        "personal": "Profil professionnel et usage personnel",
+        "compliance": "Conformité",
+        "other": "Autres réglages"
+      },
+      "installTypes": {
+        "AVAILABLE": "disponible",
+        "PREINSTALLED": "préinstallée",
+        "FORCE_INSTALLED": "installée et maintenue",
+        "REQUIRED_FOR_SETUP": "requise pour la mise en service",
+        "BLOCKED": "bloquée",
+        "KIOSK": "app de kiosque"
+      }
+    },
+    "zeroTouch": {
+      "back": "Retour à l'enrôlement",
+      "title": "Enrôlement zero-touch",
+      "subtitle": "Le portail zero-touch de Google du client : liez son compte revendeur et réglez la configuration par défaut avec le jeton ci-dessous.",
+      "token": "Jeton zero-touch",
+      "chooseToken": "— choisir —",
+      "tokenOption": "expire le {{at}}",
+      "open": "Ouvrir le portail",
+      "noToken": "Aucun jeton zero-touch actif : créez-en un depuis un profil zero-touch.",
+      "frameTitle": "Portail zero-touch"
+    },
+    "deadlines": {
+      "status": {
+        "ok": "dans les temps",
+        "warning": "bientôt",
+        "overdue": "dépassée"
+      },
+      "kind": {
+        "long_token_rotation": "Renouvellement d'un jeton d'enrôlement long",
+        "token_expiry": "Expiration d'un jeton d'enrôlement",
+        "service_account_key": "Renouvellement de la clé du compte de service",
+        "google_backup_admins": "Vérification des administrateurs de secours chez Google"
+      }
+    },
+    "ownership": {
+      "corporate": "Appareil d'entreprise",
+      "corporate_personal": "Appareil d'entreprise avec profil professionnel",
+      "personal": "Appareil personnel (profil professionnel)"
+    },
+    "locales": {
+      "fr": "Français",
+      "en": "Anglais"
+    },
+    "warnings": {
+      "androidZeroTouchUnlinkRemovesConfig": "Délier le compte zero-touch retire cette configuration de tous les appareils qu'elle couvre.",
+      "androidLongTokenWithoutApproval": "Ce jeton long enrôle sans approbation tout appareil qui le reçoit.",
+      "androidKmeBeforeZeroTouch": "Un appareil Samsung inscrit à la fois dans Knox Mobile Enrollment et dans zero-touch suit d'abord Knox."
+    },
+    "modes": {
+      "fully_managed": "entièrement géré",
+      "dedicated": "dédié",
+      "work_profile_corporate": "profil professionnel (entreprise)",
+      "work_profile_personal": "profil professionnel (personnel)"
+    },
+    "enums": {
+      "devicePosture": {
+        "SECURE": "sûre",
+        "AT_RISK": "à risque",
+        "POTENTIALLY_COMPROMISED": "possiblement compromise"
+      },
+      "securityRisk": {
+        "UNKNOWN_OS": "système d'exploitation inconnu",
+        "COMPROMISED_OS": "système d'exploitation compromis",
+        "HARDWARE_BACKED_EVALUATION_FAILED": "échec du contrôle d'intégrité matériel"
+      },
+      "nonComplianceReason": {
+        "API_LEVEL": "version d'Android trop ancienne",
+        "MANAGEMENT_MODE": "impossible dans ce mode de gestion",
+        "USER_ACTION": "attend une action de l'utilisateur",
+        "INVALID_VALUE": "valeur invalide",
+        "APP_NOT_INSTALLED": "app non installée",
+        "UNSUPPORTED": "non pris en charge par l'appareil",
+        "APP_INSTALLED": "app installée contre la politique",
+        "PENDING": "en cours d'application",
+        "APP_INCOMPATIBLE": "app incompatible avec l'appareil",
+        "APP_NOT_UPDATED": "app non mise à jour",
+        "DEVICE_INCOMPATIBLE": "appareil incompatible",
+        "PROJECT_NOT_PERMITTED": "non permis pour ce projet"
+      }
+    }
   }
 }

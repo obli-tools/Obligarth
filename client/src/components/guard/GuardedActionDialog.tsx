@@ -54,10 +54,12 @@ export interface GuardedActionDialogProps {
   /** Title of the dialog (default: the action's name). */
   title?: string;
   params?: Record<string, unknown>;
+  /** The parameters shown to the preview when they differ from the request's (a secret is never previewed: lot AN-C2). */
+  previewParams?: Record<string, unknown>;
   onDone?: (outcome: GuardOutcome) => void;
 }
 
-export function GuardedActionDialog({ open, onClose, actionKey, selection, title, params, onDone }: GuardedActionDialogProps) {
+export function GuardedActionDialog({ open, onClose, actionKey, selection, title, params, previewParams, onDone }: GuardedActionDialogProps) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<GuardPreview | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
@@ -74,7 +76,7 @@ export function GuardedActionDialog({ open, onClose, actionKey, selection, title
     setTicket('');
     setConfirm('');
     let cancelled = false;
-    guardApi.preview({ actionKey, selection, params }).then((p) => { if (!cancelled) setPreview(p); }).catch((err) => {
+    guardApi.preview({ actionKey, selection, params: previewParams ?? params }).then((p) => { if (!cancelled) setPreview(p); }).catch((err) => {
       if (cancelled) return;
       const body = err?.response?.data;
       setPreviewError(guardErrorMessage(t, body?.code, body?.error || (t('common.error') || 'Error'), body?.details));

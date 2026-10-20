@@ -21,6 +21,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
 import { saveBlob } from '@/utils/download';
+import { AndroidEnterpriseCard } from '@/components/android/AndroidEnterpriseCard';
 
 // The Integrations tab (integration-apple-edge §11.7, INT-04, lot C3): the readiness checklist of the tenant
 // (§11.5), then five cards: the device service, the push certificate (its five steps with the vendor's offline
@@ -115,6 +116,8 @@ export function IntegrationsPage() {
       {summary && <AdeCard state={summary.ade.state} onChange={load} />}
       {summary && <VppCard s={summary} onChange={load} />}
       {summary && <DeadlinesCard state={summary.deadlines.state} />}
+      {/* Android Enterprise (android-amapi §12.1, lot AN-C2): the tenant's enterprise, its linking and its operation. */}
+      <AndroidEnterpriseCard />
     </PageContainer>
   );
 }

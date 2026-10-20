@@ -4,10 +4,10 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import {
   ArrowLeft, Briefcase, Building2, FolderOpen, History, KeyRound, LayoutGrid, Package, Pencil, RefreshCw,
-  ScrollText, SlidersHorizontal, TerminalSquare, User, Zap,
+  ScrollText, SlidersHorizontal, Smartphone, TerminalSquare, User, Zap,
 } from 'lucide-react';
 import type { CollectedField, DeviceDeclarationsView, DeviceDetail, DeviceStatusItemView, EndUser } from '@obligarth/shared';
-import { SocketEvents } from '@obligarth/shared';
+import { ANDROID_MODES, SocketEvents } from '@obligarth/shared';
 import { useDeviceMove } from '@/components/mdm/DeviceMoveChange';
 import { mdmApi } from '@/api/mdm.api';
 import { appleApi } from '@/api/apple.api';
@@ -27,6 +27,7 @@ import {
 import { DeviceConfigurationTab } from '@/components/mdm/DeviceConfigurationTab';
 import { DeviceAppsTab, DeviceCertificatesTab, DeviceProfilesTab } from '@/components/mdm/DeviceInventoryTabs';
 import { DeviceActionsTab, DeviceCommandsTab } from '@/components/mdm/DeviceCommands';
+import { AndroidDeviceActions, AndroidDeviceTab } from '@/components/android/AndroidDeviceTab';
 import { DeviceHistoryTab } from '@/components/mdm/DeviceHistoryTab';
 import { DeviceRetirementCard } from '@/components/mdm/DeviceRetirementCard';
 import { anonymize } from '@/utils/anonymize';
@@ -36,8 +37,8 @@ import { apiErrorMessage, trCode } from '@/utils/apiError';
 // hardware, identity, push, declarative management), effective configuration, applications, profiles,
 // certificates, commands (the queue of the integration), history (episodes and timeline), actions.
 
-type Tab = 'overview' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions';
-const TABS: Tab[] = ['overview', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions'];
+type Tab = 'overview' | 'android' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions';
+const TABS: Tab[] = ['overview', 'android', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions'];
 
 const COLLECTED: CollectedField[] = ['serialNumber', 'hardwareIds', 'deviceName', 'phoneNumber', 'network', 'allApps', 'allCertificates'];
 const COLLECTED_FALLBACK: Record<CollectedField, string> = {
@@ -159,8 +160,11 @@ export function DeviceSummaryPage() {
   const collected = device.privacy?.collected ?? [];
   const tenantName = device.tenantName ?? tenants.find((tn) => tn.id === device.tenantId)?.name ?? `#${device.tenantId}`;
   const apple = device.apple;
+  // A device of the channel amapi (Android Enterprise, lot AN-C2): its Android tab and the menu of the Android commands.
+  const isAmapi = device.platform === 'android' && (ANDROID_MODES as readonly string[]).includes(device.managementMode);
   const tabs: SegmentedTab<Tab>[] = [
     { id: 'overview', label: t('deviceSummary.tabs.overview') || 'Overview', icon: <LayoutGrid size={15} /> },
+    ...(isAmapi ? [{ id: 'android' as const, label: t('deviceSummary.tabs.android') || 'Android', icon: <Smartphone size={15} /> }] : []),
     { id: 'configuration', label: t('deviceSummary.tabs.configuration') || 'Configuration', icon: <SlidersHorizontal size={15} /> },
     { id: 'apps', label: t('deviceSummary.tabs.apps') || 'Applications', icon: <Package size={15} /> },
     { id: 'profiles', label: t('deviceSummary.tabs.profiles') || 'Profiles', icon: <ScrollText size={15} /> },
@@ -319,7 +323,10 @@ export function DeviceSummaryPage() {
       {tab === 'certificates' && <DeviceCertificatesTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.certificates} />}
       {tab === 'commands' && <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />}
       {tab === 'history' && <DeviceHistoryTab deviceId={device.id} />}
-      {tab === 'actions' && <DeviceActionsTab deviceId={device.id} managed={managed} canAct={canWrite} onQueued={() => { void reload(); }} />}
+      {tab === 'android' && isAmapi && <AndroidDeviceTab deviceId={device.id} />}
+      {tab === 'actions' && (isAmapi
+        ? <AndroidDeviceActions deviceId={device.id} ownership={device.ownership} canAct={canWrite} onQueued={() => { void reload(); }} />
+        : <DeviceActionsTab deviceId={device.id} managed={managed} canAct={canWrite} onQueued={() => { void reload(); }} />)}
 
       <EditDeviceDialog open={editOpen} onClose={() => setEditOpen(false)} device={device} onSaved={setDevice} />
       <GroupDialog open={groupOpen} onClose={() => setGroupOpen(false)} device={device} onDone={() => { void reload(); }} />

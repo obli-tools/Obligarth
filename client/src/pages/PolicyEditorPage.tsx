@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { AlertTriangle, Archive, ArrowLeft, CheckCircle2, FileUp, Pencil, Plus, RefreshCw, Save, Send, Trash2 } from 'lucide-react';
 import type {
-  AppleItem, JsonValue, Policy, PolicyConflict, PolicyContentV1, PolicyValidationIssue, PolicyVersion, SchemaKey,
+  AndroidPolicySection as AndroidSectionContent, AppleItem, JsonValue, Policy, PolicyConflict, PolicyContentV1, PolicyValidationIssue, PolicyVersion, SchemaKey,
 } from '@obligarth/shared';
 import { POLICY_CATEGORIES, POLICY_CATEGORY_RE, POLICY_MAX_ITEMS, RAW_PROFILE_TYPE, SocketEvents, shortType } from '@obligarth/shared';
 import { mdmApi, type RawProfileImport, type SchemaCatalogView } from '@/api/mdm.api';
@@ -19,18 +19,22 @@ import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { AssignmentsPanel, announceSubmitOutcome } from '@/components/mdm/Assignments';
 import { ConflictList, ImpactConfirmDialog } from '@/components/mdm/ImpactPreview';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
+import { AndroidPolicySection } from '@/components/android/AndroidPolicySection';
 import { VERSION_TONE, categoryLabel, policyStateLabel, versionStateLabel } from '@/pages/PoliciesPage';
 import { apiErrorBody, apiErrorCode, apiErrorMessage, trCode } from '@/utils/apiError';
 
 // The editor of a policy (modele-donnees-mdm §7.1, §7.2, §11.3): its envelope, its versions (a published version
 // is immutable: a change is a new draft), the items of its Apple section, the validation, the impact preview and
-// the publication, its assignments. The items are edited as JSON (the generated forms are CFG-01, another lot):
-// the keys of each type are listed from the schema catalog to write them by hand.
+// the publication, its assignments. The Apple items are edited as JSON (the generated forms are CFG-01, another lot):
+// the keys of each type are listed from the schema catalog to write them by hand. The Android section (lot AN-C2) has
+// forms generated from the catalog of the AMAPI compiler (AndroidPolicySection).
 
 type SchemaType = SchemaCatalogView['types'][number];
 interface Row { item: AppleItem; text: string; error: string | null }
 
 const pretty = (v: unknown): string => JSON.stringify(v ?? {}, null, 2);
+/** The item id of the issues of the Android section (server: ANDROID_SECTION_ITEM). */
+const ANDROID_ITEM = 'android';
 const rowOf = (item: AppleItem): Row => ({ item, text: pretty(item.values ?? {}), error: null });
 const newId = (): string => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID()
   : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)));
@@ -49,6 +53,8 @@ export function PolicyEditorPage() {
   const [selected, setSelected] = useState<number | null>(null);
   const [version, setVersion] = useState<PolicyVersion | null>(null);
   const [rows, setRows] = useState<Row[]>([]);
+  // The Android section (lot AN-C2): its fragment and apps, edited by the generated forms.
+  const [android, setAndroid] = useState<AndroidSectionContent | undefined>(undefined);
   const [changeNote, setChangeNote] = useState('');
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -88,6 +94,7 @@ export function PolicyEditorPage() {
   const applyVersion = useCallback((v: PolicyVersion) => {
     setVersion(v);
     setRows((v.content?.sections?.apple?.items ?? []).map(rowOf));
+    setAndroid(v.content?.sections?.android);
     setChangeNote(v.changeNote ?? '');
     setDirty(false);
     setIssues([]);
@@ -133,7 +140,9 @@ export function PolicyEditorPage() {
     });
     setRows(next);
     if (!ok) return null;
-    return { format: 1, sections: { ...(version?.content?.sections ?? {}), apple: { items } } };
+    const sections: PolicyContentV1['sections'] = { ...(version?.content?.sections ?? {}), apple: { items } };
+    if (android) sections.android = android; else delete sections.android;
+    return { format: 1, sections };
   };
 
   const save = async (): Promise<boolean> => {
@@ -255,7 +264,7 @@ export function PolicyEditorPage() {
   }
 
   const itemIssues = (itemId: string) => issues.filter((i) => i.itemId === itemId);
-  const globalIssues = issues.filter((i) => i.itemId === null || !rows.some((r) => r.item.id === i.itemId));
+  const globalIssues = issues.filter((i) => i.itemId !== ANDROID_ITEM && (i.itemId === null || !rows.some((r) => r.item.id === i.itemId)));
   const rejected = version?.state === 'rejected';
 
   return (
@@ -341,7 +350,7 @@ export function PolicyEditorPage() {
                 </Button>
               )}
               {editable && (
-                <Button size="sm" disabled={busy || rows.length === 0} onClick={() => { void openPublish(); }}>
+                <Button size="sm" disabled={busy || (rows.length === 0 && !android)} onClick={() => { void openPublish(); }}>
                   <Send className="w-3.5 h-3.5 mr-1" />{t('policies.editor.publish') || 'Publish…'}
                 </Button>
               )}
@@ -375,8 +384,8 @@ export function PolicyEditorPage() {
           )}
           {!editable && version.changeNote && <p className="text-sm text-text-secondary">{version.changeNote}</p>}
 
-          {/* Items of the Apple section */}
-          <section className="space-y-3">
+          {/* Items of the Apple section (hidden for a version that has only Android settings) */}
+          {(rows.length > 0 || !android) && <section className="space-y-3">
             <h2 className="text-sm font-semibold text-text-primary">
               {t('policies.editor.items', { count: rows.length }) || `${rows.length} item(s)`}
             </h2>
@@ -392,8 +401,17 @@ export function PolicyEditorPage() {
                 onDelete={() => { setRows((prev) => prev.filter((_, i) => i !== index)); setDirty(true); setValidated(false); }}
               />
             ))}
-          </section>
+          </section>}
         </>
+      )}
+
+      {version && (android || editable) && (
+        <AndroidPolicySection
+          section={android}
+          editable={!!editable}
+          issues={issues.filter((i) => i.itemId === ANDROID_ITEM)}
+          onChange={(next) => { setAndroid(next); setDirty(true); setValidated(false); }}
+        />
       )}
 
       {/* Assignments */}

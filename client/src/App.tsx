@@ -26,6 +26,7 @@ import { AdminUsersPage } from '@/pages/AdminUsersPage';
 import { ProfilePage } from '@/pages/ProfilePage';
 import { AdminTenantsPage } from '@/pages/AdminTenantsPage';
 import { AndroidPlatformPage } from '@/pages/admin/AndroidPlatformPage';
+import { AndroidZeroTouchPage } from '@/pages/AndroidZeroTouchPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
 import { SecurityPage } from '@/pages/SecurityPage';
@@ -111,6 +112,8 @@ export default function App() {
  {/* Apple integrations: push certificate, ADE servers, deadlines, readiness (settings or mdm.integrations.manage). */}
  <Route element={<ProtectedRoute requiredCapabilities={['settings', 'mdm.integrations.manage']} />}>
   <Route path="/integrations" element={<IntegrationsPage />} />
+  {/* The zero-touch portal of Google, embedded (android-amapi §10.5, lot AN-C2): its path is the parentFrameUrl. */}
+  <Route path="/enrollment/android/zero-touch" element={<AndroidZeroTouchPage />} />
  </Route>
  {/* Device enrollment: profiles, links, invitations, sessions (mdm.enrollment.manage). */}
  <Route element={<ProtectedRoute requiredCapabilities={['mdm.enrollment.manage']} />}>

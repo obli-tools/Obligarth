@@ -24,7 +24,9 @@ const STATE_TONE: Record<MdmTargetState, 'green' | 'gray' | 'blue' | 'amber' | '
   pending: 'blue', queued: 'blue', sent: 'blue', notnow: 'amber', expired: 'gray', cancelled: 'gray', rejected: 'red',
   acknowledged: 'green', error: 'red',
 };
-const commandTypeLabel = (type: string): string => trCode(`apple.commands.types.${type}`, type);
+/** The label of a command type: Apple's, or the Android one for a command of the platform android (field platform, lot AN-D). */
+const commandTypeLabel = (type: string, platform?: string): string => (platform === 'android'
+  ? trCode(`android.commands.types.${type}`, type) : trCode(`apple.commands.types.${type}`, type));
 const stateLabel = (s: string): string => trCode(`apple.commands.state.${s}`, s);
 
 /** The page of the guarded action a command belongs to (its withdrawal is asked there). */
@@ -80,6 +82,13 @@ export function DeviceCommandsTab({ deviceId, canAct }: { deviceId: number; canA
   const relaunch = async (row: MdmTargetView) => {
     setBusy(row.commandId);
     try {
+      // An Android command in error is retried as a new command of its type (lot AN-D): no push to send.
+      if (row.platform === 'android') {
+        await appleApi.relaunch(row.commandId, [deviceId]);
+        toast.success(t('android.commands.retried') || 'A new command was queued');
+        load();
+        return;
+      }
       const o = await appleApi.relaunch(row.commandId, [deviceId]);
       if (o.pushed > 0) toast.success(t('apple.commands.pushed') || 'Push sent');
       else toast(trCode(`apple.commands.pushSkipped.${o.skipped[0]?.code}`, t('apple.commands.pushSkippedGeneric') || 'No push was sent for this device.'));
@@ -114,7 +123,8 @@ export function DeviceCommandsTab({ deviceId, canAct }: { deviceId: number; canA
               return (
                 <li key={r.commandId} className="px-3 py-2.5 text-sm">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium text-text-primary">{commandTypeLabel(r.requestType)}</span>
+                    <span className="font-medium text-text-primary">{commandTypeLabel(r.requestType, r.platform)}</span>
+                    {r.platform === 'android' && <StateBadge tone="violet" label={t('android.commands.platform') || 'Android'} />}
                     <StateBadge tone={STATE_TONE[r.state] ?? 'gray'} label={stateLabel(r.state)} pulse={open} />
                     <span className="text-[11px] text-text-muted">{trCode(`apple.commands.origin.${r.origin}`, r.origin)}</span>
                     {r.origin === 'guard' && <ShieldAlert className="w-3.5 h-3.5 text-red-400" aria-hidden />}
@@ -139,13 +149,20 @@ export function DeviceCommandsTab({ deviceId, canAct }: { deviceId: number; canA
                   )}
                   {canAct && open && (
                     <div className="mt-2 flex gap-2">
-                      {(r.state === 'queued' || r.state === 'sent' || r.state === 'notnow') && (
+                      {r.platform !== 'android' && (r.state === 'queued' || r.state === 'sent' || r.state === 'notnow') && (
                         <Button size="sm" variant="secondary" disabled={busy === r.commandId} onClick={() => relaunch(r)}>
                           <BellRing className="w-3.5 h-3.5 mr-1" />{t('apple.commands.relaunch') || 'Push again'}
                         </Button>
                       )}
                       <Button size="sm" variant="secondary" disabled={busy === r.commandId} onClick={() => cancel(r)}>
                         <Ban className="w-3.5 h-3.5 mr-1" />{r.origin === 'guard' ? (t('apple.commands.withdraw') || 'Withdraw…') : (t('apple.commands.cancel') || 'Cancel')}
+                      </Button>
+                    </div>
+                  )}
+                  {canAct && r.platform === 'android' && r.state === 'error' && r.origin !== 'guard' && (
+                    <div className="mt-2 flex gap-2">
+                      <Button size="sm" variant="secondary" disabled={busy === r.commandId} onClick={() => relaunch(r)}>
+                        <RefreshCw className="w-3.5 h-3.5 mr-1" />{t('android.commands.retry') || 'Retry'}
                       </Button>
                     </div>
                   )}

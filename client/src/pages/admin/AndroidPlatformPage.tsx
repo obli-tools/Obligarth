@@ -8,11 +8,13 @@ import { PageContainer } from '@/components/common/PageContainer';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { apiErrorMessage } from '@/utils/apiError';
+import { DeadLettersCard, KeyCard, OrphansCard } from './PlatformAndroidOperations';
 
 // « Platform > Android » (android-amapi §12.1, minimal screen of lot AN-A2; platform administrators, master tenant):
 // the identity of the instance at Google (mode, project, fingerprint of the service account key, never the key) and
 // the health of the link (permission on the subscription, pull loop, lag, breaker, budget of the limiter), with the
-// quota of the project. The deposit of the key, the orphan enterprises and the dead letters come with lot AN-C2.
+// quota of the project. Lot AN-C2: the deposit of the key and its deadline, the orphan enterprises and their adoption,
+// the dead letters of the inbox (PlatformAndroidOperations.tsx).
 
 const dateOf = (v: string | null | undefined): string => (v ? formatDateTime(v) : '—');
 
@@ -131,6 +133,7 @@ export function AndroidPlatformPage() {
             )}
           </Card>
 
+          {!off && health.auth === 'vault_key' && <KeyCard onDeposited={() => void load()} />}
           {quota && (
             <Card title={t('androidPlatform.quota.title') || 'Quota of the project'}>
               <Row label={t('androidPlatform.quota.devices') || 'Devices counted'}>{quota.count}</Row>
@@ -141,6 +144,12 @@ export function AndroidPlatformPage() {
               </Row>
             </Card>
           )}
+        </div>
+      )}
+      {health && !off && (
+        <div className="mt-4 space-y-4">
+          <OrphansCard />
+          <DeadLettersCard />
         </div>
       )}
     </PageContainer>
