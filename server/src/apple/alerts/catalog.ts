@@ -9,6 +9,10 @@
 // numbers, dates and configuration labels. The console translates
 // apple.alerts.<kind>.title / .message (i18n_key, i18n_params) and falls back
 // on the English text rendered here. No import: the unit tests load it.
+// Lot AN-P: the catalogue of the alerts is opened to the modules
+// (services/alertCatalog.ts, registerAlertDefinitions): registerAppleModule
+// declares these kinds there, the bridge agent its own (legacyAgent/alerts.ts),
+// Android its own (android/alerts.ts).
 // =============================================================================
 
 export type AppleAlertScope = 'tenant' | 'master';
@@ -41,11 +45,6 @@ export const APPLE_ALERTS = {
   'devices.inactive': { scope: 'tenant', severity: 'warning', title: 'Inactive devices', message: '{count} device(s) without contact for {days} days.' },
   'command.failed': { scope: 'tenant', severity: 'warning', title: 'Command failed', message: 'A {requestType} command failed on {count} device(s).' },
   'policy.conflict': { scope: 'tenant', severity: 'warning', title: 'Policy conflict', message: 'Two policies set the same setting differently on some devices.' },
-  // ── Android bridge agent (agent-pont-android §6) ─────────────────────────
-  'legacy_agent.admin_disabled': { scope: 'tenant', severity: 'warning', title: 'Device administrator disabled', message: 'The device administrator of the Android agent was disabled on a device: it can no longer be locked nor erased.' },
-  'legacy_agent.identity_conflict': { scope: 'tenant', severity: 'warning', title: 'Android agent identity conflict', message: 'An Android agent declared a serial number or an IMEI already held by another managed device: check that it is the same device.' },
-  'legacy_agent.silent': { scope: 'tenant', severity: 'warning', title: 'Android agents silent', message: '{count} Android agent(s) have not contacted the server for 24 hours.' },
-  'legacy_agent.license_error': { scope: 'tenant', severity: 'warning', title: 'Knox licence refused', message: 'The Knox licence could not be activated on an Android agent device: silent installation and restart are unavailable.' },
   // ── Security ──────────────────────────────────────────────────────────────
   'security.topic_mismatch': { scope: 'tenant', severity: 'warning', title: 'Push topic mismatch', message: '{count} device(s) presented a push topic that is not this tenant\'s.' },
   'security.identity_revoked': { scope: 'tenant', severity: 'critical', title: 'Revoked identity presented', message: '{count} connection(s) with a revoked device identity were refused.' },
@@ -110,7 +109,7 @@ export function isAppleAlertKind(kind: string): kind is AppleAlertKind {
 }
 
 /** 'apple:<kind>[:<discriminant>]': the discriminant is an internal identifier only. */
-export function stableKeyOf(kind: AppleAlertKind, discriminant?: string | number): string {
+export function stableKeyOf(kind: string, discriminant?: string | number): string {
   if (discriminant === undefined || discriminant === null || discriminant === '') return `apple:${kind}`;
   const d = String(discriminant);
   if (!/^[A-Za-z0-9_.:-]{1,64}$/.test(d)) throw new Error(`alert ${kind}: invalid discriminant`);
@@ -132,4 +131,10 @@ export function cleanParams(params: AlertParams | undefined): AlertParams {
 /** The English text with its parameters ({name}); an absent parameter stays as written. */
 export function render(template: string, params: AlertParams): string {
   return template.replace(/\{([A-Za-z][A-Za-z0-9_]{0,39})\}/g, (m, name: string) => (name in params ? String(params[name]) : m));
+}
+
+// The Apple kinds are raised by the catalogue service (type only, no import at run time).
+declare module '../../services/alertCatalog' {
+  // eslint-disable-next-line @typescript-eslint/no-empty-interface
+  interface CatalogAlertKinds extends Record<AppleAlertKind, true> {}
 }

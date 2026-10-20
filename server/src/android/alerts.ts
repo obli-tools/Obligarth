@@ -1,8 +1,8 @@
 // Alerts of the Android integration (annex E, closed catalogue): platform alerts go to the live alerts of the master
 // tenant (the operator), tenant alerts to the tenant's own; deduplicated on an unread alert of the same stable key.
-// Texts carry an i18n key and identifiers only (never a device datum, a name nor an e-mail). The generic alert
-// catalogue opened to modules (registerAlertDefinitions) arrives with the channel generalisation; until then the
-// definitions live here.
+// Texts carry an i18n key and identifiers only (never a device datum, a name nor an e-mail). The definitions live here
+// and are declared in the catalogue of the alerts opened to the modules (services/alertCatalog.ts,
+// registerAlertDefinitions) by registerAndroidModule (lot AN-P).
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { db } from '../db';
 import { asTenant, type DbActor } from '../db/context';
@@ -124,8 +124,8 @@ export async function raiseAndroidTenantAlert(tenantId: number, key: string, par
 }
 
 /**
- * The definitions of the Android alerts in the shape of the alert catalogue opened to modules (registerAlertDefinitions,
- * junction AN-P): key, scope, severity, title (English), i18n key of the text. Until then they live in this module.
+ * The definitions of the Android alerts for the catalogue opened to the modules (registerAlertDefinitions, lot AN-P):
+ * key, scope, severity, title (English), i18n key of the text.
  */
 export function androidAlertDefinitions(): Array<AndroidAlertDefinition & { i18nKey: string }> {
   return ANDROID_ALERTS.map((a) => ({ ...a, i18nKey: `alerts.${a.key}` }));

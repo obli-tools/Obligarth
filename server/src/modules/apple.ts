@@ -4,8 +4,9 @@ import { registerEdgeFreezeHandler } from '../guard';
 import { registerFreezeMirror } from '../guard/frozen';
 import { appleEdgeFrozen } from '../apple/commands/bus';
 import { registerBootTask, registerStartTask } from '../lifecycle';
-import { registerPlatformOnlyAlertKinds } from '../services/liveAlert.service';
-import { APPLE_ALERTS } from '../apple/alerts/catalog';
+import { registerAlertDefinitions } from '../services/alertCatalog';
+import { APPLE_ALERTS, type AppleAlertKind } from '../apple/alerts/catalog';
+import { APPLE_ALERTS_FR } from '../apple/alerts/catalog.fr';
 import { logger } from '../utils/logger';
 import { registerSecretColumn, setEdgeKekIdSource } from '../vault';
 import { registerAppleEdgeAdmin } from '../apple/admin.routes';
@@ -96,7 +97,12 @@ export function registerAppleModule(): void {
   registerRetireJob();
 
   // ── Alerts of the platform (scope 'master'): read by the platform administrators only (§12.1, lot C5) ──
-  registerPlatformOnlyAlertKinds(Object.entries(APPLE_ALERTS).filter(([, d]) => d.scope === 'master').map(([k]) => k));
+  // The Apple kinds in the catalogue of the alerts opened to the modules (lot AN-P); its platform kinds are read by the
+  // platform administrators only.
+  registerAlertDefinitions('apple', (Object.keys(APPLE_ALERTS) as AppleAlertKind[]).map((k) => ({
+    key: k, scope: APPLE_ALERTS[k].scope, severity: APPLE_ALERTS[k].severity, title: APPLE_ALERTS[k].title, message: APPLE_ALERTS[k].message,
+    fr: APPLE_ALERTS_FR[k], i18nKey: `apple.alerts.${k}`,
+  })));
 
   // ── Audit, restrictions, approvals ─────────────────────────────────────────
   registerAppleAuditActions();

@@ -7,14 +7,30 @@ import { applyTenantContext, withTenantTransaction } from '../../db/tenantContex
 import { jobIdFor, registerJob, type JobContext, type JobHandle } from '../../jobs';
 import { announce, emitResolved, trimTenant } from '../../services/liveAlert.service';
 import { logger } from '../../utils/logger';
+import { catalogAlert, type CatalogAlertKind } from '../../services/alertCatalog';
 import {
   APPLE_ALERTS, cleanParams, isAppleAlertKind, render, stableKeyOf, type AlertParams, type AppleAlertKind,
   type AppleAlertSeverity,
 } from './catalog';
+
+/** A kind the catalogue service raises: the Apple kinds, and the rendered kinds the other modules declared in the
+ *  catalogue of the alerts (services/alertCatalog.ts, lot AN-P: the bridge agent's). */
+export type ServiceAlertKind = AppleAlertKind | CatalogAlertKind;
+
+interface ServiceAlertDef { scope: 'tenant' | 'master' | 'both'; severity: AppleAlertSeverity; title: string; message: string; i18nKey: string }
+
+/** The definition of a kind of the service (the Apple catalogue first, then the declared ones), or null. */
+export function serviceAlertDef(kind: string): ServiceAlertDef | null {
+  if (isAppleAlertKind(kind)) return { ...APPLE_ALERTS[kind], i18nKey: `apple.alerts.${kind}` };
+  const d = catalogAlert(kind);
+  return d && d.message !== undefined ? { scope: d.scope, severity: d.severity, title: d.title, message: d.message, i18nKey: d.i18nKey } : null;
+}
 import { deliverToChannels } from './channels';
 
 // =============================================================================
-// Alerts of the Apple integration (docs: integration-apple-edge §12.2, §12.3):
+// Alerts of the Apple integration (docs: integration-apple-edge §12.2, §12.3),
+// and of the modules that declared rendered kinds in the catalogue of the
+// alerts (services/alertCatalog.ts, lot AN-P: the bridge agent):
 // written in the transaction of what raises them (an outbox event, a job, a
 // route), deduplicated on the unresolved row of the same stable key (read or
 // not: its parameters are refreshed, nothing new is announced), resolved by
@@ -44,8 +60,8 @@ export interface RaiseOptions {
 const SEVERITY_RANK: Record<AppleAlertSeverity, number> = { info: 0, warning: 1, critical: 2 };
 
 /** The catalogue's severity, raised by the occurrence's when higher. */
-function severityOf(kind: AppleAlertKind, wanted: AppleAlertSeverity | undefined): AppleAlertSeverity {
-  const base = APPLE_ALERTS[kind].severity as AppleAlertSeverity;
+function severityOf(kind: ServiceAlertKind, wanted: AppleAlertSeverity | undefined): AppleAlertSeverity {
+  const base = serviceAlertDef(kind)!.severity;
   return wanted && SEVERITY_RANK[wanted] > SEVERITY_RANK[base] ? wanted : base;
 }
 
@@ -57,13 +73,13 @@ const DeliverPayload = z.object({
 
 let deliverJob: JobHandle<z.infer<typeof DeliverPayload>> | null = null;
 
-function requireKind(kind: string): AppleAlertKind {
-  if (!isAppleAlertKind(kind)) throw new Error(`alert ${kind}: not in the catalogue`);
-  return kind;
+function requireKind(kind: string): ServiceAlertKind {
+  if (!serviceAlertDef(kind)) throw new Error(`alert ${kind}: not in the catalogue`);
+  return kind as ServiceAlertKind;
 }
 
-function checkScope(kind: AppleAlertKind, tenantId: number): void {
-  if (APPLE_ALERTS[kind].scope === 'master' && tenantId !== MASTER_TENANT_ID) {
+function checkScope(kind: ServiceAlertKind, tenantId: number): void {
+  if (serviceAlertDef(kind)!.scope === 'master' && tenantId !== MASTER_TENANT_ID) {
     throw new Error(`alert ${kind}: a platform alert is filed in the master tenant`);
   }
 }
@@ -77,11 +93,11 @@ async function sendDelivery(trx: Knex.Transaction, tenantId: number, alertId: nu
 }
 
 /** In the caller's transaction, whose database context is `tenantId`'s. */
-export async function raiseInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind, opts: RaiseOptions = {}):
+export async function raiseInTx(trx: Knex.Transaction, tenantId: number, kindName: ServiceAlertKind, opts: RaiseOptions = {}):
   Promise<{ id: number; created: boolean }> {
   const kind = requireKind(kindName);
   checkScope(kind, tenantId);
-  const def = APPLE_ALERTS[kind];
+  const def = serviceAlertDef(kind)!;
   const stableKey = stableKeyOf(kind, opts.discriminant);
   const params = cleanParams(opts.params);
   await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`live_alert:${tenantId}:${stableKey}`]);
@@ -104,7 +120,7 @@ export async function raiseInTx(trx: Knex.Transaction, tenantId: number, kindNam
   }
   const [row] = await trx('live_alerts').insert({
     tenant_id: tenantId, severity: severityOf(kind, opts.severity), title, message, navigate_to: opts.navigateTo ?? null, stable_key: stableKey,
-    kind, i18n_key: `apple.alerts.${kind}`, i18n_params: JSON.stringify(params),
+    kind, i18n_key: def.i18nKey, i18n_params: JSON.stringify(params),
   }).returning('id') as Array<{ id: number }>;
   const id = Number(row.id);
   await sendDelivery(trx, tenantId, id, 'raised');
@@ -142,7 +158,7 @@ function isAfter(o: CountedOccurrence, params: unknown): boolean {
  * The params carry lastAt and lastEvent (the event's time and id: never device data). In the caller's
  * transaction (tenant context). `counted` is false when the occurrence was already counted (nothing written).
  */
-export async function raiseCountedInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind,
+export async function raiseCountedInTx(trx: Knex.Transaction, tenantId: number, kindName: ServiceAlertKind,
   o: CountedOccurrence, opts: RaiseOptions = {}): Promise<{ id: number | null; created: boolean; counted: boolean }> {
   const kind = requireKind(kindName);
   checkScope(kind, tenantId);
@@ -195,7 +211,7 @@ export async function checkEnrollmentSpike(trx: Knex.Transaction, tenantId: numb
 }
 
 /** Resolves the unresolved rows of the kind (and discriminant) in the caller's transaction (tenant context). */
-export async function resolveInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind, discriminant?: string | number): Promise<number[]> {
+export async function resolveInTx(trx: Knex.Transaction, tenantId: number, kindName: ServiceAlertKind, discriminant?: string | number): Promise<number[]> {
   const kind = requireKind(kindName);
   checkScope(kind, tenantId);
   const stableKey = stableKeyOf(kind, discriminant);
@@ -211,7 +227,7 @@ export async function resolveInTx(trx: Knex.Transaction, tenantId: number, kindN
 
 /** Resolves the unresolved rows of the kind (any discriminant) that `where` selects, in the caller's transaction
  *  (tenant context): the alerts resolved by time (alerts.auto-resolve, §12.5). */
-export async function resolveWhereInTx(trx: Knex.Transaction, tenantId: number, kindName: AppleAlertKind,
+export async function resolveWhereInTx(trx: Knex.Transaction, tenantId: number, kindName: ServiceAlertKind,
   where: (q: Knex.QueryBuilder) => Knex.QueryBuilder): Promise<number[]> {
   const kind = requireKind(kindName);
   checkScope(kind, tenantId);
@@ -225,7 +241,7 @@ export async function resolveWhereInTx(trx: Knex.Transaction, tenantId: number, 
 
 /** A platform alert from a transaction in another context (rule G-6): the master tenant's context for the
  *  write, then `restore` (the tenant of the caller's context, or null for 'none'). */
-export async function raiseMasterInTx(trx: Knex.Transaction, kind: AppleAlertKind, opts: RaiseOptions, actor: DbActor,
+export async function raiseMasterInTx(trx: Knex.Transaction, kind: ServiceAlertKind, opts: RaiseOptions, actor: DbActor,
   restore: number | null): Promise<{ id: number; created: boolean }> {
   await applyTenantContext(trx, MASTER_TENANT_ID, actor);
   try {
@@ -235,7 +251,7 @@ export async function raiseMasterInTx(trx: Knex.Transaction, kind: AppleAlertKin
   }
 }
 
-export async function resolveMasterInTx(trx: Knex.Transaction, kind: AppleAlertKind, discriminant: string | number | undefined,
+export async function resolveMasterInTx(trx: Knex.Transaction, kind: ServiceAlertKind, discriminant: string | number | undefined,
   actor: DbActor, restore: number | null): Promise<number[]> {
   await applyTenantContext(trx, MASTER_TENANT_ID, actor);
   try {
@@ -247,7 +263,7 @@ export async function resolveMasterInTx(trx: Knex.Transaction, kind: AppleAlertK
 
 /** Its own transaction, in the alert's tenant (the master tenant for a platform alert). Never throws: an
  *  alert that cannot be written is logged. */
-export async function raiseAlert(actor: DbActor, tenantId: number, kind: AppleAlertKind, opts: RaiseOptions = {}): Promise<void> {
+export async function raiseAlert(actor: DbActor, tenantId: number, kind: ServiceAlertKind, opts: RaiseOptions = {}): Promise<void> {
   try {
     await withTenantTransaction(tenantId, actor, (trx) => raiseInTx(trx, tenantId, kind, opts));
   } catch (err) {
@@ -255,7 +271,7 @@ export async function raiseAlert(actor: DbActor, tenantId: number, kind: AppleAl
   }
 }
 
-export async function resolveAlert(actor: DbActor, tenantId: number, kind: AppleAlertKind, discriminant?: string | number): Promise<void> {
+export async function resolveAlert(actor: DbActor, tenantId: number, kind: ServiceAlertKind, discriminant?: string | number): Promise<void> {
   try {
     await withTenantTransaction(tenantId, actor, (trx) => resolveInTx(trx, tenantId, kind, discriminant));
   } catch (err) {

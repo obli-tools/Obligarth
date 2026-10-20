@@ -29,6 +29,8 @@ import { currentDbContext, type DbActor } from '../db/context';
 import { endKioskExitsOnFreeze } from '../android/kiosk/exits';
 import { resumeHeldCommands } from '../android/commands/submit';
 import { registerDevicePurger } from './privacy';
+import { registerAlertDefinitions } from '../services/alertCatalog';
+import { androidAlertDefinitions } from '../android/alerts';
 import { purgeAndroidDevices } from '../android/operations/purge';
 import { registerArtifactChannel } from '../mdm/policies/artifacts';
 import { amapiArtifactProvider } from '../android/policies/channel';
@@ -57,6 +59,11 @@ export function registerAndroidModule(): void {
   // Lot AN-P (§22.6, COH-2): the channel amapi of the common artifact store (the android:* settings, one own policy
   // per device, pushed by android.policies.push-device; a no-op sender while ANDROID_MODE is off).
   registerArtifactChannel(amapiArtifactProvider);
+  // Its alerts in the catalogue opened to the modules (lot AN-P, COH-22): raised by android/alerts.ts (identifiers
+  // only, i18n key alerts.<key>); a platform alert is filed in the master tenant.
+  registerAlertDefinitions('android', androidAlertDefinitions().map((a) => ({
+    key: a.key, scope: a.scope === 'platform' ? 'master' : a.scope, severity: a.severity, title: a.title, i18nKey: a.i18nKey,
+  })));
   registerInstanceSecretName(GOOGLE_CREDENTIALS_SECRET, 'JSON key of the Google service account of the Android integration (vault_key mode)');
   registerAndroidAuditActions();
   registerEnterpriseHandlers();

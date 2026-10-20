@@ -1,6 +1,8 @@
 import { guardReviewerPolicy } from '../guard/approvals';
 import { registerFreezeMirror } from '../guard/frozen';
 import { registerDevicePurger } from './privacy';
+import { registerAlertDefinitions } from '../services/alertCatalog';
+import { legacyAgentAlertDefinitions } from '../legacyAgent/alerts';
 import { appleEdgeFrozen } from '../apple/commands/bus';
 import { registerBootTask } from '../lifecycle';
 import { registerApprovalRequestType } from '../services/approval.service';
@@ -45,6 +47,8 @@ export function registerLegacyAgentModule(): void {
   // satellite, its queue and its inventory go with it, by cascade).
   registerDevicePurger('legacy_agent', { purge: async (_ctx, deviceIds) => ({ purged: deviceIds, deferred: 0, stopped: null }) });
   registerLegacyAgentAuditActions();
+  // Its alerts in the catalogue opened to the modules (lot AN-P), raised by the catalogue service of the integration.
+  registerAlertDefinitions('legacy_agent', legacyAgentAlertDefinitions());
   registerLegacyAgentJobs();
   // Guarded actions first: their keys open the category of the matrix.
   registerLegacyAgentGuardedActions();

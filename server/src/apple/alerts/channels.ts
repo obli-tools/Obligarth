@@ -5,8 +5,10 @@ import { getPlugin } from '../../notifications/registry';
 import type { NotificationPayload } from '../../notifications/types';
 import { notificationService } from '../../services/notification.service';
 import { logger } from '../../utils/logger';
-import { APPLE_ALERTS, isAppleAlertKind, render, type AlertParams, type AppleAlertKind } from './catalog';
+import { catalogAlert } from '../../services/alertCatalog';
+import { APPLE_ALERTS, isAppleAlertKind, render, type AlertParams } from './catalog';
 import { APPLE_ALERTS_FR } from './catalog.fr';
+import { serviceAlertDef, type ServiceAlertKind } from './service';
 
 // =============================================================================
 // External channels of an alert of the Apple integration (docs: integration-
@@ -39,8 +41,11 @@ export async function tenantLanguage(): Promise<AlertLanguage> {
 }
 
 /** Title and message of an alert of the catalogue in `language`. */
-export function renderAlert(kind: AppleAlertKind, params: AlertParams, language: AlertLanguage): { title: string; message: string } {
-  const def = language === 'fr' ? APPLE_ALERTS_FR[kind] : APPLE_ALERTS[kind];
+export function renderAlert(kind: ServiceAlertKind, params: AlertParams, language: AlertLanguage): { title: string; message: string } {
+  const declared = isAppleAlertKind(kind) ? null : catalogAlert(kind);
+  const def = isAppleAlertKind(kind) ? (language === 'fr' ? APPLE_ALERTS_FR[kind] : APPLE_ALERTS[kind])
+    : { title: (language === 'fr' ? declared?.fr?.title : undefined) ?? declared?.title ?? kind,
+      message: (language === 'fr' ? declared?.fr?.message : undefined) ?? declared?.message ?? '' };
   return { title: render(def.title, params).slice(0, 500), message: render(def.message, params).slice(0, 2000) };
 }
 
@@ -66,7 +71,7 @@ export interface ChannelOutcome { sent: number; failed: number; skipped: 'not_ex
 export async function deliverToChannels(ctx: Pick<JobContext<unknown>, 'once'>, tenantId: number, row: Record<string, unknown>): Promise<ChannelOutcome> {
   const kind = String(row.kind ?? '');
   const severity = String(row.severity ?? '');
-  if (!isAppleAlertKind(kind) || (severity !== 'warning' && severity !== 'critical')) return { sent: 0, failed: 0, skipped: 'not_external' };
+  if (!serviceAlertDef(kind) || (severity !== 'warning' && severity !== 'critical')) return { sent: 0, failed: 0, skipped: 'not_external' };
   const channels = await globalChannelsOf(tenantId);
   if (channels.length === 0) return { sent: 0, failed: 0, skipped: 'no_channel' };
   const alertId = Number(row.id);
@@ -74,7 +79,7 @@ export async function deliverToChannels(ctx: Pick<JobContext<unknown>, 'once'>, 
   const send = async (): Promise<void> => {
     const language = await tenantLanguage();
     const params = (row.i18n_params && typeof row.i18n_params === 'object' ? row.i18n_params : {}) as AlertParams;
-    const text = renderAlert(kind, params, language);
+    const text = renderAlert(kind as ServiceAlertKind, params, language);
     const at = row.created_at instanceof Date ? row.created_at : new Date(String(row.created_at ?? Date.now()));
     const navigate = typeof row.navigate_to === 'string' && row.navigate_to.startsWith('/') && config.publicUrl
       ? `${config.publicUrl}${row.navigate_to}` : undefined;
