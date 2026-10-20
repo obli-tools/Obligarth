@@ -11,6 +11,7 @@
 //   POST   /devices/:id/refuse              refuses it (its deletion: android.device_forget, lot AN-D)
 // Capability: mdm.enrollment.manage (AN41, §22.8). Mounted under /api/android by routes/index.ts (lot AN-A2).
 // The value of a token is never logged: the payload is in the body of the answer only, with Cache-Control no-store.
+// The answers of a QR token carry the image of its QR code (qrDataUrl, lot AN-C2).
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import { audit } from '../../audit';
@@ -20,6 +21,7 @@ import { requireTenantCapability } from '../../middleware/rbac';
 import { checkSecondFactor, sendStepUpFailure } from '../../services/deviceKey/stepUpProof';
 import { ApprovalError, approveAndroidDevice, refuseAndroidDevice } from '../enrollment/decisions';
 import { createEnrollmentToken, revealEnrollmentToken, revokeEnrollmentToken, TokenError } from '../enrollment/tokens';
+import { withQrImage } from '../enrollment/qr';
 import {
   archiveAndroidProfile, checkAndroidProfileBody, createAndroidProfile, getAndroidProfile, listAndroidProfiles, updateAndroidProfile,
 } from '../enrollment/profileService';
@@ -113,7 +115,8 @@ export function createAndroidEnrollmentRouter(): Router {
       const ctx = await audit.fromRequest(req, tenantId);
       const t = await createEnrollmentToken(tenantId, userId, parsed.data, ctx);
       res.setHeader('Cache-Control', 'no-store');
-      res.status(201).json({ success: true, data: t });
+      // Lot AN-C2: the image of the QR code, rendered here for the console (never stored).
+      res.status(201).json({ success: true, data: await withQrImage(t) });
     } catch (err) { throw routeError(err); }
   }));
 
@@ -131,7 +134,7 @@ export function createAndroidEnrollmentRouter(): Router {
     try {
       const t = await revealEnrollmentToken(tenantId, userId, id.data, await audit.fromRequest(req, tenantId));
       res.setHeader('Cache-Control', 'no-store');
-      res.json({ success: true, data: t });
+      res.json({ success: true, data: await withQrImage(t) });
     } catch (err) { throw routeError(err); }
   }));
 

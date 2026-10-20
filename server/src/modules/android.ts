@@ -31,6 +31,7 @@ import { resumeHeldCommands } from '../android/commands/submit';
 import { resealMovedCommandSecrets } from '../android/commands/moved';
 import { registerAndroidConsoleCommands } from '../android/commands/console';
 import { registerAndroidQueueChannel } from '../android/routes/commands.routes';
+import { registerAndroidInboxApprovals } from '../android/routes/inbox.routes';
 import { registerDevicePurger, registerEnrollmentPurgeSlice } from './privacy';
 import { purgeEndedTokensSlice } from '../android/enrollment/tokens';
 import { registerAlertDefinitions } from '../services/alertCatalog';
@@ -114,6 +115,8 @@ export function registerAndroidModule(): void {
   registerAndroidForgetAction();
   registerAndroidOffboardingApprovals();
   registerAndroidAdoptionApprovals();
+  // Lot AN-C2 (section 7.2): the approved redrive or discard of a dead letter of the inbox ('restricted' jobs.manage).
+  registerAndroidInboxApprovals();
   // Lot AN-C1 (§4.8, §10.3): the ended enrollment tokens purged after 90 days by enrollment.purge-expired, with those of
   // lot C1 (whatever ANDROID_MODE: rows only, nothing at Google).
   registerEnrollmentPurgeSlice('android.enrollment_tokens', purgeEndedTokensSlice);

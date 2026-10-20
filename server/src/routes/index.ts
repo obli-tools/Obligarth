@@ -49,9 +49,11 @@ import { createAndroidAdminRouter } from '../android/routes/admin.routes';
 import { createAndroidAppsRouter } from '../android/routes/apps.routes';
 import { createAndroidByodRouter } from '../android/routes/byod.routes';
 import { createAndroidCommandsRouter } from '../android/routes/commands.routes';
+import { createAndroidConsoleRouter } from '../android/routes/console.routes';
 import { createAndroidEnrollmentRouter } from '../android/routes/enrollment.routes';
 import { createAndroidEnrollmentFlowsRouter } from '../android/routes/enrollmentFlows.routes';
 import { createAndroidTenantRouter } from '../android/routes/enterprise.routes';
+import { createAndroidInboxAdminRouter } from '../android/routes/inbox.routes';
 import { createAndroidKioskRouter } from '../android/routes/kiosk.routes';
 import { createAndroidOperationsAdminRouter, createAndroidOperationsRouter } from '../android/routes/operations.routes';
 import { createAndroidSignupCallbackRouter } from '../android/routes/signupCallback.routes';
@@ -137,10 +139,14 @@ tenantRouter.use('/android', createAndroidByodRouter());
 tenantRouter.use('/android', createAndroidAppsRouter());
 tenantRouter.use('/android', createAndroidCommandsRouter());
 tenantRouter.use('/android', createAndroidKioskRouter());
+// The reads of the Android console (lot AN-C2): onboarding, policy catalog, tokens, approvals, device facet and menu.
+tenantRouter.use('/android', createAndroidConsoleRouter());
 // The platform side of Android (master tenant, platform administrators): identity, health, quota, orphan
 // enterprises, deadline of the service account key.
 tenantRouter.use('/admin/android', createAndroidAdminRouter());
 tenantRouter.use('/admin/android', createAndroidOperationsAdminRouter());
+// The dead letters of the Android inbox (lot AN-C2, section 7.2): list, audited detail, redrive, discard.
+tenantRouter.use('/admin/android/inbox', createAndroidInboxAdminRouter());
 // Background jobs administration (master tenant, platform administrators;
 // jobs/admin.routes.ts), before /admin/config.
 tenantRouter.use('/admin/jobs', createJobsAdminRouter(createJobsAdmin(defaultRuntime)));

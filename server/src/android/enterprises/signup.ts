@@ -5,7 +5,7 @@
 // (url_issued → consuming) before any call to Google; no Google call inside a transaction (G-A1); neither `s` nor
 // the enterpriseToken is stored or logged; the administrator's e-mail is passed to Google and forgotten.
 import type { Knex } from 'knex';
-import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { ANDROID_PUBLISHER_TERMS_VERSION, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditEntryInput, AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
@@ -22,7 +22,7 @@ import { pinProject, readEnterpriseRow } from './registry';
 export const CALLBACK_ACTOR: DbActor = Object.freeze({ type: 'anonymous', name: 'android.signup-callback' }) as DbActor;
 export const SIGNUP_TTL_MS = 3_600_000;
 /** Current version of the publisher's terms accepted in the linking assistant (AN35). */
-export const PUBLISHER_TERMS_VERSION = '2026-10';
+export const PUBLISHER_TERMS_VERSION = ANDROID_PUBLISHER_TERMS_VERSION;
 
 const PERSONAL_DOMAINS = /^(gmail\.com|googlemail\.com|outlook\.[a-z.]+|hotmail\.[a-z.]+|live\.[a-z.]+|msn\.com|yahoo\.[a-z.]+|ymail\.com|icloud\.com|me\.com|mac\.com|aol\.com|gmx\.[a-z.]+|proton(mail)?\.[a-z.]+|laposte\.net|orange\.fr|free\.fr|sfr\.fr|wanadoo\.fr)$/;
 const DOMAIN_RE = /^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
