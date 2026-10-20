@@ -1,7 +1,7 @@
-// The channel amapi of the guarded device actions (section 11.4, AN14, AN15, AN30), in a module of its own until the
-// junction AN-P: there defineGuardedMdmAction (apple/commands/guarded.ts) becomes defineGuardedDeviceAction, whose
-// revalidation and execution split the targets by channel and hand the amapi ones to androidGuardedChannel below
-// (the channel apple_mdm keeps its behaviour). Until then:
+// The channel amapi of the guarded device actions (section 11.4, AN14, AN15, AN30). Since the junction AN-P, the four
+// keys shared with Apple take the channel amapi through the registry of the guard engine (registerGuardedActionChannel,
+// guard/channels.ts: the targets split by channel at execution, the amapi ones to androidGuardedChannel below; the
+// channel apple_mdm keeps its behaviour); besides:
 //   - the actions that exist only for Android (mdm.reset_password, mdm.relinquish_ownership, mdm.android_disable) are
 //     complete GuardedActionDef registered by registerAndroidGuardedActions() (new restriction keys, no existing file);
 //   - defineAndroidGuardedAction() builds the Android-only definition of any key of the table (the testbed registers
@@ -20,7 +20,10 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import { audit } from '../../audit';
 import { db } from '../../db';
-import { registerGuardedAction, type GuardedActionDef, type GuardExecutionContext, type GuardTargetRefusal, type GuardTargetResult } from '../../guard';
+import {
+  registerGuardedAction, registerGuardedActionChannel, type GuardedActionDef, type GuardedChannelImpl, type GuardExecutionContext, type GuardTargetRefusal,
+  type GuardTargetResult,
+} from '../../guard';
 import { jobIdFor } from '../../jobs';
 import { findSecretRefs, vault, VaultError } from '../../vault';
 import { readEnterprise } from '../enterprises/registry';
@@ -376,60 +379,22 @@ const RESET_PASSWORD_REQUEST = z.object({
 export const SHARED_GUARDED_KEYS: ReadonlySet<string> = new Set(['mdm.erase_device', 'mdm.remove_management', 'mdm.device_lock', 'mdm.lost_mode_enable']);
 
 /**
- * A guarded action of the Apple module that also serves the devices of the channel amapi (junction AN-A2, §11.4): the
- * targets are split by channel, the Apple ones go to the Apple definition unchanged (its revalidation, its execution,
- * its cancellation), the amapi ones to androidGuardedChannel. The parameters are those of either channel: each channel
- * reads them again with its own schema and sets its targets aside when they do not fit it (params_invalid). An action
- * whose targets are all Apple behaves exactly as before.
+ * The channel amapi of a key shared with Apple (§11.4; lot AN-P, guard/channels.ts): its parameters, its revalidation
+ * and its execution for the amapi targets of the action (the Apple targets stay with the Apple definition). Its late
+ * cancellation only when the action dispatched Android commands.
  */
-export function withAmapiChannel<P>(apple: GuardedActionDef<P>): GuardedActionDef<P> {
-  // The channels of the action (PONT-R-RV4): a request on a device of another channel (the bridge agent's) is refused at
-  // once. A shared key keeps the whole fleet and the hourly cap of the tenant (PONT-R-RV3: several channels).
-  if (!SHARED_GUARDED_KEYS.has(apple.key)) return { ...apple, channels: apple.channels ?? ['apple_mdm'] };
-  const key = apple.key as AndroidGuardedKey;
-  const androidSchema = ANDROID_GUARDED_PARAMS[key];
-  const split = async (tenantId: number, ids: number[]): Promise<{ apple: number[]; amapi: number[] }> => {
-    if (!ids.length) return { apple: [], amapi: [] };
-    const amapi = new Set((await db('devices').where({ tenant_id: tenantId, management_channel: 'amapi' }).whereIn('id', ids)
-      .pluck('id') as Array<number | string>).map(Number));
-    return { apple: ids.filter((d) => !amapi.has(d)), amapi: ids.filter((d) => amapi.has(d)) };
-  };
-  const fits = (schema: z.ZodTypeAny, params: unknown): boolean => schema.safeParse(params ?? {}).success;
-  const def: GuardedActionDef<P> = {
-    ...apple,
-    channels: ['apple_mdm', 'amapi'],
-    paramsSchema: z.union([apple.paramsSchema as z.ZodTypeAny, androidSchema]) as unknown as z.ZodType<P>,
-    async revalidate(ctx) {
-      const s = await split(ctx.tenantId, ctx.deviceIds);
-      if (!s.amapi.length) return apple.revalidate(ctx);
-      const out = new Map<number, 'ok' | GuardTargetRefusal>();
-      if (s.apple.length) {
-        const r = fits(apple.paramsSchema as z.ZodTypeAny, ctx.params) ? await apple.revalidate({ ...ctx, deviceIds: s.apple }) : null;
-        for (const d of s.apple) out.set(d, r ? r.get(d) ?? { code: 'not_found' } : { code: 'params_invalid' });
-      }
-      const ok = fits(androidSchema, ctx.params);
-      const r = ok ? await androidGuardedChannel.revalidate(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>, s.amapi) : null;
-      for (const d of s.amapi) out.set(d, r ? r.get(d) ?? { code: 'not_found' } : { code: 'params_invalid' });
-      return out;
-    },
-    async execute(ctx, deviceIds) {
-      const s = await split(ctx.tenantId, deviceIds);
-      if (!s.amapi.length) return apple.execute(ctx, deviceIds);
-      const out = new Map<number, GuardTargetResult>(s.apple.length ? await apple.execute(ctx, s.apple) : []);
-      for (const [d, x] of await androidGuardedChannel.execute(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>, s.amapi)) out.set(d, x);
-      return out;
-    },
-  };
-  if (apple.cancelAfterDispatch) {
-    const cancelApple = apple.cancelAfterDispatch;
-    def.cancelAfterDispatch = async (ctx) => {
-      const out = await cancelApple(ctx);
+export function amapiGuardedChannel(key: AndroidGuardedKey, o: { gateway?: () => AndroidGateway } = {}): GuardedChannelImpl {
+  const gw = () => (o.gateway ? o.gateway() : androidGateway());
+  return {
+    channel: 'amapi',
+    paramsSchema: ANDROID_GUARDED_PARAMS[key],
+    revalidate: (ctx, ids) => androidGuardedChannel.revalidate(key, ctx, ids),
+    execute: (ctx, ids) => androidGuardedChannel.execute(key, ctx, ids, { gateway: gw() }),
+    async cancelAfterDispatch(ctx) {
       const mine = await db('android_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid }).first('id');
-      if (mine) for (const [d, x] of await androidGuardedChannel.cancelAfterDispatch(key, ctx as unknown as GuardExecutionContext<Record<string, unknown>>)) out.set(d, x);
-      return out;
-    };
-  }
-  return def;
+      return mine ? androidGuardedChannel.cancelAfterDispatch(key, ctx, { gateway: gw() }) : new Map();
+    },
+  };
 }
 
 /**
@@ -448,10 +413,12 @@ export async function lostModeFinalHook(e: FinalTargetEvent): Promise<void> {
 
 let registered = false;
 
-/** The guarded actions that exist only for Android (new restriction keys): registered by registerAndroidModule. */
+/** The guarded actions that exist only for Android (new restriction keys), and the channel amapi of the four keys shared
+ *  with Apple (§11.4, lot AN-P): registered by registerAndroidModule. */
 export function registerAndroidGuardedActions(): void {
   if (registered) return;
   registered = true;
   registerAndroidCommandFinalHook(lostModeFinalHook);
   for (const key of ['mdm.reset_password', 'mdm.relinquish_ownership', 'mdm.android_disable'] as const) registerGuardedAction(defineAndroidGuardedAction(key));
+  for (const key of SHARED_GUARDED_KEYS) registerGuardedActionChannel(key, amapiGuardedChannel(key as AndroidGuardedKey));
 }

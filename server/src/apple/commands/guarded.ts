@@ -2,7 +2,6 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import { db } from '../../db';
 import { registerGuardedAction, type GuardedActionDef, type GuardExecutionContext, type GuardTargetRefusal, type GuardTargetResult } from '../../guard';
-import { withAmapiChannel } from '../../android/commands/guarded';
 import { jobIdFor } from '../../jobs';
 import { AppError } from '../../middleware/errorHandler';
 import { toAppError } from '../edge/appError';
@@ -174,8 +173,10 @@ export function defineGuardedMdmAction<P>(
     return out;
   }
 
-  // Once its commands expired, nothing of the action waits for a device any more: no late cancellation beyond.
-  return { ...def, revalidate, execute, cancelAfterDispatch, cancelWindowSeconds: opts.expiresAfterSeconds };
+  // Once its commands expired, nothing of the action waits for a device any more: no late cancellation beyond. The
+  // channel of the action is apple_mdm (a device of another channel is refused at the request, PONT-R-RV4) unless
+  // another module adds its own (guard/channels.ts, lot AN-P).
+  return { ...def, channels: def.channels ?? ['apple_mdm'], revalidate, execute, cancelAfterDispatch, cancelWindowSeconds: opts.expiresAfterSeconds };
 }
 
 /** Serial numbers of the targets for the execution entry of the journal (J29); '' when not collected. */
@@ -204,8 +205,8 @@ let registered = false;
  * integration with the values of audit-durci §10.2). After registerMvpCommandSpecs. Their floors are not stored in
  * a tenant's matrix (no defaultLevel): a floor holds for every tenant, whatever its matrix says. The verified retirement that
  * follows a removal from management (§13.3, apple.device-retire) starts in the execution's transaction (afterDispatch).
- * Junction AN-A2 (android-amapi §11.4): each action also serves the devices of the channel amapi (withAmapiChannel);
- * its Apple targets are handled as before.
+ * Their channel is apple_mdm; another module adds its own to the same key (registerGuardedActionChannel, lot AN-P:
+ * the channel amapi, android-amapi §11.4); their Apple targets are handled as before.
  */
 export function registerGuardedMdmActions(): void {
   if (registered) return;
@@ -214,16 +215,16 @@ export function registerGuardedMdmActions(): void {
 
   // Erase: one or two devices 'sensitive' without the trusted-IP shortcut and 300 s; a batch 'restricted' and
   // 900 s; counted in the hourly cap; never a personal device; the whole fleet refused; typed confirmation.
-  registerGuardedAction(withAmapiChannel(defineGuardedMdmAction<z.infer<typeof EraseParams>>({
+  registerGuardedAction(defineGuardedMdmAction<z.infer<typeof EraseParams>>({
     key: 'mdm.erase_device', label: 'Erase devices', family: 'device_destruction', singleFloor: 'sensitive', singleStrictStepUp: true,
     bulkThreshold: 3, singleDelaySeconds: 300, bulkDelaySeconds: 900, hourlyCap: true, forbidWholeFleet: true, refuseOwnership: ['personal'],
     confirmation: 'typed', paramsSchema: EraseParams as z.ZodType<z.infer<typeof EraseParams>>, deviceCapability: 'mdm:wipe', category: CATEGORY,
     serialsOf,
-  }, { requestType: 'EraseDevice', commandParams: (p) => clean(p), expiresAfterSeconds: 7 * DAY })));
+  }, { requestType: 'EraseDevice', commandParams: (p) => clean(p), expiresAfterSeconds: 7 * DAY }));
 
   // Removal from management: RemoveProfile of the enrollment profile of the tenant; the only « deletion » allowed
   // on a personal device (it removes the work data, SEC-02).
-  registerGuardedAction(withAmapiChannel(defineGuardedMdmAction<Record<string, never>>({
+  registerGuardedAction(defineGuardedMdmAction<Record<string, never>>({
     key: REMOVE_MANAGEMENT_ACTION, label: 'Remove devices from management', family: 'device_destruction', singleFloor: 'sensitive',
     singleStrictStepUp: false, bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 900, hourlyCap: true, forbidWholeFleet: true,
     refuseOwnership: [], confirmation: 'typed', paramsSchema: NoParams as unknown as z.ZodType<Record<string, never>>, deviceCapability: 'mdm:remove',
@@ -236,21 +237,21 @@ export function registerGuardedMdmActions(): void {
     },
     expiresAfterSeconds: 14 * DAY,
     afterDispatch: (trx, tenantId, actionUuid, deviceIds) => startRetirementInTx(trx, tenantId, actionUuid, deviceIds),
-  })));
+  }));
 
   // Lock: 'sensitive', no delay; a batch 'restricted'.
-  registerGuardedAction(withAmapiChannel(defineGuardedMdmAction<z.infer<typeof LockParams>>({
+  registerGuardedAction(defineGuardedMdmAction<z.infer<typeof LockParams>>({
     key: 'mdm.device_lock', label: 'Lock devices', family: 'device_control', singleFloor: 'sensitive', singleStrictStepUp: false,
     bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 0, hourlyCap: false, forbidWholeFleet: true, refuseOwnership: ['personal'],
     confirmation: 'none', paramsSchema: LockParams as z.ZodType<z.infer<typeof LockParams>>, deviceCapability: 'mdm:lock', category: CATEGORY,
     serialsOf,
-  }, { requestType: 'DeviceLock', commandParams: (p) => clean(p), expiresAfterSeconds: 7 * DAY })));
+  }, { requestType: 'DeviceLock', commandParams: (p) => clean(p), expiresAfterSeconds: 7 * DAY }));
 
   // Lost mode: 'sensitive', a reason (the engine asks one for every action), never a personal device.
-  registerGuardedAction(withAmapiChannel(defineGuardedMdmAction<z.infer<typeof LostModeParams>>({
+  registerGuardedAction(defineGuardedMdmAction<z.infer<typeof LostModeParams>>({
     key: 'mdm.lost_mode_enable', label: 'Enable the lost mode', family: 'device_privacy', singleFloor: 'sensitive', singleStrictStepUp: false,
     bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 0, hourlyCap: false, forbidWholeFleet: true, refuseOwnership: ['personal'],
     confirmation: 'none', paramsSchema: LostModeParams as unknown as z.ZodType<z.infer<typeof LostModeParams>>, deviceCapability: 'mdm:lost_mode',
     category: CATEGORY, serialsOf,
-  }, { requestType: 'EnableLostMode', commandParams: (p) => clean(p), expiresAfterSeconds: 30 * DAY })));
+  }, { requestType: 'EnableLostMode', commandParams: (p) => clean(p), expiresAfterSeconds: 30 * DAY }));
 }

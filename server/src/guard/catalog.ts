@@ -5,6 +5,7 @@
 // Registered before anything starts (index.ts: the modules' registration),
 // no I/O.
 import { isActionKey, registerRestrictableActions } from '../services/restriction.service';
+import { withChannels, type GuardedChannelImpl } from './channels';
 import {
   MANAGEMENT_CHANNELS, type EdgeFreezeHandler, type FleetSizeProvider, type FreezeHandler, type GuardedActionDef, type OwnershipProvider,
 } from './types';
@@ -57,12 +58,43 @@ export function registerGuardedAction<P>(def: GuardedActionDef<P>): void {
   actions.set(key, Object.freeze({ ...def, ...(def.channels ? { channels: Object.freeze([...def.channels]) } : {}) }) as GuardedActionDef<any>);
 }
 
+/** The channels other modules add to an action (lot AN-P, guard/channels.ts), by key. */
+const channelImpls = new Map<string, GuardedChannelImpl[]>();
+const composed = new Map<string, GuardedActionDef<any>>();
+
+/**
+ * Adds a management channel to a guarded action defined by another module (android-amapi §11.4, lot AN-P): same key,
+ * restriction, floors, delays and caps; the targets of that channel go to `impl`. Registered before anything starts,
+ * before or after the action itself; a channel the action serves already is ignored.
+ */
+export function registerGuardedActionChannel(key: string, impl: GuardedChannelImpl): void {
+  if (!isActionKey(key)) throw new Error(`guarded action channel ${JSON.stringify(key)}: invalid key`);
+  if (!MANAGEMENT_CHANNELS.includes(impl.channel)) throw new Error(`guarded action channel ${key}: unknown channel`);
+  const list = channelImpls.get(key) ?? [];
+  if (list.some((x) => x.channel === impl.channel)) throw new Error(`guarded action channel ${key}/${impl.channel}: registered twice`);
+  if (!impl.paramsSchema || typeof impl.revalidate !== 'function' || typeof impl.execute !== 'function') {
+    throw new Error(`guarded action channel ${key}/${impl.channel}: paramsSchema, revalidate and execute are required`);
+  }
+  list.push(impl);
+  channelImpls.set(key, list);
+  composed.delete(key);
+}
+
 export function guardedActionDef(key: string): GuardedActionDef<any> | undefined {
-  return actions.get(key);
+  const base = actions.get(key);
+  if (!base) return undefined;
+  const extra = channelImpls.get(key);
+  if (!extra?.length) return base;
+  let def = composed.get(key);
+  if (!def) {
+    def = Object.freeze(withChannels(base, extra)) as GuardedActionDef<any>;
+    composed.set(key, def);
+  }
+  return def;
 }
 
 export function guardedActionList(): GuardedActionDef<any>[] {
-  return [...actions.values()];
+  return [...actions.keys()].map((k) => guardedActionDef(k)!);
 }
 
 /** The size of a tenant's active fleet: the managed devices of the tenant

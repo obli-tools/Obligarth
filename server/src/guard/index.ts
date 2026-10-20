@@ -8,11 +8,12 @@ import { request, preview, GuardStepUpError } from './engine';
 import { guardMetrics } from './metrics';
 
 export {
-  registerGuardedAction, registerFleetSizeProvider, registerOwnershipProvider, registerEdgeFreezeHandler,
+  registerGuardedAction, registerGuardedActionChannel, registerFleetSizeProvider, registerOwnershipProvider, registerEdgeFreezeHandler,
   registerFreezeHandler,
   guardedActionDef, guardedActionList,
 } from './catalog';
 export { GuardStepUpError } from './engine';
+export type { GuardedChannelImpl } from './channels';
 export { registerGuardModule } from './module';
 export { createGuardRouter } from './routes';
 export type {
