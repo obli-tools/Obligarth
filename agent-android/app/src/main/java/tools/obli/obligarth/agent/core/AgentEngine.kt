@@ -158,7 +158,10 @@ class AgentEngine(
             "capabilities" to facts.capabilities(),
             "hints" to linkedMapOf("deviceName" to cfg.hints["deviceName"], "serial" to cfg.hints["serial"], "imei" to cfg.hints["imei"]),
         )
-        val reply = client.call("POST", "/agent/v1/enroll", Json.bytes(body), enrollKeys = { json -> trustedEnrollKeys(cfg, json) })
+        val reply = client.call(
+            "POST", "/agent/v1/enroll", Json.bytes(body), enrollKeys = { json -> trustedEnrollKeys(cfg, json) },
+            enrollKeysPinned = cfg.serverKeySha256 != null || policy.serverKeyPins.isNotEmpty(),
+        )
         if ((reply.status == 200 || reply.status == 201) && reply.signed && reply.json != null) {
             val j = reply.json
             val agentId = j.str("agentId")

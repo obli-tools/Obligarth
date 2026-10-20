@@ -82,7 +82,12 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
   if (!spki || !p256PublicKey(spki)) return { reply: errorReply(400, 'badKey', 'The key must be an EC P-256 SubjectPublicKeyInfo') };
   if (!signatureHolds(ex, spki)) return { reply: { ...errorReply(401, 'badSignature', 'Bad signature'), signed: false } };
   const skew = clockReply(ex);
-  if (skew) return { reply: skew };
+  if (skew) {
+    // The public key of the instance in the body (as in every enrollment answer): an agent not yet enrolled checks
+    // the signature against the key its configuration or its build pins before it takes serverTime (PONT-R).
+    const key = await currentServerKey();
+    return { reply: { ...skew, body: { ...skew.body, serverKeys: key ? [{ keyId: key.keyId, spki: key.spkiB64url }] : [] } } };
+  }
   if (!LEGACY_AGENT_TOKEN_RE.test(b.token)) return { reply: tokenInvalid() };
   const [, publicId, secret] = b.token.split('.');
   const wait = perToken(publicId);

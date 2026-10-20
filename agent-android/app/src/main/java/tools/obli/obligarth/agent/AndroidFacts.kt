@@ -18,7 +18,9 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.provider.Settings
 import android.telephony.TelephonyManager
+import tools.obli.obligarth.agent.core.Bounds
 import tools.obli.obligarth.agent.core.DeviceFacts
+import tools.obli.obligarth.agent.core.clip
 import tools.obli.obligarth.agent.core.Sha256
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -68,20 +70,20 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
     // Every value is bounded and shaped like the server's strict schema (DeviceFacts): one value out of
     // it fails the whole /enroll or /inventory (400), and an enrollment refused that way waits a day.
     override fun device(): Map<String, Any?> = linkedMapOf(
-        "manufacturer" to Build.MANUFACTURER?.take(64),
-        "brand" to Build.BRAND?.take(64),
-        "model" to Build.MODEL?.take(64),
-        "device" to Build.DEVICE?.take(64),
+        "manufacturer" to Build.MANUFACTURER?.clip(64),
+        "brand" to Build.BRAND?.clip(64),
+        "model" to Build.MODEL?.clip(64),
+        "device" to Build.DEVICE?.clip(64),
         "androidId" to safe { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) }
             ?.takeIf { ANDROID_ID_RE.matches(it) },
         // Readable under targetSdk 25 (PB8).
-        "serial" to Build.SERIAL?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }?.take(64),
-        "samsungSerial" to (systemProperty("ril.serialnumber") ?: knox.serialNumber())?.take(64),
+        "serial" to Build.SERIAL?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }?.clip(64),
+        "samsungSerial" to (systemProperty("ril.serialnumber") ?: knox.serialNumber())?.clip(64),
         "imeis" to imeis(),
         "apiLevel" to Build.VERSION.SDK_INT,
-        "osVersion" to Build.VERSION.RELEASE?.take(32),
+        "osVersion" to Build.VERSION.RELEASE?.clip(32),
         "securityPatch" to Build.VERSION.SECURITY_PATCH?.takeIf { PATCH_RE.matches(it) },
-        "build" to Build.DISPLAY?.take(128),
+        "build" to Build.DISPLAY?.clip(128),
         "deviceName" to deviceName(),
     )
 
@@ -209,18 +211,16 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return emptyList()
         val count = safe { tm.phoneCount } ?: 1
         // IMEI digits only (a CDMA MEID, hexadecimal, is left out: the server schema takes 14 to 16 digits).
-        return (0 until count).mapNotNull { slot -> safe { tm.getDeviceId(slot) }?.trim()?.takeIf { IMEI_RE.matches(it) } }
-            .distinct().take(4)
+        return Bounds.imeis((0 until count).map { slot -> safe { tm.getDeviceId(slot) } })
     }
 
     private companion object {
         val ANDROID_ID_RE = Regex("^[0-9a-fA-F]{1,32}$")
         val PATCH_RE = Regex("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
-        val IMEI_RE = Regex("^[0-9]{14,16}$")
     }
 
     private fun deviceName(): String? =
-        safe { Settings.Global.getString(context.contentResolver, "device_name") }?.takeIf { it.isNotBlank() }?.take(100)
+        safe { Settings.Global.getString(context.contentResolver, "device_name") }?.takeIf { it.isNotBlank() }?.clip(100)
 
     @SuppressLint("PrivateApi") // ril.serialnumber (Samsung serial, §8.7), null when unavailable
     private fun systemProperty(name: String): String? = try {

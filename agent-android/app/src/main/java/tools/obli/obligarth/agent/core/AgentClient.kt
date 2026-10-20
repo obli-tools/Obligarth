@@ -47,6 +47,8 @@ class AgentClient(
         timeoutMs: Int = DEFAULT_TIMEOUT_MS,
         /** For a package download: the SHA-256 announced by the command, which the server signature covers (§4.7). */
         expectedDownloadSha256: String? = null,
+        /** Enrollment only: enrollKeys keeps the keys pinned by the configuration or the build (never trust on first contact). */
+        enrollKeysPinned: Boolean = false,
     ): Reply = lock.withLock {
         var skewRetried = false
         var seqRetried = false
@@ -54,9 +56,11 @@ class AgentClient(
             val reply = once(method, path, body, enrollKeys, downloadTo, maxDownloadBytes, timeoutMs, expectedDownloadSha256)
             if (reply.status == 401 && reply.code == "clockSkew" && !skewRetried) {
                 val serverTime = reply.json?.long("serverTime")
-                // RC-6: only a signed body sets the clock; before enrollment no key is known
-                // yet and the enrollment answer itself resets the offset (signed).
-                if (serverTime != null && (reply.signed || enrollKeys != null)) {
+                // RC-6: only a signed body sets the clock. During enrollment, only an answer verified against a key
+                // pinned by the configuration or the build (PONT-S review): an unsigned answer, or one verified
+                // against a key the answer itself announces (debug trust on first contact), never moves the clock
+                // that decides the expiry of orders.
+                if (serverTime != null && reply.signed && (enrollKeys == null || enrollKeysPinned)) {
                     skewRetried = true
                     setClock(serverTime)
                     continue
