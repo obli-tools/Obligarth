@@ -1,7 +1,8 @@
 // Submission and follow-up of the Android commands (section 11.3, AN50):
 //   android.commands.submit (one command, stately)
-//     T1 (committed BEFORE the call): the command still pending, not expired, not cancelled; tenant frozen and command
-//        destructive → held (frozen); otherwise the AN50 mark amapi_submit_started_at (refreshed before a new issue).
+//     T1 (committed BEFORE the call): the command still pending, not expired, not cancelled; tenant frozen → held
+//        (frozen), whatever its type (review AN-D: no command of a frozen tenant is delivered, even one that is not
+//        destructive); otherwise the AN50 mark amapi_submit_started_at (refreshed before a new issue).
 //     A mark already there without an operation (the instance stopped between the call and T2): the operations of the
 //        device are listed without a filter (pagination, listOperations: never exposed to a route, AMAPI-R16) and the
 //        one of the same type created since the mark minus 5 s is adopted; none: issued again. Only type, device and
@@ -146,7 +147,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: personal });
         return { kind: 'done' as const, result: 'rejected' as const };
       }
-      if (ANDROID_COMMANDS[row.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
+      if (await tenantFrozen(trx, tenantId, 'amapi')) {
         await patchCommand(trx, tenantId, id, { submit_state: 'held', hold_reason: 'frozen' });
         return { kind: 'done' as const, result: 'held' as const };
       }
@@ -188,7 +189,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         if (!cur || cur.state !== 'pending' || cur.amapi_operation) return 'skipped' as const;
         if (cur.cancel_requested_at) { await finalizeCommand(trx, cur, { state: 'cancelled' }); return 'cancelled' as const; }
         if (new Date(cur.expires_at).getTime() <= clock().getTime()) { await finalizeCommand(trx, cur, { state: 'expired' }); return 'expired' as const; }
-        if (ANDROID_COMMANDS[cur.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
+        if (await tenantFrozen(trx, tenantId, 'amapi')) {
           await patchCommand(trx, tenantId, id, { submit_state: 'held', hold_reason: 'frozen', amapi_submit_started_at: null });
           return 'held' as const;
         }

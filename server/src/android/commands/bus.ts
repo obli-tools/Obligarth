@@ -9,8 +9,10 @@
 //            of the same type to a device that has one pending or sent is refused (commandAlreadyPending, AN-RC4).
 //            The guarded types (LOCK, RESET_PASSWORD, START_LOST_MODE, WIPE, RELINQUISH_OWNERSHIP) come from the guard
 //            engine only (origin 'guard', 409 guardedActionRequired otherwise), and never for an action whose late
-//            cancellation was asked (pending_actions read FOR SHARE, the mark of the engine). A destructive command
-//            written while the tenant is frozen is held ('held', frozen): the gateway would refuse it anyway (AN15).
+//            cancellation was asked (pending_actions read FOR SHARE, the mark of the engine). While the tenant is
+//            frozen, a request of the console or of an approval is refused (423 tenantFrozen, nothing written) and any
+//            other command is held ('held', frozen), whatever its type (review AN-D: integration §8.4 point 5,
+//            audit-durci §10.7); the gateway refuses the destructive ones anyway (AN15).
 //   cancel   a command not yet submitted is cancelled at once (its secret wiped); a command sent goes through
 //            cancelOperation (outside any transaction); 'already_done' at Google: the final state wins. The commands
 //            of a guarded action are cancelled by the engine only (cancelAfterDispatch).
@@ -228,7 +230,12 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
       .whereIn('identifier', names).pluck('identifier') as string[];
     if (known.length !== names.length) throw new AndroidCommandError(422, 'invalidCommandParams', 'app_not_managed');
   }
-  const frozen = spec.destructive && (await tenantFrozen(trx, tenantId, 'amapi'));
+  // Review AN-D: a frozen tenant takes no request of the console or of an approval, whatever the type (a REBOOT, a
+  // CLEAR_APP_DATA are not destructive for the gateway but are commands all the same); the other origins are held.
+  const frozen = await tenantFrozen(trx, tenantId, 'amapi');
+  if (frozen && (req.origin === 'console' || req.origin === 'approval')) {
+    throw new AndroidCommandError(423, 'tenantFrozen', 'the commands of this tenant are frozen');
+  }
 
   const targets = await targetRows(trx, tenantId, deviceIds);
   const lostModeBlock = req.type === 'START_LOST_MODE' ? await lostModeBlocked(trx, tenantId, deviceIds) : new Set<number>();

@@ -19,6 +19,7 @@ import { db } from '../../db';
 import { asTenant } from '../../db/context';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
+import { tenantFrozen } from '../../guard/frozen';
 import { registerQueueChannel } from '../../mdm/registry/queueChannels';
 import { applyRestriction } from '../../services/restriction.service';
 import { ANDROID_COMMANDS, isAndroidCommandType } from '../commands/catalog';
@@ -60,6 +61,12 @@ async function ownCommand(req: Request, commandId: string): Promise<void> {
   await androidDeviceOf(req, Number(row.device_id), isAndroidCommandType(row.request_type) ? ANDROID_COMMAND_CAPABILITY[row.request_type] : 'mdm:wipe');
 }
 
+/** A frozen tenant: 423 before a second factor or a second approver is asked (review AN-D; the order of the Apple route,
+ *  integration §8.4 point 5: the console takes no command of a frozen tenant, whatever its type). */
+async function refuseWhenFrozen(tenantId: number): Promise<void> {
+  if (await tenantFrozen(null, tenantId, 'amapi')) throw new AppError(423, 'The commands of this tenant are frozen', 'tenantFrozen');
+}
+
 /** POST …/devices/:id/commands for an amapi device (the device already resolved for the caller). */
 export async function createAndroidCommandFor(req: Request, res: Response, deviceId: number): Promise<void> {
   // The device first (404 whatever the request says), then the type, the capability of the type on this device (403)
@@ -74,6 +81,7 @@ export async function createAndroidCommandFor(req: Request, res: Response, devic
   if (key !== undefined && !KEY.test(key)) throw new AppError(400, 'Invalid Idempotency-Key', 'invalidInput');
   const tenantId = Number(req.tenantId);
   const userId = Number(req.session.userId);
+  await refuseWhenFrozen(tenantId);
   const restrictionKey = ANDROID_COMMAND_RESTRICTION[type];
   if (restrictionKey && !(await applyRestriction(res, {
     req, actionKey: restrictionKey, deviceIds: [deviceId], approvalRequestType: ANDROID_ACTION_APPROVAL,
@@ -123,6 +131,7 @@ export async function retryAndroidCommandFor(req: Request, res: Response, comman
   if (row.state !== 'error') throw new AppError(409, 'Only a command in error is retried', 'commandNotInError');
   const type = consoleType(row.request_type)!;
   const { passwordSealed: _p, ...params } = (typeof row.params === 'string' ? JSON.parse(row.params) : row.params ?? {}) as Record<string, unknown>;
+  await refuseWhenFrozen(tenantId);
   // A retry is a new command: the restriction of its type holds as for a first request.
   const restrictionKey = ANDROID_COMMAND_RESTRICTION[type];
   if (restrictionKey && !(await applyRestriction(res, {
