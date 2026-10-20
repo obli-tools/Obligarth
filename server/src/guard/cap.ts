@@ -10,7 +10,7 @@
 import type { Knex } from 'knex';
 import type { GuardQuota } from '@obligarth/shared';
 import { db } from '../db';
-import { fleetSizeOf } from './catalog';
+import { fleetSizeOf, guardedActionList } from './catalog';
 import { capAllows, hourlyCap } from './policy';
 import { readSettings } from './settings';
 import type { GuardedActionDef, ManagementChannel } from './types';
@@ -35,17 +35,20 @@ export async function quotaOf(tenantId: number, o: { trx?: Knex.Transaction; exc
   const params: Array<string | number | string[]> = [tenantId, CAPPED_FAMILY, COUNTED_STATES];
   let exclude = '';
   if (o.excludeUuid) { exclude = ' AND a.uuid <> ?'; params.push(o.excludeUuid); }
-  // A channel: its devices among the targets of the counted actions (whatever their key, a shared one included).
+  // A channel: its devices among the targets of the counted actions (whatever their key, a shared one included). A
+  // target whose record is gone since (device.delete after an erase: review of lot D-2010) still counts, for every
+  // channel its action acts on: the deletion of records never gives back room in a channel's cap.
   const res = await (o.channel
     ? q.raw(
       `SELECT count(*)::integer AS used,
               min(COALESCE(a.executed_at, a.execute_after)) AS oldest
          FROM pending_actions a
-         JOIN devices d ON d.tenant_id = a.tenant_id AND d.id = ANY (a.target_device_ids)
+        CROSS JOIN LATERAL unnest(a.target_device_ids) AS t(device_id)
+         LEFT JOIN devices d ON d.tenant_id = a.tenant_id AND d.id = t.device_id
         WHERE a.tenant_id = ? AND a.family = ? AND a.state = ANY (?::text[])
           AND COALESCE(a.executed_at, a.execute_after) BETWEEN now() - interval '60 minutes' AND now() + interval '60 minutes'${exclude}
-          AND d.management_channel = ?`,
-      [...params, o.channel],
+          AND (d.management_channel = ? OR (d.id IS NULL AND a.action_key = ANY (?::text[])))`,
+      [...params, o.channel, keysOfChannel(o.channel)],
     )
     : q.raw(
       `SELECT COALESCE(sum(a.target_count), 0)::integer AS used,
@@ -61,6 +64,11 @@ export async function quotaOf(tenantId: number, o: { trx?: Knex.Transaction; exc
   // The oldest action counted leaves the window 60 minutes after its instant.
   const resetsAt = oldest ? new Date(oldest.getTime() + 60 * 60_000).toISOString() : null;
   return { cap, used, remaining: Math.max(0, cap - used), resetsAt };
+}
+
+/** The keys of the guarded actions that act on a channel (declared channels, or every one when none is declared). */
+function keysOfChannel(channel: ManagementChannel): string[] {
+  return guardedActionList().filter((d) => !d.channels || d.channels.includes(channel)).map((d) => d.key);
 }
 
 /** The one channel of an action of one channel only (PONT-R-RV3), or null (several channels, or every one). */
