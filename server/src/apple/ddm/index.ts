@@ -1,6 +1,6 @@
 import { registerBootTask } from '../../lifecycle';
 import { onTargetFinal, registerCommandResultIngestor } from '../commands/results';
-import { registerOnboardStep } from '../devices/jobs';
+import { registerOnboardStep } from '../../mdm/registry/onboard';
 import { coreProvider } from './core.provider';
 import { freezeDeclarationProviders, registerDeclarationProvider } from './engine';
 import { registerDdmJobs, requestDeviceSync } from './jobs';
@@ -39,7 +39,7 @@ export function registerAppleDdm(): void {
   onTargetFinal('ddm.sync', onSyncTargetFinal);
   // The onboarding of a device (apple.device-onboard, first TokenUpdate of a cycle): its set computed and announced,
   // which activates the DDM on the device. Idempotent: the queue groups the requests of a device.
-  registerOnboardStep('ddm.sync', async ({ tenantId, deviceId }) => { await requestDeviceSync(null, tenantId, [deviceId]); });
+  registerOnboardStep('apple_mdm', { name: 'ddm.sync', run: async ({ tenantId, deviceId }) => { await requestDeviceSync(null, tenantId, [deviceId]); } });
   // Providers are registered by the modules before the jobs start; none joins a running engine.
   registerBootTask('apple.ddm-providers', async () => { freezeDeclarationProviders(); });
 }

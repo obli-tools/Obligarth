@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { config } from '../../config';
 import { jobIdFor, registerJob, type JobContext, type JobHandle, type JobResult } from '../../jobs';
 import { unenrollCleanup } from '../../mdm/registry/unenroll';
+import { runOnboardSteps, type OnboardStepContext } from '../../mdm/registry/onboard';
 import { resolveInTx } from '../alerts/service';
 import { isAppleEdgeError } from '../edge/errors';
 import { appleEdge } from '../edge/instance';
@@ -17,7 +18,8 @@ import { realtime } from '../realtime';
 //   apple.device-onboard       first TokenUpdate of a cycle (I3), id per event, 5 retries: the public identity
 //                              certificate of the device (GET …/enrollments/{id}, outside any transaction:
 //                              identity_cert_pem, used to encrypt the profiles that carry a secret, §8.8), then
-//                              the onboarding steps the other lots register (registerOnboardStep: the initial
+//                              the onboarding steps of the channel apple_mdm the other lots register
+//                              (mdm/registry/onboard.ts, registerOnboardStep by channel since lot AN-P: the initial
 //                              inventory of the command queue, §8.10; the first DDM synchronisation, §9.4; the
 //                              resolution of the policies, modele §10.4)
 //   apple.await-configuration  TokenUpdate awaiting the configuration (ADE), stately d:<id>, 3 retries: the setup
@@ -31,25 +33,9 @@ import { realtime } from '../realtime';
 const DevicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
 type DeviceJob = z.infer<typeof DevicePayload>;
 
-export interface OnboardStepContext {
-  job: JobContext<DeviceJob>;
-  tenantId: number;
-  deviceId: number;
-}
-type OnboardStep = (ctx: OnboardStepContext) => Promise<void>;
 type SetupRunner = (ctx: OnboardStepContext & { deadlineAt: Date }) => Promise<void>;
 
-const onboardSteps: Array<{ name: string; fn: OnboardStep }> = [];
 let setupRunner: SetupRunner | null = null;
-
-/** A step of the onboarding of a device (after its identity certificate), run in registration order; registered
- *  before jobs.start() by the command queue (initial inventory), the DDM engine and the policies. A step that
- *  fails fails the job (retried): steps are idempotent. */
-export function registerOnboardStep(name: string, fn: OnboardStep): void {
-  if (!/^[a-z][a-z0-9_.-]{0,40}$/.test(name)) throw new Error('onboard step: invalid name');
-  if (onboardSteps.some((s) => s.name === name)) throw new Error(`onboard step ${name}: registered twice`);
-  onboardSteps.push({ name, fn });
-}
 
 /** The command queue's runner of the setup plan of an ADE device awaiting its configuration (§8.9). */
 export function registerSetupRunner(fn: SetupRunner): void {
@@ -145,10 +131,10 @@ async function onboard(ctx: JobContext<DeviceJob>): Promise<JobResult> {
     }
   }
 
-  // 2. The steps of the other lots (inventory, DDM, policies).
-  for (const s of onboardSteps) await s.fn({ job: ctx, tenantId, deviceId });
-  ctx.log.debug({ identity, steps: onboardSteps.length }, 'device onboarded');
-  return { output: { identity, steps: onboardSteps.length } };
+  // 2. The steps of the other lots for the channel apple_mdm (inventory, DDM, policies).
+  const steps = await runOnboardSteps('apple_mdm', { job: ctx, tenantId, deviceId });
+  ctx.log.debug({ identity, steps }, 'device onboarded');
+  return { output: { identity, steps } };
 }
 
 /** apple.await-configuration (§8.9, I22): the plan of the setup, then the runner of the command queue. */

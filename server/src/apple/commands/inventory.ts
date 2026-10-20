@@ -5,7 +5,7 @@ import { db } from '../../db';
 import { forEachTenant } from '../../db/tenantContext';
 import { JobError, registerJob, type JobContext, type JobHandle, type JobResult } from '../../jobs';
 import { AppError } from '../../middleware/errorHandler';
-import { registerOnboardStep } from '../devices/jobs';
+import { registerOnboardStep } from '../../mdm/registry/onboard';
 import type { AuditWriteContext } from '../../audit';
 import { mdmCommands, type EnqueueOutcome } from './bus';
 import { setAfterDeviceInformation } from './results';
@@ -156,9 +156,9 @@ export function registerInventory(): void {
   if (registered) return;
   registered = true;
   // §8.10: the initial inventory, a step of apple.device-onboard (after the identity certificate).
-  registerOnboardStep('inventory.initial', async ({ job, tenantId, deviceId }) => {
+  registerOnboardStep('apple_mdm', { name: 'inventory.initial', run: async ({ job, tenantId, deviceId }) => {
     await job.withTenant((trx) => enqueueInitialInventory(trx, tenantId, deviceId, `j:${job.name}`));
-  });
+  } });
   // The ingestor of DeviceInformation learns that a company device without a bypass reference is supervised.
   setAfterDeviceInformation(async (c) => {
     if (await wantsBypassCode(c.trx, c.tenantId, c.deviceId)) {

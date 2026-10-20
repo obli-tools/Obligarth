@@ -21,6 +21,9 @@ import { setAndroidSenders } from './enrollment/senders';
 import { recoverEnrollmentTokens } from './enrollment/tokens';
 import { runAndroidMaintenance, setMaintenanceDrainWaker, setTokenRecoverySender } from './maintenance';
 import { pushDevicePolicy, pushEnrollmentPolicy } from './policies/push';
+import { awaitsOnboarding } from './policies/channel';
+import { runOnboardSteps } from '../mdm/registry/onboard';
+import { db } from '../db';
 import { setCommandSenders } from './commands/bus';
 import { pollAndroidOperations, submitAndroidCommand } from './commands/submit';
 import { setOperationsPollSender, setAppMetadataSender } from './maintenance';
@@ -130,11 +133,17 @@ export function registerAndroidJobs(): void {
   // ── Enrollment, policies (lot AN-C1b, section 22.7) ─────────────────────────
   const devKey = (p: { tenantId: number; deviceId: number }) => `t:${p.tenantId}:d:${p.deviceId}`;
   // The first push of an enrolled device (onboarding) and every later push are the same job (pushDevicePolicy compiles,
-  // pushes the own policy and, the first time, points the device at it): one queue, one singleton key per device.
+  // pushes the own policy and, the first time, points the device at it): one queue, one singleton key per device. Until
+  // the device is attached to its own policy, the onboarding steps of the channel amapi run first (registry by channel,
+  // lot AN-P: the resolution of its policies), instead of a queue of their own.
   const push = registerJob({
     name: 'android.policies.push-device', scope: 'tenant', description: 'Pushes the own policy of an Android device',
     payload: devicePayload, policy: 'stately', notify: true, pollSeconds: IDLE_POLL_SECONDS, retry: { limit: 5, delaySeconds: 10, backoff: true, maxDelaySeconds: 600 },
-    async handler(ctx) { return { output: { result: await pushDevicePolicy(ctx.payload.tenantId, ctx.payload.deviceId) } }; },
+    async handler(ctx) {
+      const { tenantId, deviceId } = ctx.payload;
+      if (await ctx.inTenant(() => awaitsOnboarding(db, tenantId, deviceId))) await runOnboardSteps('amapi', { job: ctx, tenantId, deviceId });
+      return { output: { result: await pushDevicePolicy(tenantId, deviceId) } };
+    },
   });
   const enrollmentPolicy = registerJob({
     name: 'android.policies.enrollment-policy', scope: 'tenant', description: 'Pushes the enrollment policy of an Android profile',

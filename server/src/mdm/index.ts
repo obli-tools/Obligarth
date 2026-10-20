@@ -14,7 +14,7 @@ import { registerProfileSource } from '../apple/commands/sensitive';
 import { registerSetupContributor } from '../apple/commands/setup';
 import { registerDeclarationProvider } from '../apple/ddm/engine';
 import { registerStatusHook } from '../apple/ddm/status';
-import { registerOnboardStep } from '../apple/devices/jobs';
+import { registerOnboardStep } from './registry/onboard';
 import { registerBootTask } from '../lifecycle';
 import { resolveOnCatalogChange } from './apple/catalogRelease';
 import { registerArtifactJobs } from './apple/jobs';
@@ -27,7 +27,7 @@ import { registerComplianceJobs } from './compliance/jobs';
 import { registerMdmJobs } from './jobs';
 import { registerPolicyJobs } from './policies/jobs';
 import { executePolicyPublish, onPolicyPublishClosed } from './policies/publish';
-import { resolveAtOnboarding } from './policies/triggers';
+import { requestDeviceResolution, resolveAtOnboarding } from './policies/triggers';
 import { changeOwnership } from './registry/ownership';
 import deviceRoutes from './routes/devices.routes';
 import endUserRoutes from './routes/endUsers.routes';
@@ -96,9 +96,14 @@ export function registerMdmModule(): void {
   // ── Durable jobs (§10.5) ───────────────────────────────────────────────────
   registerMdmJobs();
   registerPolicyJobs();
-  // The onboarding of a device (apple.device-onboard, §10.4): once its identity certificate is known, its policies
-  // are resolved (a step of the integration's job, in the tenant's context).
-  registerOnboardStep('policies.resolve', ({ job, tenantId, deviceId }) => job.inTenant(() => resolveAtOnboarding(tenantId, deviceId)));
+  // The onboarding of a device (§10.4; registry by channel, lot AN-P): its policies are resolved, in the tenant's
+  // context. Apple (apple.device-onboard): once its identity certificate is known, the artifacts settled before its
+  // new cycle reset first. Android (android.policies.push-device, until the device is attached to its own policy):
+  // its artifact amapi:policy written by the resolution before the push of the job.
+  registerOnboardStep('apple_mdm', { name: 'policies.resolve', run: ({ job, tenantId, deviceId }) => job.inTenant(() => resolveAtOnboarding(tenantId, deviceId)) });
+  registerOnboardStep('amapi', { name: 'policies.resolve', run: async ({ job, tenantId, deviceId }) => {
+    await job.inTenant(() => requestDeviceResolution(null, tenantId, [deviceId]));
+  } });
   registerArtifactJobs();          // apple.artifacts.reconcile-device, mdm.artifacts.gc
   registerComplianceJobs();        // mdm.compliance.evaluate-device, mdm.compliance.evaluate-all
 

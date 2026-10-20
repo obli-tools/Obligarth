@@ -93,3 +93,12 @@ export async function syncPolicyArtifact(trx: Knex.Transaction, tenantId: number
   if (changed) await rollupConfigState(trx, [deviceId]);
   return changed;
 }
+
+/** Is the device still to onboard (enrolled under the channel amapi, not attached to its own policy yet)? Its push job
+ *  then runs the onboarding steps of the channel first (registry by channel, lot AN-P). Tenant context of the caller. */
+export async function awaitsOnboarding(q: Knex | Knex.Transaction, tenantId: number, deviceId: number): Promise<boolean> {
+  const r = await q('android_devices as a').join('devices as d', function j() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
+    .where({ 'a.tenant_id': tenantId, 'a.device_id': deviceId, 'd.enrollment_state': 'enrolled', 'd.management_channel': 'amapi' })
+    .whereNull('a.released_at').whereNull('a.policy_name').first('a.device_id');
+  return !!r;
+}
