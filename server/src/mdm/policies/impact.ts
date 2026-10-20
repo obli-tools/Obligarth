@@ -4,6 +4,7 @@ import {
   type ImpactApprovalReason, type PolicyContentV1, type PolicyImpact,
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
+import { validateAndroidSection } from '../android/validate';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { fleetShareFloor } from '../settings';
 import { recentlyTouched } from './changeLedger';
@@ -36,6 +37,11 @@ import {
 // approved beyond the tolerance of DM23, whatever the total (a key shown to
 // the approver on one device is not set on thirty: second review of lot B5b,
 // MDM-B5b-C12).
+// A wipe-capable Android setting (android-amapi §22.4) that a change sets on a
+// device of the channel amapi, or sets there to another value, asks a second
+// approver whatever the thresholds (reason wipe_settings): a policy already
+// published carried to new devices by an assignment, a device moved or a
+// group moved (decision of the owners of 20/10/2026, AN-A2-revue R3).
 // =============================================================================
 
 export type AssignmentDelta = { before: ResolutionAssignment | null; after: ResolutionAssignment | null };
@@ -222,6 +228,22 @@ const sourceOf = (s: ResolvedSetting): string => resourceKey(s.source.type, s.so
 
 const appliesResource = (settings: ResolvedSetting[], focus: Set<string>): boolean => settings.some((s) => focus.has(sourceOf(s)));
 
+/** Does one of these Android settings (set or changed on a device) carry a wipe-capable rule of the version it comes
+ *  from? The versions are read once each; their wipe-capable keys are those of the validation (validateAndroidSection). */
+async function reachesWipeSettings(q: Knex | Knex.Transaction, set: Array<{ versionId: number; settingKey: string }>): Promise<boolean> {
+  if (!set.length) return false;
+  const ids = [...new Set(set.map((x) => x.versionId))];
+  const rows = await q('policy_versions').whereIn('id', ids).select('id', 'content') as Array<{ id: number; content: unknown }>;
+  const wipe = new Map<number, Set<string>>();
+  for (const r of rows) {
+    let content: PolicyContentV1 | null = null;
+    try { content = (typeof r.content === 'string' ? JSON.parse(r.content) : r.content) as PolicyContentV1; } catch { content = null; }
+    const android = content?.sections?.android;
+    wipe.set(Number(r.id), new Set(android ? validateAndroidSection(android).wipeRules : []));
+  }
+  return set.some((x) => wipe.get(x.versionId)?.has(x.settingKey) === true);
+}
+
 /** computeImpact(tenantId, change): the preview of a change, in the caller's database context (section 7.11). */
 export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number, change: ProposedChange,
   opts: ImpactOptions = {}): Promise<ImpactResult> {
@@ -254,6 +276,9 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     if (c) c.devices++; else content.set(entry, { settingKey, devices: 1 });
   };
   const labelOf = new Map(devices.map((d) => [d.id, d.label]));
+  // Android settings set or changed on a device where they apply (the channel amapi), by the version they come from.
+  const androidSet: Array<{ versionId: number; settingKey: string }> = [];
+  const androidSeen = new Set<string>();
   for (let i = 0; i < devices.length; i++) {
     const b = before.devices[i].settings;
     const a = after.devices[i].settings;
@@ -267,6 +292,11 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       const differs = !!p && settingState(p) !== settingState(s);
       if (!p) { added.push(k); keyStat(k).added++; } else if (differs) { changed.push(k); keyStat(k).changed++; }
       if (!p || differs) mark(`S|${k}|${s.valueHash}|${s.removed ? 1 : 0}`, k);
+      if ((!p || differs) && s.kind === 'android' && !s.removed && s.availability.status === 'available'
+        && s.source.type === 'policy' && s.source.versionId !== null) {
+        const seen = `${s.source.versionId}|${k}`;
+        if (!androidSeen.has(seen)) { androidSeen.add(seen); androidSet.push({ versionId: Number(s.source.versionId), settingKey: k }); }
+      }
       if (s.availability.status === 'not_applicable' && (!p || differs)) keyStat(k).notApplicable++;
     }
     for (const k of bm.keys()) {
@@ -335,6 +365,7 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     if (!reasons.length && ((touched.length > 0 && beyond(recent.devices.size))
       || (removalDevices > 0 && recent.removals.size >= T.removalDevices))) reasons.push('cumulative');
   }
+  if (await reachesWipeSettings(q, androidSet)) reasons.push('wipe_settings');
   if (opts.matrixLevel === 'restricted') reasons.push('restriction');
 
   const visible = opts.visibleDeviceIds ?? 'all';
