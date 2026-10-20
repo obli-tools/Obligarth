@@ -2,7 +2,8 @@
 // enterprise (the only caller of setEnterpriseNotifications with the offboarding), the display name without the
 // signup marker, the reserved restrictive policy 'default'. The Pub/Sub 'test' message published by Google proves the
 // topic-subscription chain of the project: android.pubsub-test-check raises android.pubsub_test_missing when none
-// arrived 15 minutes after the topic was set. The enrollment policies of the Android profiles come with lot AN-C1.
+// arrived 15 minutes after the topic was set. Then the enrollment policies of the tenant's live Android profiles are
+// sent (lot AN-C1, §10.7: profiles written before the enterprise was linked, or while it was set up, get theirs).
 import type { Knex } from 'knex';
 import { db } from '../../db';
 import { asNone, asTenant, type DbActor } from '../../db/context';
@@ -10,6 +11,7 @@ import { raiseAndroidPlatformAlert } from '../alerts';
 import { androidGateway } from '../gateway';
 import type { AndroidGateway } from '../gateway/types';
 import { readEnterprise, readEnterpriseRow, readPlatformState } from './registry';
+import { requestEnrollmentPolicies } from '../enrollment/policyRequests';
 
 export const SETUP_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.enterprise-setup' }) as DbActor;
 
@@ -44,6 +46,7 @@ export async function setupEnterprise(tenantId: number, o: { gateway?: AndroidGa
     }
     await gw.patchEnterprise(e, { enterpriseDisplayName: row.display_name }, ['enterpriseDisplayName']);
     await gw.putPolicy(e, 'default', { ...DEFAULT_POLICY });
+    await db.transaction((trx) => requestEnrollmentPolicies(trx, tenantId));
     return 'done';
   });
 }

@@ -110,8 +110,6 @@ export async function runAndroidMaintenance(o: { now?: Date; gateway?: AndroidGa
         n += await trx('android_inbox').where({ state: 'dead' })
           .where('received_at', '<', trx.raw("now() - interval '30 days'")).delete();
         n += await trx('android_destructive_events').where('at', '<', trx.raw("now() - interval '2 hours'")).delete();
-        n += await trx('android_enrollment_tokens').whereIn('state', ['used', 'expired', 'revoked', 'failed'])
-          .where('ended_at', '<', trx.raw("now() - interval '90 days'")).delete();
         n += await trx('android_signups').whereIn('state', ['completed', 'failed', 'expired', 'cancelled'])
           .where('created_at', '<', trx.raw("now() - interval '30 days'")).delete();
         return n;

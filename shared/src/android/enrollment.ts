@@ -106,3 +106,61 @@ export interface AndroidSigninConfig {
   allowPersonalUsage: AndroidSigninPersonalUsage | null;
   configuredAt: string | null;
 }
+
+// ── Enrollment profiles (lot AN-C1, android-amapi §10.1, §10.7) ─────────────────
+
+/** Methods of an Android enrollment profile (enrollment_profiles.method, platform android). */
+export const ANDROID_ENROLLMENT_METHODS = [
+  'android_qr', 'android_token', 'android_afw', 'android_nfc', 'android_zero_touch', 'android_kme',
+  'android_byod_link', 'android_signin_url',
+] as const;
+export type AndroidEnrollmentMethod = typeof ANDROID_ENROLLMENT_METHODS[number];
+
+/** Settings of an Android profile (enrollment_profiles.settings): what validateAndroidProfile admits. */
+export interface AndroidEnrollmentProfileSettings {
+  deviceUsage?: 'standard' | 'kiosk';
+  minimumApiLevel?: number | null;
+  kioskApp?: string | null;
+  googleAuth?: 'UNSPECIFIED' | 'OPTIONAL' | 'REQUIRED';
+  requireApproval?: boolean;
+  approvedSerials?: string[];
+}
+
+/** POST /api/android/enrollment-profiles, PUT /api/android/enrollment-profiles/:id (the method never changes). */
+export interface AndroidEnrollmentProfileRequest {
+  name: string;
+  method: AndroidEnrollmentMethod;
+  ownership: 'corporate' | 'corporate_personal' | 'personal';
+  defaultGroupId?: number | null;
+  locale?: string;
+  settings?: AndroidEnrollmentProfileSettings;
+  enabled?: boolean;
+}
+
+/** State of the enrollment policy e-<profile uuid> at Google (rule of the 5 minutes, §10.7): no token before it is
+ *  pushed (409 androidEnrollmentPolicyMissing). */
+export interface AndroidEnrollmentPolicyView {
+  state: 'pending' | 'pushed' | 'error';
+  pushedAt: string | null;
+  /** A code, never a value: enrollmentPolicySecret, amapi_rejected, a compile or render code. */
+  lastError: string | null;
+}
+
+export interface AndroidEnrollmentProfileView {
+  id: string;
+  name: string;
+  method: AndroidEnrollmentMethod;
+  ownership: 'corporate' | 'corporate_personal' | 'personal';
+  defaultGroupId: number | null;
+  defaultGroupName: string | null;
+  locale: string;
+  settings: AndroidEnrollmentProfileSettings;
+  enabled: boolean;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  archivedAt: string | null;
+  /** Usable Android enrollment tokens of the profile (active, not past their end). */
+  activeTokens: number;
+  enrollmentPolicy: AndroidEnrollmentPolicyView;
+}

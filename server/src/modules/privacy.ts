@@ -235,6 +235,17 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
 
 let registered = false;
 
+/** One slice of a module's enrollment tokens ended long enough ago (enrollment.purge-expired, after the sessions and
+ *  the tokens of lot C1): at most `limit` rows deleted in `trx` (the tenant's context). Android: its AMAPI tokens used,
+ *  expired, revoked or failed for 90 days (android-amapi §4.8, §10.3; lot AN-C1). */
+export type EnrollmentPurgeSlice = (trx: Knex.Transaction, tenantId: number, now: Date, limit: number) => Promise<number>;
+const enrollmentPurgeSlices: Array<{ name: string; slice: EnrollmentPurgeSlice }> = [];
+export function registerEnrollmentPurgeSlice(name: string, slice: EnrollmentPurgeSlice): void {
+  if (!enrollmentPurgeSlices.some((x) => x.name === name)) enrollmentPurgeSlices.push({ name, slice });
+}
+/** The names of the registered slices (the testbed). */
+export const enrollmentPurgeSliceNames = (): string[] => enrollmentPurgeSlices.map((x) => x.name);
+
 export function registerPrivacyModule(): void {
   if (registered) return;
   registered = true;
@@ -316,6 +327,7 @@ export function registerPrivacyModule(): void {
       const { ok, failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
         sessions += await drainTenant(tenantId, purgeEnrollmentSessionsSlice);
         tokens += await drainTenant(tenantId, purgeEnrollmentTokensSlice);
+        for (const x of enrollmentPurgeSlices) tokens += await drainTenant(tenantId, x.slice);
       });
       if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed, ${ok} done`);
       return { output: { tenants: ok, sessions, tokens } };

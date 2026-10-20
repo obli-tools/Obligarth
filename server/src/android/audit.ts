@@ -18,6 +18,8 @@ export function registerAndroidAuditActions(): void {
     { name: 'android.enterprise_unlink_requested', criticality: 'critical', label: 'Android: enterprise unlink requested' },
     { name: 'android.enterprise_unlinked', criticality: 'critical', label: 'Android: enterprise unlinked' },
     { name: 'android.enterprise_settings_changed', criticality: 'standard', label: 'Android: enterprise settings changed' },
+    // Lot AN-C1: an Android enrollment profile created, changed or archived (profile service of lot C1).
+    { name: 'android.enrollment_profile_saved', criticality: 'standard', label: 'Android: enrollment profile saved' },
     { name: 'android.enrollment_token_created', criticality: 'standard', label: 'Android: enrollment token created' },
     { name: 'android.enrollment_token_revealed', criticality: 'standard', label: 'Android: enrollment token shown again' },
     { name: 'android.enrollment_token_revoked', criticality: 'standard', label: 'Android: enrollment token revoked' },

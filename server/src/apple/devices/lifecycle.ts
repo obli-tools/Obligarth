@@ -11,6 +11,7 @@ import {
   serialHolderOf, type DeviceMatch, type SessionFacts,
 } from '../../mdm/registry/authenticateRules';
 import { closeEpisode, markEpisodeEnrolled, openEpisode } from '../../mdm/registry/episodes';
+import { renewRecordForNewCycle } from '../../mdm/registry/renewal';
 import { applyCollectionRules } from '../../mdm/inventory/ingestors';
 import { enrollmentReleaseJob } from '../../mdm/jobs';
 import { afterCommit, cancelOpenTargetsOfDevice } from '../commands/targets';
@@ -375,11 +376,10 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     // and apps), lost mode off and no position of the previous cycle.
     if (session.resetGroupOnReenroll || found.by === 'serial') cols.group_id = session.groupId;
     if (found.by === 'serial') {
-      cols.lost_mode_state = 'off';
-      cols.lost_mode_changed_at = null;
-      const assignments = await trx('assignments').where({ tenant_id: tenantId, target_scope: 'device', target_id: deviceId }).del();
-      const locations = await trx('lost_mode_locations').where({ tenant_id: tenantId, device_id: deviceId }).del();
-      renewed = { assignments: Number(assignments), locations: Number(locations) };
+      // The renewal common to the channels (mdm/registry/renewal.ts).
+      const r = await renewRecordForNewCycle(trx, tenantId, deviceId, session.groupId);
+      Object.assign(cols, r.columns);
+      renewed = { assignments: r.assignments, locations: r.locations };
     } else if (sat && sat.enrollment_state !== 'unenrolled' && sat.id_activated_at && f.proof !== 'ade' && !f.reenrollAllowed) {
       // MDM-B2-R13, option A: a new cycle of a record under management without the ADE proof (an OTA enrollment that
       // announces the UDID of an enrolled device, or the device itself installing a profile again): the operator checks.

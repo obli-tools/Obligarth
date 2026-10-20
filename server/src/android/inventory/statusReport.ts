@@ -5,6 +5,10 @@
 // device's policy (applied when the applied version reaches the pushed one without a non-compliance of the policy;
 // error with <reason>:<setting> otherwise; PENDING stays delivering), then the compliance. A report of a device the
 // instance does not know yet waits for its ENROLLMENT (MissingPrerequisite); one of a quarantined device is ignored.
+// §8.3 (lot AN-C1): a report that changes the Android version or the API level asks for the resolution of the device
+// (mdm.policies.resolve-device: the availability of its settings) and for the push of its own policy (the compiler
+// checks each field against the API level: a field that becomes available is pushed, nothing when the policy is
+// unchanged); the management mode of an AMAPI device never changes.
 // No network call (G-A3); identifiers only in the real-time events and the alerts (G-A4).
 import type { z } from 'zod';
 import { raiseAndroidTenantAlert } from '../alerts';
@@ -15,6 +19,8 @@ import { filterInventory } from './privacy';
 import { byodApps } from '../byod/policy';
 import { policyArtifactHash, syncPolicyArtifact } from '../policies/channel';
 import { rollupConfigState } from '../../mdm/policies/artifacts';
+import { requestDeviceResolution } from '../../mdm/policies/triggers';
+import { androidSenders } from '../enrollment/senders';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -60,7 +66,8 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   const d = ctx.event.payload;
   const row = await trx('android_devices as a').join('devices as dv', function j() { this.on('dv.id', '=', 'a.device_id').andOn('dv.tenant_id', '=', 'a.tenant_id'); })
     .where('a.amapi_name', d.name).whereNull('a.released_at')
-    .first('a.device_id', 'a.last_status_report_at', 'a.pushed_policy_version', 'a.policy_state', 'a.policy_name', 'dv.ownership', 'dv.serial_number', 'dv.last_checkin_at') as
+    .first('a.device_id', 'a.last_status_report_at', 'a.pushed_policy_version', 'a.policy_state', 'a.policy_name', 'a.api_level', 'a.approval_state',
+      'dv.ownership', 'dv.serial_number', 'dv.last_checkin_at', 'dv.os_version') as
     Record<string, any> | undefined;
   if (!row) {
     const q = await trx('android_quarantine').where({ amapi_name: d.name }).first('id');
@@ -141,6 +148,13 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
       tenant_id: tenantId, device_id: deviceId, identifier: a.identifier, name: a.name, version: a.version, short_version: a.shortVersion,
       managed: true, management_status: a.state, source: 'amapi_report',
     })));
+  }
+  // §8.3: the facts the availability depends on changed (an upgrade): resolution of the device and push of its policy.
+  const apiChanged = inv.apiLevel !== null && inv.apiLevel !== undefined && row.api_level !== null && Number(row.api_level) !== Number(inv.apiLevel);
+  const osChanged = !!inv.osVersion && !!row.os_version && String(row.os_version) !== String(inv.osVersion);
+  if (apiChanged || osChanged) {
+    await requestDeviceResolution(trx, tenantId, [deviceId]);
+    if (row.policy_name && row.approval_state !== 'pending') await androidSenders.push(trx, { tenantId, deviceId });
   }
   const evaluation = await evaluateAndroidDevices(trx, tenantId, [deviceId]);
   for (const id of evaluation.atRisk) ctx.afterCommit(() => raiseAndroidTenantAlert(tenantId, 'android.integrity_compromised', { deviceId: id }));

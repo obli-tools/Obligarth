@@ -5,6 +5,7 @@ import { SocketEvents } from '@obligarth/shared';
 import { db } from '../../db';
 import { defaultRuntime, registerJob, type JobContext, type JobHandle, type JobResult } from '../../jobs';
 import { getIO } from '../../socket';
+import { logger } from '../../utils/logger';
 import { appleCatalog } from '../apple/catalog';
 import { syncConflictAlerts } from './alerts';
 import { loadDevices, loadPolicyState } from './loader';
@@ -47,6 +48,29 @@ const TenantPayload = z.object({ tenantId: z.number().int().positive() }).strict
 const DevicePayload = z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive() }).strict();
 
 let tenantJob: JobHandle<z.infer<typeof TenantPayload>> | null = null;
+
+/** What a module does once every device of a tenant was resolved (android-amapi §9.3, lot AN-C1: the enrollment
+ *  policies of the Android profiles, compiled for a fictitious device of each profile's default group, are sent
+ *  again). Runs after the resolution, in the job (its own transactions); a failure is logged, never fails the job. */
+export type TenantResolvedHook = (ctx: Pick<JobContext<unknown>, 'withTenant'>, tenantId: number) => Promise<unknown>;
+const tenantResolvedHooks: Array<{ name: string; fn: TenantResolvedHook }> = [];
+export function registerTenantResolvedHook(name: string, fn: TenantResolvedHook): void {
+  if (!tenantResolvedHooks.some((h) => h.name === name)) tenantResolvedHooks.push({ name, fn });
+}
+
+/** The hooks after the resolution of a tenant, each in turn (mdm.policies.resolve-tenant; the testbed). */
+export async function runTenantResolvedHooks(ctx: Pick<JobContext<unknown>, 'withTenant'>, tenantId: number): Promise<string[]> {
+  const ran: string[] = [];
+  for (const h of tenantResolvedHooks) {
+    try {
+      await h.fn(ctx, tenantId);
+      ran.push(h.name);
+    } catch (err) {
+      logger.warn({ tenantId, hook: h.name, err: { message: (err as Error)?.message } }, 'hook after the resolution of a tenant failed');
+    }
+  }
+  return ran;
+}
 let deviceJob: JobHandle<z.infer<typeof DevicePayload>> | null = null;
 
 /** DEVICE_CONFIG_CHANGED to the tenant's room (identifiers only); never throws. */
@@ -151,6 +175,7 @@ async function runTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): Promis
   try {
     const r = await resolveTenant(ctx, ctx.payload.tenantId);
     emitConfigChanged(ctx.payload.tenantId, r.changed);
+    await runTenantResolvedHooks(ctx, ctx.payload.tenantId);
     return { output: { devices: r.devices, changed: r.changed.length, upserted: r.upserted, deleted: r.deleted, deferred: r.deferred } };
   } finally {
     fetchNext(TENANT_QUEUE);

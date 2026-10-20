@@ -14,13 +14,14 @@
 //   5. approval of a token that requires it (long tokens; forced by the hourly cap of the token): pending, DISABLED,
 //      no own policy until approved;
 //   6. the record: a released record of the same serial (company device, serial unchecked: AN45) is renewed
-//      (MDM-B2-R12 option A); a record still managed with that serial is never taken (new record, alert); a record
+//      (MDM-B2-R12 option A, by the function of lot C common to the channels); a record still managed with that serial is never taken (new record, alert); a record
 //      named in previousDeviceNames is superseded and its old resource deleted at Google by a cleanup job;
 //   7. devices, android_devices, the episode, the token's use; 8. android.device-onboard (unless pending); 9. audit.
 // No network call here (G-A3): the follow-ups are jobs sent in the event's savepoint.
 import type { Knex } from 'knex';
 import { autoFreeze } from '../../guard/freeze';
 import { markEpisodeEnrolled, openEpisode } from '../../mdm/registry/episodes';
+import { renewRecordForNewCycle } from '../../mdm/registry/renewal';
 import { raiseAndroidTenantAlert } from '../alerts';
 import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { DeviceSchema } from '../inbox/schemas';
@@ -122,6 +123,9 @@ async function findToken(ctx: Ctx, d: Device, at: Date): Promise<TokenRow | null
   // SEC-AN-14: the token Google names must be the row's (a forged additionalData on another token is unknown).
   if (d.enrollmentTokenName !== undefined && (t.token_name === null || d.enrollmentTokenName !== t.token_name)) return null;
   if (!tokenValidAt(t, at)) return null;
+  // §10.3: no use beyond max_uses (review AN-C1b: a single-use token already used never enrolls a second device,
+  // whatever Google does; the device of its first use is caught by the idempotence of step 1).
+  if (t.max_uses !== null && Number(t.uses) >= Number(t.max_uses)) return null;
   return t;
 }
 
@@ -253,13 +257,11 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
     network_info: inv.networkInfo ? JSON.stringify(inv.networkInfo) : null, enrolled_at: at, released_at: null, release_reason: null, updated_at: now,
   };
   if (deviceId !== null) {
-    // Renewal (MDM-B2-R12 option A, to be replaced by the function of lot C at the junction): the group of the
-    // profile, no direct assignment, lost mode off, no position of the previous cycle.
-    await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update({
-      ...cols, group_id: snapshot.defaultGroupId, lost_mode_state: 'off', lost_mode_changed_at: null,
-    });
-    await trx('assignments').where({ tenant_id: tenantId, target_scope: 'device', target_id: deviceId }).del();
-    await trx('lost_mode_locations').where({ tenant_id: tenantId, device_id: deviceId }).del();
+    // Renewal (MDM-B2-R12 option A) by the function of lot C common to the channels (mdm/registry/renewal.ts): the
+    // group of the profile, no direct assignment, lost mode off, no position of the previous cycle; the inventory of
+    // the previous cycle goes too.
+    const r = await renewRecordForNewCycle(trx, tenantId, deviceId, snapshot.defaultGroupId);
+    await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update({ ...cols, ...r.columns });
     await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId }).del();
     await trx('android_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(sat);
   } else {

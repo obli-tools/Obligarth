@@ -40,10 +40,14 @@ function profileView(r: Record<string, any>): EnrollmentProfileView {
   };
 }
 
-function profilesQuery(q: Q, tenantId: number) {
+/** The profiles of one platform (android-amapi §10.1, lot AN-C1): the Apple routes see the Apple profiles only, the
+ *  Android routes (android/routes/enrollment.routes.ts) the Android ones, each with the checks of its platform. */
+export type ProfilePlatform = 'apple' | 'android';
+
+function profilesQuery(q: Q, tenantId: number, platform: ProfilePlatform = 'apple') {
   return q('enrollment_profiles as p')
     .leftJoin('device_groups as g', function joinGroup() { this.on('g.id', '=', 'p.default_group_id').andOn('g.tenant_id', '=', 'p.tenant_id'); })
-    .where('p.tenant_id', tenantId)
+    .where('p.tenant_id', tenantId).where('p.platform', platform)
     .select('p.*', 'g.name as group_name', q.raw(`(SELECT count(*) FROM obligarth.enrollment_tokens t
       WHERE t.tenant_id = p.tenant_id AND t.profile_id = p.id AND t.revoked_at IS NULL AND t.expires_at > now() AND t.uses < t.max_uses)::int AS active_tokens`));
 }
@@ -55,15 +59,15 @@ async function withBindings(q: Q, tenantId: number, views: EnrollmentProfileView
   return views.map((v) => (v.method === 'ade' ? { ...v, adeBindings: b.get(v.id) ?? [] } : v));
 }
 
-export async function listProfiles(q: Q, tenantId: number, archived: boolean): Promise<EnrollmentProfileView[]> {
-  let qb = profilesQuery(q, tenantId);
+export async function listProfiles(q: Q, tenantId: number, archived: boolean, platform: ProfilePlatform = 'apple'): Promise<EnrollmentProfileView[]> {
+  let qb = profilesQuery(q, tenantId, platform);
   if (!archived) qb = qb.whereNull('p.archived_at');
   const rows = await qb.orderBy([{ column: 'p.archived_at', order: 'desc', nulls: 'first' }, { column: 'p.name' }]) as Array<Record<string, any>>;
   return withBindings(q, tenantId, rows.map(profileView));
 }
 
-export async function getProfile(q: Q, tenantId: number, id: string): Promise<EnrollmentProfileView> {
-  const row = await profilesQuery(q, tenantId).where('p.id', id).first() as Record<string, any> | undefined;
+export async function getProfile(q: Q, tenantId: number, id: string, platform: ProfilePlatform = 'apple'): Promise<EnrollmentProfileView> {
+  const row = await profilesQuery(q, tenantId, platform).where('p.id', id).first() as Record<string, any> | undefined;
   if (!row) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   return (await withBindings(q, tenantId, [profileView(row)]))[0];
 }
@@ -73,6 +77,15 @@ async function checkGroup(trx: Knex.Transaction, tenantId: number, groupId: numb
   const g = await trx('device_groups').where({ tenant_id: tenantId, id: groupId }).first('id');
   if (!g) throw new AppError(404, 'Group not found', 'groupNotFound');
 }
+
+/** What the service writes: a checked Apple profile (settings.ts, checkProfile), or an Android one checked by the
+ *  Android module (android-amapi §10.1: validateAndroidProfile, checkAndroidKioskProfile; lot AN-C1), platform android.
+ *  The rules of both are held again by enrollment_profiles_rules_check (two branches, COH-17). */
+export type ProfileWrite = Omit<CheckedProfile, 'method' | 'settings'> & {
+  method: string;
+  settings: object;
+  platform?: 'apple' | 'android';
+};
 
 /** The database's refusals of a profile, as console errors. */
 function profileDbError(err: unknown): never {
@@ -84,7 +97,7 @@ function profileDbError(err: unknown): never {
   throw err;
 }
 
-export async function createProfile(trx: Knex.Transaction, tenantId: number, userId: number, p: CheckedProfile): Promise<string> {
+export async function createProfile(trx: Knex.Transaction, tenantId: number, userId: number, p: ProfileWrite): Promise<string> {
   await checkGroup(trx, tenantId, p.defaultGroupId);
   if (p.isDefault) {
     await trx('enrollment_profiles').where({ tenant_id: tenantId, method: 'ade', is_default: true }).whereNull('archived_at')
@@ -92,6 +105,7 @@ export async function createProfile(trx: Knex.Transaction, tenantId: number, use
   }
   try {
     const [row] = await trx('enrollment_profiles').insert({
+      ...(p.platform === 'android' ? { platform: 'android' } : {}),
       tenant_id: tenantId, name: p.name, method: p.method, ownership: p.ownership, usage: p.usage, default_group_id: p.defaultGroupId,
       notice_required: p.noticeRequired, locale: p.locale, settings: JSON.stringify(p.settings), is_default: p.isDefault,
       enabled: p.enabled, created_by: userId, updated_by: userId,
@@ -104,9 +118,10 @@ export async function createProfile(trx: Knex.Transaction, tenantId: number, use
 
 /** A change of a profile (the method never changes); version + 1. Disabled: its sessions not yet on a device end
  *  (review of lot C1, INT-C1-R2), their ids pushed to endedSessions. */
-export async function updateProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string, p: CheckedProfile,
+export async function updateProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string, p: ProfileWrite,
   endedSessions: string[] = []): Promise<number> {
-  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forUpdate().first('id', 'method', 'archived_at', 'is_default', 'enabled') as
+  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id, platform: p.platform ?? 'apple' }).forUpdate()
+    .first('id', 'method', 'archived_at', 'is_default', 'enabled') as
     { id: string; method: string; archived_at: Date | null; is_default: boolean; enabled: boolean } | undefined;
   if (!cur) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   if (cur.archived_at) throw new AppError(409, 'This enrollment profile is archived', 'enrollmentProfileArchived');
@@ -135,8 +150,8 @@ export async function updateProfile(trx: Knex.Transaction, tenantId: number, use
 /** Archives a profile (never deleted); refused for the default ADE profile while another is not designated. Its
  *  sessions not yet on a device end (review of lot C1, INT-C1-R2), their ids pushed to endedSessions. */
 export async function archiveProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string,
-  endedSessions: string[] = []): Promise<number> {
-  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forUpdate().first('archived_at', 'is_default', 'version') as
+  endedSessions: string[] = [], platform: ProfilePlatform = 'apple'): Promise<number> {
+  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id, platform }).forUpdate().first('archived_at', 'is_default', 'version') as
     { archived_at: Date | null; is_default: boolean; version: number } | undefined;
   if (!cur) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   if (cur.archived_at) return Number(cur.version);

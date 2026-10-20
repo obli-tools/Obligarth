@@ -28,12 +28,15 @@ import { registerFreezeHandler } from '../guard';
 import { currentDbContext, type DbActor } from '../db/context';
 import { endKioskExitsOnFreeze } from '../android/kiosk/exits';
 import { resumeHeldCommands } from '../android/commands/submit';
-import { registerDevicePurger } from './privacy';
+import { registerDevicePurger, registerEnrollmentPurgeSlice } from './privacy';
+import { purgeEndedTokensSlice } from '../android/enrollment/tokens';
 import { registerAlertDefinitions } from '../services/alertCatalog';
 import { androidAlertDefinitions } from '../android/alerts';
 import { purgeAndroidDevices } from '../android/operations/purge';
 import { registerArtifactChannel } from '../mdm/policies/artifacts';
 import { amapiArtifactProvider } from '../android/policies/channel';
+import { registerTenantResolvedHook } from '../mdm/policies/jobs';
+import { requestEnrollmentPolicies } from '../android/enrollment/policyRequests';
 
 // =============================================================================
 // ANDROID (Android Management API, called directly by the instance) — its hooks into the core's registries,
@@ -101,6 +104,9 @@ export function registerAndroidModule(): void {
   registerAndroidForgetAction();
   registerAndroidOffboardingApprovals();
   registerAndroidAdoptionApprovals();
+  // Lot AN-C1 (§4.8, §10.3): the ended enrollment tokens purged after 90 days by enrollment.purge-expired, with those of
+  // lot C1 (whatever ANDROID_MODE: rows only, nothing at Google).
+  registerEnrollmentPurgeSlice('android.enrollment_tokens', purgeEndedTokensSlice);
   setAndroidDeviceCounter(async (tenantId) => {
     const r = await db('android_devices').where({ tenant_id: tenantId }).whereNull('released_at').count<{ n: string }[]>('* as n');
     return Number(r[0]?.n ?? 0);
@@ -110,6 +116,9 @@ export function registerAndroidModule(): void {
   if (cfg.mode === 'off') return;
 
   registerAndroidJobs();
+  // Lot AN-C1 (§9.3): after each resolution of a tenant, the enrollment policies of its live Android profiles are sent
+  // again (one stately job per profile; nothing pushed when the compiled policy did not change).
+  registerTenantResolvedHook('android.enrollment-policies', (ctx, tenantId) => ctx.withTenant((trx) => requestEnrollmentPolicies(trx, tenantId)));
   // Lot AN-P (§11.4, COH-22): the Android handler of the freeze list (actions.edge-freeze-sync, the single queue of the
   // freeze): a freeze ends the running kiosk exits at once (the safest state first, AN-G1 correction), an unfreeze
   // submits again the commands it held. Nothing to propagate outside the instance: the gateway reads the freeze

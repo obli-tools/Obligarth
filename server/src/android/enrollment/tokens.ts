@@ -153,7 +153,16 @@ export async function createEnrollmentToken(tenantId: number, userId: number | n
       throw err;
     }
     const value = typeof created.value === 'string' ? created.value : '';
-    if (!value) throw new TokenError(502, 'androidInvalidRequest', 'token without a value');
+    if (!value) {
+      // Review AN-C1b: a token Google answers without a value is of no use; the row fails (never 'creating' for ever)
+      // and the token is deleted at Google (best effort: the garbage collection of the maintenance takes it otherwise).
+      await db.transaction((trx) => trx('android_enrollment_tokens').where({ id: t1.id, state: 'creating' })
+        .update({ state: 'failed', ended_at: trx.fn.now() }));
+      if (typeof created.name === 'string') {
+        try { await gw.deleteEnrollmentToken(t1.e, tokenIdOfName(t1.e, created.name)); } catch { /* collected later */ }
+      }
+      throw new TokenError(502, 'androidInvalidRequest', 'token without a value');
+    }
     const expiresAt = created.expirationTimestamp && Number.isFinite(Date.parse(created.expirationTimestamp))
       ? new Date(created.expirationTimestamp) : new Date(Date.now() + t1.plan.durationSeconds * 1000);
     await db.transaction(async (trx) => {
@@ -200,6 +209,9 @@ export async function revokeEnrollmentToken(tenantId: number, userId: number, id
   return asTenant(tenantId, { type: 'user', userId }, async () => {
     const row = await db('android_enrollment_tokens').where({ id }).first(TOKEN_COLUMNS) as TokenRow | undefined;
     if (!row) throw new TokenError(404, 'notFound', 'token not found');
+    // Review AN-C1b: a token still being created would become active right after a « not_active » answer: refused
+    // until its creation ends (active: revocable; failed: nothing to revoke).
+    if (row.state === 'creating') throw new TokenError(409, 'androidTokenCreating', 'the token is being created; revoke it once created');
     if (row.state !== 'active') return 'not_active';
     const e = await readEnterprise();
     if (e && row.token_name) {
@@ -285,6 +297,11 @@ export async function recoverEnrollmentTokens(tenantId: number, o: { gateway?: A
         if (row && row.state === 'active') continue;
         await gw.deleteEnrollmentToken(e, tokenIdOfName(e, full.name));
         out.collected += 1;
+        // A creation past its grace that cannot be adopted (Google holds no value for it): it fails rather than stay
+        // 'creating' for ever (review AN-C1b).
+        if (row && row.state === 'creating') {
+          out.failed += await db('android_enrollment_tokens').where({ id, state: 'creating' }).update({ state: 'failed', ended_at: db.fn.now() });
+        }
       }
       pageToken = page.nextPageToken;
       pages += 1;
@@ -300,4 +317,18 @@ export async function recoverEnrollmentTokens(tenantId: number, o: { gateway?: A
     if (out.adopted || out.collected || out.failed) logger.info({ android: { tokens: out, tenantId } }, 'android: enrollment tokens recovered');
     return out;
   });
+}
+
+/** Days an ended token (used, expired, revoked, failed) is kept before its row is deleted (§4.8; as the tokens of lot
+ *  C1). Its value was destroyed when it ended; the devices and quarantines that name it lose the reference only. */
+export const ENDED_TOKEN_RETENTION_DAYS = 90;
+
+/** One slice of enrollment.purge-expired (modules/privacy.ts, registerEnrollmentPurgeSlice): at most `limit` ended
+ *  tokens of the tenant deleted, the oldest first. In the job's transaction (tenant context). */
+export async function purgeEndedTokensSlice(trx: Knex.Transaction, tenantId: number, now: Date, limit: number): Promise<number> {
+  const cutoff = new Date(now.getTime() - ENDED_TOKEN_RETENTION_DAYS * 86_400_000);
+  const ids = await trx('android_enrollment_tokens').where({ tenant_id: tenantId }).whereIn('state', ['used', 'expired', 'revoked', 'failed'])
+    .where('ended_at', '<', cutoff).orderBy('ended_at', 'asc').limit(limit).pluck('id') as string[];
+  if (!ids.length) return 0;
+  return trx('android_enrollment_tokens').where({ tenant_id: tenantId }).whereIn('id', ids).del();
 }
