@@ -1,6 +1,8 @@
 import { db } from '../db';
 import { asIdentity, currentDbContext, type DbActor } from '../db/context';
 import { registerEdgeFreezeHandler } from '../guard';
+import { registerFreezeMirror } from '../guard/frozen';
+import { appleEdgeFrozen } from '../apple/commands/bus';
 import { registerBootTask, registerStartTask } from '../lifecycle';
 import { registerPlatformOnlyAlertKinds } from '../services/liveAlert.service';
 import { APPLE_ALERTS } from '../apple/alerts/catalog';
@@ -100,7 +102,11 @@ export function registerAppleModule(): void {
   registerAppleAuditActions();
   registerAppleEdgeAdmin();
 
-  // ── Guard engine: the emergency freeze of the commands at apple-edge ───────
+  // ── Guard engine: the freeze of the Apple commands ────────────────────────
+  // A freeze set at apple-edge (its mirror, tenant_apple_edge.commands_frozen) holds the Apple commands like the
+  // engine's (guard/frozen.ts, lot AN-P).
+  registerFreezeMirror('apple_mdm', appleEdgeFrozen);
+  // The emergency freeze of the commands at apple-edge
   // (audit-durci §10.7; called after the freeze's commit and by the job
   // actions.edge-freeze-sync, which retries every minute).
   registerEdgeFreezeHandler(async (tenantId, frozen) => {

@@ -9,8 +9,8 @@ import { audit } from '../../audit';
 import { db } from '../../db';
 import { userActor } from '../../db/context';
 import { guard, GuardStepUpError } from '../../guard';
+import { tenantFrozen as frozenFor } from '../../guard/frozen';
 import { asAppError } from '../../guard/approvals';
-import { readSettings } from '../../guard/settings';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
 import { activeRequester, refuse, type ApprovalExecution } from '../../services/approval.service';
@@ -115,11 +115,8 @@ async function deviceFacts(tenantId: number, ids: number[]): Promise<Map<number,
 
 const prerequisite = (spec: CommandSpec<any>, d: DeviceFacts | undefined): MdmRefusalCode | null => refusalOf(spec, d && d.apple !== null ? d : undefined);
 
-async function frozen(tenantId: number): Promise<boolean> {
-  if ((await readSettings(tenantId)).frozen_at) return true;
-  const m = await db('tenant_apple_edge').where({ tenant_id: tenantId }).first('commands_frozen') as { commands_frozen: boolean } | undefined;
-  return m?.commands_frozen === true;
-}
+/** The freeze of the Apple commands (the engine's, or apple-edge's mirror: guard/frozen.ts, lot AN-P). */
+const frozen = (tenantId: number): Promise<boolean> => frozenFor(null, tenantId, 'apple_mdm');
 
 /** The device of a route, in the session's tenant (404 otherwise), with the capability asked (403 without it). */
 async function deviceOf(req: Request, capability?: DeviceCapability, write = false): Promise<number> {

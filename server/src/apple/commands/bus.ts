@@ -6,7 +6,7 @@ import type {
 import { MDM_COMMAND_ORIGINS } from '@obligarth/shared';
 import { audit, type AuditEntryInput, type AuditWriteContext } from '../../audit';
 import type { DbActor } from '../../db/context';
-import { readSettings } from '../../guard/settings';
+import { tenantFrozen as frozenFor } from '../../guard/frozen';
 import { lateCancelOf } from '../../guard/types';
 import { jobIdFor, type JobHandle } from '../../jobs';
 import { AppError } from '../../middleware/errorHandler';
@@ -236,11 +236,17 @@ async function replayOf(trx: Knex.Transaction, tenantId: number, key: string): P
   };
 }
 
-/** Is the tenant frozen (the guard engine's emergency freeze, or the mirror of a freeze set at apple-edge)? */
-export async function tenantFrozen(trx: Knex.Transaction, tenantId: number): Promise<boolean> {
-  if ((await readSettings(tenantId, trx)).frozen_at) return true;
-  const m = await trx('tenant_apple_edge').where({ tenant_id: tenantId }).first('commands_frozen') as { commands_frozen: boolean } | undefined;
+/** The mirror of a freeze set at apple-edge (tenant_apple_edge.commands_frozen): the freeze mirror of the Apple channel
+ *  (registerFreezeMirror, lot AN-P). */
+export async function appleEdgeFrozen(q: Knex | Knex.Transaction, tenantId: number): Promise<boolean> {
+  const m = await q('tenant_apple_edge').where({ tenant_id: tenantId }).first('commands_frozen') as { commands_frozen: boolean } | undefined;
   return m?.commands_frozen === true;
+}
+
+/** Is the tenant frozen for the Apple commands (the guard engine's emergency freeze, or the mirror of a freeze set at
+ *  apple-edge)? The generic reader is guard/frozen.ts (tenantFrozen of a channel). */
+export async function tenantFrozen(trx: Knex.Transaction, tenantId: number): Promise<boolean> {
+  return frozenFor(trx, tenantId, 'apple_mdm');
 }
 
 async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<EnqueueOutcome> {

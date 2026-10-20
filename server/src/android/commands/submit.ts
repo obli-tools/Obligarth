@@ -22,7 +22,7 @@ import type { Knex } from 'knex';
 import { audit } from '../../audit';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
-import { readSettings } from '../../guard/settings';
+import { tenantFrozen } from '../../guard/frozen';
 import { findSecretRefs, vault } from '../../vault';
 import { logger } from '../../utils/logger';
 import { readEnterprise } from '../enterprises/registry';
@@ -140,7 +140,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: personal });
         return { kind: 'done' as const, result: 'rejected' as const };
       }
-      if (ANDROID_COMMANDS[row.request_type].destructive && (await readSettings(tenantId, trx)).frozen_at) {
+      if (ANDROID_COMMANDS[row.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
         await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', updated_at: trx.fn.now() });
         return { kind: 'done' as const, result: 'held' as const };
       }
@@ -182,7 +182,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         if (!cur || cur.state !== 'pending' || cur.amapi_operation) return 'skipped' as const;
         if (cur.cancel_requested_at) { await finalizeCommand(trx, cur, { state: 'cancelled' }); return 'cancelled' as const; }
         if (new Date(cur.expires_at).getTime() <= clock().getTime()) { await finalizeCommand(trx, cur, { state: 'expired' }); return 'expired' as const; }
-        if (ANDROID_COMMANDS[cur.request_type].destructive && (await readSettings(tenantId, trx)).frozen_at) {
+        if (ANDROID_COMMANDS[cur.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
           await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', amapi_submit_started_at: null, updated_at: trx.fn.now() });
           return 'held' as const;
         }
@@ -302,7 +302,7 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
  */
 export async function resumeHeldCommands(tenantId: number, actor: DbActor = POLL_ACTOR): Promise<number> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
-    const frozen = !!(await readSettings(tenantId, trx)).frozen_at;
+    const frozen = (await tenantFrozen(trx, tenantId, 'amapi'));
     const q = trx('android_commands').where({ tenant_id: tenantId, state: 'pending', submit_state: 'held' });
     if (frozen) q.where({ hold_reason: 'google_unavailable' }); else q.whereIn('hold_reason', ['frozen', 'google_unavailable']);
     const ids = await q.forUpdate().limit(500).pluck('id') as string[];
@@ -317,7 +317,7 @@ export async function resumeHeldCommands(tenantId: number, actor: DbActor = POLL
 /** The operator releases a command held by the last-resort cap (gateway_cap), the tenant no longer frozen. */
 export async function releaseHeldCommand(tenantId: number, commandId: string, actor: DbActor): Promise<'released' | 'not_held' | 'frozen'> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
-    if ((await readSettings(tenantId, trx)).frozen_at) return 'frozen' as const;
+    if ((await tenantFrozen(trx, tenantId, 'amapi'))) return 'frozen' as const;
     const n = await trx('android_commands').where({ tenant_id: tenantId, id: commandId.toLowerCase(), state: 'pending', submit_state: 'held', hold_reason: 'gateway_cap' })
       .update({ submit_state: 'pending', hold_reason: null, updated_at: trx.fn.now() });
     if (n !== 1) return 'not_held' as const;

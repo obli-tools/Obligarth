@@ -29,7 +29,7 @@ import { JobError, type JobContext, type JobResult } from '../jobs';
 import { logger } from '../utils/logger';
 import { safeErr } from '../jobs/errors';
 import { capExceeded } from './cap';
-import { edgeFreezeOf, guardedActionDef } from './catalog';
+import { EDGE_FREEZE_HANDLER, freezeHandlersOf, guardedActionDef } from './catalog';
 import { guardMetrics } from './metrics';
 import { alertTenantAndMsp, alertTenants, notifyAction } from './notify';
 import { personFacts } from './people';
@@ -306,24 +306,40 @@ export async function expirePaused(ctx: JobContext<Record<string, never>>): Prom
   return { output: { expired } };
 }
 
-/** actions.edge-freeze-sync: the freeze (or its end) at apple-edge. */
+/** actions.edge-freeze-sync: the freeze (or its end) by every handler of the list (apple-edge, Android: lot AN-P), the
+ *  single queue of the freeze whatever the channel (COH-22). Every handler runs (each is idempotent); one that fails
+ *  alerts and fails the job, retried every minute. */
 export async function edgeFreezeSync(ctx: JobContext<{ tenantId: number }>): Promise<JobResult> {
-  const handler = edgeFreezeOf();
-  if (!handler) return { output: { skipped: 'apple_edge_off' } };
+  const handlers = freezeHandlersOf();
+  if (!handlers.length) return { output: { skipped: 'apple_edge_off' } };
   const tenantId = ctx.tenantId as number;
   const frozen = (await ctx.inTenant(() => readSettings(tenantId))).frozen_at !== null;
-  try {
-    const r = await handler(tenantId, frozen);
-    return { output: r === 'no_edge_tenant' ? { skipped: 'no_edge_tenant' } : { frozen } };
-  } catch (err) {
-    await ctx.inTenant(() => alertTenantAndMsp(tenantId, {
+  const results: Record<string, string> = {};
+  const failed: string[] = [];
+  for (const h of handlers) {
+    try {
+      results[h.name] = await h.handler(tenantId, frozen);
+    } catch {
+      failed.push(h.name);
+    }
+  }
+  if (failed.length) {
+    const edgeFailed = failed.includes(EDGE_FREEZE_HANDLER);
+    await ctx.inTenant(() => alertTenantAndMsp(tenantId, edgeFailed ? {
       severity: 'critical',
       title: frozen ? 'Freeze not applied at apple-edge yet' : 'Unfreeze not applied at apple-edge yet',
       message: 'apple-edge did not take the change of the commands freeze; it is retried every minute.',
       stableKey: `guard:edge-freeze:${tenantId}`,
+    } : {
+      severity: 'critical',
+      title: frozen ? 'Freeze not applied by every module yet' : 'Unfreeze not applied by every module yet',
+      message: `${failed.join(', ')} did not take the change of the freeze; it is retried every minute.`,
+      stableKey: `guard:freeze-sync:${tenantId}`,
     }));
-    throw new JobError('edge_unreachable', 'apple-edge did not take the freeze');
+    throw new JobError(edgeFailed ? 'edge_unreachable' : 'freeze_handler_failed', edgeFailed ? 'apple-edge did not take the freeze' : 'a freeze handler failed');
   }
+  const extra: Record<string, string> = handlers.length > 1 ? { handlers: Object.entries(results).map(([k, v]) => `${k}:${v}`).join(',') } : {};
+  return { output: results[EDGE_FREEZE_HANDLER] === 'no_edge_tenant' ? { skipped: 'no_edge_tenant', ...extra } : { frozen, ...extra } };
 }
 
 /** actions.privilege-watch: an alert per privilege grant (platform

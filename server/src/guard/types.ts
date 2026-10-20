@@ -131,6 +131,11 @@ export type OwnershipProvider = (tenantId: number, deviceIds: number[]) => Promi
  *  (its provisioning carries the freeze over). Throws on a failure. */
 export type EdgeFreezeHandler = (tenantId: number, frozen: boolean) => Promise<'done' | 'no_edge_tenant'>;
 
+/** What a module does at a freeze or an unfreeze of a tenant, after its commit (the list of actions.edge-freeze-sync,
+ *  lot AN-P): 'done', 'nothing' (nothing of the tenant concerned it), or 'no_edge_tenant' (apple-edge does not know
+ *  the tenant yet). Idempotent: the job runs every handler again on a retry. Throws on a failure. */
+export type FreezeHandler = (tenantId: number, frozen: boolean) => Promise<'done' | 'nothing' | 'no_edge_tenant'>;
+
 /** Summary of pending_actions.result. */
 export interface GuardResultSummary {
   done: number;

@@ -4,7 +4,10 @@
 //                             delayed execution: revalidation, then execution;
 //                             never redriven by hand (a destructive action)
 //   actions.expire-paused     hourly: pauses older than 24 h expire
-//   actions.edge-freeze-sync  tenant, on demand: the freeze at apple-edge
+//   actions.edge-freeze-sync  tenant, on demand: the freeze by the handlers of
+//                             the modules (apple-edge, Android): the single
+//                             queue of the freeze (lot AN-P, COH-22; its name
+//                             kept: the queues of an instance unchanged)
 //   actions.privilege-watch   every minute: an alert per privilege grant, and
 //                             per loss of a client approver (AUD-A7-R4)
 //   actions.purge             daily: finished actions and grants after 13 months
@@ -90,7 +93,7 @@ export function registerGuardJobs(): void {
   edgeFreezeSync = registerJob({
     name: 'actions.edge-freeze-sync',
     scope: 'tenant',
-    description: "Apply a tenant's emergency freeze (or its end) at apple-edge",
+    description: "Apply a tenant's emergency freeze (or its end) by every module (apple-edge, Android)",
     payload: TenantPayload,
     policy: 'stately',
     retry: { limit: 10, delaySeconds: 60, backoff: false },

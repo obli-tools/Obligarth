@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import { audit } from '../audit';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
-import { tenantFrozen } from '../apple/commands/bus';
+import { tenantFrozen as frozenFor } from '../guard/frozen';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { agentConfigFor } from './agentConfig';
 import { acknowledgeUpdates, applyResults, deliver } from './commands';
@@ -10,6 +10,9 @@ import { PollBody } from './schemas';
 import { withAgentTransaction, type Satellite } from './session';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
 import { writeStatusItems } from './status';
+
+/** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
+const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
 
 // =============================================================================
 // POST /agent/v1/poll (docs: agent-pont-android §4.5, RS-2, RS-3): in one

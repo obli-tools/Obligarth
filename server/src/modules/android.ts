@@ -24,6 +24,10 @@ import { registerStatusReportHandler } from '../android/inventory/statusReport';
 import { registerUsageLogsHandler } from '../android/inventory/usageLogs';
 import { setAndroidDeviceCounter } from '../android/gateway/google';
 import { plugAndroidJunction } from '../android/junction';
+import { registerFreezeHandler } from '../guard';
+import { currentDbContext, type DbActor } from '../db/context';
+import { endKioskExitsOnFreeze } from '../android/kiosk/exits';
+import { resumeHeldCommands } from '../android/commands/submit';
 import { registerArtifactChannel } from '../mdm/policies/artifacts';
 import { amapiArtifactProvider } from '../android/policies/channel';
 
@@ -97,6 +101,15 @@ export function registerAndroidModule(): void {
   if (cfg.mode === 'off') return;
 
   registerAndroidJobs();
+  // Lot AN-P (§11.4, COH-22): the Android handler of the freeze list (actions.edge-freeze-sync, the single queue of the
+  // freeze): a freeze ends the running kiosk exits at once (the safest state first, AN-G1 correction), an unfreeze
+  // submits again the commands it held. Nothing to propagate outside the instance: the gateway reads the freeze
+  // before every destructive call (AN15). Idempotent (the job runs it again on a retry).
+  registerFreezeHandler('android', async (tenantId, frozen) => {
+    const actor: DbActor = currentDbContext()?.actor ?? { type: 'job', name: 'actions.edge-freeze-sync' };
+    const n = frozen ? await endKioskExitsOnFreeze(tenantId, true, actor) : await resumeHeldCommands(tenantId, actor);
+    return n > 0 ? 'done' : 'nothing';
+  });
   registerStartTask('android.google-check', async () => {
     freezeAndroidEventHandlers();
     await checkPinnedProject(cfg.projectId);

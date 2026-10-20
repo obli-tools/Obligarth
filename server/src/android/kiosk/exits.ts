@@ -41,7 +41,7 @@ import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { registerGuardedAction, type GuardedActionDef, type GuardExecutionContext, type GuardTargetRefusal, type GuardTargetResult } from '../../guard';
-import { readSettings } from '../../guard/settings';
+import { tenantFrozen } from '../../guard/frozen';
 import { androidSenders } from '../enrollment/senders';
 import { kioskExitPolicyRefusal } from '../policies/push';
 
@@ -190,7 +190,7 @@ export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_
     // A frozen tenant: its running exits end now (the safest state first; the junction AN-P also calls
     // endKioskExitsOnFreeze from the freeze list).
     let frozen = 0;
-    if ((await readSettings(tenantId, trx)).frozen_at) frozen = await closeRunning(trx, tenantId, 'frozen', ctx);
+    if ((await tenantFrozen(trx, tenantId, 'amapi'))) frozen = await closeRunning(trx, tenantId, 'frozen', ctx);
     // Locks still pending past their retry time: the push again (a device with a new running exit waits for it).
     const pending = await trx('android_kiosk_exits as k')
       .join('android_devices as a', function j() { this.on('a.device_id', '=', 'k.device_id').andOn('a.tenant_id', '=', 'k.tenant_id'); })
@@ -206,7 +206,7 @@ export async function expireKioskExits(tenantId: number, actor: DbActor = KIOSK_
     // G1-S1: locks restored under a freeze without their wipe-capable settings, the tenant no longer frozen: the push
     // of the full policy again (every 15 minutes until Google accepts it).
     let wipeRetried = 0;
-    if (!(await readSettings(tenantId, trx)).frozen_at) {
+    if (!(await tenantFrozen(trx, tenantId, 'amapi'))) {
       const withheld = await trx('android_kiosk_exits as k')
         .join('android_devices as a', function j() { this.on('a.device_id', '=', 'k.device_id').andOn('a.tenant_id', '=', 'k.tenant_id'); })
         .where('k.tenant_id', tenantId).whereNotNull('k.wipe_withheld_at').whereNull('a.released_at')
@@ -239,7 +239,7 @@ async function closeRunning(trx: Knex.Transaction, tenantId: number, reason: 'fr
 export async function endKioskExitsOnFreeze(tenantId: number, frozen: boolean, actor: DbActor = KIOSK_EXIT_ACTOR): Promise<number> {
   if (!frozen) return 0;
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
-    if (!(await readSettings(tenantId, trx)).frozen_at) return 0;
+    if (!(await tenantFrozen(trx, tenantId, 'amapi'))) return 0;
     const ctx = audit.fromJob({ name: 'android.kiosk-exit-end', requestId: 'android-kiosk-freeze-' + tenantId + '-' + Date.now() });
     return closeRunning(trx, tenantId, 'frozen', ctx);
   }));
@@ -268,7 +268,7 @@ export async function endKioskExitForWipePolicy(tenantId: number, deviceId: numb
  */
 export async function kioskLockPendingUnderFreeze(tenantId: number, deviceId: number): Promise<boolean> {
   return db.transaction(async (trx) => {
-    if (!(await readSettings(tenantId, trx)).frozen_at) return false;
+    if (!(await tenantFrozen(trx, tenantId, 'amapi'))) return false;
     const pending = await trx('android_kiosk_exits').where({ tenant_id: tenantId, device_id: deviceId }).whereNotNull('ended_at')
       .whereNull('lock_restored_at').whereNot('end_reason', 'device_left').first('id');
     if (!pending) return false;

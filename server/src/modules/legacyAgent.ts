@@ -1,4 +1,6 @@
 import { guardReviewerPolicy } from '../guard/approvals';
+import { registerFreezeMirror } from '../guard/frozen';
+import { appleEdgeFrozen } from '../apple/commands/bus';
 import { registerBootTask } from '../lifecycle';
 import { registerApprovalRequestType } from '../services/approval.service';
 import { registerRestrictableActions } from '../services/restriction.service';
@@ -36,6 +38,8 @@ export function registerLegacyAgentModule(): void {
   registered = true;
 
   registerServerKeySecretName();
+  // The queue of the bridge agent is held by a freeze set at apple-edge too (decision PONT-R; guard/frozen.ts, lot AN-P).
+  registerFreezeMirror('legacy_agent', appleEdgeFrozen);
   registerLegacyAgentAuditActions();
   registerLegacyAgentJobs();
   // Guarded actions first: their keys open the category of the matrix.

@@ -12,7 +12,7 @@ import {
 import { db } from '../../db';
 import { currentDbContext } from '../../db/context';
 import { autoFreeze } from '../../guard/freeze';
-import { readSettings } from '../../guard/settings';
+import { tenantFrozen } from '../../guard/frozen';
 import { policyHasWipeSettings } from '../../mdm/android/overlay';
 import { logger } from '../../utils/logger';
 import { raiseAndroidPlatformAlert, raiseAndroidTenantAlert } from '../alerts';
@@ -161,8 +161,7 @@ export class GoogleGateway implements AndroidGateway {
 
   private frozen(e: AndroidEnterpriseRef): Promise<boolean> {
     return db.transaction(async (trx) => {
-      const s = await readSettings(e.tenantId, trx);
-      return !!s.frozen_at;
+      return tenantFrozen(trx, e.tenantId, 'amapi');
     });
   }
 

@@ -19,7 +19,7 @@ import { audit } from '../../audit';
 import type { AuditEntryInput, AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
-import { readSettings } from '../../guard/settings';
+import { tenantFrozen } from '../../guard/frozen';
 import { lateCancelOf } from '../../guard/types';
 import { vault } from '../../vault';
 import { readEnterprise } from '../enterprises/registry';
@@ -260,7 +260,7 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
       .whereIn('identifier', names).pluck('identifier') as string[];
     if (known.length !== names.length) throw new AndroidCommandError(422, 'invalidCommandParams', 'app_not_managed');
   }
-  const frozen = spec.destructive && !!(await readSettings(tenantId, trx)).frozen_at;
+  const frozen = spec.destructive && (await tenantFrozen(trx, tenantId, 'amapi'));
 
   const targets = await targetRows(trx, tenantId, deviceIds);
   const lostModeBlock = req.type === 'START_LOST_MODE' ? await lostModeBlocked(trx, tenantId, deviceIds) : new Set<number>();

@@ -1,11 +1,12 @@
 // Catalogue of the guarded actions (docs: audit-durci §10.2) and the
 // providers the modules plug in: the size of a tenant's active fleet, the
-// ownership of its devices, the freeze of its commands at apple-edge.
+// ownership of its devices, what the modules do at a freeze (apple-edge, the
+// kiosk exits and the held commands of Android: a list since lot AN-P).
 // Registered before anything starts (index.ts: the modules' registration),
 // no I/O.
 import { isActionKey, registerRestrictableActions } from '../services/restriction.service';
 import {
-  MANAGEMENT_CHANNELS, type EdgeFreezeHandler, type FleetSizeProvider, type GuardedActionDef, type OwnershipProvider,
+  MANAGEMENT_CHANNELS, type EdgeFreezeHandler, type FleetSizeProvider, type FreezeHandler, type GuardedActionDef, type OwnershipProvider,
 } from './types';
 
 const FAMILIES = new Set(['device_records', 'device_destruction', 'device_control', 'device_privacy']);
@@ -15,7 +16,7 @@ const OWNERSHIPS = new Set(['personal', 'corporate_personal', 'corporate']);
 const actions = new Map<string, GuardedActionDef<any>>();
 let fleetSizeProvider: FleetSizeProvider | null = null;
 let ownershipProvider: OwnershipProvider | null = null;
-let edgeFreezeHandler: EdgeFreezeHandler | null = null;
+const freezeHandlers: Array<{ name: string; handler: FreezeHandler }> = [];
 
 const isDelay = (n: unknown): boolean => Number.isInteger(n) && (n as number) >= 0 && (n as number) <= 86_400;
 
@@ -86,13 +87,25 @@ export function ownershipOf(): OwnershipProvider | null {
   return ownershipProvider;
 }
 
-/** The freeze of a tenant's commands at apple-edge (lot B). One handler;
- *  without one (APPLE_EDGE_MODE=off, lot A), the freeze stays in the brain. */
-export function registerEdgeFreezeHandler(fn: EdgeFreezeHandler): void {
-  if (edgeFreezeHandler) throw new Error('edge freeze handler registered twice');
-  edgeFreezeHandler = fn;
+/** The name of the handler of the freeze at apple-edge (registerEdgeFreezeHandler). */
+export const EDGE_FREEZE_HANDLER = 'apple-edge';
+
+/** What a module does at a freeze or an unfreeze of a tenant (android-amapi §22.6, COH-22): one list, run in
+ *  registration order after the commit and by the single job actions.edge-freeze-sync (never a queue per channel).
+ *  Without any (APPLE_EDGE_MODE=off and ANDROID_MODE=off), the freeze stays in the brain. */
+export function registerFreezeHandler(name: string, handler: FreezeHandler): void {
+  if (!/^[a-z][a-z0-9_.-]{0,40}$/.test(name)) throw new Error('freeze handler: invalid name');
+  if (freezeHandlers.some((h) => h.name === name)) throw new Error(`freeze handler ${name} registered twice`);
+  freezeHandlers.push({ name, handler });
 }
 
-export function edgeFreezeOf(): EdgeFreezeHandler | null {
-  return edgeFreezeHandler;
+/** The freeze of a tenant's commands at apple-edge (lot B): the handler 'apple-edge' of the list (kept as an alias). */
+export function registerEdgeFreezeHandler(fn: EdgeFreezeHandler): void {
+  if (freezeHandlers.some((h) => h.name === EDGE_FREEZE_HANDLER)) throw new Error('edge freeze handler registered twice');
+  registerFreezeHandler(EDGE_FREEZE_HANDLER, fn);
+}
+
+/** The handlers of the freeze, in registration order. */
+export function freezeHandlersOf(): ReadonlyArray<{ name: string; handler: FreezeHandler }> {
+  return freezeHandlers;
 }

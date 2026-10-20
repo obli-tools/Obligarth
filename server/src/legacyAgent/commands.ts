@@ -9,7 +9,10 @@ import { audit, type AuditWriteContext } from '../audit';
 import type { DbActor } from '../db/context';
 import { lateCancelOf } from '../guard/types';
 import { AppError } from '../middleware/errorHandler';
-import { tenantFrozen } from '../apple/commands/bus';
+import { tenantFrozen as frozenFor } from '../guard/frozen';
+
+/** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
+const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
 
 // =============================================================================
 // The queue of the Android bridge agents (docs: agent-pont-android §5.1 to

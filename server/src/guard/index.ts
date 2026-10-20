@@ -1,7 +1,7 @@
 // The guard engine against mass erasure (docs: audit-durci §10, PLT-11,
 // D23-D24): the only way to a destructive action. A module declares its
 // guarded actions (registerGuardedAction) and the providers the engine
-// reads (fleet size, ownership, freeze at apple-edge); routes and modules
+// reads (fleet size, ownership, the handlers of a freeze); routes and modules
 // request an action through guard.request(req, input). Registration in the
 // core's registries: module.ts (registerGuardModule, called by index.ts).
 import { request, preview, GuardStepUpError } from './engine';
@@ -9,6 +9,7 @@ import { guardMetrics } from './metrics';
 
 export {
   registerGuardedAction, registerFleetSizeProvider, registerOwnershipProvider, registerEdgeFreezeHandler,
+  registerFreezeHandler,
   guardedActionDef, guardedActionList,
 } from './catalog';
 export { GuardStepUpError } from './engine';
@@ -16,7 +17,7 @@ export { registerGuardModule } from './module';
 export { createGuardRouter } from './routes';
 export type {
   GuardedActionDef, GuardExecutionContext, GuardTargetRefusal, GuardTargetResult, FleetSizeProvider, OwnershipProvider,
-  EdgeFreezeHandler, DeviceOwnership, ManagementChannel,
+  EdgeFreezeHandler, FreezeHandler, DeviceOwnership, ManagementChannel,
 } from './types';
 
 export const guard = {

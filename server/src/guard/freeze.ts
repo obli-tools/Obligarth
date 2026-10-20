@@ -4,15 +4,17 @@
 // matters); automatic on anomaly (§10.9). The freeze is protective: it never
 // depends on the journal (entries written after the commit, P4). Scheduled
 // actions are paused (never resumed by themselves: 24 h, then expired).
-// apple-edge stops delivering the tenant's commands (lot B handler; without
-// one the freeze stays in the brain). Unfreezing goes through an approval
+// The handlers of the modules run after the commit (one list since lot AN-P):
+// apple-edge stops delivering the tenant's commands (lot B), Android ends the
+// running kiosk exits (and, at the unfreeze, submits its held commands
+// again); without any, the freeze stays in the brain. Unfreezing goes through an approval
 // (guard.unfreeze, floor 'restricted', the examination policy of §10.4).
 import { audit, type AuditWriteContext } from '../audit';
 import { db } from '../db';
 import { asTenant, type DbActor } from '../db/context';
 import { logger } from '../utils/logger';
 import { safeErr } from '../jobs/errors';
-import { edgeFreezeOf } from './catalog';
+import { EDGE_FREEZE_HANDLER, freezeHandlersOf } from './catalog';
 import { cancelJob, edgeFreezeSyncJob } from './jobs';
 import { guardMetrics } from './metrics';
 import { alertTenantAndMsp, emitState, notifyAction } from './notify';
@@ -126,30 +128,40 @@ export async function unfreezeTenant(tenantId: number, ctx: AuditWriteContext, o
 }
 
 /**
- * The freeze at apple-edge (§10.7; review AUD-RC3): the handler of the
- * integration (lot B), called after the commit; on a failure, the job
- * actions.edge-freeze-sync retries every minute and alerts. No handler
- * (lot A, APPLE_EDGE_MODE=off) or a tenant apple-edge does not know yet: no
+ * The handlers of the freeze (§10.7; review AUD-RC3; android-amapi §11.4, COH-22): apple-edge (lot B), Android (lot
+ * AN-P), in registration order, after the commit. A handler that fails does not stop the others; the job
+ * actions.edge-freeze-sync (the single queue of the freeze, whatever the channel) runs the list again every minute
+ * and alerts. No handler (APPLE_EDGE_MODE=off and ANDROID_MODE=off) or a tenant apple-edge does not know yet: no
  * alert, its provisioning carries the freeze over.
  */
 export async function syncEdge(tenantId: number, frozen: boolean): Promise<'done' | 'no_edge_tenant' | 'apple_edge_off' | 'queued'> {
-  const handler = edgeFreezeOf();
-  if (!handler) return 'apple_edge_off';
-  try {
-    return await handler(tenantId, frozen);
-  } catch (err) {
-    logger.warn({ err: safeErr(err), tenantId, frozen }, 'guard: apple-edge freeze failed, retried by actions.edge-freeze-sync');
+  const handlers = freezeHandlersOf();
+  if (!handlers.length) return 'apple_edge_off';
+  const failed: string[] = [];
+  let edge: 'done' | 'no_edge_tenant' | null = null;
+  for (const h of handlers) {
     try {
-      await edgeFreezeSyncJob().send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId });
-    } catch (sendErr) {
-      logger.error({ err: safeErr(sendErr), tenantId }, 'guard: actions.edge-freeze-sync not queued');
-      await alertTenantAndMsp(tenantId, {
-        severity: 'critical',
-        title: 'Freeze not applied at apple-edge',
-        message: 'The freeze of the commands could not be sent to apple-edge and could not be retried: check the job runtime.',
-        stableKey: `guard:edge-freeze:${tenantId}`,
-      });
+      const r = await h.handler(tenantId, frozen);
+      if (h.name === EDGE_FREEZE_HANDLER) edge = r === 'no_edge_tenant' ? 'no_edge_tenant' : 'done';
+    } catch (err) {
+      failed.push(h.name);
+      logger.warn({ err: safeErr(err), tenantId, frozen, handler: h.name }, 'guard: freeze handler failed, retried by actions.edge-freeze-sync');
     }
-    return 'queued';
   }
+  if (!failed.length) return edge ?? 'done';
+  try {
+    await edgeFreezeSyncJob().send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId });
+  } catch (sendErr) {
+    logger.error({ err: safeErr(sendErr), tenantId }, 'guard: actions.edge-freeze-sync not queued');
+    const edgeFailed = failed.includes(EDGE_FREEZE_HANDLER);
+    await alertTenantAndMsp(tenantId, {
+      severity: 'critical',
+      title: edgeFailed ? 'Freeze not applied at apple-edge' : 'Freeze not applied by every module',
+      message: edgeFailed
+        ? 'The freeze of the commands could not be sent to apple-edge and could not be retried: check the job runtime.'
+        : `The freeze could not be applied by ${failed.join(', ')} and could not be retried: check the job runtime.`,
+      stableKey: edgeFailed ? `guard:edge-freeze:${tenantId}` : `guard:freeze-sync:${tenantId}`,
+    });
+  }
+  return 'queued';
 }

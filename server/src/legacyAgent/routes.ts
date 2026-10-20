@@ -1,3 +1,4 @@
+import type { Knex } from 'knex';
 import { randomBytes } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
@@ -7,7 +8,7 @@ import {
   type DeviceCapability, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated, type LegacyAgentTokenView,
 } from '@obligarth/shared';
-import { tenantFrozen } from '../apple/commands/bus';
+import { tenantFrozen as frozenFor } from '../guard/frozen';
 import { audit } from '../audit';
 import { config } from '../config';
 import { db } from '../db';
@@ -27,6 +28,9 @@ import { cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommand
 import { looksLikeApk, receiveApk } from './packages';
 import { currentServerKey } from './serverKey';
 import { sha256Hex } from './signature';
+
+/** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
+const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
 
 // =============================================================================
 // Console API of the bridge agent (docs: agent-pont-android §7), mounted at
