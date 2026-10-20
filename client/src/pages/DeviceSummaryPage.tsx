@@ -323,7 +323,7 @@ export function DeviceSummaryPage() {
       {tab === 'certificates' && <DeviceCertificatesTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.certificates} />}
       {tab === 'commands' && <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />}
       {tab === 'history' && <DeviceHistoryTab deviceId={device.id} />}
-      {tab === 'android' && isAmapi && <AndroidDeviceTab deviceId={device.id} />}
+      {tab === 'android' && isAmapi && <AndroidDeviceTab deviceId={device.id} canAct={canWrite} />}
       {tab === 'actions' && (isAmapi
         ? <AndroidDeviceActions deviceId={device.id} ownership={device.ownership} canAct={canWrite} onQueued={() => { void reload(); }} />
         : <DeviceActionsTab deviceId={device.id} managed={managed} canAct={canWrite} onQueued={() => { void reload(); }} />)}

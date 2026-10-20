@@ -370,7 +370,10 @@ function JsonDialog({ open, onClose, section, editable, onSave }: {
         throw new Error(t('android.policy.jsonShape') || 'The section is { "fragment": { … }, "applications": [ … ] }');
       }
       onSave(Object.keys(v.fragment).length === 0 && !(v.applications?.length) ? undefined : v);
-    } catch (err) { setError((err as Error).message); }
+    } catch (err) {
+      // The browser's own SyntaxError text is never shown (an untranslated literal): the console's message instead.
+      setError(err instanceof SyntaxError ? (t('android.policy.jsonSyntax') || 'Not valid JSON: fix it before applying.') : (err as Error).message);
+    }
   };
   return (
     <Modal open={open} onClose={onClose} size="2xl" title={t('android.policy.jsonTitle') || 'Android section as JSON'}

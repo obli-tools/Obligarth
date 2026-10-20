@@ -22,7 +22,7 @@ type Tone = 'green' | 'gray' | 'blue' | 'amber' | 'red';
 const POLICY_TONE: Record<AndroidDeviceView['policy']['state'], Tone> = { applied: 'green', delivering: 'blue', pending: 'blue', error: 'red' };
 const APPROVAL_TONE: Record<AndroidDeviceView['approvalState'], Tone> = { none: 'gray', pending: 'amber', approved: 'green', rejected: 'red' };
 
-export function AndroidDeviceTab({ deviceId }: { deviceId: number }) {
+export function AndroidDeviceTab({ deviceId, canAct }: { deviceId: number; canAct: boolean }) {
   const { t } = useTranslation();
   const [d, setD] = useState<AndroidDeviceView | null>(null);
   const [kiosk, setKiosk] = useState<AndroidKioskState | null>(null);
@@ -96,12 +96,12 @@ export function AndroidDeviceTab({ deviceId }: { deviceId: number }) {
         )}
       </section>
 
-      {kiosk?.dedicated && <KioskPanel deviceId={deviceId} state={kiosk} onChanged={load} />}
+      {kiosk?.dedicated && <KioskPanel deviceId={deviceId} state={kiosk} canAct={canAct} onChanged={load} />}
     </div>
   );
 }
 
-function KioskPanel({ deviceId, state, onChanged }: { deviceId: number; state: AndroidKioskState; onChanged: () => void }) {
+function KioskPanel({ deviceId, state, canAct, onChanged }: { deviceId: number; state: AndroidKioskState; canAct: boolean; onChanged: () => void }) {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
   const exit = state.exit;
@@ -116,7 +116,8 @@ function KioskPanel({ deviceId, state, onChanged }: { deviceId: number; state: A
         <div className="flex flex-wrap items-center gap-2">
           <StateBadge tone="amber" label={t('android.kiosk.exitRunning') || 'temporary exit running'} />
           <span className="text-xs text-text-muted">{t('android.kiosk.until', { at: dateOf(exit.expiresAt) }) || `until ${dateOf(exit.expiresAt)}`}</span>
-          <Button size="sm" variant="secondary" disabled={busy} onClick={() => void end()}>{t('android.kiosk.endNow') || 'End now'}</Button>
+          {/* Ending the exit takes write access and mdm:lock on the device (server): offered to whoever may act only. */}
+          {canAct && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void end()}>{t('android.kiosk.endNow') || 'End now'}</Button>}
         </div>
       ) : <p className="text-text-secondary">{t('android.kiosk.locked') || 'The device is held in its kiosk.'}</p>}
       {state.lockPending && <p className="text-xs text-amber-400">{t('android.kiosk.lockPending') || 'The policy that locks the kiosk again is not applied yet.'}</p>}
@@ -197,6 +198,8 @@ export function AndroidDeviceActions({ deviceId, ownership, canAct, onQueued }: 
     if (!a) return;
     setParamsFor(null);
     const params = paramsOf(a);
+    // The typed values (a new password among them) do not stay in the state of the menu once the request is built.
+    setValues({});
     if (a.guarded) setGuard({ actionKey: a.actionKey, params });
     else void send(a, params);
   };
@@ -234,10 +237,10 @@ export function AndroidDeviceActions({ deviceId, ownership, canAct, onQueued }: 
       })}
       {!canAct && <p className="text-xs text-text-muted">{t('apple.actions.readOnly') || 'You can read this device but not act on it.'}</p>}
 
-      <Modal open={paramsFor !== null} onClose={() => setParamsFor(null)} size="sm" title={paramsFor ? actionLabel(paramsFor.type) : ''}
+      <Modal open={paramsFor !== null} onClose={() => { setParamsFor(null); setValues({}); }} size="sm" title={paramsFor ? actionLabel(paramsFor.type) : ''}
         footer={(
           <>
-            <Button variant="secondary" onClick={() => setParamsFor(null)}>{t('common.cancel') || 'Cancel'}</Button>
+            <Button variant="secondary" onClick={() => { setParamsFor(null); setValues({}); }}>{t('common.cancel') || 'Cancel'}</Button>
             <Button disabled={!paramsOk} onClick={next}>{t('common.next') || 'Next'}</Button>
           </>
         )}>
