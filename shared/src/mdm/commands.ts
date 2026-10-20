@@ -33,6 +33,8 @@ export const MDM_GUARDED_REQUEST_TYPES: Readonly<Record<string, string>> = {
 export interface MdmTargetView {
   commandId: string;
   deviceId: number;
+  /** The platform of a command that is not Apple's ('android': an AMAPI command, android-amapi §11.5); absent for Apple. */
+  platform?: string;
   requestType: string;
   origin: string;
   state: MdmTargetState;
@@ -56,6 +58,8 @@ export interface MdmTargetView {
 export interface MdmCommandView {
   id: string;
   batchId: string | null;
+  /** The platform of a command that is not Apple's ('android'); absent for Apple. */
+  platform?: string;
   requestType: string;
   origin: string;
   createdAt: string;

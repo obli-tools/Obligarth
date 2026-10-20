@@ -2073,7 +2073,10 @@
         "erase_device": "Erase device",
         "remove_management": "Remove management",
         "device_lock": "Lock device",
-        "lost_mode_enable": "Enable lost mode"
+        "lost_mode_enable": "Enable lost mode",
+        "reset_password": "Reset the password (Android)",
+        "relinquish_ownership": "Relinquish ownership (Android)",
+        "android_disable": "Disable or enable the device (Android)"
       },
       "legacy_agent": {
         "erase_device": "Erase Android agent device",
@@ -3590,7 +3593,19 @@
     "enrollmentNotFound": "Enrollment not found.",
     "appleTopicMissing": "This tenant has no active push certificate yet.",
     "policyTargetNotWritable": "You cannot publish this policy: it is assigned to a target you cannot write. Ask an administrator of the tenant.",
-    "groupHasSubgroups": "This group has subgroups: move them first, then delete the group."
+    "groupHasSubgroups": "This group has subgroups: move them first, then delete the group.",
+    "commandNotInError": "Only a command in error can be retried.",
+    "commandAlreadyPending": "A command of this type is already pending for this device.",
+    "commandNotHeld": "This command is not held by the last-resort cap.",
+    "invalidInput": "Invalid input.",
+    "androidNotLinked": "No Android enterprise is linked to this tenant.",
+    "guardActionNotExecuting": "The guarded action is not being executed.",
+    "guardActionMismatch": "This command does not belong to the guarded action.",
+    "guardActionCancelled": "The cancellation of the guarded action was requested.",
+    "guardActionUnknown": "Unknown guarded action.",
+    "invalidCommandParams": "Invalid command parameters.",
+    "androidUnknownCommand": "Unknown Android command.",
+    "androidGoogleUnavailable": "Google did not confirm yet; the request will be retried."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",

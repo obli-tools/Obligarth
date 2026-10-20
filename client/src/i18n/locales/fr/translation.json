@@ -2073,7 +2073,10 @@
         "erase_device": "Effacer l'appareil",
         "remove_management": "Retirer la gestion",
         "device_lock": "Verrouiller l'appareil",
-        "lost_mode_enable": "Activer le mode perdu"
+        "lost_mode_enable": "Activer le mode perdu",
+        "reset_password": "Réinitialiser le mot de passe (Android)",
+        "relinquish_ownership": "Rendre la propriété (Android)",
+        "android_disable": "Désactiver ou réactiver l'appareil (Android)"
       },
       "legacy_agent": {
         "erase_device": "Effacer l'appareil (agent Android)",
@@ -3590,7 +3593,19 @@
     "enrollmentNotFound": "Enrôlement introuvable.",
     "appleTopicMissing": "Ce tenant n'a pas encore de certificat push actif.",
     "policyTargetNotWritable": "Vous ne pouvez pas publier cette politique : elle est affectée à une cible sur laquelle vous n'avez pas l'écriture. Demandez à un administrateur du tenant.",
-    "groupHasSubgroups": "Ce groupe a des sous-groupes : déplacez-les d'abord, puis supprimez le groupe."
+    "groupHasSubgroups": "Ce groupe a des sous-groupes : déplacez-les d'abord, puis supprimez le groupe.",
+    "commandNotInError": "Seule une commande en erreur peut être relancée.",
+    "commandAlreadyPending": "Une commande de ce type est déjà en attente pour cet appareil.",
+    "commandNotHeld": "Cette commande n'est pas retenue par le plafond de dernier recours.",
+    "invalidInput": "Saisie invalide.",
+    "androidNotLinked": "Aucune entreprise Android n'est liée à ce tenant.",
+    "guardActionNotExecuting": "L'action protégée n'est pas en cours d'exécution.",
+    "guardActionMismatch": "Cette commande n'appartient pas à l'action protégée.",
+    "guardActionCancelled": "L'annulation de l'action protégée a été demandée.",
+    "guardActionUnknown": "Action protégée inconnue.",
+    "invalidCommandParams": "Paramètres de commande invalides.",
+    "androidUnknownCommand": "Commande Android inconnue.",
+    "androidGoogleUnavailable": "Google n'a pas encore confirmé ; la demande sera reprise."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",

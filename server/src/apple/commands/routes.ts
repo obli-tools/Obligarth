@@ -29,6 +29,7 @@ import { commandSpecList, commandSpecOrNull, guardedActionOf, REMOVE_MANAGEMENT_
 import { refreshInventoryNow } from './inventory';
 import { PlistError, plistFromJson, type PlistDict } from './plist';
 import { findSecrets, type SecretFinding } from './sensitive';
+import { queueChannelOfDevice, queueChannelOfPlatform } from '../../mdm/registry/queueChannels';
 
 // =============================================================================
 // Console API of the command queue (docs: integration-apple-edge §8.12),
@@ -51,6 +52,11 @@ import { findSecrets, type SecretFinding } from './sensitive';
 // The guarded types (erase, lock, lost mode, removal of the enrollment profile)
 // are refused here (409 guardedActionRequired): they go through the guard
 // engine. Enqueueing never needs apple-edge (the submission is a job).
+// The queue of every platform (android-amapi §11.5, lot AN-D): the lists and the
+// views show the commands of the other platforms too (field platform, absent
+// for Apple); a device of another channel (amapi) and a command of another
+// platform go to the handlers its module registered (registerQueueChannel):
+// creation, cancellation, relaunch (for Android: a new command for one in error).
 // =============================================================================
 
 const router = Router();
@@ -188,6 +194,7 @@ function targetView(r: Record<string, any>): MdmTargetView {
     rejectCode: r.reject_code ?? null, lastStatus: r.last_status ?? null, holdReason: r.hold_reason ?? null,
     createdAt: iso(r.created_at) as string, notBefore: iso(r.not_before), expiresAt: iso(r.expires_at) as string,
     // queued_at is written when the submission starts: it is the time of the queueing only once apple-edge took the command.
+    ...(r.platform && r.platform !== 'apple' ? { platform: String(r.platform) } : {}),
     queuedAt: state === 'pending' ? null : iso(r.queued_at), deliveredAt: iso(r.delivered_at), completedAt: iso(r.completed_at),
     pushCount: Number(r.push_count ?? 0), pushedAt: iso(r.pushed_at), pushOutcome: r.push_outcome ?? null,
     errorChain: Array.isArray(r.error_chain) ? r.error_chain.slice(0, 20).map((e: Record<string, unknown>) => ({
@@ -200,7 +207,7 @@ function targetView(r: Record<string, any>): MdmTargetView {
 }
 
 const TARGET_COLUMNS = ['t.command_id', 't.device_id', 't.state', 't.reject_code', 't.last_status', 't.hold_reason', 't.queued_at', 't.delivered_at',
-  't.completed_at', 't.push_count', 't.pushed_at', 't.push_outcome', 't.error_chain', 'c.request_type', 'c.origin', 'c.created_at', 'c.not_before',
+  't.completed_at', 't.push_count', 't.pushed_at', 't.push_outcome', 't.error_chain', 'c.platform', 'c.request_type', 'c.origin', 'c.created_at', 'c.not_before',
   'c.expires_at', 'c.requested_by', 'c.reason', 'u.username as requested_by_name'];
 
 function targetsQuery(tenantId: number) {
@@ -223,7 +230,8 @@ async function commandView(tenantId: number, row: Record<string, any>): Promise<
   const counts = await db('mdm_command_targets').where({ tenant_id: tenantId, command_id: row.id }).groupBy('state')
     .select('state').count('* as n') as unknown as Array<{ state: MdmTargetState; n: string | number }>;
   return {
-    id: String(row.id).toLowerCase(), batchId: row.batch_id ? String(row.batch_id).toLowerCase() : null, requestType: row.request_type, origin: row.origin,
+    id: String(row.id).toLowerCase(), batchId: row.batch_id ? String(row.batch_id).toLowerCase() : null,
+    ...(row.platform && row.platform !== 'apple' ? { platform: String(row.platform) } : {}), requestType: row.request_type, origin: row.origin,
     createdAt: iso(row.created_at) as string, notBefore: iso(row.not_before), expiresAt: iso(row.expires_at) as string, submitState: row.submit_state,
     reason: row.reason ?? null, ticket: row.ticket ?? null,
     requestedBy: row.requested_by ? { id: Number(row.requested_by), name: row.requested_by_name ?? `#${row.requested_by}` } : null,
@@ -232,7 +240,7 @@ async function commandView(tenantId: number, row: Record<string, any>): Promise<
   };
 }
 
-const COMMAND_COLUMNS = ['c.id', 'c.batch_id', 'c.request_type', 'c.origin', 'c.created_at', 'c.not_before', 'c.expires_at', 'c.submit_state', 'c.reason',
+const COMMAND_COLUMNS = ['c.id', 'c.batch_id', 'c.platform', 'c.request_type', 'c.origin', 'c.created_at', 'c.not_before', 'c.expires_at', 'c.submit_state', 'c.reason',
   'c.ticket', 'c.requested_by', 'c.approval_id', 'c.guard_action_uuid', 'u.username as requested_by_name'];
 
 /** The devices of the tenant the caller sees ('all' for an administrator). */
@@ -280,6 +288,9 @@ router.post('/devices/:id/commands', enqueueLimiter, async (req, res, next) => {
     // The device first: one the caller does not see answers 404 whatever the request says (no oracle on a type or
     // a parameter); then the type, then the capability the type needs on this device (403).
     const id = await deviceOf(req);
+    // A device of another channel goes to its module (lot AN-D: amapi), with its own types, capabilities and rules.
+    const channel = queueChannelOfDevice(await channelOf(req.tenantId!, id));
+    if (channel) { await channel.create(req, res, id); return; }
     const b = body(CommandBody, req);
     const { spec, params } = consoleSpec(b.requestType, b.params);
     await requireCapability(req, id, spec.capability as DeviceCapability);
@@ -506,6 +517,21 @@ router.get('/commands/:commandId', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+/** The management channel of a device of the tenant. */
+async function channelOf(tenantId: number, deviceId: number): Promise<string | null> {
+  const d = await db('devices').where({ tenant_id: tenantId, id: deviceId }).first('management_channel') as { management_channel: string } | undefined;
+  return d?.management_channel ?? null;
+}
+
+/** A command of another platform the caller sees (404 otherwise), with the handlers of its module; null for Apple. */
+async function otherPlatform(req: Request): Promise<{ channel: NonNullable<ReturnType<typeof queueChannelOfPlatform>>; commandId: string } | null> {
+  const { row } = await commandOf(req);
+  if (!row.platform || row.platform === 'apple') return null;
+  const channel = queueChannelOfPlatform(row.platform);
+  if (!channel) throw new AppError(404, 'Command not found');
+  return { channel, commandId: String(row.id).toLowerCase() };
+}
+
 /** The targets of a request on a command: those asked among the visible ones, on which the caller holds the
  *  capability of the type (or every visible one for the author of the command, when `authorToo`). */
 async function actionableTargets(req: Request, authorToo: boolean): Promise<{ row: Record<string, any>; deviceIds: number[] }> {
@@ -529,6 +555,8 @@ async function actionableTargets(req: Request, authorToo: boolean): Promise<{ ro
 // POST /api/apple/commands/:commandId/cancel
 router.post('/commands/:commandId/cancel', async (req, res, next) => {
   try {
+    const other = await otherPlatform(req);
+    if (other) { await other.channel.cancel(req, res, other.commandId); return; }
     const { row, deviceIds } = await actionableTargets(req, true);
     const tenantId = req.tenantId!;
     const auditCtx = await audit.fromRequest(req, tenantId);
@@ -540,6 +568,8 @@ router.post('/commands/:commandId/cancel', async (req, res, next) => {
 // POST /api/apple/commands/:commandId/relaunch
 router.post('/commands/:commandId/relaunch', enqueueLimiter, async (req, res, next) => {
   try {
+    const other = await otherPlatform(req);
+    if (other) { await other.channel.relaunch(req, res, other.commandId); return; }
     const { row, deviceIds } = await actionableTargets(req, false);
     const tenantId = req.tenantId!;
     if (await frozen(tenantId)) throw new AppError(423, 'The commands of this tenant are frozen', 'tenantFrozen');
