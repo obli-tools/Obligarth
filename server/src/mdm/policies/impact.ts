@@ -5,6 +5,7 @@ import {
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
 import { validateAndroidSection } from '../android/validate';
+import { androidKioskLockArtifact } from '../android/kiosk';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { fleetShareFloor } from '../settings';
 import { recentlyTouched } from './changeLedger';
@@ -93,6 +94,9 @@ export interface ImpactResult {
 }
 
 const KIOSK_LOCK_TYPE = 'com.apple.app.lock';
+
+/** An Android ApplicationPolicy whose installType is BLOCKED (the app is uninstalled). */
+const isBlockedApp = (v: unknown): boolean => !!v && typeof v === 'object' && (v as { installType?: unknown }).installType === 'BLOCKED';
 
 type Target = { scope: 'tenant' | 'group' | 'device'; id: number | null };
 
@@ -338,6 +342,24 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       removal = true;
       if (x.type === KIOSK_LOCK_TYPE) artifacts.kioskLockChanges++;
       if (x.kind === 'app') artifacts.appRemovals++;
+    }
+    // An Android device (lot AN-C1, raccords of AN-E1 and AN-G1; DM23): its settings all go into one artifact,
+    // amapi:policy, counted above as one install when it changes. The kiosk lock (apps installed as KIOSK or holding
+    // the KIOSK role, Google's launcher, the customization) is compared as a whole: set or changed, a kiosk lock
+    // change; lifted, a removal too. An app that leaves the device's applications[] or becomes BLOCKED is uninstalled
+    // by Google (playStoreMode WHITELIST): an app removal.
+    const bk = androidKioskLockArtifact(b);
+    const ak = androidKioskLockArtifact(a);
+    if ((bk?.sig ?? null) !== (ak?.sig ?? null)) {
+      artifacts.kioskLockChanges++;
+      if (!ak) { artifacts.removals++; removal = true; }
+    }
+    for (const [k, s] of bm) {
+      if (s.kind !== 'android' || !k.startsWith('android:app[') || s.removed || s.availability.status !== 'available') continue;
+      const n = am.get(k);
+      const gone = !n || n.removed || n.availability.status !== 'available';
+      const blocked = !gone && isBlockedApp(n!.value) && !isBlockedApp(s.value);
+      if (gone || blocked) { artifacts.appRemovals++; artifacts.removals++; removal = true; }
     }
     if (removal) { removalDevices++; removalDeviceIds.push(devices[i].id); }
   }

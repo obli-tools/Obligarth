@@ -136,12 +136,15 @@ export async function loadResources(q: Knex | Knex.Transaction, tenantId: number
   }
   if (appIds.length) {
     const rows = await q('apps').whereIn(['tenant_id', 'id'], appIds).whereNull('archived_at')
-      .select('id', 'tenant_id', 'identifier', 'name', 'supported_platforms', 'store_id') as
-      Array<{ id: number; tenant_id: number; identifier: string; name: string; supported_platforms: string[] | null; store_id: string | null }>;
+      .select('id', 'tenant_id', 'identifier', 'name', 'supported_platforms', 'store_id', 'platform_family') as
+      Array<{ id: number; tenant_id: number; identifier: string; name: string; supported_platforms: string[] | null; store_id: string | null; platform_family: string }>;
     for (const r of rows) {
       resources.set(resourceKey('app', Number(r.tenant_id), Number(r.id)), {
         type: 'app', id: Number(r.id), tenantId: Number(r.tenant_id), versionId: null, name: r.name, contributions: [],
-        app: { identifier: r.identifier, supportedPlatforms: Array.isArray(r.supported_platforms) ? r.supported_platforms : [], storeId: r.store_id ?? null },
+        app: {
+          identifier: r.identifier, supportedPlatforms: Array.isArray(r.supported_platforms) ? r.supported_platforms : [], storeId: r.store_id ?? null,
+          platformFamily: r.platform_family === 'android' ? 'android' : 'apple',
+        },
       });
     }
   }

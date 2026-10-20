@@ -1,7 +1,7 @@
 import type { PolicyConflict, SourceScope } from '@obligarth/shared';
 import { preferredActivityConflicts } from '../android/validate';
 import { appContribution, type Contribution } from './contributions';
-import { resourceKey, type ResolutionAssignment, type ResolvedResource } from './resolver';
+import { androidAppAssignmentContribution, resourceKey, type ResolutionAssignment, type ResolvedResource } from './resolver';
 
 // =============================================================================
 // Conflicts at write time (docs: modele-donnees-mdm §7.7). With one group per
@@ -21,6 +21,7 @@ import { resourceKey, type ResolutionAssignment, type ResolvedResource } from '.
 const SCOPE_OF: Record<ResolutionAssignment['targetScope'], SourceScope> = { tenant: 'tenant', group: 'group', device: 'device' };
 
 export function contributionsFor(res: ResolvedResource, a: ResolutionAssignment): Contribution[] {
+  if (res.type === 'app' && res.app?.platformFamily === 'android') return [androidAppAssignmentContribution(res.app.identifier, a.options ?? {})];
   return res.type === 'app' && res.app ? [appContribution(res.app, a.options ?? {})] : res.contributions;
 }
 

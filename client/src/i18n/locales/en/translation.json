@@ -3513,6 +3513,7 @@
     "impactChanged": "The impact changed since the preview (more devices, more removals, or another reach): preview the change again.",
     "configurationBusy": "Too many changes of the configuration are waiting on this tenant: try again in a moment.",
     "validationFailed": "The content of the policy is not valid.",
+    "androidAppOptionsInvalid": "Invalid options for this Android app: check the installation type and the managed configuration against the app.",
     "policyConflict": "The change would create a conflict: two policies set the same key on the same target with the same priority.",
     "rawProfileInvalid": "The profile cannot be imported.",
     "tooManyTargets": "Too many devices for one request.",

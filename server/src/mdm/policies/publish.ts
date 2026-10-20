@@ -3,7 +3,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   ASSIGNMENT_PRIORITY, POLICY_PUBLISH_REQUEST_TYPE,
-  type AssignmentChange, type PolicyConflict, type PolicyContentV1, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
+  type AssignmentChange, type JsonValue, type PolicyConflict, type PolicyContentV1, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { userActor } from '../../db/context';
@@ -34,6 +34,7 @@ import { requestTenantResolution } from './triggers';
 import { assignableApp, normalizeAppOptions } from '../apps/appCatalogService';
 import { androidContributions } from '../android/contributions';
 import { validateAndroidSection } from '../android/validate';
+import { checkAndroidAppAssignment, holdsSecretValue, sealAndroidAppOptions } from '../../android/apps/assignments';
 
 // =============================================================================
 // Submission, publication and approval (docs: modele-donnees-mdm §7.11,
@@ -318,6 +319,8 @@ export async function requireWriteOnAssignedTargets(q: Knex | Knex.Transaction, 
 export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: number, changes: AssignmentChange[], r: Requester): Promise<AssignmentDelta[]> {
   const deltas: AssignmentDelta[] = [];
   const touchedIds = new Set<number>();
+  /** The Android apps of the batch (lot AN-C1): their options are an ApplicationPolicy, checked by the Android module. */
+  const androidApps = new Set<number>();
   let next = -1;
   // The capability of each kind of resource of the batch, read once.
   const held = new Map<string, boolean>();
@@ -343,7 +346,8 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
         if (!policy) throw new AppError(404, 'Policy not found');
         if (policy.state === 'archived') throw new AppError(409, 'An archived policy is not assigned', 'policyArchived');
       } else {
-        await assignableApp(q, tenantId, resourceTenantId, ch.resourceId!);
+        const app = await assignableApp(q, tenantId, resourceTenantId, ch.resourceId!);
+        if (app.platformFamily === 'android') androidApps.add(app.id);
       }
       const scope = ch.targetScope!;
       const targetId = scope === 'tenant' ? null : (ch.targetId ?? null);
@@ -355,7 +359,9 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
       if (scope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
       if (resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
       if (resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
-      const options = resourceType === 'app' && mode === 'include' ? normalizeAppOptions(ch.options ?? {}) : {};
+      const options = resourceType !== 'app' || mode !== 'include' ? {}
+        : androidApps.has(ch.resourceId!) ? await checkedAndroidOptions(q, tenantId, ch.resourceId!, ch.options ?? {}, i)
+          : normalizeAppOptions(ch.options ?? {});
       const exists = await q('assignments').where({
         tenant_id: tenantId, resource_type: resourceType, resource_tenant_id: resourceTenantId, resource_id: ch.resourceId, target_scope: scope,
       }).where((w) => (targetId === null ? w.whereNull('target_id') : w.where({ target_id: targetId }))).first('id');
@@ -391,11 +397,58 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
     if (before.targetScope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
     if (before.resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
     if (before.resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
+    const android = before.resourceType === 'app' && await isAndroidApp(q, before.resourceTenantId, before.resourceId);
     const options = before.resourceType !== 'app' || mode === 'exclude' ? (mode === 'exclude' ? {} : before.options)
-      : ch.options !== undefined ? normalizeAppOptions(ch.options) : Object.keys(before.options ?? {}).length ? before.options : normalizeAppOptions({});
+      : android ? await checkedAndroidOptions(q, tenantId, before.resourceId, ch.options !== undefined ? ch.options : before.options ?? {}, i)
+        : ch.options !== undefined ? normalizeAppOptions(ch.options) : Object.keys(before.options ?? {}).length ? before.options : normalizeAppOptions({});
     deltas.push({ before, after: { ...before, mode, priority: ch.priority ?? before.priority, options } });
   }
   return deltas;
+}
+
+/** Is the app an Android app of the catalog? */
+async function isAndroidApp(q: Knex | Knex.Transaction, tenantId: number, appId: number): Promise<boolean> {
+  return !!(await q('apps').where({ tenant_id: tenantId, id: appId, platform_family: 'android' }).first('id'));
+}
+
+/**
+ * The options of an assignment of an Android app (android-amapi §9.6; lot AN-C1, raccord of AN-E1): checked against
+ * the app's schema and the tenant's secrets (checkAndroidAppAssignment); 422 androidAppOptionsInvalid with the issues
+ * otherwise. A secret typed in ({"$secretValue"}) is admitted here (the preview) and sealed by sealBatchAndroidOptions
+ * before anything stores the batch.
+ */
+async function checkedAndroidOptions(q: Knex | Knex.Transaction, tenantId: number, appId: number, options: unknown, index: number):
+  Promise<Record<string, JsonValue>> {
+  const c = await checkAndroidAppAssignment(q, tenantId, appId, options);
+  if (!c) throw new AppError(404, 'App not found', 'appNotFound');
+  if (c.issues.length) throw new AppError(422, 'Invalid options of an Android app assignment', 'androidAppOptionsInvalid', { index, issues: c.issues.slice(0, 20) });
+  return (options ?? {}) as Record<string, JsonValue>;
+}
+
+/**
+ * The secrets typed in the options of the batch's Android app assignments moved to the tenant's vault and replaced by
+ * their reference (sealAndroidAppOptions), once, before the batch or its approval request is stored: no value in clear
+ * ever reaches assignments.options, pending_approvals nor a log. Returns the batch as it is then stored.
+ */
+async function sealBatchAndroidOptions(tenantId: number, changes: AssignmentChange[], userId: number): Promise<AssignmentChange[]> {
+  if (!changes.some((c) => c.options && holdsSecretValue(c.options))) return changes;
+  return db.transaction(async (trx) => {
+    const out: AssignmentChange[] = [];
+    for (const ch of changes) {
+      if (!ch.options || !holdsSecretValue(ch.options)) { out.push(ch); continue; }
+      let appId: number | null = null;
+      if (ch.op === 'create' && ch.resourceType === 'app' && ch.resourceId) appId = ch.resourceId;
+      else if (ch.op !== 'create' && ch.id) {
+        const row = await trx('assignments').where({ tenant_id: tenantId, id: ch.id, resource_type: 'app' }).first('resource_id') as { resource_id: number } | undefined;
+        appId = row ? Number(row.resource_id) : null;
+      }
+      const c = appId !== null && await isAndroidApp(trx, tenantId, appId) ? await checkAndroidAppAssignment(trx, tenantId, appId, ch.options) : null;
+      if (!c) throw new AppError(400, 'A secret value is admitted in the options of an Android app only', 'invalidRequest');
+      if (c.issues.length) throw new AppError(422, 'Invalid options of an Android app assignment', 'androidAppOptionsInvalid', { issues: c.issues.slice(0, 20) });
+      out.push({ ...ch, options: await sealAndroidAppOptions(trx, tenantId, ch.options as Record<string, JsonValue>, c.secrets, { userId }) });
+    }
+    return out;
+  });
 }
 
 /** A policy a batch of assignment changes names, as it stands: its published version (null: none yet). */
@@ -481,7 +534,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
   const parsed = ChangesBody.safeParse(rawBody ?? {});
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
   const requester: Requester = { userId: req.session.userId!, isPlatformAdmin: req.session.role === 'admin' };
-  const changes = parsed.data.changes as AssignmentChange[];
+  let changes = parsed.data.changes as AssignmentChange[];
   const visible = await visibleDevices(req);
   /** The batch against the tenant as `q` reads it: its changes, their preview. */
   const look = async (q: Knex | Knex.Transaction): Promise<ImpactResult & { deltas: AssignmentDelta[]; change: ProposedChange }> => {
@@ -498,6 +551,9 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
     return { status: 200, body: { data: body } };
   }
   if (first.impact.conflicts.length) conflictRefusal(first.impact.conflicts);
+  // The secrets typed in for Android apps sealed now, before the batch, its approval request or a log can hold them
+  // (the checks of the first look passed: the batch is about to be stored).
+  changes = await sealBatchAndroidOptions(tenantId, changes, requester.userId);
   let proven = false;
   if ((await requiredLevel(tenantId, first.impact)) === 'sensitive') {
     const refused = await stepUp(req);

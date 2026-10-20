@@ -3513,6 +3513,7 @@
     "impactChanged": "L'impact a changé depuis l'aperçu (plus d'appareils, plus de retraits, ou une autre portée) : refaites l'aperçu du changement.",
     "configurationBusy": "Trop de changements de configuration attendent sur ce tenant : réessayez dans un instant.",
     "validationFailed": "Le contenu de la politique n'est pas valide.",
+    "androidAppOptionsInvalid": "Options invalides pour cette app Android : vérifiez le type d’installation et la configuration gérée au regard de l’app.",
     "policyConflict": "Le changement créerait un conflit : deux politiques fixent la même clé sur la même cible avec la même priorité.",
     "rawProfileInvalid": "Le profil ne peut pas être importé.",
     "tooManyTargets": "Trop d'appareils pour une seule demande.",

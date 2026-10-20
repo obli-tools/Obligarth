@@ -244,11 +244,17 @@ export async function archiveApp(trx: Knex.Transaction, tenantId: number, id: nu
 
 /** The app an assignment names (the tenant's, or the master's library shared with it), not archived. */
 export async function assignableApp(q: Knex | Knex.Transaction, tenantId: number, resourceTenantId: number, id: number):
-  Promise<{ id: number; tenantId: number; identifier: string; name: string }> {
+  Promise<{ id: number; tenantId: number; identifier: string; name: string; platformFamily: 'apple' | 'android' }> {
   const r = await q('apps').where({ id, tenant_id: resourceTenantId }).first('id', 'tenant_id', 'identifier', 'name', 'archived_at', 'platform_family', 'target_tenant_ids') as
     (Pick<AppRow, 'id' | 'tenant_id' | 'identifier' | 'name' | 'archived_at' | 'platform_family'> & { target_tenant_ids: number[] | null }) | undefined;
   if (!r || (resourceTenantId !== tenantId && !(r.target_tenant_ids ?? []).includes(tenantId))) throw new AppError(404, 'App not found', 'appNotFound');
   if (r.archived_at) throw new AppError(409, 'An archived app is not assigned', 'appArchived');
-  if (r.platform_family !== 'apple') throw new AppError(422, 'Only Apple apps are assigned at this stage', 'invalidRequest');
-  return { id: Number(r.id), tenantId: Number(r.tenant_id), identifier: r.identifier, name: r.name };
+  // Lot AN-C1 (raccord of AN-E1): an app of the tenant's own Android catalog is assigned too (never shared from the
+  // master tenant: apps_android_identifier); its options are checked by the Android module (publish.ts).
+  if (r.platform_family === 'android') {
+    if (resourceTenantId !== tenantId) throw new AppError(404, 'App not found', 'appNotFound');
+    return { id: Number(r.id), tenantId: Number(r.tenant_id), identifier: r.identifier, name: r.name, platformFamily: 'android' };
+  }
+  if (r.platform_family !== 'apple') throw new AppError(422, 'Only Apple and Android apps are assigned', 'invalidRequest');
+  return { id: Number(r.id), tenantId: Number(r.tenant_id), identifier: r.identifier, name: r.name, platformFamily: 'apple' };
 }

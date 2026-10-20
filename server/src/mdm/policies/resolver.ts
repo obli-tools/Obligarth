@@ -5,6 +5,18 @@ import {
 } from '@obligarth/shared';
 import type { AppleCatalogView } from '../apple/catalog';
 import { appContribution, type Contribution } from './contributions';
+import { androidAppContribution } from '../../android/apps/appPolicy';
+
+/** The contribution of an assignment of an Android app (android-amapi §9.6): the key android:app[<package>], its
+ *  ApplicationPolicy built from the options of the assignment (checked and sealed by the batch), in amapi:policy.
+ *  Used by the resolution and by the conflicts at write time (conflicts.ts). */
+export function androidAppAssignmentContribution(packageName: string, options: Record<string, JsonValue>): Contribution {
+  const x = androidAppContribution(packageName, options);
+  return {
+    settingKey: x.settingKey, type: 'android', kind: 'android', key: null, instance: null, artifactKey: x.artifactKey,
+    valueHash: x.valueHash, value: x.value, removed: false, variables: x.variables, requiresAsset: false,
+  };
+}
 
 // =============================================================================
 // The resolution (docs: modele-donnees-mdm §7.6), a pure function: for each
@@ -69,7 +81,9 @@ export interface ResolvedResource {
   name: string;
   /** A policy's contributions (an app's are built per assignment, its options being the value). */
   contributions: Contribution[];
-  app?: { identifier: string; supportedPlatforms: string[]; storeId: string | null };
+  /** platformFamily android (lot AN-C1, raccord of AN-E1): an app of the tenant's Android catalog, which brings the key
+   *  android:app[<package>] (delivered in amapi:policy), never apple:app[…]. */
+  app?: { identifier: string; supportedPlatforms: string[]; storeId: string | null; platformFamily?: 'apple' | 'android' };
 }
 
 export interface ResolutionInput {
@@ -282,7 +296,8 @@ const appContributionCache = new WeakMap<ResolutionAssignment, Contribution>();
 function appContributionOf(res: ResolvedResource, a: ResolutionAssignment): Contribution {
   const hit = appContributionCache.get(a);
   if (hit) return hit;
-  const c = appContribution(res.app!, a.options ?? {});
+  const c = res.app!.platformFamily === 'android' ? androidAppAssignmentContribution(res.app!.identifier, a.options ?? {})
+    : appContribution(res.app!, a.options ?? {});
   appContributionCache.set(a, c);
   return c;
 }
