@@ -8,7 +8,8 @@ import {
 } from '../apple/retention';
 import { JobError, registerJob, type JobContext, type JobHandle, type JobResult } from '../jobs';
 import { safeErr } from '../jobs/errors';
-import { deleteDueDeviceRecords, devicesDueForPurge, mdmRetentionRules, type MdmRetentionRule } from '../mdm/inventory/retention';
+import { channelsDueForPurge, deleteDueDeviceRecords, devicesDueForPurge, mdmRetentionRules, type MdmRetentionRule } from '../mdm/inventory/retention';
+import type { ManagementChannel } from '../guard/types';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -24,11 +25,16 @@ import { logger } from '../utils/logger';
 //     each slice its own tenant transaction, abort checked between two,
 //     idempotent: a new run starts again from the database). A rule that
 //     fails does not stop the others; the run fails afterwards.
-//     A device record is deleted ONLY after its enrollments were purged at
+//     A device record is deleted ONLY after the purger of its management
+//     channel purged it outside the brain (registerDevicePurger, lot AN-P,
+//     COH-10), outside any transaction: apple_mdm purges its enrollments at
 //     apple-edge (apple/retention.ts purgeDeviceInEdge, integration §13.3),
-//     outside any transaction; a failure postpones it to the next run, and
-//     without apple-edge (mode off, unreachable, tenant unknown there) no
-//     record is deleted at all;
+//     amapi deletes its own policy at Google and checks the device is gone
+//     there, legacy_agent has nothing outside the brain. A failure postpones
+//     it to the next run; a channel that cannot purge (apple-edge off,
+//     unreachable, tenant unknown there or without its MDM key; no purger
+//     registered) keeps its records, never the other channels' (a tenant
+//     without an MDM key is not skipped for its other channels);
 //   - enrollment.purge-expired (daily): enrollment sessions ended or
 //     abandoned for 30 days, enrollment tokens expired or revoked for 90 days
 //     (integration §4.9).
@@ -62,53 +68,129 @@ async function drain(ctx: JobContext<unknown>, slice: (trx: Knex.Transaction) =>
   }
 }
 
-// ── Device records: purge at apple-edge first (integration §13.3) ───────────
+// ── Device records: purged by the purger of their channel first (COH-10) ────
 
 interface DeviceRecordsResult { deleted: number; deferred: number; skipped: string | null }
 
-/** The records due: purged at apple-edge one by one, then deleted by slice. The slices follow the ids
- *  (a record postponed is passed, never retried in the same run); the next run starts again from the
- *  first record still due. */
-async function purgeDeviceRecords(ctx: JobContext<unknown>, tenantId: number, now: Date): Promise<DeviceRecordsResult> {
-  const due = await ctx.inTenant(() => devicesDueForPurge(db, tenantId, now, 1));
-  if (!due.length) return { deleted: 0, deferred: 0, skipped: null };
-  // APPLE_EDGE_MODE=off: the enrollments cannot be purged at apple-edge, so no record is deleted.
-  if (config.apple.mode !== 'on') return { deleted: 0, deferred: 0, skipped: 'apple_edge_off' };
-  const key = await ctx.inTenant(async () => {
-    const t = await db('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
-    return t?.mdm_key ?? null;
-  });
-  if (!key) return { deleted: 0, deferred: 0, skipped: 'tenant_without_key' };
+/** What a purger needs of the job that runs it (a JobContext of a tenant job, the tenant and the run's instant). */
+export interface DevicePurgeContext {
+  readonly tenantId: number;
+  readonly now: Date;
+  readonly actor: string;
+  readonly requestId: string;
+  readonly signal: AbortSignal;
+  throwIfAborted(): void;
+  /** fn in the tenant's database context, each statement its own lease (no transaction held open). */
+  inTenant<T>(fn: () => Promise<T>): Promise<T>;
+}
 
+/** The purge of the records of one channel outside the brain (android-amapi §22.6, COH-10). */
+export interface DevicePurger {
+  /** null: the channel can purge in this run; else why its records all wait (apple_edge_off, tenant_without_key). */
+  ready?(ctx: DevicePurgeContext): Promise<string | null>;
+  /**
+   * Purges outside the brain the records `deviceIds` (due at ctx.now, of the channel, ascending, one slice): those
+   * `purged` are deleted by the caller (only those still due); `deferred` were postponed to the next run; `stopped`:
+   * why the rest of the channel waits (what was purged before is still deleted).
+   */
+  purge(ctx: DevicePurgeContext, deviceIds: number[]): Promise<{ purged: number[]; deferred: number; stopped: string | null }>;
+}
+
+const purgers = new Map<ManagementChannel, DevicePurger>();
+
+/** The purger of a management channel (one per channel, registered by its module before anything runs). */
+export function registerDevicePurger(channel: ManagementChannel, purger: DevicePurger): void {
+  if (purgers.has(channel)) throw new Error(`device purger of ${channel}: registered twice`);
+  purgers.set(channel, purger);
+}
+
+/** The records due of one channel: purged by its purger by slice, then deleted. The slices follow the ids (a record
+ *  postponed is passed, never retried in the same run); the next run starts again from the first record still due. */
+async function purgeChannelRecords(ctx: JobContext<unknown>, pctx: DevicePurgeContext, channel: string, purger: DevicePurger):
+  Promise<DeviceRecordsResult> {
+  const { tenantId, now } = pctx;
+  const notReady = purger.ready ? await purger.ready(pctx) : null;
+  if (notReady) return { deleted: 0, deferred: 0, skipped: notReady };
   let deleted = 0;
   let deferred = 0;
   let afterId = 0;
   for (;;) {
     ctx.throwIfAborted();
     const cursor = afterId;
-    const ids = await ctx.inTenant(() => devicesDueForPurge(db, tenantId, now, DEVICE_SLICE, cursor));
+    const ids = await ctx.inTenant(() => devicesDueForPurge(db, tenantId, now, DEVICE_SLICE, cursor, channel));
     if (!ids.length) break;
     afterId = ids[ids.length - 1];
-    const purged: number[] = [];
-    let stopped: string | null = null;
-    for (const id of ids) {
-      ctx.throwIfAborted();
-      const r = await purgeDeviceInEdge(ctx, tenantId, key, id, now);
-      if (r === 'purged') purged.push(id);
-      else if (r === 'deferred') deferred++;
-      else { stopped = r; break; }
-    }
-    // What was purged at apple-edge is deleted even when the run stops here.
+    const r = await purger.purge(pctx, ids);
+    const purged = r.purged.filter((id) => ids.includes(id));
+    deferred += r.deferred;
+    // What was purged outside the brain is deleted even when the run stops here.
     if (purged.length) {
       const n = await ctx.withTenant((trx) => deleteDueDeviceRecords(trx, tenantId, now, purged));
       deleted += n;
       deferred += purged.length - n;                   // came back under management meanwhile
     }
-    if (stopped) return { deleted, deferred, skipped: stopped };
+    if (r.stopped) return { deleted, deferred, skipped: r.stopped };
     if (ids.length < DEVICE_SLICE) break;
   }
   return { deleted, deferred, skipped: null };
 }
+
+/** The records due of every channel, each by its purger (registration order, apple_mdm first); a channel without a
+ *  purger keeps its records (no_purger). `skipped`: the first reason a channel waited. */
+async function purgeDeviceRecords(ctx: JobContext<unknown>, tenantId: number, now: Date): Promise<DeviceRecordsResult> {
+  const channels = await ctx.inTenant(() => channelsDueForPurge(db, tenantId, now));
+  if (!channels.length) return { deleted: 0, deferred: 0, skipped: null };
+  const order = [...purgers.keys()] as string[];
+  const rank = (c: string): number => (order.includes(c) ? order.indexOf(c) : order.length);
+  channels.sort((a, b) => rank(a) - rank(b));
+  const pctx: DevicePurgeContext = {
+    tenantId, now, actor: ctx.actor, requestId: ctx.requestId, signal: ctx.signal,
+    throwIfAborted: () => ctx.throwIfAborted(), inTenant: (fn) => ctx.inTenant(fn),
+  };
+  const out: DeviceRecordsResult = { deleted: 0, deferred: 0, skipped: null };
+  for (const channel of channels) {
+    const purger = purgers.get(channel as ManagementChannel);
+    const r = purger ? await purgeChannelRecords(ctx, pctx, channel, purger) : { deleted: 0, deferred: 0, skipped: 'no_purger' };
+    out.deleted += r.deleted;
+    out.deferred += r.deferred;
+    out.skipped ??= r.skipped;
+  }
+  return out;
+}
+
+// ── The purger of the channel apple_mdm: apple-edge first (integration §13.3) ─
+
+/** The MDM key of the tenant (its enrollments are `<key>_…` at apple-edge), null without one. */
+async function mdmKeyOf(pctx: DevicePurgeContext): Promise<string | null> {
+  return pctx.inTenant(async () => {
+    const t = await db('tenants').where({ id: pctx.tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
+    return t?.mdm_key ?? null;
+  });
+}
+
+/** apple_mdm: every enrollment of the record purged at apple-edge before the record goes (purgeDeviceInEdge); without
+ *  apple-edge (mode off) or without the tenant's MDM key, its records wait. */
+export const appleDevicePurger: DevicePurger = {
+  async ready(pctx) {
+    // APPLE_EDGE_MODE=off: the enrollments cannot be purged at apple-edge, so no record is deleted.
+    if (config.apple.mode !== 'on') return 'apple_edge_off';
+    return (await mdmKeyOf(pctx)) ? null : 'tenant_without_key';
+  },
+  async purge(pctx, deviceIds) {
+    const key = await mdmKeyOf(pctx);
+    if (!key) return { purged: [], deferred: 0, stopped: 'tenant_without_key' };
+    const purged: number[] = [];
+    let deferred = 0;
+    for (const id of deviceIds) {
+      pctx.throwIfAborted();
+      const r = await purgeDeviceInEdge(pctx, pctx.tenantId, key, id, pctx.now);
+      if (r === 'purged') purged.push(id);
+      else if (r === 'deferred') deferred++;
+      else return { purged, deferred, stopped: r };
+    }
+    return { purged, deferred, stopped: null };
+  },
+};
 
 // ── privacy.retention-tenant ───────────────────────────────────────────────
 
@@ -139,7 +221,7 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
     output.devices_records = devices.deleted;
     output.devicesDeferred = devices.deferred;
     output.devicesSkipped = devices.skipped;
-    if (devices.skipped && devices.skipped !== 'apple_edge_off') {
+    if (devices.skipped && devices.skipped !== 'apple_edge_off' && devices.skipped !== 'no_purger') {
       // The other rules are done; the records wait for the next run.
       logger.warn({ tenantId, reason: devices.skipped }, 'privacy.retention: device records postponed');
     }
@@ -155,6 +237,9 @@ let registered = false;
 export function registerPrivacyModule(): void {
   if (registered) return;
   registered = true;
+
+  // The purger of the Apple channel (the other channels register theirs: legacy_agent, amapi; lot AN-P).
+  registerDevicePurger('apple_mdm', appleDevicePurger);
 
   tenantJob = registerJob({
     name: 'privacy.retention-tenant',

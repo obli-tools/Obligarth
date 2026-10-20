@@ -28,6 +28,8 @@ import { registerFreezeHandler } from '../guard';
 import { currentDbContext, type DbActor } from '../db/context';
 import { endKioskExitsOnFreeze } from '../android/kiosk/exits';
 import { resumeHeldCommands } from '../android/commands/submit';
+import { registerDevicePurger } from './privacy';
+import { purgeAndroidDevices } from '../android/operations/purge';
 import { registerArtifactChannel } from '../mdm/policies/artifacts';
 import { amapiArtifactProvider } from '../android/policies/channel';
 
@@ -109,6 +111,15 @@ export function registerAndroidModule(): void {
     const actor: DbActor = currentDbContext()?.actor ?? { type: 'job', name: 'actions.edge-freeze-sync' };
     const n = frozen ? await endKioskExitsOnFreeze(tenantId, true, actor) : await resumeHeldCommands(tenantId, actor);
     return n > 0 ? 'done' : 'nothing';
+  });
+  // Lot AN-P (§4.8, COH-10): the purger of the channel amapi in the generic retention (privacy.retention-tenant): its
+  // own policy deleted at Google, the device gone there, then its satellite; a tenant without an MDM key is not
+  // skipped for these records. A device still at Google, or Google out of reach, waits for the next run.
+  registerDevicePurger('amapi', {
+    purge: async (ctx, deviceIds) => {
+      const r = await purgeAndroidDevices(ctx.tenantId, deviceIds);
+      return { purged: r.purged, deferred: r.kept.length, stopped: null };
+    },
   });
   registerStartTask('android.google-check', async () => {
     freezeAndroidEventHandlers();

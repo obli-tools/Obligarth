@@ -1,9 +1,13 @@
 // Hooks of the Android operation for the junction AN-A2/AN-P (lot AN-H1): written as autonomous functions with the
 // signatures of the points of section 22.6, so that the junction only registers them in the existing files (forbidden
 // before the integration of lot C):
-//   - registerDevicePurger('amapi', androidDevicePurger)            modules/privacy.ts (retention, COH-10);
-//   - registerAlertDefinitions(androidAlertDefinitions())          catalogue of the alerts opened to modules;
-//   - registerOnboardStep('amapi', androidOnboardStep)             onboarding assistant (Android part);
+//   - registerDevicePurger('amapi', …)                              modules/privacy.ts (retention, COH-10): done at the
+//                                                                   junction AN-P (modules/android.ts, purgeAndroidDevices);
+//   - registerAlertDefinitions(androidAlertDefinitions())          catalogue of the alerts opened to modules: done at AN-P;
+//   - androidOnboardStep                                           the Android part of an onboarding ASSISTANT of a
+//                                                                   tenant (not the onboarding of a device: the registry
+//                                                                   of steps by channel of AN-P is the device's); no
+//                                                                   assistant exists on main yet: left for later;
 //   - tenantService.delete → assertTenantDeletable(tenantId)        409 tenantHasAndroidEnterprise (AN27);
 //   - jobEffectOf(err) === 'enterprise_error' → markEnterpriseAccessLost(tenantId)  (a 403 of any Android job);
 //   - the échéancier of lot C3 → listAndroidDeadlines / platformKeyDeadline;
@@ -13,17 +17,11 @@ import { asNone, asTenant, type DbActor } from '../../db/context';
 import { androidConfig } from '../config';
 import { MAINTENANCE_ACTOR } from '../enterprises/orphans';
 import { readPlatformState } from '../enterprises/registry';
-import { purgeAndroidDevices } from './purge';
 import { requestReconcile } from './reconcile';
 
 export { androidAlertDefinitions } from '../alerts';
 export { assertTenantDeletable, markEnterpriseAccessLost } from './offboarding';
 export { listAndroidDeadlines, platformKeyDeadline } from './deadlines';
-
-/** The purger of the channel amapi, in the shape of registerDevicePurger (ctx carries the tenant). */
-export async function androidDevicePurger(ctx: { tenantId: number }, deviceIds: number[]): Promise<void> {
-  await purgeAndroidDevices(ctx.tenantId, deviceIds);
-}
 
 /** The steps of the onboarding assistant for Android (identifiers and booleans only). */
 export interface AndroidOnboardState {

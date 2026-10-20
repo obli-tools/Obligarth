@@ -1,5 +1,6 @@
 import { guardReviewerPolicy } from '../guard/approvals';
 import { registerFreezeMirror } from '../guard/frozen';
+import { registerDevicePurger } from './privacy';
 import { appleEdgeFrozen } from '../apple/commands/bus';
 import { registerBootTask } from '../lifecycle';
 import { registerApprovalRequestType } from '../services/approval.service';
@@ -40,6 +41,9 @@ export function registerLegacyAgentModule(): void {
   registerServerKeySecretName();
   // The queue of the bridge agent is held by a freeze set at apple-edge too (decision PONT-R; guard/frozen.ts, lot AN-P).
   registerFreezeMirror('legacy_agent', appleEdgeFrozen);
+  // Retention (COH-10, lot AN-P): a record of the bridge agent has nothing outside the brain to purge first (its
+  // satellite, its queue and its inventory go with it, by cascade).
+  registerDevicePurger('legacy_agent', { purge: async (_ctx, deviceIds) => ({ purged: deviceIds, deferred: 0, stopped: null }) });
   registerLegacyAgentAuditActions();
   registerLegacyAgentJobs();
   // Guarded actions first: their keys open the category of the matrix.

@@ -39,14 +39,23 @@ export const STATUS_HISTORY_DAYS = 90;
 const days = (n: number) => n * 86_400_000;
 
 /** The records due for purge (out of management, retention_until passed), by id, after `afterId`: the
- *  caller purges them at apple-edge before deleteDueDeviceRecords. `afterId` is the last id of the previous
- *  slice of the same run: a record the caller postponed is not listed again before the next run. */
+ *  caller purges them with the purger of their channel before deleteDueDeviceRecords. `afterId` is the last id
+ *  of the previous slice of the same run: a record the caller postponed is not listed again before the next run.
+ *  `channel`: the records of that management channel only. */
 export async function devicesDueForPurge(trx: Knex | Knex.Transaction, tenantId: number, now: Date, limit: number,
-  afterId = 0): Promise<number[]> {
+  afterId = 0, channel?: string): Promise<number[]> {
+  const q = trx('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' })
+    .whereNotNull('retention_until').where('retention_until', '<=', now)
+    .where('id', '>', afterId);
+  if (channel !== undefined) q.where('management_channel', channel);
+  return (await q.orderBy('id', 'asc').limit(limit).pluck('id') as number[]).map(Number);
+}
+
+/** The management channels of the records due for purge (privacy.retention-tenant runs the purger of each). */
+export async function channelsDueForPurge(trx: Knex | Knex.Transaction, tenantId: number, now: Date): Promise<string[]> {
   return (await trx('devices').where({ tenant_id: tenantId, enrollment_state: 'unenrolled' })
     .whereNotNull('retention_until').where('retention_until', '<=', now)
-    .where('id', '>', afterId)
-    .orderBy('id', 'asc').limit(limit).pluck('id') as number[]).map(Number);
+    .distinct('management_channel').pluck('management_channel') as string[]).map(String).sort();
 }
 
 /** Deletes those of `ids` that are still due at `now` (same predicate as devicesDueForPurge: a record that
