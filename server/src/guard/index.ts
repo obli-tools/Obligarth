@@ -16,7 +16,7 @@ export { registerGuardModule } from './module';
 export { createGuardRouter } from './routes';
 export type {
   GuardedActionDef, GuardExecutionContext, GuardTargetRefusal, GuardTargetResult, FleetSizeProvider, OwnershipProvider,
-  EdgeFreezeHandler, DeviceOwnership,
+  EdgeFreezeHandler, DeviceOwnership, ManagementChannel,
 } from './types';
 
 export const guard = {

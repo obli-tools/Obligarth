@@ -339,6 +339,9 @@ export function defineAndroidGuardedAction(key: AndroidGuardedKey, o: { gateway?
   const gw = () => (o.gateway ? o.gateway() : androidGateway());
   const def: GuardedActionDef<Record<string, unknown>> = {
     key, ...ANDROID_GUARDED_DEFAULTS[key], paramsSchema: ANDROID_GUARDED_PARAMS[key] as z.ZodType<Record<string, unknown>>,
+    // A key of the channel amapi only: refused at the request on another channel's device, whole fleet and hourly cap
+    // also on the channel's fleet (decisions of the owners of 20/10/2026, PONT-R-RV3 and RV4).
+    channels: ['amapi'],
     revalidate: (ctx) => androidGuardedChannel.revalidate(key, ctx),
     execute: (ctx, ids) => androidGuardedChannel.execute(key, ctx, ids, { gateway: gw() }),
   };
@@ -380,7 +383,9 @@ export const SHARED_GUARDED_KEYS: ReadonlySet<string> = new Set(['mdm.erase_devi
  * whose targets are all Apple behaves exactly as before.
  */
 export function withAmapiChannel<P>(apple: GuardedActionDef<P>): GuardedActionDef<P> {
-  if (!SHARED_GUARDED_KEYS.has(apple.key)) return apple;
+  // The channels of the action (PONT-R-RV4): a request on a device of another channel (the bridge agent's) is refused at
+  // once. A shared key keeps the whole fleet and the hourly cap of the tenant (PONT-R-RV3: several channels).
+  if (!SHARED_GUARDED_KEYS.has(apple.key)) return { ...apple, channels: apple.channels ?? ['apple_mdm'] };
   const key = apple.key as AndroidGuardedKey;
   const androidSchema = ANDROID_GUARDED_PARAMS[key];
   const split = async (tenantId: number, ids: number[]): Promise<{ apple: number[]; amapi: number[] }> => {
@@ -392,6 +397,7 @@ export function withAmapiChannel<P>(apple: GuardedActionDef<P>): GuardedActionDe
   const fits = (schema: z.ZodTypeAny, params: unknown): boolean => schema.safeParse(params ?? {}).success;
   const def: GuardedActionDef<P> = {
     ...apple,
+    channels: ['apple_mdm', 'amapi'],
     paramsSchema: z.union([apple.paramsSchema as z.ZodTypeAny, androidSchema]) as unknown as z.ZodType<P>,
     async revalidate(ctx) {
       const s = await split(ctx.tenantId, ctx.deviceIds);

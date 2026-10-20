@@ -1,6 +1,7 @@
 // The request of a guarded action (docs: audit-durci §10.3): the only way to
 // a destructive action. In order: form, targets, freeze, cooldown, ownership,
-// whole fleet, bulk or single (with the burst requalification), hourly cap,
+// whole fleet (and that of the action's channel, PONT-R-RV3), bulk or single
+// (with the burst requalification), hourly cap (and its channel's),
 // typed confirmation, level (matrix and floors), step-up, then one
 // transaction in the target tenant's context: the pending action, its
 // approval request or its delayed job, and the critical entries written last
@@ -23,14 +24,14 @@ import { jobIdFor } from '../jobs';
 import { logger } from '../utils/logger';
 import { safeErr } from '../jobs/errors';
 import { actorRecentTenants, alertA3 } from './anomalies';
-import { quotaOf, fleetSize } from './cap';
+import { capExceeded, quotaOf, fleetSize, ownChannelOf } from './cap';
 import { guardedActionDef, ownershipOf } from './catalog';
 import { executeJob, wakeExecutor } from './jobs';
 import { guardMetrics } from './metrics';
 import { alertTenants, notifyAction } from './notify';
 import { cooldownUntil, personFacts, type PersonFacts } from './people';
 import {
-  capAllows, checkReason, classify, confirmationMatches, expectedConfirmation, isWholeFleet, requestLevel,
+  checkReason, classify, confirmationMatches, expectedConfirmation, isWholeFleet, requestLevel,
   stricter, type MatrixLevel,
 } from './policy';
 import { recordRefusal } from './refusals';
@@ -175,15 +176,20 @@ async function assess(req: Request, f: ReturnType<typeof form>, tenantId: number
   if (def.forbidWholeFleet && isWholeFleet(selection, count, await fleetSize(tenantId))) {
     await refuse(422, 'wholeFleetForbidden', 'This action is refused on the whole fleet');
   }
+  //    An action of one channel: also the whole fleet of that channel (PONT-R-RV3).
+  const channel = ownChannelOf(def);
+  if (def.forbidWholeFleet && channel && isWholeFleet(selection, count, await fleetSize(tenantId, channel))) {
+    await refuse(422, 'wholeFleetForbidden', 'This action is refused on the whole fleet of its channel', { channel });
+  }
   // 7. Bulk or single, with the burst requalification.
   const { bulk, requalified } = classify(count, selection, await priorSingles(tenantId, requesterId, def.family), def.bulkThreshold);
   // 8. Hourly cap.
-  if (def.hourlyCap) {
-    const quota = await quotaOf(tenantId);
-    if (!capAllows(quota.cap, quota.used, count)) {
-      await refuse(409, 'hourlyCapExceeded', 'The hourly cap of destructive actions would be exceeded',
-        { cap: quota.cap, used: quota.used, remaining: quota.remaining, resetsAt: quota.resetsAt });
-    }
+  //    An action of one channel: also the cap of that channel (PONT-R-RV3).
+  const over = await capExceeded(def, tenantId, count);
+  if (over) {
+    const { quota } = over;
+    await refuse(409, 'hourlyCapExceeded', 'The hourly cap of destructive actions would be exceeded',
+      { cap: quota.cap, used: quota.used, remaining: quota.remaining, resetsAt: quota.resetsAt, ...(over.channel ? { channel: over.channel } : {}) });
   }
   // 9. Typed confirmation.
   const expected = def.confirmation === 'typed' ? expectedConfirmation(bulk, count, targets.singleName) : null;
@@ -401,6 +407,8 @@ export async function preview(req: Request, input: Partial<GuardRequestInput>): 
   return asTargetTenant(req, tenantId, async () => {
     const a = await assess(req, f, tenantId, { preview: true });
     const quota = a.def.hourlyCap ? await quotaOf(tenantId) : null;
+    const ownChannel = a.def.hourlyCap ? ownChannelOf(a.def) : null;
+    const channelQuota = ownChannel ? { channel: ownChannel, ...(await quotaOf(tenantId, { channel: ownChannel })) } : null;
     // The approver's side of a restricted request; held fallback: refused
     // here too (AUD-A7-R4), nothing journaled.
     let approver: { approverSide: string; approverFallback: boolean } | null = null;
@@ -422,6 +430,7 @@ export async function preview(req: Request, input: Partial<GuardRequestInput>): 
         : (!a.bulk && a.targets.deviceIds.length === 1 && a.targets.singleName ? 'name' : 'count'),
       expectedConfirmation: a.expectedConfirmation,
       quota,
+      ...(channelQuota ? { channelQuota } : {}),
       ...(approver ?? {}),
     };
   });

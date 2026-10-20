@@ -159,6 +159,9 @@ export function defineForgetAction(o: { gateway?: () => AndroidGateway } = {}): 
     key: ANDROID_FORGET_ACTION, label: 'Forget Android devices presumed gone', family: 'device_destruction',
     singleFloor: 'sensitive', singleStrictStepUp: true, bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 900, hourlyCap: true,
     forbidWholeFleet: true, refuseOwnership: [], confirmation: 'typed', deviceCapability: 'mdm:remove', category: 'Android',
+    // The channel amapi only (PONT-R-RV3, RV4): another channel's device refused at the request; whole fleet and hourly
+    // cap also on the channel's fleet.
+    channels: ['amapi'],
     paramsSchema: z.object({}).strict() as z.ZodType<Record<string, unknown>>,
     async revalidate(ctx) {
       const rows = await forgetFacts(ctx.tenantId, ctx.deviceIds);

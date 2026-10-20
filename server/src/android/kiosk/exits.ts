@@ -388,6 +388,8 @@ export function defineKioskExitAction(): GuardedActionDef<Record<string, unknown
     singleFloor: 'sensitive', singleStrictStepUp: false, bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 0, hourlyCap: false,
     forbidWholeFleet: true, refuseOwnership: ['personal', 'corporate_personal'], confirmation: 'none', deviceCapability: 'mdm:lock',
     category: 'Android', paramsSchema: KIOSK_EXIT_PARAMS as z.ZodType<Record<string, unknown>>,
+    // The channel amapi only (PONT-R-RV3, RV4): another channel's device refused at the request; whole fleet of the channel.
+    channels: ['amapi'],
     async revalidate(ctx) {
       const rows = await facts(db, ctx.tenantId, ctx.deviceIds);
       const out = new Map<number, 'ok' | GuardTargetRefusal>();

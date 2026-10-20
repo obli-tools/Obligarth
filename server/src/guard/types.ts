@@ -8,6 +8,10 @@ export type { GuardFamily, GuardLevel, GuardSide };
 
 export type DeviceOwnership = 'personal' | 'corporate_personal' | 'corporate';
 
+/** The management channels of a device (devices.management_channel). */
+export type ManagementChannel = 'apple_mdm' | 'amapi' | 'legacy_agent';
+export const MANAGEMENT_CHANNELS: readonly ManagementChannel[] = ['apple_mdm', 'amapi', 'legacy_agent'];
+
 /** Why a target is set aside at execution (revalidate) or refused by the
  *  executor: a short code ('not_found', 'not_enrolled', 'personal'…). */
 export interface GuardTargetRefusal {
@@ -65,6 +69,12 @@ export interface GuardedActionDef<P = Record<string, unknown>> {
   hourlyCap: boolean;
   forbidWholeFleet: boolean;
   refuseOwnership: DeviceOwnership[];
+  /**
+   * The management channels the action acts on (decision of the owners of 20/10/2026, PONT-R-RV3): an action of one
+   * channel only (legacy_agent, or amapi for the Android-only keys) also has the whole fleet and the hourly cap
+   * computed on that channel's fleet, besides the tenant's. Absent: every channel (the deletion of records).
+   */
+  channels?: readonly ManagementChannel[];
   confirmation: 'typed' | 'none';
   /** Non-secret parameters, strict. */
   paramsSchema: z.ZodType<P>;
@@ -108,7 +118,7 @@ export interface GuardedActionDef<P = Record<string, unknown>> {
 }
 
 /** Size of a tenant's active fleet (hourly cap, whole fleet). */
-export type FleetSizeProvider = (tenantId: number) => Promise<number>;
+export type FleetSizeProvider = (tenantId: number, channel?: ManagementChannel) => Promise<number>;
 
 /** Ownership of devices of a tenant (lot B: devices.ownership); a device
  *  absent from the map is of unknown ownership. */

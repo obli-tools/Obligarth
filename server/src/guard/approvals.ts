@@ -26,7 +26,7 @@ import {
   type ApprovalReviewCheck, type PendingApproval,
 } from '../services/approval.service';
 import { jobIdFor } from '../jobs';
-import { quotaOf } from './cap';
+import { capExceeded } from './cap';
 import { guardedActionDef } from './catalog';
 import { approvalTtlMinutes } from './engine';
 import { actionEntry } from './executor';
@@ -36,7 +36,7 @@ import { notifyAction } from './notify';
 import {
   activeClientApprovers, cooldownUntil, designationsOf, fallbackHold, personFacts, reviewerFacts, type PersonFacts,
 } from './people';
-import { capAllows, requiredApproverSide, reviewerRefusal, type RequiredApproverSide } from './policy';
+import { requiredApproverSide, reviewerRefusal, type RequiredApproverSide } from './policy';
 import { recordRefusal } from './refusals';
 import { targetsWithoutRights } from './selection';
 import { fleetShareFloor } from '../mdm/settings';
@@ -202,12 +202,12 @@ async function recheck(row: NonNullable<Awaited<ReturnType<typeof findAction>>>,
   }
   const lacking = await targetsWithoutRights(def!, row.requested_by, requester.platformAdmin, row.tenant_id, row.target_device_ids);
   if (lacking.length) await fail('targetsOutsideScope', 'The requester no longer has rights on every target — nothing was executed', { lacking: lacking.length });
-  if (def!.hourlyCap) {
-    const quota = await quotaOf(row.tenant_id, { excludeUuid: row.uuid });
-    if (!capAllows(quota.cap, quota.used, row.target_count)) {
-      await fail('hourlyCapExceeded', 'The hourly cap of destructive actions would be exceeded — nothing was executed',
-        { cap: quota.cap, used: quota.used, remaining: quota.remaining, resetsAt: quota.resetsAt });
-    }
+  // The tenant's cap, and for an action of one channel that channel's (PONT-R-RV3).
+  const over = await capExceeded(def!, row.tenant_id, row.target_count, { excludeUuid: row.uuid });
+  if (over) {
+    const { quota } = over;
+    await fail('hourlyCapExceeded', 'The hourly cap of destructive actions would be exceeded — nothing was executed',
+      { cap: quota.cap, used: quota.used, remaining: quota.remaining, resetsAt: quota.resetsAt, ...(over.channel ? { channel: over.channel } : {}) });
   }
 }
 

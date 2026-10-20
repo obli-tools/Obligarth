@@ -28,12 +28,11 @@ import { forEachTenant } from '../db/tenantContext';
 import { JobError, type JobContext, type JobResult } from '../jobs';
 import { logger } from '../utils/logger';
 import { safeErr } from '../jobs/errors';
-import { quotaOf } from './cap';
+import { capExceeded } from './cap';
 import { edgeFreezeOf, guardedActionDef } from './catalog';
 import { guardMetrics } from './metrics';
 import { alertTenantAndMsp, alertTenants, notifyAction } from './notify';
 import { personFacts } from './people';
-import { capAllows } from './policy';
 import { checkAnomalies } from './refusals';
 import { targetsWithoutRights } from './selection';
 import { readSettings } from './settings';
@@ -134,9 +133,9 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
   for (const id of lacking) setAside.push({ id, code: 'rights' });
   let candidates = row.target_device_ids.filter((id) => !lacking.has(id));
 
+  // The tenant's cap, and for an action of one channel that channel's (PONT-R-RV3).
   if (def.hourlyCap && candidates.length) {
-    const quota = await quotaOf(tenantId, { trx, excludeUuid: row.uuid });
-    if (!capAllows(quota.cap, quota.used, candidates.length)) {
+    if (await capExceeded(def, tenantId, candidates.length, { trx, excludeUuid: row.uuid })) {
       await trx('pending_actions').where({ id: row.id }).update({ state: 'paused', paused_at: new Date(), updated_at: new Date() });
       return { kind: 'paused', row, code: 'cap' };
     }

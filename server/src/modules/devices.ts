@@ -115,9 +115,11 @@ export function registerDeviceModule(): void {
   registerGuardedAction(deviceDeleteAction);
   // The active fleet of a tenant (hourly cap, whole fleet): the devices under
   // management (every enrollment state but 'unenrolled').
-  registerFleetSizeProvider(async (tenantId) => {
-    const row = await db('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled')
-      .count<{ n: string }[]>('id as n').first();
+  // With a channel: the devices of that channel only (an action of one channel, PONT-R-RV3).
+  registerFleetSizeProvider(async (tenantId, channel) => {
+    const q = db('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled');
+    if (channel) q.where({ management_channel: channel });
+    const row = await q.count<{ n: string }[]>('id as n').first();
     return Number(row?.n ?? 0);
   });
   // The ownership of devices (devices.ownership, never unknown: modele-donnees-mdm DM25), read by the guard

@@ -4,8 +4,8 @@
 // Registered before anything starts (index.ts: the modules' registration),
 // no I/O.
 import { isActionKey, registerRestrictableActions } from '../services/restriction.service';
-import type {
-  EdgeFreezeHandler, FleetSizeProvider, GuardedActionDef, OwnershipProvider,
+import {
+  MANAGEMENT_CHANNELS, type EdgeFreezeHandler, type FleetSizeProvider, type GuardedActionDef, type OwnershipProvider,
 } from './types';
 
 const FAMILIES = new Set(['device_records', 'device_destruction', 'device_control', 'device_privacy']);
@@ -41,6 +41,10 @@ export function registerGuardedAction<P>(def: GuardedActionDef<P>): void {
   if (def.bulkDelaySeconds < def.singleDelaySeconds) fail('the bulk delay is never shorter than the single one');
   if (!Array.isArray(def.refuseOwnership) || !def.refuseOwnership.every((o) => OWNERSHIPS.has(o))) fail('invalid refuseOwnership');
   if (def.confirmation !== 'typed' && def.confirmation !== 'none') fail('confirmation is typed or none');
+  if (def.channels !== undefined && (!Array.isArray(def.channels) || def.channels.length === 0
+    || !def.channels.every((c) => MANAGEMENT_CHANNELS.includes(c)) || new Set(def.channels).size !== def.channels.length)) {
+    fail('channels: one or more distinct management channels');
+  }
   if (def.hourlyCap && def.family !== 'device_destruction') fail('only the family device_destruction has an hourly cap (MVP)');
   if (!def.paramsSchema || typeof (def.paramsSchema as { safeParse?: unknown }).safeParse !== 'function') fail('paramsSchema (zod) is required');
   if (typeof def.revalidate !== 'function' || typeof def.execute !== 'function') fail('revalidate and execute are required');
@@ -49,7 +53,7 @@ export function registerGuardedAction<P>(def: GuardedActionDef<P>): void {
     def.defaultLevel ? { [key]: def.defaultLevel } : {},
     { [key]: { level: def.singleFloor, strictStepUp: def.singleStrictStepUp === true } },
   );
-  actions.set(key, Object.freeze({ ...def }) as GuardedActionDef<any>);
+  actions.set(key, Object.freeze({ ...def, ...(def.channels ? { channels: Object.freeze([...def.channels]) } : {}) }) as GuardedActionDef<any>);
 }
 
 export function guardedActionDef(key: string): GuardedActionDef<any> | undefined {
@@ -61,7 +65,8 @@ export function guardedActionList(): GuardedActionDef<any>[] {
 }
 
 /** The size of a tenant's active fleet: the managed devices of the tenant
- *  (lot B), until then every device (modules/devices.ts). One provider. */
+ *  (lot B), until then every device (modules/devices.ts); with a channel,
+ *  those of that channel only (PONT-R-RV3). One provider. */
 export function registerFleetSizeProvider(fn: FleetSizeProvider): void {
   if (fleetSizeProvider) throw new Error('fleet size provider registered twice');
   fleetSizeProvider = fn;

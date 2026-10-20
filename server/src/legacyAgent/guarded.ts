@@ -27,6 +27,9 @@ import { ERASE_ACTION, LOCK_ACTION, legacyAgentCommands } from './commands';
 
 const DAY = 86_400;
 const CATEGORY = 'Android agent';
+/** The channel of the agent's actions (decisions of the owners of 20/10/2026): a request on a device of another channel
+ *  is refused at once (PONT-R-RV4); the whole fleet and the hourly cap are also those of the agent's devices (RV3). */
+const CHANNELS = ['legacy_agent'] as const;
 
 export function guardedCommandId(actionUuid: string, deviceId: number): string {
   return jobIdFor('legacy_agent.command', `${actionUuid.toLowerCase()}:${deviceId}`);
@@ -129,7 +132,7 @@ export function registerLegacyAgentGuardedActions(): void {
     key: ERASE_ACTION, label: 'Erase Android agent devices', family: 'device_destruction', singleFloor: 'sensitive', singleStrictStepUp: true,
     bulkThreshold: 3, singleDelaySeconds: 300, bulkDelaySeconds: 900, hourlyCap: true, forbidWholeFleet: true, refuseOwnership: ['personal'],
     confirmation: 'typed', paramsSchema: EraseParams as z.ZodType<z.infer<typeof EraseParams>>, deviceCapability: 'mdm:wipe', category: CATEGORY,
-    serialsOf,
+    serialsOf, channels: CHANNELS,
   }, { requestType: 'device.wipe', commandParams: (p) => ({ wipeExternal: p.wipeExternal === true }), lifetimeSeconds: 7 * DAY }));
 
   // Lock: 'sensitive', no delay; a batch 'restricted'.
@@ -137,6 +140,6 @@ export function registerLegacyAgentGuardedActions(): void {
     key: LOCK_ACTION, label: 'Lock Android agent devices', family: 'device_control', singleFloor: 'sensitive', singleStrictStepUp: false,
     bulkThreshold: 3, singleDelaySeconds: 0, bulkDelaySeconds: 0, hourlyCap: false, forbidWholeFleet: true, refuseOwnership: ['personal'],
     confirmation: 'none', paramsSchema: NoParams as unknown as z.ZodType<Record<string, never>>, deviceCapability: 'mdm:lock', category: CATEGORY,
-    serialsOf,
+    serialsOf, channels: CHANNELS,
   }, { requestType: 'device.lock', commandParams: () => ({}), lifetimeSeconds: 7 * DAY }));
 }
