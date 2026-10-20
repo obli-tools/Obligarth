@@ -4595,6 +4595,7 @@
       "addApp": "Add an app",
       "search": "Search",
       "jsonShape": "The section is { \"fragment\": { … }, \"applications\": [ … ] }",
+      "jsonSyntax": "Not valid JSON: fix it before applying.",
       "jsonTitle": "Android section as JSON",
       "applyJson": "Apply",
       "groups": {
