@@ -1,5 +1,6 @@
 // The request of a guarded action (docs: audit-durci §10.3): the only way to
-// a destructive action. In order: form, targets, freeze, cooldown, ownership,
+// a destructive action. In order: form, targets, channel of the targets
+// (PONT-R-RV4), freeze, cooldown, ownership,
 // whole fleet (and that of the action's channel, PONT-R-RV3), bulk or single
 // (with the burst requalification), hourly cap (and its channel's),
 // typed confirmation, level (matrix and floors), step-up, then one
@@ -151,6 +152,19 @@ async function assess(req: Request, f: ReturnType<typeof form>, tenantId: number
     throw new AppError(status, message, code, details);
   };
 
+  // 2b. The channel of the targets (decision of the owners of 20/10/2026, PONT-R-RV4): an action of a channel never
+  //     targets a device of another one; refused at once, nothing scheduled nor counted in the hourly cap.
+  if (def.channels && count) {
+    const rows = await db('devices').where({ tenant_id: tenantId }).whereRaw('id = ANY (?::int[])', [targets.deviceIds])
+      .select('id', 'management_channel') as Array<{ id: number; management_channel: string }>;
+    const ok = new Set(rows.filter((r) => (def.channels as readonly string[]).includes(r.management_channel)).map((r) => Number(r.id)));
+    const other = targets.deviceIds.filter((id) => !ok.has(id));
+    if (other.length) {
+      await refuse(422, 'channelMismatch', 'This action does not apply to the management channel of some targets',
+        { channels: [...def.channels], deviceIds: other.slice(0, 200) });
+    }
+  }
+
   // 3. Emergency freeze.
   const settings = await readSettings(tenantId);
   if (settings.frozen_at) await refuse(423, 'tenantFrozen', 'The tenant is frozen: no guarded action until it is unfrozen');
@@ -176,7 +190,7 @@ async function assess(req: Request, f: ReturnType<typeof form>, tenantId: number
   if (def.forbidWholeFleet && isWholeFleet(selection, count, await fleetSize(tenantId))) {
     await refuse(422, 'wholeFleetForbidden', 'This action is refused on the whole fleet');
   }
-  //    An action of one channel: also the whole fleet of that channel (PONT-R-RV3).
+  //    An action of one channel: also the whole fleet of that channel (PONT-R-RV3; its targets are all of it, 2b).
   const channel = ownChannelOf(def);
   if (def.forbidWholeFleet && channel && isWholeFleet(selection, count, await fleetSize(tenantId, channel))) {
     await refuse(422, 'wholeFleetForbidden', 'This action is refused on the whole fleet of its channel', { channel });

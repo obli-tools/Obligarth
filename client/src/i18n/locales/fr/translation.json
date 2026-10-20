@@ -2104,6 +2104,7 @@
       "privilegeCooldown": "Vos droits sont trop récents : rôle d'administrateur ou d'approbateur, ou droit d'effacer, de verrouiller ou de retirer des appareils reçu par une équipe (refroidissement de 72 h, jusqu'au {{until}}).",
       "personalDeviceForbidden": "Cette action est refusée sur les appareils personnels.",
       "wholeFleetForbidden": "Cette action est refusée sur tout le parc.",
+      "channelMismatch": "Cette action ne s'applique pas à certains des appareils choisis (autre canal de gestion).",
       "hourlyCapExceeded": "Le plafond horaire des actions destructrices serait dépassé (reste {{remaining}} appareils sur {{cap}}).",
       "confirmationMismatch": "La confirmation ne correspond pas.",
       "reasonRequired": "Un motif de 5 à 500 caractères est requis.",

@@ -2104,6 +2104,7 @@
       "privilegeCooldown": "Your rights are too recent: administrator or approver role, or the right to erase, lock or remove devices received through a team (72-hour cooldown, until {{until}}).",
       "personalDeviceForbidden": "This action is refused on personal devices.",
       "wholeFleetForbidden": "This action is refused on the whole fleet.",
+      "channelMismatch": "This action does not apply to some of the selected devices (another management channel).",
       "hourlyCapExceeded": "The hourly cap of destructive actions would be exceeded ({{remaining}} of {{cap}} devices left).",
       "confirmationMismatch": "The confirmation does not match.",
       "reasonRequired": "A reason of 5 to 500 characters is required.",

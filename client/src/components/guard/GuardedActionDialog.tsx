@@ -25,6 +25,7 @@ export function guardErrorMessage(t: TFunction, code: string | undefined, fallba
       || 'Your administrator rights are too recent (72 hours) for a destructive action.';
     case 'personalDeviceForbidden': return t('guard.errors.personalDeviceForbidden') || 'This action is refused on personal devices.';
     case 'wholeFleetForbidden': return t('guard.errors.wholeFleetForbidden') || 'This action is refused on the whole fleet.';
+    case 'channelMismatch': return t('guard.errors.channelMismatch') || 'This action does not apply to some of the selected devices (another management channel).';
     case 'hourlyCapExceeded': return t('guard.errors.hourlyCapExceeded', { remaining: details?.remaining ?? 0, cap: details?.cap ?? 0 })
       || 'The hourly cap of destructive actions would be exceeded.';
     case 'confirmationMismatch': return t('guard.errors.confirmationMismatch') || 'The confirmation does not match.';

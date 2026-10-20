@@ -70,9 +70,11 @@ export interface GuardedActionDef<P = Record<string, unknown>> {
   forbidWholeFleet: boolean;
   refuseOwnership: DeviceOwnership[];
   /**
-   * The management channels the action acts on (decision of the owners of 20/10/2026, PONT-R-RV3): an action of one
-   * channel only (legacy_agent, or amapi for the Android-only keys) also has the whole fleet and the hourly cap
-   * computed on that channel's fleet, besides the tenant's. Absent: every channel (the deletion of records).
+   * The management channels the action acts on (decisions of the owners of 20/10/2026, PONT-R-RV3 and RV4): a
+   * request whose targets include a device of another channel is refused at once (422 channelMismatch: nothing
+   * scheduled, nothing counted in the hourly cap). An action of one channel only (legacy_agent, or amapi for the
+   * Android-only keys) also has the whole fleet and the hourly cap computed on that channel's fleet, besides the
+   * tenant's. Absent: every channel (the deletion of records).
    */
   channels?: readonly ManagementChannel[];
   confirmation: 'typed' | 'none';
