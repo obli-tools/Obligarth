@@ -84,7 +84,7 @@ export async function readiness(q: Knex, tenantId: number): Promise<ReadinessIte
     else out.push({ key: 'push.active', state: 'ready' });
   }
 
-  const profiles = await q('enrollment_profiles').where({ tenant_id: tenantId, enabled: true }).whereNull('archived_at')
+  const profiles = await q('enrollment_profiles').where({ tenant_id: tenantId, platform: 'apple', enabled: true }).whereNull('archived_at')
     .groupBy('method').select('method').count({ n: '*' }) as Array<{ method: string; n: string | number }>;
   const byMethod = new Map(profiles.map((p) => [p.method, Number(p.n)]));
   const totalProfiles = [...byMethod.values()].reduce((a, b) => a + b, 0);

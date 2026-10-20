@@ -551,15 +551,16 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
     return { status: 200, body: { data: body } };
   }
   if (first.impact.conflicts.length) conflictRefusal(first.impact.conflicts);
-  // The secrets typed in for Android apps sealed now, before the batch, its approval request or a log can hold them
-  // (the checks of the first look passed: the batch is about to be stored).
-  changes = await sealBatchAndroidOptions(tenantId, changes, requester.userId);
   let proven = false;
   if ((await requiredLevel(tenantId, first.impact)) === 'sensitive') {
     const refused = await stepUp(req);
     if (refused) return refused;
     proven = true;
   }
+  // The secrets typed in for Android apps sealed now, before the batch, its approval request or a log can hold them
+  // (the checks of the first look and the step-up passed: the batch is about to be stored; review AN-C1: a request
+  // refused by its step-up writes nothing in the vault).
+  changes = await sealBatchAndroidOptions(tenantId, changes, requester.userId);
   const ctx = await audit.fromRequest(req, tenantId);
   // The decision, where the batch is written: normalised and previewed again under the lock of the configuration.
   const done = await withConfigurationLock(tenantId, async (trx) => {

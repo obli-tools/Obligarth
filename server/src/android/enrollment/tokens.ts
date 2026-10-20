@@ -138,7 +138,7 @@ export async function createEnrollmentToken(tenantId: number, userId: number | n
         tenantId, action: 'android.enrollment_token_created', target: { type: 'android_enrollment_token', id },
         details: { tokenId: id, profileId: profile.id, kind: plan.kind, oneTime: plan.oneTime, requiresApproval: approval, durationSeconds: plan.durationSeconds },
       }, auditCtx);
-      return { id, e, plan, approval, policyId: String(pol.policy_id) };
+      return { id, e, plan, approval, policyId: String(pol.policy_id), profileId: profile.id };
     });
 
     let created;
@@ -165,12 +165,29 @@ export async function createEnrollmentToken(tenantId: number, userId: number | n
     }
     const expiresAt = created.expirationTimestamp && Number.isFinite(Date.parse(created.expirationTimestamp))
       ? new Date(created.expirationTimestamp) : new Date(Date.now() + t1.plan.durationSeconds * 1000);
-    await db.transaction(async (trx) => {
+    // Review AN-C1: the profile archived while Google created the token (the archive revokes the active tokens only, a
+    // creating one escaped it): the token never becomes active, it fails and is deleted at Google. The profile row is
+    // read under a shared lock (the archive takes it FOR UPDATE): an archive that starts meanwhile waits for this
+    // transaction, then sees the token active and revokes it.
+    const archived = await db.transaction(async (trx) => {
+      const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id: t1.profileId, platform: 'android' }).forShare()
+        .first('archived_at') as { archived_at: Date | null } | undefined;
+      if (!p || p.archived_at) {
+        await trx('android_enrollment_tokens').where({ id: t1.id, state: 'creating' }).update({ state: 'failed', ended_at: trx.fn.now() });
+        return true;
+      }
       const ref = await vault.createTenantSecret(tenantId, TOKEN_SECRET_PURPOSE, value, { userId: userId ?? null }, { trx });
       const n = await trx('android_enrollment_tokens').where({ id: t1.id, state: 'creating' })
         .update({ token_name: created.name, value_ref: ref, expires_at: expiresAt, state: 'active' });
       if (n !== 1) throw new TokenError(409, 'conflict', 'the token changed meanwhile');
+      return false;
     });
+    if (archived) {
+      if (typeof created.name === 'string') {
+        try { await gw.deleteEnrollmentToken(t1.e, tokenIdOfName(t1.e, created.name)); } catch { /* collected later */ }
+      }
+      throw new TokenError(409, 'enrollmentProfileArchived', 'the profile was archived while the token was created');
+    }
     return { id: t1.id, kind: t1.plan.kind, expiresAt: expiresAt.toISOString(), requiresApproval: t1.approval,
       payload: tokenPayload(t1.plan.kind, value, created.qrCode) };
   });
@@ -284,6 +301,10 @@ export async function recoverEnrollmentTokens(tenantId: number, o: { gateway?: A
         if (row && row.state === 'creating' && typeof full.value === 'string' && full.value) {
           const value = full.value;
           const adopted = await db.transaction(async (trx) => {
+            // Review AN-C1: never adopted for a profile archived meanwhile (deleted at Google and failed below).
+            const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id: row.profile_id, platform: 'android' }).forShare()
+              .first('archived_at') as { archived_at: Date | null } | undefined;
+            if (!p || p.archived_at) return null;
             const ref = await vault.createTenantSecret(tenantId, TOKEN_SECRET_PURPOSE, value, { userId: null }, { trx });
             const expiresAt = full.expirationTimestamp && Number.isFinite(Date.parse(full.expirationTimestamp)) ? new Date(full.expirationTimestamp) : row.expires_at;
             const n = await trx('android_enrollment_tokens').where({ id, state: 'creating' })
@@ -292,7 +313,7 @@ export async function recoverEnrollmentTokens(tenantId: number, o: { gateway?: A
             return n === 1;
           });
           if (adopted) out.adopted += 1;
-          continue;
+          if (adopted !== null) continue;
         }
         if (row && row.state === 'active') continue;
         await gw.deleteEnrollmentToken(e, tokenIdOfName(e, full.name));

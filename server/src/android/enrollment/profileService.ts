@@ -75,7 +75,26 @@ export async function createAndroidProfile(trx: Knex.Transaction, tenantId: numb
   return id;
 }
 
+/** Has the kiosk profile still enrolled devices (amapi channel, not unenrolled)? */
+async function kioskProfileInUse(trx: Knex.Transaction, tenantId: number, id: string): Promise<boolean> {
+  return !!(await trx('devices').where({ tenant_id: tenantId, enrollment_profile_id: id, management_channel: 'amapi' })
+    .whereNot('enrollment_state', 'unenrolled').first('id'));
+}
+
 export async function updateAndroidProfile(trx: Knex.Transaction, tenantId: number, userId: number, id: string, p: ProfileWrite): Promise<number> {
+  // Review AN-C1 (G1-R4, DM23): the kiosk app of a kiosk profile is the single-app kiosk of its enrolled devices (read
+  // at each push of their own policy). Changing it, or turning the profile into a standard one, would change or lift
+  // the kiosk lock of those devices outside the preview and the approval of a policy (kioskLockChanges): refused while
+  // the profile has enrolled devices, as its archiving is; a kiosk form is then changed by a policy.
+  const cur = await trx('enrollment_profiles').where({ tenant_id: tenantId, id, platform: 'android' }).forUpdate().first('settings', 'archived_at') as
+    { settings: AndroidEnrollmentProfileSettings | null; archived_at: Date | null } | undefined;
+  if (cur && !cur.archived_at && cur.settings?.deviceUsage === 'kiosk') {
+    const next = p.settings as AndroidEnrollmentProfileSettings;
+    const changed = next.deviceUsage !== 'kiosk' || (next.kioskApp ?? null) !== (cur.settings.kioskApp ?? null);
+    if (changed && await kioskProfileInUse(trx, tenantId, id)) {
+      throw new AppError(409, 'This kiosk profile still has enrolled devices', 'androidKioskProfileInUse');
+    }
+  }
   const version = await updateProfile(trx, tenantId, userId, id, p);
   await afterWrite(trx, tenantId, id, p);
   return version;
@@ -87,10 +106,8 @@ export async function archiveAndroidProfile(trx: Knex.Transaction, tenantId: num
   const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id, platform: 'android' }).forUpdate().first('settings', 'archived_at') as
     { settings: AndroidEnrollmentProfileSettings | null; archived_at: Date | null } | undefined;
   if (!p) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
-  if (!p.archived_at && p.settings?.deviceUsage === 'kiosk') {
-    const live = await trx('devices').where({ tenant_id: tenantId, enrollment_profile_id: id, management_channel: 'amapi' })
-      .whereNot('enrollment_state', 'unenrolled').first('id');
-    if (live) throw new AppError(409, 'This kiosk profile still has enrolled devices', 'androidKioskProfileInUse');
+  if (!p.archived_at && p.settings?.deviceUsage === 'kiosk' && await kioskProfileInUse(trx, tenantId, id)) {
+    throw new AppError(409, 'This kiosk profile still has enrolled devices', 'androidKioskProfileInUse');
   }
   const version = await archiveProfile(trx, tenantId, userId, id, [], 'android');
   const tokens = await trx('android_enrollment_tokens').where({ tenant_id: tenantId, profile_id: id, state: 'active' }).pluck('id') as string[];

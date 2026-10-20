@@ -127,7 +127,7 @@ export async function attachUnknownEnrollments(tenantId: number, actor: DbActor,
   const c: Ctx = { tenantId, key, actor, requestId };
   const ids = checkIds(input.enrollmentIds, key);
   if (!UUID_RE.test(input.profileId)) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
-  const profile = await db('enrollment_profiles').where({ tenant_id: tenantId, id: input.profileId.toLowerCase() }).whereNull('archived_at')
+  const profile = await db('enrollment_profiles').where({ tenant_id: tenantId, id: input.profileId.toLowerCase(), platform: 'apple' }).whereNull('archived_at')
     .first('id', 'method', 'ownership', 'enabled', 'locale') as { id: string; method: string; ownership: string; enabled: boolean; locale: string } | undefined;
   if (!profile) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   if (!profile.enabled) throw new AppError(409, 'This enrollment profile is disabled', 'enrollmentProfileDisabled');

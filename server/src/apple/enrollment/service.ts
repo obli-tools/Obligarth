@@ -165,7 +165,7 @@ export async function archiveProfile(trx: Knex.Transaction, tenantId: number, us
 interface ActiveProfile { id: string; method: string; ownership: string; locale: string; settings: EnrollmentProfileSettings }
 
 async function activeProfile(trx: Knex.Transaction, tenantId: number, id: string): Promise<ActiveProfile> {
-  const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id }).forShare()
+  const p = await trx('enrollment_profiles').where({ tenant_id: tenantId, id, platform: 'apple' }).forShare()
     .first('id', 'method', 'ownership', 'locale', 'settings', 'archived_at', 'enabled') as (ActiveProfile & { archived_at: Date | null; enabled: boolean }) | undefined;
   if (!p) throw new AppError(404, 'Enrollment profile not found', 'enrollmentProfileNotFound');
   if (p.archived_at) throw new AppError(409, 'This enrollment profile is archived', 'enrollmentProfileArchived');
