@@ -241,7 +241,8 @@ async function reachesWipeSettings(q: Knex | Knex.Transaction, set: Array<{ vers
     const android = content?.sections?.android;
     wipe.set(Number(r.id), new Set(android ? validateAndroidSection(android).wipeRules : []));
   }
-  return set.some((x) => wipe.get(x.versionId)?.has(x.settingKey) === true);
+  // A version that cannot be read counts as wipe-capable (fail closed: a second approver rather than none).
+  return set.some((x) => !wipe.has(x.versionId) || wipe.get(x.versionId)!.has(x.settingKey));
 }
 
 /** computeImpact(tenantId, change): the preview of a change, in the caller's database context (section 7.11). */
