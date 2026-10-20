@@ -43,8 +43,9 @@ export async function checkOpenTargets(tenantId: number, o: OpenTargetsOptions):
   if (!t?.mdm_key) return { devices: 0, expired: 0 };
   const key = t.mdm_key;
   const before = new Date(Date.now() - (o.all ? 0 : OPEN_TARGET_AGE_MS));
+  // The targets of Apple commands only (lot AN-D: an Android target, amapi_request_type set, is followed by its polling).
   const devices = await asTenant(tenantId, o.actor, () => db('mdm_command_targets')
-    .where({ tenant_id: tenantId }).whereIn('state', OPEN as unknown as string[])
+    .where({ tenant_id: tenantId }).whereNull('amapi_request_type').whereIn('state', OPEN as unknown as string[])
     .where((q) => q.where('queued_at', '<', before).orWhere((w) => w.whereNull('queued_at').where('state_event_at', '<', before)))
     .groupBy('device_id').orderByRaw('min(coalesce(queued_at, state_event_at))')
     .limit(o.all ? 100_000 : OPEN_TARGETS_PER_PASS)
@@ -58,7 +59,7 @@ export async function checkOpenTargets(tenantId: number, o: OpenTargetsOptions):
     const deviceId = Number(raw);
     const check = async (): Promise<void> => {
       const targets = await asTenant(tenantId, o.actor, () => db('mdm_command_targets')
-        .where({ tenant_id: tenantId, device_id: deviceId }).whereIn('state', OPEN as unknown as string[])
+        .where({ tenant_id: tenantId, device_id: deviceId }).whereNull('amapi_request_type').whereIn('state', OPEN as unknown as string[])
         .where((q) => q.where('queued_at', '<', before).orWhere((w) => w.whereNull('queued_at').where('state_event_at', '<', before)))
         .select('command_id', 'enrollment_id')) as Array<{ command_id: string; enrollment_id: string }>;
       if (targets.length === 0) return;

@@ -148,7 +148,8 @@ export function defineGuardedMdmAction<P>(
 
   async function cancelAfterDispatch(ctx: GuardExecutionContext<P>): Promise<Map<number, 'cancelled' | 'already_delivered' | 'completed'>> {
     const out = new Map<number, 'cancelled' | 'already_delivered' | 'completed'>();
-    const commands = await db('mdm_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid }).pluck('id') as string[];
+    // The Apple commands of the action only: a mixed action's Android commands are the channel amapi's (lot AN-D).
+    const commands = await db('mdm_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid, platform: 'apple' }).pluck('id') as string[];
     for (const raw of commands) {
       const commandId = String(raw).toLowerCase();
       // What never left the brain is cancelled at once; what apple-edge holds is asked for right away (the job the

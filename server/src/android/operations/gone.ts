@@ -11,6 +11,7 @@ import { db } from '../../db';
 import type { AndroidEnterpriseRef } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
 import { exitManagement } from './exit';
+import { commands } from '../commands/store';
 
 /** 200 pages of 100 devices: 20 000 devices per enterprise at most in one run. */
 export const MAX_LIST_PAGES = 200;
@@ -35,8 +36,8 @@ export function writtenDuringListing(k: { created_at: Date | string | null; enro
 
 /** A device absent at Google leaves management with the reason its commands give; true when it left now. */
 export async function releaseGoneDevice(tenantId: number, deviceId: number): Promise<boolean> {
-  const removed = await db('android_commands').where({ tenant_id: tenantId, device_id: deviceId })
-    .whereIn('request_type', ['WIPE', 'RELINQUISH_OWNERSHIP']).whereIn('state', ['sent', 'acknowledged']).first('id');
+  const removed = await commands(db).where({ 'c.tenant_id': tenantId, 't.device_id': deviceId })
+    .whereIn('c.request_type', ['WIPE', 'RELINQUISH_OWNERSHIP']).whereIn('t.state', ['sent', 'acknowledged']).first('c.id');
   return db.transaction((trx) => exitManagement(trx, tenantId, deviceId, removed ? 'removed_by_command' : 'missing_in_provider'));
 }
 

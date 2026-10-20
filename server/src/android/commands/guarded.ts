@@ -35,6 +35,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { ANDROID_COMMANDS, AndroidCommandParamError, checkNewPassword, refusalOf, type AndroidCommandType } from './catalog';
 import { AndroidCommandError, cancelAndroidCommand, enqueueAndroidCommands, registerAndroidCommandFinalHook, type FinalTargetEvent } from './bus';
 import { RESET_PASSWORD_PURPOSE } from './submit';
+import { commands } from './store';
 
 export type AndroidGuardedKey =
   | 'mdm.erase_device' | 'mdm.remove_management' | 'mdm.device_lock' | 'mdm.lost_mode_enable'
@@ -191,8 +192,8 @@ export const androidGuardedChannel = {
         if (secret?.missing) {
           // The secret is gone (an execution already sealed it and destroyed it): only the commands already written
           // are replayed; never a RESET_PASSWORD without its password (it would clear the password).
-          const existing = new Set((await trx('android_commands').where({ tenant_id: ctx.tenantId })
-            .whereIn('id', ids.map((d) => guardedAndroidCommandId(ctx.actionUuid, d))).pluck('device_id') as number[]).map(Number));
+          const existing = new Set((await commands(trx).where({ 'c.tenant_id': ctx.tenantId })
+            .whereIn('c.id', ids.map((d) => guardedAndroidCommandId(ctx.actionUuid, d))).pluck('t.device_id') as number[]).map(Number));
           for (const d of ids) if (!existing.has(d)) out.set(d, { status: 'skipped', code: 'secret_unavailable' });
           ids = ids.filter((d) => existing.has(d));
           if (!ids.length) continue;
@@ -225,11 +226,11 @@ export const androidGuardedChannel = {
   async cancelAfterDispatch(_key: AndroidGuardedKey, ctx: GuardExecutionContext<Record<string, unknown>>, o: { gateway?: AndroidGateway } = {}):
     Promise<Map<number, 'cancelled' | 'already_delivered' | 'completed'>> {
     const out = new Map<number, 'cancelled' | 'already_delivered' | 'completed'>();
-    const cmds = await db('android_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid }).select('id', 'device_id') as
+    const cmds = await commands(db).where({ 'c.tenant_id': ctx.tenantId, 'c.guard_action_uuid': ctx.actionUuid }).select('c.id', 't.device_id') as
       Array<{ id: string; device_id: number }>;
     for (const c of cmds) {
       await cancelAndroidCommand(ctx.tenantId, String(c.id), { actor: `u:${ctx.requesterId}` }, { allowGuarded: true, ...(o.gateway ? { gateway: o.gateway } : {}) });
-      const r = await db('android_commands').where({ tenant_id: ctx.tenantId, id: c.id }).first('state') as { state: string };
+      const r = await commands(db).where({ 'c.tenant_id': ctx.tenantId, 'c.id': c.id }).first('t.state') as { state: string };
       if (r.state === 'acknowledged' || r.state === 'error') out.set(Number(c.device_id), 'completed');
       else if (r.state === 'cancelled' || r.state === 'expired' || r.state === 'rejected') out.set(Number(c.device_id), 'cancelled');
       else throw new AndroidCommandError(503, 'androidGoogleUnavailable', 'the cancellation is not confirmed yet: it is retried');
@@ -391,7 +392,7 @@ export function amapiGuardedChannel(key: AndroidGuardedKey, o: { gateway?: () =>
     revalidate: (ctx, ids) => androidGuardedChannel.revalidate(key, ctx, ids),
     execute: (ctx, ids) => androidGuardedChannel.execute(key, ctx, ids, { gateway: gw() }),
     async cancelAfterDispatch(ctx) {
-      const mine = await db('android_commands').where({ tenant_id: ctx.tenantId, guard_action_uuid: ctx.actionUuid }).first('id');
+      const mine = await commands(db).where({ 'c.tenant_id': ctx.tenantId, 'c.guard_action_uuid': ctx.actionUuid }).first('c.id');
       return mine ? androidGuardedChannel.cancelAfterDispatch(key, ctx, { gateway: gw() }) : new Map();
     },
   };

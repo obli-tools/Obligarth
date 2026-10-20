@@ -123,7 +123,7 @@ async function withdrawClosedTargets(trx: Knex.Transaction, tenantId: number, co
 async function prepare(trx: Knex.Transaction, ctx: JobContext<Submit>): Promise<Prepared> {
   const tenantId = ctx.tenantId as number;
   const commandId = ctx.payload.commandId;
-  const cmd = await trx('mdm_commands').where({ tenant_id: tenantId, id: commandId }).forUpdate()
+  const cmd = await trx('mdm_commands').where({ tenant_id: tenantId, id: commandId, platform: 'apple' }).forUpdate()
     .first('id', 'request_type', 'plist', 'plist_enc', 'push', 'not_before', 'expires_at', 'submit_state', 'submit_attempts') as CommandRow | undefined;
   if (!cmd) return { kind: 'skip', why: 'not_found' };
   if (cmd.submit_state !== 'pending' && cmd.submit_state !== 'held') {
@@ -471,7 +471,7 @@ async function resubmitHeld(ctx: JobContext<Tenant>): Promise<JobResult> {
     if (await tenantFrozen(trx, tenantId)) return -1;
     const t = await trx('tenants').where({ id: tenantId }).first('mdm_key') as { mdm_key: string | null } | undefined;
     if (!t?.mdm_key) return -2;
-    const held = await trx('mdm_commands').where({ tenant_id: tenantId, submit_state: 'held' }).orderBy('created_at').limit(500).forUpdate().skipLocked()
+    const held = await trx('mdm_commands').where({ tenant_id: tenantId, submit_state: 'held', platform: 'apple' }).orderBy('created_at').limit(500).forUpdate().skipLocked()
       .select('id', 'not_before') as Array<{ id: string; not_before: Date | null }>;
     const now = Date.now();
     for (const c of held) {
@@ -494,7 +494,7 @@ async function resubmitAll(ctx: JobContext<Record<string, never>>): Promise<JobR
   let tenants = 0;
   const { failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
     ctx.throwIfAborted();
-    const held = await db('mdm_commands').where({ tenant_id: tenantId, submit_state: 'held' }).first('id');
+    const held = await db('mdm_commands').where({ tenant_id: tenantId, submit_state: 'held', platform: 'apple' }).first('id');
     if (!held) return;
     await requestResubmitHeld(tenantId);
     tenants++;
@@ -510,7 +510,8 @@ async function expirePending(ctx: JobContext<Record<string, never>>): Promise<Jo
   let expired = 0;
   const { failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
     ctx.throwIfAborted();
-    const due = await db('mdm_commands').where({ tenant_id: tenantId }).whereIn('submit_state', ['pending', 'held'])
+    // Apple's only: an Android command expires through its own polling (android.operations-poll, its final hooks).
+    const due = await db('mdm_commands').where({ tenant_id: tenantId, platform: 'apple' }).whereIn('submit_state', ['pending', 'held'])
       .where('expires_at', '<=', new Date()).limit(500).pluck('id') as string[];
     for (const id of due) {
       const commandId = String(id).toLowerCase();
@@ -641,7 +642,7 @@ async function relaunchAll(ctx: JobContext<Record<string, never>>): Promise<JobR
   let tenants = 0;
   const { failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
     ctx.throwIfAborted();
-    const open = await db('mdm_command_targets').where({ tenant_id: tenantId }).whereIn('state', ['queued', 'sent', 'notnow']).first('device_id');
+    const open = await db('mdm_command_targets').where({ tenant_id: tenantId }).whereNull('amapi_request_type').whereIn('state', ['queued', 'sent', 'notnow']).first('device_id');
     if (!open) return;
     await (relaunchJob as JobHandle<Tenant>).send({ tenantId }, { singletonKey: `t:${tenantId}`, tenantId });
     tenants++;

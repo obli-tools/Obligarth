@@ -36,9 +36,8 @@ import { OperationSchema } from '../inbox/schemas';
 import type { z } from 'zod';
 import { adoptableOperations, ANDROID_COMMANDS, finalStateOf, nextPollAt, withDuration, type AndroidCommandType } from './catalog';
 import { byodCommandRefusal } from '../byod/policy';
-import {
-  cancelSent, COMMAND_COLUMNS, COMMAND_SECRET_COLUMN, commandSenders, finalizeCommand, type CommandRow,
-} from './bus';
+import { cancelSent, commandSenders, finalizeCommand } from './bus';
+import { COMMAND_COLUMNS, COMMAND_SECRET_COLUMN, commands, patchCommand, readCommand, type CommandRow } from './store';
 
 export const SUBMIT_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.commands.submit' }) as DbActor;
 export const POLL_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.operations-poll' }) as DbActor;
@@ -62,27 +61,30 @@ async function personalRefusal(trx: Knex.Transaction, tenantId: number, row: Com
 }
 
 async function readRow(trx: Knex.Transaction, tenantId: number, id: string, lock = true): Promise<CommandRow | undefined> {
-  const q = trx('android_commands').where({ tenant_id: tenantId, id }).first(COMMAND_COLUMNS);
-  if (lock) q.forUpdate();
-  return q as unknown as Promise<CommandRow | undefined>;
+  return readCommand(trx, tenantId, id, lock);
+}
+
+/** A sealed newPassword moved by the migration android_commands_move and not sealed again yet (boot backfill). */
+async function sealMoving(trx: Knex.Transaction, tenantId: number, id: string): Promise<boolean> {
+  return !!(await trx('android_command_moved_secrets').where({ tenant_id: tenantId, command_id: id }).first('command_id'));
 }
 
 /** Records the operation Google returned (T2): 'sent', the secret wiped. False when the command changed meanwhile. */
 async function recordOperation(tenantId: number, id: string, operation: string): Promise<boolean> {
   const now = new Date();
   return db.transaction(async (trx) => {
-    const n = await trx('android_commands').where({ tenant_id: tenantId, id, state: 'pending' }).whereNull('amapi_operation').update({
+    const n = await patchCommand(trx, tenantId, id, {
       state: 'sent', submit_state: 'submitted', hold_reason: null, amapi_operation: operation, delivered_at: now, secret_enc: null,
-      next_poll_at: nextPollAt(now, 0), poll_count: 0, state_event_at: now, last_submit_error: null, updated_at: now,
-    });
+      next_poll_at: nextPollAt(now, 0), poll_count: 0, state_event_at: now, last_submit_error: null, submitted_at: now,
+    }, { states: ['pending'], operationNull: true });
     return n === 1;
   });
 }
 
 async function hold(tenantId: number, id: string, reason: 'frozen' | 'gateway_cap' | 'google_unavailable', clearMark: boolean): Promise<void> {
-  await db.transaction((trx) => trx('android_commands').where({ tenant_id: tenantId, id, state: 'pending' }).update({
-    submit_state: 'held', hold_reason: reason, updated_at: trx.fn.now(), ...(clearMark ? { amapi_submit_started_at: null } : {}),
-  }));
+  await db.transaction((trx) => patchCommand(trx, tenantId, id, {
+    submit_state: 'held', hold_reason: reason, ...(clearMark ? { amapi_submit_started_at: null } : {}),
+  }, { states: ['pending'] }));
 }
 
 /** Lists the operations of a device (AN50 recovery only), every page up to the bound. */
@@ -114,7 +116,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
       // A mark without an operation: the recovery comes first, whatever the expiry or the cancellation (an
       // operation may exist at Google).
       if (mark) {
-        if (row.submit_state === 'held') await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'pending', hold_reason: null });
+        if (row.submit_state === 'held') await patchCommand(trx, tenantId, id, { submit_state: 'pending', hold_reason: null });
         return { kind: 'recover' as const, row, e, mark };
       }
       if (row.cancel_requested_at) {
@@ -125,10 +127,14 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, row, { state: 'expired' });
         return { kind: 'done' as const, result: 'expired' as const };
       }
-      if (!e || !commandAdmitted(row.request_type, e.state) || e.id !== Number(row.enterprise_id)) {
+      // The enterprise of the command is the one of its device name (enterprises/<e>/devices/<d>): a command written
+      // before a change of enterprise is never issued to the new one.
+      if (!e || !commandAdmitted(row.request_type, e.state) || !String(row.enrollment_id).startsWith(`${e.name}/devices/`)) {
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: 'enterprise_not_linked' });
         return { kind: 'done' as const, result: 'rejected' as const };
       }
+      // A seal the migration moved waits for the boot backfill (sealed again for its new column): never issued without it.
+      if (row.params?.passwordSealed === true && !row.secret_enc && (await sealMoving(trx, tenantId, id))) return { kind: 'skip' as const };
       if (row.params?.passwordSealed === true && !row.secret_enc) {
         await finalizeCommand(trx, row, { state: 'rejected', rejectCode: 'secret_lost' });
         return { kind: 'done' as const, result: 'rejected' as const };
@@ -141,12 +147,12 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         return { kind: 'done' as const, result: 'rejected' as const };
       }
       if (ANDROID_COMMANDS[row.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
-        await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', updated_at: trx.fn.now() });
+        await patchCommand(trx, tenantId, id, { submit_state: 'held', hold_reason: 'frozen' });
         return { kind: 'done' as const, result: 'held' as const };
       }
       const at = clock();
-      await trx('android_commands').where({ tenant_id: tenantId, id }).update({
-        amapi_submit_started_at: at, submit_state: 'pending', hold_reason: null, submit_attempts: trx.raw('submit_attempts + 1'), updated_at: trx.fn.now(),
+      await patchCommand(trx, tenantId, id, {
+        amapi_submit_started_at: at, submit_state: 'pending', hold_reason: null, submit_attempts: trx.raw('submit_attempts + 1'),
       });
       return { kind: 'issue' as const, row, e };
     });
@@ -162,7 +168,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
       // An operation another command already recorded is never adopted (a command of the same type finished just
       // before this one was written: the residue AN-RC4 narrowed to the operations nobody owns).
       const owned = candidates.length
-        ? new Set(await db('android_commands').whereIn('amapi_operation', candidates.map((c) => c.name)).pluck('amapi_operation') as string[])
+        ? new Set(await db('mdm_command_targets').whereIn('amapi_operation', candidates.map((c) => c.name)).pluck('amapi_operation') as string[])
         : new Set<string>();
       const ops = candidates.filter((c) => !owned.has(c.name))
         .sort((a, b) => Date.parse(String(a.metadata?.createTime)) - Date.parse(String(b.metadata?.createTime)));
@@ -183,15 +189,13 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         if (cur.cancel_requested_at) { await finalizeCommand(trx, cur, { state: 'cancelled' }); return 'cancelled' as const; }
         if (new Date(cur.expires_at).getTime() <= clock().getTime()) { await finalizeCommand(trx, cur, { state: 'expired' }); return 'expired' as const; }
         if (ANDROID_COMMANDS[cur.request_type].destructive && (await tenantFrozen(trx, tenantId, 'amapi'))) {
-          await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'held', hold_reason: 'frozen', amapi_submit_started_at: null, updated_at: trx.fn.now() });
+          await patchCommand(trx, tenantId, id, { submit_state: 'held', hold_reason: 'frozen', amapi_submit_started_at: null });
           return 'held' as const;
         }
         // Lot AN-F1: the recovery issues again only what a personal device may take.
         const personal = await personalRefusal(trx, tenantId, cur);
         if (personal) { await finalizeCommand(trx, cur, { state: 'rejected', rejectCode: personal }); return 'rejected' as const; }
-        await trx('android_commands').where({ tenant_id: tenantId, id }).update({
-          amapi_submit_started_at: clock(), submit_attempts: trx.raw('submit_attempts + 1'), updated_at: trx.fn.now(),
-        });
+        await patchCommand(trx, tenantId, id, { amapi_submit_started_at: clock(), submit_attempts: trx.raw('submit_attempts + 1') });
         return 'issue' as const;
       });
       if (again !== 'issue') return again;
@@ -228,8 +232,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
         return 'rejected';
       }
       // Google out of reach: the call may have reached it. The mark stays; the job tries again through the recovery.
-      await db.transaction((trx) => trx('android_commands').where({ tenant_id: tenantId, id })
-        .update({ last_submit_error: err.kind.slice(0, 64), updated_at: trx.fn.now() }));
+      await db.transaction((trx) => patchCommand(trx, tenantId, id, { last_submit_error: err.kind.slice(0, 64) }));
       throw err;
     } finally {
       secret?.fill(0);
@@ -250,7 +253,7 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
     const now = clock();
     // Pending past their end: never issued → expired; issued (a mark): the submission recovers or expires them.
     out.expired += await db.transaction(async (trx) => {
-      const rows = await trx('android_commands').where({ tenant_id: tenantId, state: 'pending' }).where('expires_at', '<=', now)
+      const rows = await commands(trx).where({ 'c.tenant_id': tenantId, 't.state': 'pending' }).where('c.expires_at', '<=', now)
         .limit(500).forUpdate().select(COMMAND_COLUMNS) as CommandRow[];
       let n = 0;
       for (const r of rows) {
@@ -259,9 +262,9 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
       }
       return n;
     });
-    const due = await db('android_commands').where({ tenant_id: tenantId, state: 'sent' })
-      .where((q) => q.where('next_poll_at', '<=', now).orWhere('expires_at', '<=', now))
-      .orderBy('next_poll_at').limit(o.limit ?? 100).select(COMMAND_COLUMNS) as CommandRow[];
+    const due = await commands(db).where({ 'c.tenant_id': tenantId, 't.state': 'sent' })
+      .where((q) => q.where('t.amapi_next_poll_at', '<=', now).orWhere('c.expires_at', '<=', now))
+      .orderBy('t.amapi_next_poll_at').limit(o.limit ?? 100).select(COMMAND_COLUMNS) as CommandRow[];
     if (!due.length) return out;
     const e = await readEnterprise();
     if (!e) return out;
@@ -285,9 +288,7 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
           const count = Number(r.poll_count) + 1;
           const next = nextPollAt(new Date(r.delivered_at ?? now), count);
           const end = new Date(r.expires_at);
-          await trx('android_commands').where({ tenant_id: tenantId, id: r.id, state: 'sent' }).update({
-            poll_count: count, next_poll_at: next.getTime() > end.getTime() ? end : next, updated_at: trx.fn.now(),
-          });
+          await patchCommand(trx, tenantId, r.id, { poll_count: count, next_poll_at: next.getTime() > end.getTime() ? end : next }, { states: ['sent'] });
         }
       });
     }
@@ -303,11 +304,11 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
 export async function resumeHeldCommands(tenantId: number, actor: DbActor = POLL_ACTOR): Promise<number> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
     const frozen = (await tenantFrozen(trx, tenantId, 'amapi'));
-    const q = trx('android_commands').where({ tenant_id: tenantId, state: 'pending', submit_state: 'held' });
-    if (frozen) q.where({ hold_reason: 'google_unavailable' }); else q.whereIn('hold_reason', ['frozen', 'google_unavailable']);
-    const ids = await q.forUpdate().limit(500).pluck('id') as string[];
+    const q = commands(trx).where({ 'c.tenant_id': tenantId, 't.state': 'pending', 'c.submit_state': 'held' });
+    if (frozen) q.where({ 't.hold_reason': 'google_unavailable' }); else q.whereIn('t.hold_reason', ['frozen', 'google_unavailable']);
+    const ids = await q.forUpdate().limit(500).pluck('c.id') as string[];
     for (const id of ids) {
-      await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'pending', hold_reason: null, updated_at: trx.fn.now() });
+      await patchCommand(trx, tenantId, String(id), { submit_state: 'pending', hold_reason: null });
       await commandSenders.submit(trx, { tenantId, commandId: String(id) });
     }
     return ids.length;
@@ -318,13 +319,12 @@ export async function resumeHeldCommands(tenantId: number, actor: DbActor = POLL
 export async function releaseHeldCommand(tenantId: number, commandId: string, actor: DbActor): Promise<'released' | 'not_held' | 'frozen'> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
     if ((await tenantFrozen(trx, tenantId, 'amapi'))) return 'frozen' as const;
-    const n = await trx('android_commands').where({ tenant_id: tenantId, id: commandId.toLowerCase(), state: 'pending', submit_state: 'held', hold_reason: 'gateway_cap' })
-      .update({ submit_state: 'pending', hold_reason: null, updated_at: trx.fn.now() });
+    const n = await patchCommand(trx, tenantId, commandId, { submit_state: 'pending', hold_reason: null },
+      { states: ['pending'], submitState: 'held', holdReason: 'gateway_cap' });
     if (n !== 1) return 'not_held' as const;
     await commandSenders.submit(trx, { tenantId, commandId: commandId.toLowerCase() });
     // Review AN-D1: the release of a command the last-resort cap held is traced (who, which command).
-    const c = await trx('android_commands').where({ tenant_id: tenantId, id: commandId.toLowerCase() }).first('device_id', 'request_type', 'guard_action_uuid') as
-      { device_id: number; request_type: string; guard_action_uuid: string | null };
+    const c = await readCommand(trx, tenantId, commandId) as CommandRow;
     await audit.appendInTx(trx, {
       tenantId, action: 'android.command_released', target: { type: 'device', id: String(c.device_id), device: Number(c.device_id) },
       links: { command: commandId.toLowerCase(), ...(c.guard_action_uuid ? { action: c.guard_action_uuid } : {}) },
@@ -337,8 +337,8 @@ export async function releaseHeldCommand(tenantId: number, commandId: string, ac
 /** Pending commands not submitted for 2 minutes (a lost job, an interrupted submission): their job again. */
 export async function resubmitStaleCommands(tenantId: number, actor: DbActor = POLL_ACTOR): Promise<number> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
-    const ids = await trx('android_commands').where({ tenant_id: tenantId, state: 'pending', submit_state: 'pending' })
-      .where('updated_at', '<', trx.raw("now() - interval '2 minutes'")).limit(500).pluck('id') as string[];
+    const ids = await commands(trx).where({ 'c.tenant_id': tenantId, 't.state': 'pending', 'c.submit_state': 'pending' })
+      .where('c.updated_at', '<', trx.raw("now() - interval '2 minutes'")).limit(500).pluck('c.id') as string[];
     for (const id of ids) await commandSenders.submit(trx, { tenantId, commandId: String(id) });
     return ids.length;
   }));
@@ -369,13 +369,13 @@ export const RESET_PASSWORD_PURPOSE = 'android.reset_password';
 
 async function onCommand(ctx: AndroidEventContext<z.infer<typeof OperationSchema>>): Promise<void> {
   const op = ctx.event.payload;
-  const row = await ctx.trx('android_commands').where({ tenant_id: ctx.tenantId, amapi_operation: op.name }).forUpdate().first(COMMAND_COLUMNS) as CommandRow | undefined;
+  const row = await commands(ctx.trx).where({ 'c.tenant_id': ctx.tenantId, 't.amapi_operation': op.name }).forUpdate().first(COMMAND_COLUMNS) as CommandRow | undefined;
   if (!row) {
     // The notification may arrive before T2 of the submission: a submission of this device in flight → retried.
     const device = op.name.split('/operations/')[0];
-    const inFlight = await ctx.trx('android_commands').where({ tenant_id: ctx.tenantId, enrollment_id: device, state: 'pending' })
-      .whereNotNull('amapi_submit_started_at').whereNull('amapi_operation')
-      .modify((q) => { if (op.metadata?.type) q.where({ request_type: op.metadata.type }); }).first('id');
+    const inFlight = await commands(ctx.trx).where({ 'c.tenant_id': ctx.tenantId, 't.enrollment_id': device, 't.state': 'pending' })
+      .whereNotNull('t.amapi_submit_started_at').whereNull('t.amapi_operation')
+      .modify((q) => { if (op.metadata?.type) q.where({ 'c.request_type': op.metadata.type }); }).first('c.id');
     if (inFlight) throw new MissingPrerequisite('operation not recorded yet');
     return;
   }

@@ -28,6 +28,9 @@ import { registerFreezeHandler } from '../guard';
 import { currentDbContext, type DbActor } from '../db/context';
 import { endKioskExitsOnFreeze } from '../android/kiosk/exits';
 import { resumeHeldCommands } from '../android/commands/submit';
+import { resealMovedCommandSecrets } from '../android/commands/moved';
+import { registerAndroidConsoleCommands } from '../android/commands/console';
+import { registerAndroidQueueChannel } from '../android/routes/commands.routes';
 import { registerDevicePurger, registerEnrollmentPurgeSlice } from './privacy';
 import { purgeEndedTokensSlice } from '../android/enrollment/tokens';
 import { registerAlertDefinitions } from '../services/alertCatalog';
@@ -81,22 +84,29 @@ export function registerAndroidModule(): void {
     table: 'android_enrollment_tokens', column: 'value_ref', tenantColumn: 'tenant_id',
     refs: (v) => (typeof v === 'string' && /^[0-9a-f-]{36}$/.test(v) ? [v] : []),
   });
-  // Lot AN-D1: commands (section 11, §22.9): the sealed newPassword of RESET_PASSWORD (android_commands.secret_enc: a
-  // command whose seal is lost is rejected, never sent without its password), the references of pending_actions
-  // (mdm.reset_password carries {"$secret": "<uuid>"}, purpose android.reset_password), the COMMAND handler, the
-  // guarded actions that exist only for Android and the final hook of the lost mode.
-  registerSecretColumn({
-    table: 'android_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
-    owner: 'android.commands', onLoss: 'null', lossPatch: { state: 'rejected', reject_code: 'secret_lost', submit_state: 'failed', hold_reason: null },
-  });
-  // The queue widened to Android (migration android_junction): its sealed newPassword, written by the bus of lot AN-P.
+  // Lot AN-D (section 11, §22.9): the sealed newPassword of RESET_PASSWORD lives in mdm_commands.secret_enc (a command
+  // whose seal is lost keeps its row and is rejected at its submission, secret_lost: never sent without its password);
+  // the seals the migration android_commands_move moved are sealed again there by the boot backfill (custom source).
+  // android_commands.secret_enc stays registered for that reseal only (transient: the table is gone, no scan reads it).
+  // The references of pending_actions (mdm.reset_password carries {"$secret": "<uuid>"}, purpose android.reset_password),
+  // the COMMAND handler, the guarded actions that exist only for Android and the final hook of the lost mode.
   registerSecretColumn({
     table: 'mdm_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
-    owner: 'android.commands', onLoss: 'delete',
+    owner: 'android.commands', onLoss: 'null',
+    legacy: { kind: 'custom', name: 'android_commands_moved', run: resealMovedCommandSecrets },
+  });
+  registerSecretColumn({
+    table: 'android_commands', column: 'secret_enc', pk: 'id', pkType: 'uuid', tenantColumn: 'tenant_id', encoding: 'utf8',
+    owner: 'android.commands', transient: true,
   });
   registerSecretReferenceHolder({ table: 'pending_actions', column: 'params', tenantColumn: 'tenant_id', refs: (v) => findSecretRefs(typeof v === 'string' ? JSON.parse(v) : v) });
   registerCommandHandler();
   registerAndroidGuardedActions();
+  // Lot AN-D (§11.2, §11.5): the commands of the console that are not guarded (restriction keys mdm.reboot,
+  // mdm.lost_mode_disable, mdm.clear_app_data, floor 'sensitive'; approval type android_action), and the routes of the
+  // queue serving the amapi devices and the Android commands (registerQueueChannel).
+  registerAndroidConsoleCommands();
+  registerAndroidQueueChannel();
   // Lot AN-G1: the temporary exit of a kiosk (guarded action mdm.android_kiosk_exit, new restriction key).
   registerAndroidKioskActions();
   // Lot AN-H1: the operator's forget of a device presumed gone (guarded action android.device_forget), the restricted

@@ -281,7 +281,7 @@ function buildSources(ctx: SourceContext): Partial<Record<ChangeEventKind, Event
       detail: r.reject_code ? short(r.reject_code, 64) : null,
       actor: actorName(r),
       actorType: r.user_id ? 'user' : 'system',
-      severityHint: /^(EraseDevice|DeviceLock|EnableLostMode|DisableLostMode|ClearPasscode|RemoveProfile|RemoveApplication)$/.test(String(r.request_type)) ? 'high' : 'medium',
+      severityHint: /^(EraseDevice|DeviceLock|EnableLostMode|DisableLostMode|ClearPasscode|RemoveProfile|RemoveApplication|WIPE|LOCK|RESET_PASSWORD|START_LOST_MODE|STOP_LOST_MODE|RELINQUISH_OWNERSHIP|CLEAR_APP_DATA)$/.test(String(r.request_type)) ? 'high' : 'medium',
       resourceType: 'mdm_command',
       resourceId: String(r.command_id).toUpperCase(),
       resourcePath: null,

@@ -221,11 +221,12 @@ interface Planned {
 }
 
 async function replayOf(trx: Knex.Transaction, tenantId: number, key: string): Promise<EnqueueOutcome | null> {
-  const first = await trx('mdm_commands').where({ tenant_id: tenantId, idempotency_key: key }).first('id', 'batch_id', 'not_before', 'submit_state') as
+  // The commands of the Apple platform only (lot AN-D: an Android command of the queue stores its key 'amapi:…').
+  const first = await trx('mdm_commands').where({ tenant_id: tenantId, idempotency_key: key, platform: 'apple' }).first('id', 'batch_id', 'not_before', 'submit_state') as
     { id: string; batch_id: string | null; not_before: Date | null; submit_state: string } | undefined;
   if (!first) return null;
   const commands = first.batch_id
-    ? await trx('mdm_commands').where({ tenant_id: tenantId, batch_id: first.batch_id }).orderBy('created_at').orderBy('id').select('id', 'submit_state') as
+    ? await trx('mdm_commands').where({ tenant_id: tenantId, batch_id: first.batch_id, platform: 'apple' }).orderBy('created_at').orderBy('id').select('id', 'submit_state') as
       Array<{ id: string; submit_state: string }>
     : [{ id: first.id, submit_state: first.submit_state }];
   const ids = commands.map((c) => String(c.id).toLowerCase());

@@ -1,7 +1,8 @@
-// The bus of the Android commands (sections 11.1 to 11.3, AN50), in files of its own until the junction AN-P (the bus
-// of apple/commands/bus.ts becomes per platform there and these rows move to mdm_commands):
-//   enqueue  in the caller's transaction (tenant context): the prerequisites of the catalogue per device, one row of
-//            android_commands per device ('pending', batch_id), the newPassword of RESET_PASSWORD sealed at once in
+// The bus of the Android commands (sections 11.1 to 11.3, AN50). Since lot AN-D the commands live in the queue
+// (mdm_commands, platform 'android', and their target in mdm_command_targets: store.ts); the bus of the Apple module
+// refuses an amapi device (not_apple) and the queue routes hand the amapi commands to this bus (queueChannel.ts):
+//   enqueue  in the caller's transaction (tenant context): the prerequisites of the catalogue per device, one command
+//            of the queue per device ('pending', batch_id), the newPassword of RESET_PASSWORD sealed at once in
 //            secret_enc (never in params, amapi_command, a job payload, the audit nor a log), one job
 //            android.commands.submit per command (sendInTx: it exists only if the transaction commits), the audit
 //            entry mdm.command_requested. NEVER a call to Google (G-A1): the submission is the job's. A second command
@@ -32,8 +33,9 @@ import {
   validateParams, type AndroidCommandType, type AndroidTargetState,
 } from './catalog';
 import { byodCommandRefusal } from '../byod/policy';
+import { COMMAND_SECRET_COLUMN, commands, insertCommand, patchCommand, readCommand, storedKey, type CommandRow } from './store';
 
-export const COMMAND_SECRET_COLUMN = { table: 'android_commands', column: 'secret_enc' } as const;
+export { COMMAND_COLUMNS, COMMAND_SECRET_COLUMN, type CommandRow } from './store';
 /** The guarded command types each guarded action key dispatches (table of §11.4). */
 const GUARDED_TYPES_OF_KEY: Readonly<Record<string, readonly AndroidCommandType[]>> = Object.freeze({
   'mdm.erase_device': ['WIPE'], 'mdm.remove_management': ['WIPE', 'RELINQUISH_OWNERSHIP'], 'mdm.device_lock': ['LOCK'],
@@ -95,42 +97,6 @@ async function journal(trx: Knex.Transaction, entry: AuditEntryInput, who: { act
 
 // ── Reads ─────────────────────────────────────────────────────────────────────
 
-export interface CommandRow {
-  id: string;
-  tenant_id: number;
-  device_id: number;
-  enterprise_id: number;
-  enrollment_id: string;
-  batch_id: string;
-  request_type: AndroidCommandType;
-  params: Record<string, unknown>;
-  amapi_command: Record<string, unknown>;
-  secret_enc: string | null;
-  origin: 'console' | 'guard' | 'system';
-  actor: string;
-  guard_action_uuid: string | null;
-  guard_action_key: string | null;
-  expires_at: Date;
-  submit_state: string;
-  hold_reason: string | null;
-  submit_attempts: number;
-  amapi_submit_started_at: Date | null;
-  amapi_operation: string | null;
-  amapi_error_code: string | null;
-  state: AndroidTargetState;
-  reject_code: string | null;
-  delivered_at: Date | null;
-  completed_at: Date | null;
-  cancel_requested_at: Date | null;
-  next_poll_at: Date | null;
-  poll_count: number;
-  created_at: Date;
-}
-
-export const COMMAND_COLUMNS = ['id', 'tenant_id', 'device_id', 'enterprise_id', 'enrollment_id', 'batch_id', 'request_type', 'params', 'amapi_command',
-  'secret_enc', 'origin', 'actor', 'guard_action_uuid', 'guard_action_key', 'expires_at', 'submit_state', 'hold_reason', 'submit_attempts',
-  'amapi_submit_started_at', 'amapi_operation', 'amapi_error_code', 'state', 'reject_code', 'delivered_at', 'completed_at', 'cancel_requested_at',
-  'next_poll_at', 'poll_count', 'created_at'];
 
 interface TargetRow {
   id: number;
@@ -164,8 +130,8 @@ async function lostModeBlocked(trx: Knex.Transaction, tenantId: number, deviceId
   const since = new Date(Date.now() - LOST_MODE_BLOCK_MS);
   const exits = await trx('android_lost_mode_exits').where({ tenant_id: tenantId }).whereIn('device_id', deviceIds)
     .where('exited_at', '>', since).pluck('device_id') as number[];
-  const resets = await trx('android_commands').where({ tenant_id: tenantId, request_type: 'RESET_PASSWORD', state: 'acknowledged' })
-    .whereIn('device_id', deviceIds).where('completed_at', '>', since).pluck('device_id') as number[];
+  const resets = await commands(trx).where({ 'c.tenant_id': tenantId, 'c.request_type': 'RESET_PASSWORD', 't.state': 'acknowledged' })
+    .whereIn('t.device_id', deviceIds).where('t.completed_at', '>', since).pluck('t.device_id') as number[];
   return new Set([...exits, ...resets].map(Number));
 }
 
@@ -178,10 +144,12 @@ export interface EnqueueAndroidCommands {
   params?: unknown;
   /** RESET_PASSWORD only: sealed at once in secret_enc of each command (the caller zeroes its own copy). */
   newPassword?: string;
-  origin: 'console' | 'guard' | 'system';
+  origin: 'console' | 'guard' | 'system' | 'approval';
   /** 'u:<id>' | 'j:<queue>'. */
   actor: string;
   requestedBy?: number | null;
+  /** An approved request of the matrix's 'restricted' level (approval type android_action). */
+  approvalId?: number | null;
   reason?: string;
   guardActionUuid?: string;
   guardActionKey?: string;
@@ -286,14 +254,13 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
     if (newPassword !== null) {
       secretEnc = await vault.seal({ ...COMMAND_SECRET_COLUMN, pk: id, tenantId }, newPassword, { trx, requestTenantId: tenantId });
     }
-    const rows = await trx('android_commands').insert({
-      id, tenant_id: tenantId, device_id: deviceId, enterprise_id: e.id, enrollment_id: t!.amapi_name, batch_id: batchId, request_type: req.type,
-      params: JSON.stringify(params), amapi_command: JSON.stringify(body), secret_enc: secretEnc, origin: req.origin, actor: req.actor.slice(0, 70),
-      requested_by: req.requestedBy ?? userOfActor(req.actor), reason: req.reason?.slice(0, 500) ?? null,
-      guard_action_uuid: req.guardActionUuid ?? null, guard_action_key: req.guardActionKey ?? null, idempotency_key: req.idempotencyKey?.slice(0, 200) ?? null,
-      expires_at: expiresAt, submit_state: frozen ? 'held' : 'pending', hold_reason: frozen ? 'frozen' : null,
-    }).onConflict().ignore().returning('id') as Array<{ id: string }>;
-    if (rows.length) {
+    const written = await insertCommand(trx, {
+      id, tenantId, deviceId, enrollmentId: String(t!.amapi_name), batchId, type: req.type, params, body, secretEnc, origin: req.origin,
+      actor: req.actor, requestedBy: req.requestedBy ?? userOfActor(req.actor), reason: req.reason?.slice(0, 500) ?? null,
+      approvalId: req.approvalId ?? null, guardActionUuid: req.guardActionUuid ?? null, idempotencyKey: req.idempotencyKey ?? null,
+      expiresAt, held: frozen,
+    });
+    if (written) {
       inserted.push(id);
       out.commandIds.push(id);
       out.byDevice.set(deviceId, id);
@@ -302,11 +269,11 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
     }
     // Not written: the same command already exists (an execution or a request run again), or another open command of
     // the type holds the device (AN-RC4).
-    const same = await trx('android_commands').where({ tenant_id: tenantId, id }).first('id', 'device_id', 'request_type') as
+    const same = await commands(trx).where({ 'c.tenant_id': tenantId, 'c.id': id }).first('c.id', 't.device_id', 'c.request_type') as
       { id: string; device_id: number; request_type: string } | undefined;
     const sameKey = !same && req.idempotencyKey
-      ? await trx('android_commands').where({ tenant_id: tenantId, idempotency_key: req.idempotencyKey.slice(0, 200), device_id: deviceId }).first('id', 'request_type') as
-        { id: string; request_type: string } | undefined
+      ? await commands(trx).where({ 'c.tenant_id': tenantId, 'c.idempotency_key': storedKey(deviceId, req.idempotencyKey), 't.device_id': deviceId })
+        .first('c.id', 'c.request_type') as { id: string; request_type: string } | undefined
       : undefined;
     const replay = same && Number(same.device_id) === deviceId && same.request_type === req.type ? same.id
       : sameKey && sameKey.request_type === req.type ? sameKey.id : null;
@@ -346,13 +313,13 @@ export async function enqueueAndroidCommands(trx: Knex.Transaction, req: Enqueue
 export async function finalizeCommand(trx: Knex.Transaction, row: Pick<CommandRow, 'id' | 'tenant_id' | 'device_id' | 'request_type' | 'actor' | 'guard_action_uuid' | 'state'>,
   final: { state: Exclude<AndroidTargetState, 'pending' | 'sent'>; errorCode?: string | null; rejectCode?: string | null }): Promise<boolean> {
   const from: AndroidTargetState[] = final.state === 'acknowledged' || final.state === 'error' ? ['sent'] : ['pending', 'sent'];
-  const n = await trx('android_commands').where({ tenant_id: row.tenant_id, id: row.id }).whereIn('state', from).update({
+  const n = await patchCommand(trx, row.tenant_id, row.id, {
     state: final.state, amapi_error_code: final.errorCode ?? null, reject_code: final.rejectCode ?? null, secret_enc: null,
-    completed_at: trx.fn.now(), state_event_at: trx.fn.now(), next_poll_at: null, updated_at: trx.fn.now(),
+    completed_at: trx.fn.now(), state_event_at: trx.fn.now(), next_poll_at: null,
     ...(final.state === 'cancelled' ? { submit_state: trx.raw("CASE WHEN submit_state = 'submitted' THEN submit_state ELSE 'cancelled' END") } : {}),
     ...(final.state === 'rejected' ? { submit_state: 'failed', hold_reason: null } : {}),
     ...(final.state === 'expired' ? { hold_reason: null, submit_state: trx.raw("CASE WHEN submit_state = 'submitted' THEN submit_state ELSE 'failed' END") } : {}),
-  });
+  }, { states: from });
   if (n !== 1) return false;
   for (const h of finalHooks) {
     await h({ trx, tenantId: row.tenant_id, deviceId: Number(row.device_id), commandId: row.id, requestType: row.request_type, state: final.state,
@@ -389,7 +356,7 @@ export async function cancelAndroidCommand(tenantId: number, commandId: string, 
   const actorUser = userOfActor(by.actor);
   return asTenant(tenantId, actorUser ? { type: 'user', userId: actorUser } : COMMANDS_ACTOR, async () => {
     const step = await db.transaction(async (trx) => {
-      const row = await trx('android_commands').where({ tenant_id: tenantId, id }).forUpdate().first(COMMAND_COLUMNS) as CommandRow | undefined;
+      const row = await readCommand(trx, tenantId, id, true);
       if (!row) throw new AndroidCommandError(404, 'notFound', 'command not found');
       if (row.guard_action_uuid && !o.allowGuarded) {
         throw new AndroidCommandError(409, 'guardedActionRequired', 'the commands of a guarded action are cancelled through the action');
@@ -399,11 +366,10 @@ export async function cancelAndroidCommand(tenantId: number, commandId: string, 
         await finalizeCommand(trx, { ...row, actor: by.actor }, { state: 'cancelled' });
         return { kind: 'done' as const, row };
       }
-      await trx('android_commands').where({ tenant_id: tenantId, id }).whereNull('cancel_requested_at')
-        .update({ cancel_requested_at: trx.fn.now(), updated_at: trx.fn.now() });
+      await patchCommand(trx, tenantId, id, { cancel_requested_at: trx.fn.now() }, { cancelNotRequested: true });
       if (row.state === 'pending') {
         // in flight: the submission job decides (it sees the mark)
-        if (row.submit_state === 'held') await trx('android_commands').where({ tenant_id: tenantId, id }).update({ submit_state: 'pending', hold_reason: null });
+        if (row.submit_state === 'held') await patchCommand(trx, tenantId, id, { submit_state: 'pending', hold_reason: null });
         await commandSenders.submit(trx, { tenantId, commandId: id });
         return { kind: 'requested' as const, row };
       }
