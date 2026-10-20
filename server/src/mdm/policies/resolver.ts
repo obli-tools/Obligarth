@@ -1,5 +1,5 @@
 import {
-  APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
+  ANDROID_MODES, APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
   type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
   type SettingKind, type SourceScope,
 } from '@obligarth/shared';
@@ -145,10 +145,14 @@ export function appViaDeclaration(d: ResolutionDevice, app: NonNullable<Contribu
 
 function availabilityOf(input: ResolutionInput, d: ResolutionDevice, c: Contribution): SettingAvailability {
   const unresolved = c.variables.find((v) => variableValue(v, d, input.tenant) === null) ?? null;
-  // An Android key (lot AN-A2): Android devices only; the compilation of the Android module checks each field
-  // against the device (API level, mode, ownership: mdm/android/availability.ts).
+  // An Android key (lot AN-A2): the devices of the channel amapi only, known by their mode (the bridge agent,
+  // channel legacy_agent, is 'device_admin' and has no policy in v0: agent-pont-android §2, review PONT-R); the
+  // compilation of the Android module checks each field against the device (API level, mode, ownership:
+  // mdm/android/availability.ts).
   if (c.kind === 'android') {
-    if (d.platform !== 'android') return { status: 'not_applicable', reason: 'platform_unsupported' };
+    if (d.platform !== 'android' || !(ANDROID_MODES as readonly string[]).includes(d.mode)) {
+      return { status: 'not_applicable', reason: 'platform_unsupported' };
+    }
     if (unresolved) return { status: 'not_applicable', reason: 'variable_unresolved', detail: unresolved };
     return { status: 'available' };
   }
