@@ -129,6 +129,9 @@ export interface AndroidSigninReadiness {
    *  can be given). */
   profiles: number;
   profilesPushed: number;
+  /** Of those pushed, the ones each value of allowPersonalUsage can give a device (review AN-F2: ALLOWED a work
+   *  profile, COPE or personal; DISALLOWED a fully managed company device): enabling needs one for the chosen value. */
+  pushedByUsage: Record<AndroidSigninPersonalUsage, number>;
   /** An identity provider (Obligate) is configured for the authentication of the end users. */
   identityProvider: boolean;
 }

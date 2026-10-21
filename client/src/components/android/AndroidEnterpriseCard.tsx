@@ -213,11 +213,14 @@ function SigninPanel({ config, canManage, onSaved }: { config: AndroidSigninConf
   };
   // The prerequisites the server reports (lot AN-F2, raccord): enabling is offered once all of them are met.
   const readiness = config.readiness;
+  // Review AN-F2: a profile the chosen personal use can give a device (COPE or personal under ALLOWED, fully managed
+  // under DISALLOWED), not any sign-in URL profile.
+  const pushedForUsage = readiness ? (readiness.pushedByUsage?.[usage as typeof ANDROID_SIGNIN_PERSONAL_USAGE[number]] ?? 0) : 0;
   const checks: Array<[string, boolean, string]> = readiness ? [
     ['surface', readiness.surface, t('android.signin.req.surface') || 'Public HTTPS address of the device service (mdm.)'],
     ['mdmKey', readiness.mdmKey, t('android.signin.req.mdmKey') || 'MDM key of the tenant'],
-    ['profiles', readiness.profilesPushed > 0, t('android.signin.req.profiles', { pushed: readiness.profilesPushed, count: readiness.profiles })
-      || `Enabled sign-in URL profile with its enrollment policy at Google (${readiness.profilesPushed} of ${readiness.profiles})`],
+    ['profiles', pushedForUsage > 0, t('android.signin.req.profilesForUsage', { pushed: pushedForUsage, total: readiness.profiles })
+      || `Enabled sign-in URL profile for this personal use, with its enrollment policy at Google (${pushedForUsage} of ${readiness.profiles} sign-in URL profiles)`],
     ['identityProvider', readiness.identityProvider, t('android.signin.req.identityProvider') || 'Obligate configured for the authentication of the users'],
   ] : [];
   const ready = !readiness || checks.every(([, done]) => done);
@@ -240,7 +243,7 @@ function SigninPanel({ config, canManage, onSaved }: { config: AndroidSigninConf
               </li>
             ))}
           </ul>
-          {!config.enabled && !ready && <p className="text-xs text-amber-400">{t('android.signin.notReady') || 'The sign-in URL cannot be enabled until every prerequisite is met.'}</p>}
+          {(!config.enabled || usage !== config.allowPersonalUsage) && !ready && <p className="text-xs text-amber-400">{t('android.signin.notReady') || 'The sign-in URL cannot be enabled until every prerequisite is met.'}</p>}
         </div>
       )}
       {config.signinUrl && <p className="font-mono text-xs break-all text-text-secondary">{config.signinUrl}</p>}
@@ -251,7 +254,7 @@ function SigninPanel({ config, canManage, onSaved }: { config: AndroidSigninConf
               {ANDROID_SIGNIN_PERSONAL_USAGE.map((u) => <option key={u} value={u}>{trCode(`android.signin.usage.${u}`, u)}</option>)}
             </select>
           </Labeled>
-          <Button size="sm" disabled={busy || (!config.enabled && !ready)} onClick={() => void save(true)}>{config.enabled ? (t('common.save') || 'Save') : (t('android.signin.enable') || 'Enable')}</Button>
+          <Button size="sm" disabled={busy || (!ready && (!config.enabled || usage !== config.allowPersonalUsage))} onClick={() => void save(true)}>{config.enabled ? (t('common.save') || 'Save') : (t('android.signin.enable') || 'Enable')}</Button>
           {config.enabled && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void save(false)}>{t('android.signin.disable') || 'Disable'}</Button>}
         </div>
       )}

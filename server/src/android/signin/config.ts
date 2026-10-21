@@ -5,7 +5,7 @@
 // what Google answers: Google adds to every SigninDetail an enrollment token valid for the whole enterprise and its QR
 // code, which the gateway strips (redact.ts) and nothing here ever reads, stores, logs nor returns.
 //   PUT /api/android/enterprise/signin { enabled, allowPersonalUsage? }: enabled needs a linked enterprise, the public
-//   base of the device surface (https), the MDM key of the tenant and at least one enabled sign-in URL profile;
+//   base of the device surface (https), the MDM key of the tenant and at least one enabled sign-in URL profile whose ownership the chosen personal use admits;
 //   disabled sends an empty list (Google drops the sign-in token). Audited android.signin_configured.
 import {
   ANDROID_SIGNIN_PERSONAL_USAGE, type AndroidSigninConfig, type AndroidSigninConfigRequest, type AndroidSigninPersonalUsage, type AndroidSigninReadiness,
@@ -63,18 +63,29 @@ const viewOf = (d: StoredDetail | null): AndroidSigninConfig => ({
 
 const HTTPS_BASE_RE = /^https:\/\/[A-Za-z0-9.-]{1,253}(:[0-9]{1,5})?\/?$/;
 
+/** The ownerships of the profiles each value of allowPersonalUsage can give a device (usageAdmits, signinFacts:
+ *  ALLOWED a work profile, COPE or personal; DISALLOWED a fully managed company device). Review AN-F2. */
+const OWNERSHIPS_OF_USAGE: Record<AndroidSigninPersonalUsage, readonly string[]> = {
+  PERSONAL_USAGE_ALLOWED: ['corporate_personal', 'personal'],
+  PERSONAL_USAGE_DISALLOWED: ['corporate'],
+};
+
 /** The prerequisites of the flow (lot AN-F2, raccord of 21/10): booleans and counts only, in the tenant's context. */
 async function readinessOf(tenantId: number): Promise<AndroidSigninReadiness> {
   const base = surfaceBase();
   const rows = await db('enrollment_profiles as p')
     .leftJoin('android_enrollment_policies as e', function j() { this.on('e.profile_id', '=', 'p.id').andOn('e.tenant_id', '=', 'p.tenant_id'); })
     .where({ 'p.tenant_id': tenantId, 'p.platform': 'android', 'p.method': 'android_signin_url', 'p.enabled': true }).whereNull('p.archived_at')
-    .select('e.state') as Array<{ state: string | null }>;
+    .select('p.ownership', 'e.state') as Array<{ ownership: string; state: string | null }>;
+  const pushedFor = (u: AndroidSigninPersonalUsage): number =>
+    rows.filter((r) => r.state === 'pushed' && OWNERSHIPS_OF_USAGE[u].includes(r.ownership)).length;
   let identityProvider = false;
   try { identityProvider = !!(await signinIdentity().origin()); } catch { identityProvider = false; }
   return {
     surface: !!base && HTTPS_BASE_RE.test(base), mdmKey: !!(await appleTenants.keyOrNull(tenantId)),
-    profiles: rows.length, profilesPushed: rows.filter((r) => r.state === 'pushed').length, identityProvider,
+    profiles: rows.length, profilesPushed: rows.filter((r) => r.state === 'pushed').length,
+    pushedByUsage: { PERSONAL_USAGE_ALLOWED: pushedFor('PERSONAL_USAGE_ALLOWED'), PERSONAL_USAGE_DISALLOWED: pushedFor('PERSONAL_USAGE_DISALLOWED') },
+    identityProvider,
   };
 }
 
@@ -107,8 +118,10 @@ export async function configureSignin(tenantId: number, userId: number, req: And
     const e = await readEnterprise();
     if (!e || e.state !== 'linked') throw new SigninConfigError(409, 'androidNotLinked', 'no linked Android enterprise');
     if (detail) {
+      // A profile this personal use can give a device (review AN-F2: DISALLOWED with COPE profiles only, or ALLOWED with
+      // fully managed ones only, sent every device to the invalid page).
       const profiles = await db('enrollment_profiles').where({ tenant_id: tenantId, platform: 'android', method: 'android_signin_url', enabled: true })
-        .whereNull('archived_at').count<{ n: string }[]>('* as n');
+        .whereIn('ownership', OWNERSHIPS_OF_USAGE[detail.allowPersonalUsage]).whereNull('archived_at').count<{ n: string }[]>('* as n');
       if (Number(profiles[0]?.n ?? 0) === 0) throw new SigninConfigError(409, 'androidSigninProfileMissing', 'no enabled sign-in URL profile');
     }
     // Outside any transaction (G-A1). The body is the instance's own object; the answer is not read beyond its success.
