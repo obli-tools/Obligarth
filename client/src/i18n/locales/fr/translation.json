@@ -4805,7 +4805,9 @@
         "installPriority": "La priorité d'installation est un entier de 0 à 10 000.",
         "permission": "Une autorisation est malformée ou donnée deux fois.",
         "templateId": "L'identifiant de la configuration est fait de chiffres."
-      }
+      },
+      "permissionNotDeclared": "L'app ne déclare pas cette autorisation : la règle n'a aucun effet sur elle.",
+      "secretKeep": "Garder le secret enregistré"
     },
     "installTypes": {
       "AVAILABLE": "Disponible",
