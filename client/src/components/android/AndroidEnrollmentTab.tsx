@@ -630,6 +630,7 @@ function NoticeDialog({ open, onClose }: { open: boolean; onClose: () => void })
                 {sec.paragraphs.map((para, j) => <p key={j} className="text-text-secondary">{para}</p>)}
               </section>
             ))}
+            {notice.contact && <p className="text-text-secondary">{notice.contact}</p>}
             <p className="text-text-secondary italic">{notice.consentSummary}</p>
             <p className="text-xs text-text-muted font-mono">{t('android.byod.noticeVersion', { version: notice.versionId }) || `Version ${notice.versionId}`}</p>
           </article>

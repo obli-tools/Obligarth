@@ -280,7 +280,7 @@ export async function expireEnrollmentTokens(tenantId: number, actor: DbActor = 
     // Lot AN-F1: the invitation of an expired BYOD token is expired too (its life bounds the token's).
     const byod = rows.filter((r) => r.kind === 'byod_link').map((r) => r.id);
     if (byod.length) {
-      await trx('android_byod_invitations').whereIn('token_id', byod).where({ state: 'issued' })
+      await trx('android_byod_invitations').where({ tenant_id: tenantId, state: 'issued' }).whereIn('token_id', byod)
         .update({ state: 'expired', issuing_at: null, updated_at: trx.fn.now() });
     }
     return rows.length;
