@@ -41,7 +41,7 @@ const APP_ORDER: AppEntry[] = [
   { type: 'obliguard', label: 'Obliguard', color: '#f5a623' },
   { type: 'oblimap', label: 'Oblimap', color: '#1edd8a' },
   { type: 'obliance', label: 'Obliance', color: '#e03a3a' },
-  { type: 'obligarth', label: 'Obligarth', color: '#d63fd6' },
+  { type: 'obligarth', label: 'Obligarth', color: '#e30557' },
   { type: 'obliplan', label: 'Obliplan', color: '#7c6cff' },
   { type: 'oblidesk', label: 'Oblidesk', color: '#22b8f5' },
   { type: 'oblihub', label: 'Oblihub', color: '#2d4ec9' },

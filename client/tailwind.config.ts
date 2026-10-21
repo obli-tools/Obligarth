@@ -68,7 +68,7 @@ export default {
       // links, icons, values) has its own token, --c-accent-as-text, a tint
       // that reads at AA (4.5:1) on each theme's surfaces. Fills, borders,
       // rings and tints keep --c-accent, deep enough for white text on it
-      // (4.5:1): no single tone of the magenta does both (index.css).
+      // (4.5:1): no single tone of the raspberry does both (index.css).
       textColor: {
         accent: { DEFAULT: 'rgb(var(--c-accent-as-text) / <alpha-value>)' },
         primary: 'rgb(var(--c-accent-as-text) / <alpha-value>)',
