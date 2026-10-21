@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { Archive, Ban, Check, Eye, KeyRound, Mail, Pencil, Plus, QrCode, RefreshCw, X } from 'lucide-react';
+import { Archive, Ban, Check, Eye, FileText, KeyRound, Mail, Pencil, Plus, QrCode, RefreshCw, X } from 'lucide-react';
 import {
-  ANDROID_ENROLLMENT_METHODS, ENROLLMENT_LOCALES,
-  type AndroidByodInvitationCreated, type AndroidByodInvitationView, type AndroidCreatedTokenView, type AndroidEnrollmentMethod,
+  ANDROID_BYOD_INVITATION_TTL_HOURS, ANDROID_ENROLLMENT_METHODS, ENROLLMENT_LOCALES,
+  type AndroidByodInvitationCreated, type AndroidByodNoticeView, type AndroidByodInvitationView, type AndroidCreatedTokenView, type AndroidEnrollmentMethod,
   type AndroidEnrollmentProfileRequest, type AndroidEnrollmentProfileView, type AndroidEnrollmentTokenView, type AndroidKmeConfiguration,
   type AndroidPendingDeviceView, type DeviceGroup, type EndUser,
 } from '@obligarth/shared';
@@ -58,6 +58,7 @@ export function AndroidEnrollmentTab() {
   const [shown, setShown] = useState<AndroidCreatedTokenView | null>(null);
   const [kme, setKme] = useState<AndroidKmeConfiguration | null>(null);
   const [inviteFor, setInviteFor] = useState<AndroidEnrollmentProfileView | null>(null);
+  const [noticeOpen, setNoticeOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -87,6 +88,10 @@ export function AndroidEnrollmentTab() {
   const revoke = async (tk: AndroidEnrollmentTokenView) => {
     if (!(await confirm({ message: t('android.tokens.confirmRevoke') || 'Revoke this token? A device that has not enrolled with it yet can no longer use it.', danger: true }))) return;
     await act(`revoke:${tk.id}`, () => androidApi.revokeToken(tk.id), t('android.tokens.revoked') || 'Token revoked');
+  };
+  const revokeInvitation = async (iv: AndroidByodInvitationView) => {
+    if (!(await confirm({ message: t('android.byod.confirmRevoke') || 'Revoke this invitation? Its code no longer serves, and a device that has not enrolled with it yet can no longer do so.', danger: true }))) return;
+    await act(`inv:${iv.id}`, () => androidApi.revokeByodInvitation(iv.id), t('android.byod.revoked') || 'Invitation revoked');
   };
   const archive = async (p: AndroidEnrollmentProfileView) => {
     if (!(await confirm({ message: t('android.profiles.confirmArchive', { name: p.name }) || `Archive the profile "${p.name}"? Its active tokens are revoked.`, danger: true }))) return;
@@ -240,32 +245,54 @@ export function AndroidEnrollmentTab() {
       </section>
 
       {/* BYOD invitations (lot AN-F1) */}
-      {invitations.length > 0 && (
+      {(invitations.length > 0 || (profiles ?? []).some((p) => p.method === 'android_byod_link' && !p.archivedAt)) && (
         <section className="space-y-2">
-          <h2 className="text-sm font-semibold text-text-primary">{t('android.byod.title') || 'BYOD invitations'}</h2>
-          <ul className="divide-y divide-border/50 rounded-lg bg-bg-secondary">
-            {invitations.map((iv) => (
-              <li key={iv.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
-                <span className="font-mono text-text-primary">{iv.prefix}…</span>
-                <span className="text-text-secondary">{iv.label ?? ''}</span>
-                <StateBadge tone={iv.state === 'active' || iv.state === 'issued' ? 'green' : iv.state === 'used' ? 'blue' : 'gray'} label={trCode(`android.byod.states.${iv.state}`, iv.state)} />
-                <span className="ml-auto text-xs text-text-muted">{dateOf(iv.expiresAt)}</span>
-                {(iv.state === 'active' || iv.state === 'issued') && (
-                  <Button size="sm" variant="secondary" disabled={busy !== null}
-                    onClick={() => void act(`inv:${iv.id}`, () => androidApi.revokeByodInvitation(iv.id), t('android.byod.revoked') || 'Invitation revoked')}>
-                    <Ban className="w-3.5 h-3.5 mr-1" />{t('android.byod.revoke') || 'Revoke'}
-                  </Button>
-                )}
-              </li>
-            ))}
-          </ul>
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-sm font-semibold text-text-primary">{t('android.byod.title') || 'BYOD invitations'}</h2>
+            <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setNoticeOpen(true)}>
+              <FileText className="w-3.5 h-3.5 mr-1" />{t('android.byod.noticePreview') || 'Notice shown to the user'}
+            </Button>
+          </div>
+          <p className="text-xs text-text-muted">{t('android.byod.help') || 'A work profile on the user\'s own device: the organization manages the work apps and data only, never the personal data. The invitation is single use; the user reads and accepts the privacy notice before enrolling. Removing the device erases the work profile only.'}</p>
+          {invitations.length === 0 ? (
+            <p className="text-sm text-text-muted italic">{t('android.byod.none') || 'No invitation yet: invite a user from a BYOD profile.'}</p>
+          ) : (
+            <ul className="divide-y divide-border/50 rounded-lg bg-bg-secondary">
+              {invitations.map((iv) => (
+                <li key={iv.id} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+                  <span className="font-mono text-text-primary">{iv.prefix}…</span>
+                  <span className="text-text-primary">{iv.endUserName ? anonymize(iv.endUserName) : (iv.endUserId ? `#${iv.endUserId}` : '')}</span>
+                  <span className="text-text-secondary">{iv.label ?? ''}</span>
+                  <span className="text-xs text-text-muted">{byId.get(iv.profileId)?.name ?? ''}</span>
+                  <StateBadge tone={iv.state === 'active' || iv.state === 'issued' || iv.state === 'issuing' ? 'green' : iv.state === 'used' ? 'blue' : 'gray'} label={trCode(`android.byod.states.${iv.state}`, iv.state)} />
+                  {iv.acknowledgedAt && (
+                    <span className="text-xs text-text-muted" title={iv.noticeVersionId ?? ''}>{t('android.byod.acknowledgedAt', { date: dateOf(iv.acknowledgedAt) }) || `Notice accepted ${dateOf(iv.acknowledgedAt)}`}</span>
+                  )}
+                  {iv.deviceId !== null && (
+                    <Link to={`/devices/${iv.deviceId}`} className="text-xs text-text-primary hover:underline">{t('android.byod.device') || 'Device'}</Link>
+                  )}
+                  <span className="ml-auto text-xs text-text-muted">
+                    {iv.state === 'used' && iv.usedAt ? (t('android.byod.usedAt', { date: dateOf(iv.usedAt) }) || `Used ${dateOf(iv.usedAt)}`)
+                      : iv.state === 'revoked' && iv.revokedAt ? (t('android.byod.revokedAt', { date: dateOf(iv.revokedAt) }) || `Revoked ${dateOf(iv.revokedAt)}`)
+                      : (t('android.byod.expiresAt', { date: dateOf(iv.expiresAt) }) || `Expires ${dateOf(iv.expiresAt)}`)}
+                  </span>
+                  {(iv.state === 'active' || iv.state === 'issuing' || iv.state === 'issued') && (
+                    <Button size="sm" variant="secondary" disabled={busy !== null} onClick={() => void revokeInvitation(iv)}>
+                      <Ban className="w-3.5 h-3.5 mr-1" />{t('android.byod.revoke') || 'Revoke'}
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
         </section>
       )}
 
       <ProfileDialog target={editing} onClose={() => setEditing(null)} onSaved={() => void load()} />
       <TokenDialog token={shown} onClose={() => { setShown(null); void load(); }} />
       <KmeDialog config={kme} onClose={() => setKme(null)} />
-      <InvitationDialog profile={inviteFor} onClose={() => { setInviteFor(null); void load(); }} />
+      <InvitationDialog profile={inviteFor} onClose={() => { setInviteFor(null); void load(); }} onPreview={() => setNoticeOpen(true)} />
+      <NoticeDialog open={noticeOpen} onClose={() => setNoticeOpen(false)} />
     </div>
   );
 }
@@ -482,24 +509,37 @@ function KmeDialog({ config, onClose }: { config: AndroidKmeConfiguration | null
   );
 }
 
-function InvitationDialog({ profile, onClose }: { profile: AndroidEnrollmentProfileView | null; onClose: () => void }) {
-  const { t } = useTranslation();
+/** Lifetimes offered for an invitation, in hours (7 days at most: AN17). */
+const INVITATION_TTLS = [24, 72, ANDROID_BYOD_INVITATION_TTL_HOURS.max] as const;
+
+function InvitationDialog({ profile, onClose, onPreview }: { profile: AndroidEnrollmentProfileView | null; onClose: () => void; onPreview: () => void }) {
+  const { t, i18n } = useTranslation();
   const [users, setUsers] = useState<EndUser[]>([]);
   const [endUserId, setEndUserId] = useState('');
   const [label, setLabel] = useState('');
   const [email, setEmail] = useState('');
+  const [ttlHours, setTtlHours] = useState<number>(ANDROID_BYOD_INVITATION_TTL_HOURS.dflt);
+  const [locale, setLocale] = useState<'fr' | 'en'>('fr');
   const [busy, setBusy] = useState(false);
   const [created, setCreated] = useState<AndroidByodInvitationCreated | null>(null);
   useEffect(() => {
-    if (!profile) { setCreated(null); setEndUserId(''); setLabel(''); setEmail(''); return; }
+    if (!profile) { setCreated(null); setEndUserId(''); setLabel(''); setEmail(''); setTtlHours(ANDROID_BYOD_INVITATION_TTL_HOURS.dflt); return; }
+    setLocale(profile.locale === 'en' || (profile.locale !== 'fr' && i18n.language?.startsWith('en')) ? 'en' : 'fr');
     mdmApi.listEndUsers({ status: 'active', pageSize: 200 }).then((r) => setUsers(r.items)).catch(() => setUsers([]));
-  }, [profile]);
+  }, [profile, i18n.language]);
+  const pick = (id: string) => {
+    setEndUserId(id);
+    // The user's address by default (still editable, never stored by the server).
+    const u = users.find((x) => String(x.id) === id);
+    if (u?.email && !email.trim()) setEmail(u.email);
+  };
   const create = async () => {
     if (!profile) return;
     setBusy(true);
     try {
       setCreated(await androidApi.createByodInvitation({
-        profileId: profile.id, endUserId: Number(endUserId), ...(label.trim() ? { label: label.trim() } : {}), ...(email.trim() ? { email: email.trim() } : {}),
+        profileId: profile.id, endUserId: Number(endUserId), ttlHours, locale,
+        ...(label.trim() ? { label: label.trim() } : {}), ...(email.trim() ? { email: email.trim() } : {}),
       }));
     } catch (err) { errorToast(err); } finally { setBusy(false); }
   };
@@ -516,12 +556,13 @@ function InvitationDialog({ profile, onClose }: { profile: AndroidEnrollmentProf
           <p className="text-xs text-text-secondary">{t('android.byod.codeOnce') || 'The code is shown once: give it to the user with the link.'}</p>
           <CopyValue label={t('android.byod.code') || 'Code'} value={created.code} />
           <CopyValue label={t('android.byod.link') || 'Link'} value={created.link} />
+          <p className="text-xs text-text-muted">{t('android.byod.expiresAt', { date: dateOf(created.expiresAt) }) || `Expires ${dateOf(created.expiresAt)}`}</p>
           <p className="text-xs text-text-muted">{trCode(`android.byod.mail.${created.mail}`, created.mail)}</p>
         </div>
       ) : (
         <div className="space-y-3">
           <Labeled label={t('android.byod.endUser') || 'User'}>
-            <select value={endUserId} onChange={(e) => setEndUserId(e.target.value)} className={fieldClass}>
+            <select value={endUserId} onChange={(e) => pick(e.target.value)} className={fieldClass}>
               <option value="">{t('android.byod.chooseUser') || '— choose —'}</option>
               {users.map((u) => <option key={u.id} value={u.id}>{anonymize(u.displayName ?? u.email ?? `#${u.id}`)}</option>)}
             </select>
@@ -532,8 +573,68 @@ function InvitationDialog({ profile, onClose }: { profile: AndroidEnrollmentProf
           <Labeled label={t('android.byod.email') || 'Send to (optional)'}>
             <input value={email} onChange={(e) => setEmail(e.target.value)} maxLength={254} type="email" className={fieldClass} />
           </Labeled>
+          <div className="grid grid-cols-2 gap-3">
+            <Labeled label={t('android.byod.ttl') || 'Valid for'}>
+              <select value={ttlHours} onChange={(e) => setTtlHours(Number(e.target.value))} className={fieldClass}>
+                {INVITATION_TTLS.map((h) => <option key={h} value={h}>{t(`android.byod.ttlOptions.h${h}`) || `${h / 24} d`}</option>)}
+              </select>
+            </Labeled>
+            <Labeled label={t('android.byod.locale') || 'Language of the notice and the e-mail'}>
+              <select value={locale} onChange={(e) => setLocale(e.target.value === 'en' ? 'en' : 'fr')} className={fieldClass}>
+                <option value="fr">{t('android.byod.locales.fr') || 'French'}</option>
+                <option value="en">{t('android.byod.locales.en') || 'English'}</option>
+              </select>
+            </Labeled>
+          </div>
+          <p className="text-xs text-text-muted">{t('android.byod.singleUse') || 'Single use: once a device has enrolled with it, the code serves no more. The user accepts the privacy notice on the device before the Google enrollment.'}</p>
+          <Button size="sm" variant="secondary" onClick={onPreview}>
+            <FileText className="w-3.5 h-3.5 mr-1" />{t('android.byod.noticePreview') || 'Notice shown to the user'}
+          </Button>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/** The notice of a personal device, exactly as the device surface shows it before the Google link (plain text). */
+function NoticeDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { t, i18n } = useTranslation();
+  const [locale, setLocale] = useState<'fr' | 'en'>('fr');
+  const [notice, setNotice] = useState<AndroidByodNoticeView | null>(null);
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { if (open) setLocale(i18n.language?.startsWith('en') ? 'en' : 'fr'); }, [open, i18n.language]);
+  useEffect(() => {
+    if (!open) { setNotice(null); setFailed(false); return; }
+    let live = true;
+    androidApi.byodNotice(locale).then((n) => { if (live) { setNotice(n); setFailed(false); } }).catch(() => { if (live) { setNotice(null); setFailed(true); } });
+    return () => { live = false; };
+  }, [open, locale]);
+  return (
+    <Modal open={open} onClose={onClose} size="lg" title={t('android.byod.noticePreview') || 'Notice shown to the user'}
+      footer={<Button onClick={onClose}>{t('common.close') || 'Close'}</Button>}>
+      <div className="space-y-3 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-text-muted">{t('android.byod.noticeIntro') || 'The user reads and accepts this notice on the device before the Google enrollment; the acceptance is recorded with its version.'}</span>
+          <select value={locale} onChange={(e) => setLocale(e.target.value === 'en' ? 'en' : 'fr')} className={`${fieldClass} ml-auto w-auto`}>
+            <option value="fr">{t('android.byod.locales.fr') || 'French'}</option>
+            <option value="en">{t('android.byod.locales.en') || 'English'}</option>
+          </select>
+        </div>
+        {failed && <p className="text-text-muted">{t('errors.androidByodNoticeUnavailable') || 'The notice is not available.'}</p>}
+        {notice && (
+          <article className="space-y-3 rounded-lg bg-bg-secondary p-3" lang={notice.locale}>
+            <h3 className="font-semibold text-text-primary">{notice.title}</h3>
+            {notice.sections.map((sec, i) => (
+              <section key={i} className="space-y-1">
+                <h4 className="font-medium text-text-primary">{sec.heading}</h4>
+                {sec.paragraphs.map((para, j) => <p key={j} className="text-text-secondary">{para}</p>)}
+              </section>
+            ))}
+            <p className="text-text-secondary italic">{notice.consentSummary}</p>
+            <p className="text-xs text-text-muted font-mono">{t('android.byod.noticeVersion', { version: notice.versionId }) || `Version ${notice.versionId}`}</p>
+          </article>
+        )}
+      </div>
     </Modal>
   );
 }

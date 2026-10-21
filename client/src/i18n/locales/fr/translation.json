@@ -3667,7 +3667,8 @@
     "invalidSerial": "Numéro de série invalide.",
     "invalidSetting": "Réglage du profil invalide.",
     "tenantHasAndroidEnterprise": "Ce tenant a encore une entreprise Android : déliez-la d'abord.",
-    "androidAppReadOnly": "Le nom, l'auteur et l'icône d'une app Android viennent de Google."
+    "androidAppReadOnly": "Le nom, l'auteur et l'icône d'une app Android viennent de Google.",
+    "androidByodNoticeUnavailable": "La notice n'est pas disponible."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -4462,7 +4463,30 @@
         "not_configured": "Aucun canal de messagerie n'est réglé : remettez vous-même le code et le lien.",
         "failed": "L'e-mail n'a pas pu partir : remettez vous-même le code et le lien.",
         "not_requested": "Aucun e-mail demandé."
-      }
+      },
+      "confirmRevoke": "Révoquer cette invitation ? Son code ne sert plus, et un appareil qui ne s'est pas encore enrôlé avec elle ne le pourra plus.",
+      "noticePreview": "Notice montrée à l'utilisateur",
+      "help": "Un profil de travail sur l'appareil personnel de l'utilisateur : l'organisation ne gère que les applications et les données professionnelles, jamais les données personnelles. L'invitation est à usage unique ; l'utilisateur lit et accepte la notice de confidentialité avant l'enrôlement. Retirer l'appareil n'efface que le profil de travail.",
+      "none": "Aucune invitation pour l'instant : invitez un utilisateur depuis un profil BYOD.",
+      "acknowledgedAt": "Notice acceptée le {{date}}",
+      "device": "Appareil",
+      "usedAt": "Utilisée le {{date}}",
+      "revokedAt": "Révoquée le {{date}}",
+      "expiresAt": "Expire le {{date}}",
+      "ttl": "Valable",
+      "ttlOptions": {
+        "h24": "1 jour",
+        "h72": "3 jours",
+        "h168": "7 jours"
+      },
+      "locale": "Langue de la notice et de l'e-mail",
+      "locales": {
+        "fr": "Français",
+        "en": "Anglais"
+      },
+      "singleUse": "Usage unique : dès qu'un appareil s'est enrôlé avec lui, le code ne sert plus. L'utilisateur accepte la notice de confidentialité sur l'appareil avant l'enrôlement chez Google.",
+      "noticeIntro": "L'utilisateur lit et accepte cette notice sur l'appareil avant l'enrôlement chez Google ; l'acceptation est enregistrée avec sa version.",
+      "noticeVersion": "Version {{version}}"
     },
     "common": {
       "yes": "Oui",

@@ -3667,7 +3667,8 @@
     "invalidSerial": "Invalid serial number.",
     "invalidSetting": "Invalid setting of the profile.",
     "tenantHasAndroidEnterprise": "This tenant still has an Android enterprise: unlink it first.",
-    "androidAppReadOnly": "The name, author and icon of an Android app come from Google."
+    "androidAppReadOnly": "The name, author and icon of an Android app come from Google.",
+    "androidByodNoticeUnavailable": "The notice is not available."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -4462,7 +4463,30 @@
         "not_configured": "No mail channel is configured: hand the code and the link yourself.",
         "failed": "The e-mail could not be sent: hand the code and the link yourself.",
         "not_requested": "No e-mail requested."
-      }
+      },
+      "confirmRevoke": "Revoke this invitation? Its code no longer serves, and a device that has not enrolled with it yet can no longer do so.",
+      "noticePreview": "Notice shown to the user",
+      "help": "A work profile on the user's own device: the organization manages the work apps and data only, never the personal data. The invitation is single use; the user reads and accepts the privacy notice before enrolling. Removing the device erases the work profile only.",
+      "none": "No invitation yet: invite a user from a BYOD profile.",
+      "acknowledgedAt": "Notice accepted {{date}}",
+      "device": "Device",
+      "usedAt": "Used {{date}}",
+      "revokedAt": "Revoked {{date}}",
+      "expiresAt": "Expires {{date}}",
+      "ttl": "Valid for",
+      "ttlOptions": {
+        "h24": "1 day",
+        "h72": "3 days",
+        "h168": "7 days"
+      },
+      "locale": "Language of the notice and the e-mail",
+      "locales": {
+        "fr": "French",
+        "en": "English"
+      },
+      "singleUse": "Single use: once a device has enrolled with it, the code serves no more. The user accepts the privacy notice on the device before the Google enrollment.",
+      "noticeIntro": "The user reads and accepts this notice on the device before the Google enrollment; the acceptance is recorded with its version.",
+      "noticeVersion": "Version {{version}}"
     },
     "common": {
       "yes": "Yes",
