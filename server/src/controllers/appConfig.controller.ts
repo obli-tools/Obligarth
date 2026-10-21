@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import { appConfigService } from '../services/appConfig.service';
-import { writeConfigKey, obligatePatch } from '../services/settingsWrite.service';
+import { writeConfigKey, writeObligateConfig } from '../services/settingsWrite.service';
 
 // The writes live in services/settingsWrite.service.ts, shared with the
 // approval executor (an approved `settings_update` replays the same write).
@@ -34,7 +34,7 @@ export const appConfigController = {
 
   async setObligateConfig(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const updated = await appConfigService.patchObligateConfig(obligatePatch(req.body ?? {}));
+      const updated = await writeObligateConfig(req.body ?? {});
       res.json({ success: true, data: updated });
     } catch (err) { next(err); }
   },

@@ -1,7 +1,8 @@
 import type { Request } from 'express';
-import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey } from '@obligarth/shared';
+import { DEVICE_KEY_SETTING_KEYS, type DeviceKeySettingKey, type ObligateConfig } from '@obligarth/shared';
 import { AppError } from '../middleware/errorHandler';
 import { appConfigService, moduleConfigKey } from './appConfig.service';
+import { obligateService } from './obligate.service';
 
 // ── Platform settings writes (/api/admin/config, tenant.manage_settings) ───
 //
@@ -112,6 +113,15 @@ export type ObligatePatch = {
   inboundSecret?: string | null;
 };
 
+/** PUT /obligate (route and approved request): the settings written, then
+ *  this app's colour announced to the Obligate they name (best-effort, not
+ *  awaited: obligateService.announceSelfInfo). */
+export async function writeObligateConfig(body: Record<string, unknown>): Promise<ObligateConfig> {
+  const updated = await appConfigService.patchObligateConfig(obligatePatch(body));
+  void obligateService.announceSelfInfo();
+  return updated;
+}
+
 /** PUT /obligate: validated patch (AppError 400). */
 export function obligatePatch(body: Record<string, unknown>): ObligatePatch {
   const patch: ObligatePatch = {};
@@ -209,7 +219,7 @@ export async function prepareSettingsApproval(method: string, path: string, rawB
 export async function applySettingsRequest(method: string, path: string, body: unknown, ctx: SettingsWriteCtx = {}): Promise<void> {
   const b = (body && typeof body === 'object' && !Array.isArray(body)) ? body as Record<string, unknown> : {};
   const m = String(method).toUpperCase();
-  if (m === 'PUT' && path === '/obligate') { await appConfigService.patchObligateConfig(obligatePatch(b)); return; }
+  if (m === 'PUT' && path === '/obligate') { await writeObligateConfig(b); return; }
   const named = namedWrite(m, path);
   if (named) { await named.apply(b, ctx); return; }
   const key = /^\/([a-z0-9_]+)$/.exec(path);

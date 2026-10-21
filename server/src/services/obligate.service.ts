@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 import { safeEqualSecret } from '../utils/safeCompare';
 import { db } from '../db';
-import { switchToIdentity } from '../db/context';
+import { asNone, switchToIdentity, type DbActor } from '../db/context';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 
 /**
@@ -15,6 +15,18 @@ import { MASTER_TENANT_ID } from '@obligarth/shared';
 export function obligatePublicClientId(apiKey: string): string {
   return crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex');
 }
+
+/**
+ * Obligarth's accent colour, announced to Obligate (POST /api/apps/self-info).
+ * Same value as the brand token of the client (client/src/index.css): the
+ * colour of this app's pill / card in every switcher of the suite.
+ */
+export const APP_ACCENT_COLOR = '#e30557';
+
+/** Database actor of the self-info announce (its own context, see announceSelfInfo). */
+const SELF_INFO_ACTOR: DbActor = { type: 'integration', name: 'obligate' };
+/** Delay allowed to the self-info announce. */
+const SELF_INFO_TIMEOUT_MS = 5_000;
 
 /** One user of Obligate's roster for this app (GET /api/apps/users). */
 export interface ObligateRosterEntry {
@@ -38,6 +50,8 @@ export interface ObligateConnectedApp {
   color: string | null;
   /** Marks the entry that is this app itself (resolved by Obligate from our Bearer key). */
   self?: boolean;
+  /** Not an Obli* app (filed under "More…" in Obligate). */
+  thirdParty?: boolean;
 }
 
 /** Normalised `scheme://host[:port]` of an http(s) URL (lower-case host, no default port), or null. */
@@ -929,6 +943,32 @@ export const obligateService = {
       });
     } catch (err) {
       logger.error(err, 'Failed to report provision to Obligate');
+    }
+  },
+
+  /**
+   * Announce Obligarth's own accent colour to Obligate, which uses it for this
+   * app's pill / card in every switcher of the suite (the announced value
+   * always wins there). Best-effort, never throws, never blocks the caller
+   * (5 s at most). Called at start and after each write of the Obligate
+   * settings (route or approved request). The settings are read in a context
+   * of its own ('none': app_config is a catalog, the API key an instance
+   * secret readable there), so it runs as well at start (no context) as after
+   * a request whose context is gone by then.
+   */
+  async announceSelfInfo(): Promise<void> {
+    try {
+      const raw = await asNone(SELF_INFO_ACTOR, () => appConfigService.getObligateRaw());
+      if (!raw.url || !raw.apiKey) return;
+      const res = await fetch(`${raw.url}/api/apps/self-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${raw.apiKey}` },
+        body: JSON.stringify({ color: APP_ACCENT_COLOR }),
+        signal: AbortSignal.timeout(SELF_INFO_TIMEOUT_MS),
+      });
+      if (!res.ok) logger.warn({ status: res.status }, 'Obligate: self-info announce failed');
+    } catch (err) {
+      logger.warn({ err: err instanceof Error ? err.message : String(err) }, 'Obligate: self-info announce failed');
     }
   },
 
