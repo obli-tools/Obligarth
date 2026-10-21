@@ -164,13 +164,17 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
   const [androidIssues, setAndroidIssues] = useState<Array<{ path: string; code: string }>>([]);
   const [checking, setChecking] = useState(false);
 
+  // Review AN-E: started again when the dialog opens or its resource changes (by its id: an object rebuilt by a render
+  // of the parent would wipe what is being typed); a secret typed in the Android options leaves the state once the
+  // dialog is closed (applied or abandoned), as the values of a command (review AN-C2).
+  const resourceKey = resource ? `${resource.type ?? 'policy'}:${resource.tenantId}:${resource.id}` : '';
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setAndroidDraft(draftOf(undefined)); setAndroidIssues([]); return; }
     setPolicyId(''); setScope('group'); setGroupId(null); setDevice(null); setMode('include');
     setPriority(ASSIGNMENT_PRIORITY.default); setPreviewing(false); setAppOptions({ ...APPLE_APP_OPTION_DEFAULTS }); setConfigText('');
     setAndroidDraft(draftOf(initialAndroidOptions)); setAndroidIssues([]);
-    if (!resource) mdmApi.listPolicies({ state: 'published' }).then(setPolicies).catch(() => setPolicies([]));
-  }, [open, resource, initialAndroidOptions]);
+    if (!resourceKey) mdmApi.listPolicies({ state: 'published' }).then(setPolicies).catch(() => setPolicies([]));
+  }, [open, resourceKey, initialAndroidOptions]);
 
   const chosen = resource ?? (() => {
     const p = policies.find((x) => x.id === policyId);

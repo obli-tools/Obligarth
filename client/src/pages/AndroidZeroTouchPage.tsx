@@ -18,7 +18,7 @@ import { useOwnDocument } from '@/hooks/useOwnDocument';
 // path first (useOwnDocument) [AR: Google's iframe checked at AN-J].
 
 export function AndroidZeroTouchPage() {
-  const own = useOwnDocument();
+  const own = useOwnDocument('/enrollment/android/zero-touch');
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const [tokens, setTokens] = useState<AndroidEnrollmentTokenView[]>([]);

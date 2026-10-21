@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Trash2 } from 'lucide-react';
 import {
@@ -191,6 +192,10 @@ export function AndroidAppOptionsFields({ app, value, onChange }: {
             </select>
             <button type="button" onClick={() => set({ grants: value.grants.filter((_, j) => j !== i) })} aria-label={t('androidApps.options.removePermission') || 'Remove'}
               className="p-1 text-text-muted hover:text-red-400 coarse:min-h-10 coarse:min-w-10"><Trash2 className="w-3.5 h-3.5" /></button>
+            {/* Review AN-E: the server's warning permission_not_declared (not refused), shown while it is typed. */}
+            {app.permissions.length > 0 && g.permission.trim() !== '' && !app.permissions.includes(g.permission.trim()) && (
+              <p className="basis-full text-[11px] text-amber-400">{t('androidApps.options.permissionNotDeclared') || 'The app does not declare this permission: the policy has no effect on it.'}</p>
+            )}
           </div>
         ))}
         <datalist id={`perm-${app.uuid}`}>{app.permissions.map((p) => <option key={p} value={p} />)}</datalist>
@@ -253,18 +258,29 @@ function PropertiesForm({ props, value, onChange, depth }: { props: AndroidManag
 
 function SecretInput({ value, onChange, label }: { value: JsonValue | undefined; onChange: (v: JsonValue | undefined) => void; label: string }) {
   const { t } = useTranslation();
+  // Review AN-E: the stored secret being replaced is kept aside, so that « Keep » restores it (left empty, the
+  // replacement would otherwise remove it from the configuration without a word). An emptied field stays a secret
+  // field ({"$secretValue": ""}, left out of the options by pruned): it never falls back to a text field in clear.
+  const [stored, setStored] = useState<JsonValue | null>(null);
   if (isSecretRef(value)) {
     return (
       <div className="flex items-center gap-2 text-xs">
         <span className="text-text-secondary">{t('androidApps.options.secretStored') || 'Secret stored in the vault'}</span>
-        <button type="button" className="text-accent hover:underline coarse:min-h-10" onClick={() => onChange({ $secretValue: '' })}>{t('androidApps.options.secretReplace') || 'Replace'}</button>
+        <button type="button" className="text-accent hover:underline coarse:min-h-10" onClick={() => { setStored(value); onChange({ $secretValue: '' }); }}>{t('androidApps.options.secretReplace') || 'Replace'}</button>
       </div>
     );
   }
   const typed = isObj(value) && typeof value.$secretValue === 'string' ? value.$secretValue : '';
   return (
-    <input type="password" autoComplete="new-password" aria-label={label} value={typed}
-      onChange={(e) => onChange(e.target.value ? { $secretValue: e.target.value } : undefined)} className={fieldClass} />
+    <div className="flex items-center gap-2">
+      <input type="password" autoComplete="new-password" aria-label={label} value={typed}
+        onChange={(e) => onChange({ $secretValue: e.target.value })} className={fieldClass} />
+      {stored && (
+        <button type="button" className="shrink-0 text-xs text-accent hover:underline coarse:min-h-10" onClick={() => { onChange(stored); setStored(null); }}>
+          {t('androidApps.options.secretKeep') || 'Keep the stored secret'}
+        </button>
+      )}
+    </div>
   );
 }
 

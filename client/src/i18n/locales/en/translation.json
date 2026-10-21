@@ -4805,7 +4805,9 @@
         "installPriority": "The install priority is a whole number from 0 to 10,000.",
         "permission": "A permission is malformed or given twice.",
         "templateId": "The id of the configuration is made of digits."
-      }
+      },
+      "permissionNotDeclared": "The app does not declare this permission: the policy has no effect on it.",
+      "secretKeep": "Keep the stored secret"
     },
     "installTypes": {
       "AVAILABLE": "Available",

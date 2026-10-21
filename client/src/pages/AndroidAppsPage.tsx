@@ -29,7 +29,7 @@ const PAGE = '/apps/android';
 const SCREENS = ['catalog', 'store_builder'] as const satisfies readonly AndroidIframeScreen[];
 
 export function AndroidAppsPage() {
-  const own = useOwnDocument();
+  const own = useOwnDocument(PAGE);
   const { t, i18n } = useTranslation();
   const [params, setParams] = useSearchParams();
   const [apps, setApps] = useState<AndroidAppView[] | null>(null);

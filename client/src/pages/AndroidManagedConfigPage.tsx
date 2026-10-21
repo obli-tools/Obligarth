@@ -20,11 +20,13 @@ import { apiErrorMessage } from '@/utils/apiError';
 // The configuration itself stays at Google: Obligarth keeps its id only. Capability mdm.apps.manage.
 
 const MCM_RE = /^[0-9]{1,20}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export function AndroidManagedConfigPage() {
-  const own = useOwnDocument();
-  const { t, i18n } = useTranslation();
   const { uuid = '' } = useParams();
+  // Review AN-E: the page's exact path (lowercase uuid, no final slash), the one the proxy gives Google's frames.
+  const own = useOwnDocument(UUID_RE.test(uuid) ? `/apps/android/${uuid.toLowerCase()}/managed-config` : undefined);
+  const { t, i18n } = useTranslation();
   const { pathname } = useLocation();
   const [app, setApp] = useState<AndroidAppDetail | null>(null);
   const [assignments, setAssignments] = useState<Assignment[]>([]);
