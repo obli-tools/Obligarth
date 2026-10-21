@@ -1581,7 +1581,14 @@
       "apple_ddm_sync_requested": "Synchronisation DDM forcée",
       "android_app_added": "Android : app ajoutée au catalogue",
       "android_app_archived": "Android : app archivée",
-      "android_web_token_created": "Android : iframe de Google Play d'entreprise ouverte"
+      "android_web_token_created": "Android : iframe de Google Play d'entreprise ouverte",
+      "android_signin_configured": "Android : sign-in URL configurée",
+      "android_signin_notice_acknowledged": "Android : notice acquittée dans le parcours de connexion",
+      "android_signin_refused": "Android : enrôlement par connexion refusé",
+      "android_signin_completed": "Android : jeton d'enrôlement par connexion remis",
+      "android_signin_session_used": "Android : appareil enrôlé par la sign-in URL",
+      "android_zero_touch_iframe_opened": "Android : portail zero-touch ouvert",
+      "android_kme_configuration_shown": "Android : configuration Knox Mobile Enrollment affichée"
     },
     "families": {
       "auth": "Authentification",
@@ -2767,7 +2774,8 @@
       "retire_released": "Retrait : libéré au service des appareils",
       "retired": "Retrait : fiche retirée",
       "retire_manual_apple_business": "Retrait : libéré dans Apple Business",
-      "retire_manual_activation_lock": "Retrait : verrou d'activation traité"
+      "retire_manual_activation_lock": "Retrait : verrou d'activation traité",
+      "lost_mode_user_exit": "L'utilisateur a quitté le mode perdu sur l'appareil (mode perdu refusé pendant {{cooldownHours}} h)"
     },
     "status": {
       "app": {
@@ -4326,7 +4334,8 @@
         "not_enrolled": "L'appareil n'est plus géré.",
         "not_amapi": "Pas un appareil Android Enterprise.",
         "not_found": "Appareil introuvable.",
-        "use_erase": "Un appareil d'entreprise sort de la gestion par un effacement."
+        "use_erase": "Un appareil d'entreprise sort de la gestion par un effacement.",
+        "lost_mode_cooldown": "L'utilisateur a quitté le mode perdu, ou le mot de passe a été réinitialisé, il y a moins de 12 heures : Google refuse le mode perdu d'ici là."
       },
       "flags": {
         "PRESERVE_RESET_PROTECTION_DATA": "Garder la protection contre la réinitialisation",
@@ -4555,13 +4564,22 @@
       "title": "Enrôlement par connexion Google",
       "enabled": "activé",
       "disabled": "désactivé",
-      "help": "Un utilisateur qui ajoute un compte professionnel sur un appareil neuf est envoyé vers Obligarth pour s'authentifier (Obligate), puis reçoit un enrôlement à usage unique.",
+      "help": "Un utilisateur qui ajoute un compte professionnel sur un appareil neuf est envoyé vers Obligarth pour s'authentifier (Obligate), puis reçoit un enrôlement à usage unique valable 15 minutes.",
+      "endUsers": "Seul un utilisateur final actif de ce tenant dont l'adresse e-mail est celle qu'Obligate authentifie peut enrôler un appareil de cette façon.",
+      "prerequisites": "Prérequis",
+      "req": {
+        "surface": "Adresse HTTPS publique du service des appareils (mdm.)",
+        "mdmKey": "Clé MDM du tenant",
+        "profiles": "Profil sign-in URL activé, avec sa politique d'enrôlement chez Google ({{pushed}} sur {{count}})",
+        "identityProvider": "Obligate configuré pour l'authentification des utilisateurs"
+      },
+      "notReady": "La sign-in URL ne peut pas être activée tant qu'un prérequis manque.",
       "personalUsage": "Usage personnel",
       "enable": "Activer",
       "disable": "Désactiver",
       "usage": {
-        "PERSONAL_USAGE_ALLOWED": "Autorisé (profil professionnel sur un appareil d'entreprise)",
-        "PERSONAL_USAGE_DISALLOWED": "Interdit (appareil entièrement géré)"
+        "PERSONAL_USAGE_ALLOWED": "Autorisé (profil professionnel : appareil d'entreprise en COPE, ou appareil personnel)",
+        "PERSONAL_USAGE_DISALLOWED": "Interdit (appareil d'entreprise entièrement géré)"
       }
     },
     "offboarding": {
