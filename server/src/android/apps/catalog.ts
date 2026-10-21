@@ -8,7 +8,7 @@
 // The common catalog (POST /api/mdm/apps, mdm.apps.manage) is a junction point (AN-A2/AN-P): it calls addAndroidApp
 // for the family android. Until then only the router of this module (not mounted) and the testbed call it.
 import type { Knex } from 'knex';
-import { ANDROID_APP_KINDS, type AndroidAppKind, isAndroidPackage } from '@obligarth/shared';
+import { ANDROID_APP_KINDS, type AndroidAppDetail, type AndroidAppKind, type AndroidAppView, isAndroidPackage } from '@obligarth/shared';
 import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
@@ -53,23 +53,8 @@ export interface AndroidAppRow {
 
 const COLUMNS = ['id', 'uuid', 'tenant_id', 'kind', 'identifier', 'name', 'publisher', 'icon_url', 'metadata', 'metadata_refreshed_at', 'archived_at'];
 
-/** What a route shows of an Android app (never Google's whole answer). */
-export interface AndroidAppView {
-  id: number;
-  uuid: string;
-  kind: AndroidAppKind;
-  packageName: string;
-  name: string;
-  publisher: string | null;
-  iconUrl: string | null;
-  managedConfiguration: 'json' | 'iframe' | 'none';
-  oemConfig: boolean;
-  tracks: Array<{ trackId: string; trackAlias: string | null }>;
-  permissions: string[];
-  minAndroidSdkVersion: number | null;
-  metadataRefreshedAt: string | null;
-  unavailable: boolean;
-}
+/** What a route shows of an Android app (never Google's whole answer): AndroidAppView of shared (lot AN-E). */
+export type { AndroidAppView };
 
 export function appView(r: AndroidAppRow): AndroidAppView {
   const m = metadataOf(r.metadata);
@@ -81,6 +66,22 @@ export function appView(r: AndroidAppRow): AndroidAppView {
     minAndroidSdkVersion: m?.minAndroidSdkVersion ?? null,
     metadataRefreshedAt: r.metadata_refreshed_at ? new Date(r.metadata_refreshed_at).toISOString() : null,
     unavailable: !!(m as (AndroidAppMetadata & { unavailableSince?: string }) | null)?.unavailableSince,
+  };
+}
+
+/** The page of an app (lot AN-E): its view, its managed configuration schema (the console generates its form from it;
+ *  null when unknown or too large: the iframe only) and the number of its assignments. Context tenant. */
+export async function androidAppDetail(q: Knex | Knex.Transaction, tenantId: number, ref: number | string): Promise<AndroidAppDetail | null> {
+  const row = await readAndroidApp(q, tenantId, ref);
+  if (!row) return null;
+  const m = metadataOf(row.metadata);
+  const n = await q('assignments').where({ tenant_id: tenantId, resource_type: 'app', resource_tenant_id: tenantId, resource_id: row.id })
+    .count({ n: '*' }).first() as { n: string | number } | undefined;
+  const view = appView(row);
+  return {
+    ...view, tenantId: Number(row.tenant_id),
+    managedProperties: view.managedConfiguration === 'json' ? m?.managedProperties ?? null : null,
+    assignments: Number(n?.n ?? 0),
   };
 }
 
