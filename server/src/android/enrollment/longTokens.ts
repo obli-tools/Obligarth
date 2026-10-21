@@ -10,7 +10,7 @@
 // nothing secret before its approval (requires_approval, true by default for zero-touch and KME, AN17).
 import {
   ANDROID_DPC_PACKAGE, ANDROID_ENROLLMENT_TOKEN_EXTRA, ANDROID_ZERO_TOUCH_FEATURES, ANDROID_ZERO_TOUCH_PAGE, androidProvisioningExtras,
-  androidZeroTouchIframeUrl, type AndroidKmeConfiguration, type AndroidZeroTouchIframe,
+  androidZeroTouchDpcExtras, androidZeroTouchIframeUrl, type AndroidKmeConfiguration, type AndroidZeroTouchIframe,
 } from '@obligarth/shared';
 import type { Knex } from 'knex';
 import { audit } from '../../audit';
@@ -123,7 +123,8 @@ export async function createZeroTouchIframe(tenantId: number, userId: number, re
       if (!e || e.state !== 'linked') throw new TokenError(409, 'androidNotLinked', 'no linked Android enterprise');
       const { row, value } = await longTokenValue(trx, tenantId, req.tokenId, 'zero_touch');
       try {
-        return { e, row, extras: androidProvisioningExtras(value.toString('utf8')) };
+        // Nested under PROVISIONING_ADMIN_EXTRAS_BUNDLE (Android Device Policy's zero-touch form; the flat one is Knox's).
+        return { e, row, extras: androidZeroTouchDpcExtras(value.toString('utf8')) };
       } finally {
         value.fill(0);
       }

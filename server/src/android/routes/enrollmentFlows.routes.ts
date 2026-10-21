@@ -50,8 +50,9 @@ export function createAndroidEnrollmentFlowsRouter(): Router {
     if (!step.ok) { sendStepUpFailure(res, step); return; }
     const tenantId = Number(req.tenantId);
     try {
-      const r = await configureSignin(tenantId, Number(req.session.userId), parsed.data, await audit.fromRequest(req, tenantId));
-      res.json({ success: true, data: r });
+      await configureSignin(tenantId, Number(req.session.userId), parsed.data, await audit.fromRequest(req, tenantId));
+      // The configuration as GET reads it, with its prerequisites.
+      res.json({ success: true, data: await readSigninConfig(tenantId, Number(req.session.userId)) });
     } catch (err) { throw routeError(err); }
   }));
 

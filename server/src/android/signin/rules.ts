@@ -70,11 +70,28 @@ export function chooseSigninProfile(candidates: readonly SigninCandidate[], f: P
 }
 
 /** Is allowPersonalUsage of the enterprise's signinDetails compatible with the facts? PERSONAL_USAGE_DISALLOWED
- *  admits fully managed company devices only; PERSONAL_USAGE_ALLOWED a work profile (COPE or personal) only. */
+ *  admits fully managed company devices only; PERSONAL_USAGE_ALLOWED a work profile (COPE or personal) only, a company
+ *  device announced as DEVICE_OWNER included (see signinFacts). */
 export function usageAdmits(allowPersonalUsage: string | null, f: ProvisioningFacts): boolean {
   if (allowPersonalUsage === 'PERSONAL_USAGE_DISALLOWED') return f.ownership === 'COMPANY_OWNED' && f.managementMode === 'DEVICE_OWNER';
-  if (allowPersonalUsage === 'PERSONAL_USAGE_ALLOWED') return f.managementMode === 'PROFILE_OWNER';
+  if (allowPersonalUsage === 'PERSONAL_USAGE_ALLOWED') return f.managementMode === 'PROFILE_OWNER' || f.ownership === 'COMPANY_OWNED';
   return false;
+}
+
+/**
+ * The facts the flow works with (lot AN-F2, raccord of 21/10; review AN-F2, R7 [AR]): under PERSONAL_USAGE_ALLOWED a
+ * company device sets up a work profile (Google, SigninDetail.allowPersonalUsage: « for company-owned devices, enabling
+ * personal usage allows the user to set up a work profile »), whatever provisioningInfo announced before the token
+ * decided: a company device announced as DEVICE_OWNER is taken as the COPE it will become (PROFILE_OWNER), so that the
+ * COPE by sign-in URL is not lost. Nothing is trusted more for it: the token carries PERSONAL_USAGE_ALLOWED and the
+ * profile snapshot of a COPE, and the enrollment handler compares the mode of the enrolled Device with that snapshot
+ * (a fully managed device enrolled with it is quarantined, section 10.4 step 4). Any other combination: unchanged.
+ */
+export function signinFacts(f: ProvisioningFacts, allowPersonalUsage: string | null): ProvisioningFacts {
+  if (allowPersonalUsage === 'PERSONAL_USAGE_ALLOWED' && f.ownership === 'COMPANY_OWNED' && f.managementMode === 'DEVICE_OWNER') {
+    return { ...f, managementMode: 'PROFILE_OWNER' };
+  }
+  return f;
 }
 
 const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');

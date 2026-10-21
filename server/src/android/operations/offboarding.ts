@@ -7,7 +7,8 @@
 //     rights); audited android.enterprise_unlink_requested (critical).
 //   - Execution, once approved: the enterprise goes unlinking and the durable job android.offboard-tenant walks the
 //     steps, each one idempotent and resumable (android.maintenance sends it again when a step waits or failed):
-//       revoking         new enrollments refused (createEnrollmentToken wants linked), tokens deleted at Google and
+//       revoking         the sign-in URL emptied (signinDetails [], lot AN-F2), new enrollments refused
+//                        (createEnrollmentToken wants linked), tokens deleted at Google and
 //                        revoked (their value destroyed);
 //       waiting_devices  the managed devices are never erased by the procedure: the console offers, by batch, the
 //                        guarded action that fits (mdm.erase_device, mdm.remove_management; WIPE and
@@ -47,6 +48,7 @@ import {
 import { logger } from '../../utils/logger';
 import { raiseAndroidTenantAlert } from '../alerts';
 import { endToken, recoverEnrollmentTokens } from '../enrollment/tokens';
+import { clearSigninForOffboarding } from '../signin/config';
 import { readEnterprise, readEnterpriseRow } from '../enterprises/registry';
 import { androidGateway } from '../gateway';
 import { AndroidError } from '../gateway/errors';
@@ -250,6 +252,11 @@ export async function runOffboarding(tenantId: number, o: { gateway?: AndroidGat
       db('android_offboardings').where({ id: off.id }).update({ step: s, next_run_at: db.fn.now(), attempts: 0, last_error: null, ...patch });
     try {
       if (off.step === 'revoking') {
+        // The sign-in URL first (lot AN-F2, raccord): no device is sent to the surface of a client leaving.
+        if (e && e.state === 'unlinking') {
+          const ctx = audit.fromJob({ name: 'android.offboard-tenant', requestId: `android-offboard-${tenantId}-${off.id}` });
+          try { await clearSigninForOffboarding(gw, e, tenantId, ctx); } catch (err) { if (!goneAtGoogle(err)) throw err; }
+        }
         off.tokens_revoked += await revokeTokens(gw, e, tenantId, off.enterprise_id);
         await step('waiting_devices', { tokens_revoked: off.tokens_revoked });
         off.step = 'waiting_devices';

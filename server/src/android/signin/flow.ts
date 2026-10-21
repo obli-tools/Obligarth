@@ -35,7 +35,7 @@ import { storedDetailOf } from './config';
 import { isEmail, signinIdentity } from './identity';
 import {
   chooseSigninProfile, factsOf, isAuthCode, isRandomToken, nonceHash, ownershipOfFacts, provisioningHash, provisioningIdOf, randomToken,
-  stateHash, usageAdmits, type ProvisioningFacts, type SigninCandidate,
+  signinFacts, stateHash, usageAdmits, type ProvisioningFacts, type SigninCandidate,
 } from './rules';
 
 export const SIGNIN_ACTOR: DbActor = Object.freeze({ type: 'enrollment', name: 'android-signin' }) as DbActor;
@@ -135,9 +135,12 @@ export async function startSignin(t: TenantFacts, a: { provisioningInfo: unknown
     if (err instanceof AndroidError) return { kind: 'unavailable' };
     throw err;
   }
-  const facts = factsOf(info);
-  if (!facts) return { kind: 'invalid', reason: 'unsupported_device' };
-  if (!usageAdmits(pre.detail.allowPersonalUsage, facts)) return { kind: 'invalid', reason: 'usage_refused' };
+  const announced = factsOf(info);
+  if (!announced) return { kind: 'invalid', reason: 'unsupported_device' };
+  if (!usageAdmits(pre.detail.allowPersonalUsage, announced)) return { kind: 'invalid', reason: 'usage_refused' };
+  // The mode the token will give the device (a company device under ALLOWED becomes a COPE): kept in the session, the
+  // profile chosen for it, checked against the enrolled Device by the enrollment handler.
+  const facts = signinFacts(announced, pre.detail.allowPersonalUsage);
   const provider = signinIdentity();
   if (!(await provider.origin())) return { kind: 'unavailable' };
   const state = randomToken();

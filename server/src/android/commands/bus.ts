@@ -127,7 +127,8 @@ async function targetRows(trx: Knex.Transaction, tenantId: number, deviceIds: nu
  *  RESET_PASSWORD_RECENTLY otherwise). Lot AN-F2. */
 export const LOST_MODE_BLOCK_MS = 12 * 3_600_000;
 
-async function lostModeBlocked(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): Promise<Set<number>> {
+/** The devices of `deviceIds` under that refusal (also read by the menu of the console, lot AN-F2 raccord). */
+export async function lostModeBlocked(trx: Knex | Knex.Transaction, tenantId: number, deviceIds: number[]): Promise<Set<number>> {
   if (!deviceIds.length) return new Set();
   const since = new Date(Date.now() - LOST_MODE_BLOCK_MS);
   const exits = await trx('android_lost_mode_exits').where({ tenant_id: tenantId }).whereIn('device_id', deviceIds)

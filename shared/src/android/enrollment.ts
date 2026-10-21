@@ -13,10 +13,20 @@ export const ANDROID_DPC_PACKAGE = 'com.google.android.apps.work.clouddpc';
 /** The only key of the provisioning extras the instance ever hands out (zero-touch dpcExtras, KME custom JSON). */
 export const ANDROID_ENROLLMENT_TOKEN_EXTRA = 'com.google.android.apps.work.clouddpc.EXTRA_ENROLLMENT_TOKEN';
 
-/** The provisioning extras of an enrollment token: one key, the token; never a Wi-Fi password, an account nor another
- *  extra (a custom JSON is copied out of Obligarth into the Knox portal or the zero-touch configuration). */
+/** The provisioning extras of an enrollment token in the flat form of the custom JSON of a Knox profile (KME): one key,
+ *  the token; never a Wi-Fi password, an account nor another extra (it is copied out of Obligarth into the Knox portal). */
 export function androidProvisioningExtras(tokenValue: string): string {
   return JSON.stringify({ [ANDROID_ENROLLMENT_TOKEN_EXTRA]: tokenValue });
+}
+
+/** The bundle of the provisioning extras Android hands to the DPC (zero-touch configuration, QR code). */
+export const ANDROID_ADMIN_EXTRAS_BUNDLE = 'android.app.extra.PROVISIONING_ADMIN_EXTRAS_BUNDLE';
+
+/** The DPC extras of a zero-touch configuration (lot AN-F2, raccord of 21/10, review AN-F2: Google's documentation of
+ *  Android Device Policy nests the token under PROVISIONING_ADMIN_EXTRAS_BUNDLE, the flat form being the Knox one):
+ *  the bundle and, in it, the token only [AR: X10, AN-J]. */
+export function androidZeroTouchDpcExtras(tokenValue: string): string {
+  return JSON.stringify({ [ANDROID_ADMIN_EXTRAS_BUNDLE]: { [ANDROID_ENROLLMENT_TOKEN_EXTRA]: tokenValue } });
 }
 
 // ── Zero-touch ────────────────────────────────────────────────────────────────
@@ -105,6 +115,22 @@ export interface AndroidSigninConfig {
   signinUrl: string | null;
   allowPersonalUsage: AndroidSigninPersonalUsage | null;
   configuredAt: string | null;
+  /** What the flow needs, as the console shows it before enabling (lot AN-F2, raccord): read by GET and PUT. */
+  readiness?: AndroidSigninReadiness;
+}
+
+/** The prerequisites of the sign-in URL (booleans and counts only, never a URL of Obligate nor a key). */
+export interface AndroidSigninReadiness {
+  /** The device surface has a public HTTPS base (https://mdm.<domain>). */
+  surface: boolean;
+  /** The tenant has its MDM key (the path of its surface). */
+  mdmKey: boolean;
+  /** Enabled sign-in URL profiles of the tenant, and those whose enrollment policy is pushed (the only ones a device
+   *  can be given). */
+  profiles: number;
+  profilesPushed: number;
+  /** An identity provider (Obligate) is configured for the authentication of the end users. */
+  identityProvider: boolean;
 }
 
 // ── Enrollment profiles (lot AN-C1, android-amapi §10.1, §10.7) ─────────────────
