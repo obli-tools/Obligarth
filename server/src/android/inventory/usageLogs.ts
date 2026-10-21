@@ -5,9 +5,10 @@
 //     it too, lost_mode_locations_guard), never for a device whose lost mode is off (a late event);
 //   - STOP_LOST_MODE_USER_ATTEMPT with ATTEMPT_SUCCEEDED: the user left the lost mode on the device: lost mode off, and
 //     the time of the exit kept (android_lost_mode_exits): Google refuses START_LOST_MODE for 12 hours after it
-//     (USER_EXIT_LOST_MODE_RECENTLY), the bus refuses it before any call.
+//     (USER_EXIT_LOST_MODE_RECENTLY), the bus refuses it before any call; an entry lost_mode_user_exit in the timeline.
 // No network call (G-A3); identifiers only in the logs (G-A4): never a coordinate.
 import type { z } from 'zod';
+import { deviceEvents } from '../../apple/devices/events';
 import { registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { UsageLogsSchema } from '../inbox/schemas';
 
@@ -68,7 +69,12 @@ export async function onUsageLogs(ctx: Ctx): Promise<'applied' | 'ignored'> {
     const n = await trx('devices').where({ tenant_id: tenantId, id: deviceId }).whereIn('lost_mode_state', ['enabling', 'on', 'disabling'])
       .whereNot('ownership', 'personal').where((q) => q.whereNull('lost_mode_changed_at').orWhere('lost_mode_changed_at', '<=', userExitAt))
       .update({ lost_mode_state: 'off', lost_mode_changed_at: userExitAt });
-    if (Number(n) > 0) state = 'off';
+    if (Number(n) > 0) {
+      state = 'off';
+      // The timeline of the device (§8, amapi.usage_logs; lot AN-F2 raccord): once, when the exit turned the lost mode off
+      // (a replayed batch finds it off already and writes nothing).
+      await deviceEvents.add(trx, tenantId, deviceId, 'lost_mode_user_exit', userExitAt, null, { cooldownHours: 12 });
+    }
   }
   if (positions.length && (state === 'on' || state === 'enabling')) {
     const purge = new Date(Date.now() + LOST_MODE_LOCATION_DAYS * 86_400_000);

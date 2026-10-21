@@ -18,6 +18,7 @@ import { requireTenantCapability } from '../../middleware/rbac';
 import { tenantFrozen } from '../../guard/frozen';
 import { permissionService } from '../../services/permission.service';
 import { androidFormCatalog } from '../../mdm/android/formCatalog';
+import { lostModeBlocked } from '../commands/bus';
 import { ANDROID_COMMANDS, refusalOf, type AndroidCommandType } from '../commands/catalog';
 import { ANDROID_COMMAND_CAPABILITY, ANDROID_COMMAND_RESTRICTION } from '../commands/console';
 import { ANDROID_GUARDED_DEFAULTS, type AndroidGuardedKey } from '../commands/guarded';
@@ -168,11 +169,13 @@ export function createAndroidConsoleRouter(): Router {
       managementChannel: String(t.management_channel), enrollmentState: String(t.enrollment_state), released: t.released_at !== null || !t.amapi_name,
       ownership: String(t.ownership), mode: String(t.management_mode), apiLevel: t.api_level === null || t.api_level === undefined ? null : Number(t.api_level),
     };
+    // Lot AN-F2 (raccord): the lost mode refused 12 hours after a user exit or an acknowledged password reset, as the bus does.
+    const cooldown = (await lostModeBlocked(db, tenantId, [deviceId])).has(deviceId);
     const actions: AndroidDeviceAction[] = [];
     for (const type of Object.keys(ANDROID_COMMANDS) as AndroidCommandType[]) {
       const spec = ANDROID_COMMANDS[type];
       const guarded = GUARDED_OF[type];
-      const refusal = refusalOf(type, target);
+      const refusal = refusalOf(type, target) ?? (type === 'START_LOST_MODE' && cooldown ? 'lost_mode_cooldown' : null);
       const unavailable = !(await has(ANDROID_COMMAND_CAPABILITY[type])) ? 'capabilityMissing' : refusal ?? (frozen ? 'frozen' : null);
       actions.push({ type, actionKey: guarded ?? ANDROID_COMMAND_RESTRICTION[type] ?? spec.action, guarded: spec.guarded, available: unavailable === null, unavailable });
     }

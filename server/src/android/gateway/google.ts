@@ -299,7 +299,9 @@ export class GoogleGateway implements AndroidGateway {
   }
 
   async patchEnterprise(e: AndroidEnterpriseRef, patch: EnterprisePatch, mask: EnterprisePatchField[]): Promise<AmapiEnterprise> {
-    this.own(e);
+    // While unlinking (offboarding, §6.5 step 1), only the removal of the sign-in URL is admitted.
+    const clearsSignin = mask.length === 1 && mask[0] === 'signinDetails' && Array.isArray(patch.signinDetails) && patch.signinDetails.length === 0;
+    this.own(e, clearsSignin ? ['linked', 'unlinking'] : ['linked']);
     if (!mask.length || mask.some((m) => !PATCH_FIELDS.has(m))) throw new AndroidRequestError('field outside the enterprise patch mask');
     const body: Record<string, unknown> = {};
     for (const m of mask) body[m] = (patch as Record<string, unknown>)[m];
