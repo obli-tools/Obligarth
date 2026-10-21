@@ -1578,7 +1578,10 @@
       "apple_enrollment_released": "Enrôlements inconnus du cerveau libérés",
       "apple_restore_check": "Service des appareils vérifié après une restauration",
       "apple_device_identity_revoked": "Identité d'appareil révoquée",
-      "apple_ddm_sync_requested": "Synchronisation DDM forcée"
+      "apple_ddm_sync_requested": "Synchronisation DDM forcée",
+      "android_app_added": "Android : app ajoutée au catalogue",
+      "android_app_archived": "Android : app archivée",
+      "android_web_token_created": "Android : iframe de Google Play d'entreprise ouverte"
     },
     "families": {
       "auth": "Authentification",
@@ -3663,7 +3666,8 @@
     "invalidOwnership": "Propriété invalide.",
     "invalidSerial": "Numéro de série invalide.",
     "invalidSetting": "Réglage du profil invalide.",
-    "tenantHasAndroidEnterprise": "Ce tenant a encore une entreprise Android : déliez-la d'abord."
+    "tenantHasAndroidEnterprise": "Ce tenant a encore une entreprise Android : déliez-la d'abord.",
+    "androidAppReadOnly": "Le nom, l'auteur et l'icône d'une app Android viennent de Google."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -4689,6 +4693,180 @@
         "DEVICE_INCOMPATIBLE": "appareil incompatible",
         "PROJECT_NOT_PERMITTED": "non permis pour ce projet"
       }
+    }
+  },
+  "androidApps": {
+    "back": "Retour aux apps",
+    "title": "Apps Android",
+    "badge": "Android",
+    "openCatalog": "Apps Android",
+    "subtitle": "Apps de Google Play d'entreprise pour l'entreprise Android du tenant : apps publiques, apps privées et apps web, et leurs affectations.",
+    "play": {
+      "title": "Google Play d'entreprise",
+      "screens": {
+        "catalog": "Rechercher et publier",
+        "store_builder": "Organiser le store"
+      },
+      "close": "Fermer",
+      "hint": "Recherchez une app, ou publiez une app privée ou une app web, puis sélectionnez-la : elle est ajoutée au catalogue. Une app privée ne devient jamais publique."
+    },
+    "frameTitle": "Google Play d'entreprise",
+    "gapiFailed": "La bibliothèque d'iframes de Google n'a pas pu être chargée.",
+    "added": "{{name}} ajoutée au catalogue",
+    "alreadyThere": "{{name}} est déjà au catalogue",
+    "addByPackage": "Ou ajouter par son nom de paquet",
+    "add": "Ajouter",
+    "empty": "Aucune app Android pour l'instant",
+    "emptyHint": "Ouvrez Google Play d'entreprise ci-dessus et sélectionnez les apps du tenant.",
+    "name": "Nom",
+    "package": "Paquet",
+    "kind": "Sorte",
+    "managedConfiguration": "Configuration gérée",
+    "refreshed": "Lue chez Google",
+    "unavailable": "Retirée par Google",
+    "detailTitle": "App Android",
+    "unavailableHint": "Google ne sert plus cette app à l'entreprise : ses dernières métadonnées sont gardées.",
+    "privateHint": "App privée de l'entreprise du tenant : elle ne devient jamais publique.",
+    "minSdk": "API Android minimale",
+    "permissions": "Autorisations",
+    "tracks": "Pistes de test",
+    "refresh": "Relire chez Google",
+    "managedConfigPage": "Configuration gérée",
+    "archiveBlocked": "Retirez d'abord les affectations de cette app",
+    "confirmArchive": "Archiver l'app {{name}} ?",
+    "archivedDone": "App archivée",
+    "archive": "Archiver",
+    "editOptions": "Modifier les options",
+    "editOptionsTitle": "Options de l'affectation",
+    "kinds": {
+      "play": "Publique (Google Play)",
+      "private": "Privée",
+      "web": "App web"
+    },
+    "configKinds": {
+      "json": "Formulaire",
+      "iframe": "Iframe de Google seulement",
+      "none": "Aucune"
+    },
+    "refreshResults": {
+      "fresh": "Lue il y a moins de 5 minutes : rien à faire",
+      "refreshed": "Métadonnées relues",
+      "unavailable": "Google ne sert plus cette app",
+      "gone": "L'app n'est plus au catalogue"
+    },
+    "config": {
+      "back": "Retour à l'app",
+      "title": "Configuration gérée de {{name}}",
+      "subtitle": "Créez ou modifiez une configuration dans l'iframe de Google, puis appliquez-la à une affectation de l'app. La configuration reste chez Google : Obligarth n'en garde que l'identifiant.",
+      "open": "Ouvrir les configurations",
+      "frameTitle": "Configuration gérée",
+      "chosen": "Configuration « {{name}} » (identifiant {{id}}) enregistrée.",
+      "noAssignment": "L'app n'a encore aucune affectation.",
+      "apply": "Appliquer à cette affectation",
+      "assignWith": "Affecter l'app avec cette configuration"
+    },
+    "options": {
+      "title": "Options de l'app Android",
+      "default": "Par défaut",
+      "installType": "Installation",
+      "installTypeDefault": "Disponible (par défaut)",
+      "autoUpdateMode": "Mises à jour",
+      "minimumVersionCode": "Code de version minimal",
+      "installPriority": "Priorité d'installation (0 à 10 000, la plus basse d'abord)",
+      "constraint": "Contrainte d'installation",
+      "permissions": "Autorisations d'exécution",
+      "defaultPermissionPolicy": "Règle par défaut",
+      "permission": "Autorisation",
+      "permissionPolicy": "Règle de l'autorisation",
+      "removePermission": "Retirer",
+      "addPermission": "Ajouter une autorisation",
+      "tracks": "Pistes de test que les appareils peuvent recevoir",
+      "managedConfiguration": "Configuration gérée",
+      "configModes": {
+        "none": "Aucune",
+        "form": "Formulaire",
+        "template": "Configuration enregistrée dans l'iframe de Google"
+      },
+      "oemConfigHint": "Une app OEMConfig se configure dans l'iframe des configurations gérées seulement.",
+      "templateId": "Identifiant de la configuration enregistrée dans l'iframe",
+      "templateHint": "Enregistrée depuis la page « Configuration gérée » de l'app.",
+      "secretStored": "Secret gardé au coffre",
+      "secretReplace": "Remplacer",
+      "unset": "Non défini",
+      "yes": "Oui",
+      "no": "Non",
+      "hiddenHint": "Propriété masquée : gardée au coffre, jamais réaffichée.",
+      "asSecret": "Secret (gardé au coffre)",
+      "removeItem": "Retirer l'élément",
+      "addItem": "Ajouter un élément",
+      "errors": {
+        "minimumVersionCode": "Le code de version minimal est un entier à partir de 1.",
+        "installPriorityType": "Une priorité d'installation ne s'applique qu'à une app forcée ou préinstallée.",
+        "installPriority": "La priorité d'installation est un entier de 0 à 10 000.",
+        "permission": "Une autorisation est malformée ou donnée deux fois.",
+        "templateId": "L'identifiant de la configuration est fait de chiffres."
+      }
+    },
+    "installTypes": {
+      "AVAILABLE": "Disponible",
+      "PREINSTALLED": "Préinstallée",
+      "FORCE_INSTALLED": "Forcée",
+      "REQUIRED_FOR_SETUP": "Requise à la mise en service",
+      "BLOCKED": "Bloquée",
+      "KIOSK": "Kiosque"
+    },
+    "autoUpdateModes": {
+      "AUTO_UPDATE_DEFAULT": "Par défaut (Wi-Fi, en charge, inactif)",
+      "AUTO_UPDATE_POSTPONED": "Reportées (jusqu'à 90 jours)",
+      "AUTO_UPDATE_HIGH_PRIORITY": "Dès que possible"
+    },
+    "constraints": {
+      "networkTypeConstraint": "Réseau",
+      "chargingConstraint": "Charge",
+      "deviceIdleConstraint": "Appareil inactif"
+    },
+    "constraintValues": {
+      "INSTALL_ON_ANY_NETWORK": "Tout réseau",
+      "INSTALL_ONLY_ON_UNMETERED_NETWORK": "Réseau non facturé seulement",
+      "CHARGING_NOT_REQUIRED": "Non requise",
+      "INSTALL_ONLY_WHEN_CHARGING": "En charge seulement",
+      "DEVICE_IDLE_NOT_REQUIRED": "Non requis",
+      "INSTALL_ONLY_WHEN_DEVICE_IDLE": "Appareil inactif seulement"
+    },
+    "permissionPolicies": {
+      "PROMPT": "Demander à l'utilisateur",
+      "GRANT": "Accorder",
+      "DENY": "Refuser"
+    },
+    "issues": {
+      "invalid_options": "Les options ne sont pas un objet.",
+      "unknown_option": "Option inconnue.",
+      "option_reserved": "Option réservée à Obligarth.",
+      "type_mismatch": "Valeur d'un mauvais type.",
+      "out_of_range": "Valeur hors limites.",
+      "install_type_invalid": "Type d'installation inconnu.",
+      "install_priority_not_applicable": "Une priorité d'installation ne s'applique qu'à une app forcée ou préinstallée.",
+      "too_many_install_constraints": "Une seule contrainte d'installation au plus.",
+      "duplicate_value": "Valeur donnée deux fois.",
+      "managed_configuration_exclusive": "Une configuration par formulaire et une configuration de l'iframe de Google s'excluent.",
+      "template_id_invalid": "L'identifiant de la configuration est fait de chiffres.",
+      "template_variables_invalid": "Variables de la configuration invalides.",
+      "metadata_missing": "Le schéma de l'app est inconnu : relisez-la chez Google, ou passez par l'iframe.",
+      "oemconfig_iframe_only": "Une app OEMConfig se configure par l'iframe seulement.",
+      "managed_configuration_unknown_key": "Propriété inconnue de l'app.",
+      "managed_configuration_type": "Valeur d'un mauvais type pour cette propriété.",
+      "managed_configuration_value": "Valeur non proposée par l'app.",
+      "too_deep": "Configuration trop imbriquée.",
+      "secret_expected": "Une propriété masquée prend un secret, jamais une valeur en clair.",
+      "secret_invalid": "Secret invalide.",
+      "secret_not_allowed": "Un secret n'est admis que dans une propriété texte.",
+      "unknown_variable": "Variable inconnue.",
+      "permission_invalid": "Autorisation malformée.",
+      "track_unknown": "Piste inconnue de l'app.",
+      "package_invalid": "Nom de paquet malformé.",
+      "package_reserved": "Paquet réservé par Obligarth.",
+      "web_app_no_managed_configuration": "Une app web n'a pas de configuration gérée.",
+      "secret_not_found": "Secret introuvable au coffre du tenant."
     }
   }
 }

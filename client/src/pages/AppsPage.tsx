@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { AppWindow, Archive, Plus, RefreshCw, Search } from 'lucide-react';
+import { AppWindow, Archive, Plus, RefreshCw, Search, ShoppingBag } from 'lucide-react';
 import { SocketEvents, type AppCatalogEntry, type AppDetail, type VppAssetView } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
 import { integrationsApi } from '@/api/integrations.api';
@@ -23,7 +23,9 @@ import { apiErrorMessage, trCode } from '@/utils/apiError';
 // Business, licensed by Apps and Books), their licences, what the inventory shows of them, their delivery, and their
 // assignments (with their options) through the impact preview like a policy's. Reading: any member; writing:
 // mdm.apps.manage. An app is added from a licence of the tenant (the content tokens of the Integrations tab) or by
-// its App Store id; its bundle identifier and name are typed (no call to Apple from the console).
+// its App Store id; its bundle identifier and name are typed (no call to Apple from the console). The Android apps of
+// the tenant (lot AN-E) are listed here too; they are added from managed Google Play and opened on their own page
+// (/apps/android).
 
 const fieldCls = 'mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary';
 
@@ -37,6 +39,7 @@ export function AppsPage() {
   const caps = permissions?.tenantCapabilities ?? [];
   const canManage = isAdmin() || caps.includes('mdm.apps.manage');
   const [params, setParams] = useSearchParams();
+  const navigate = useNavigate();
   const [apps, setApps] = useState<AppCatalogEntry[] | null>(null);
   const [q, setQ] = useState('');
   const [archived, setArchived] = useState(false);
@@ -81,7 +84,12 @@ export function AppsPage() {
           <RefreshCw className="w-4 h-4" />
         </button>
         {canManage && (
-          <Button size="sm" className="ml-auto" onClick={() => setAdding(true)}><Plus className="w-4 h-4 mr-1" />{t('apps.add') || 'Add an app'}</Button>
+          <span className="ml-auto flex flex-wrap gap-2">
+            <Link to="/apps/android" className="inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium bg-bg-tertiary text-text-primary hover:bg-bg-hover coarse:min-h-10">
+              <ShoppingBag className="w-4 h-4 mr-1" />{t('androidApps.openCatalog') || 'Android apps'}
+            </Link>
+            <Button size="sm" onClick={() => setAdding(true)}><Plus className="w-4 h-4 mr-1" />{t('apps.add') || 'Add an app'}</Button>
+          </span>
         )}
       </div>
       {error && <p className="text-sm text-red-400">{error}</p>}
@@ -105,15 +113,17 @@ export function AppsPage() {
               </thead>
               <tbody>
                 {apps.map((a) => (
-                  <tr key={a.id} className="border-t border-border/50 hover:bg-bg-tertiary cursor-pointer" onClick={() => select(a.id)}>
+                  <tr key={a.id} className="border-t border-border/50 hover:bg-bg-tertiary cursor-pointer"
+                    onClick={() => (a.platformFamily === 'android' ? (canManage ? navigate(`/apps/android?app=${a.uuid}`) : undefined) : select(a.id))}>
                     <td className="px-4 py-2.5">
                       <span className="font-medium text-text-primary">{a.name}</span>
+                      {a.platformFamily === 'android' && <span className="ml-2"><StateBadge tone="green" label={t('androidApps.badge') || 'Android'} /></span>}
                       {a.archivedAt && <span className="ml-2"><StateBadge tone="gray" label={t('apps.archived') || 'Archived'} /></span>}
                       {a.publisher && <span className="block text-xs text-text-muted">{a.publisher}</span>}
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-text-secondary">{a.identifier}</td>
                     <td className="px-3 py-2.5 text-text-secondary">
-                      {a.licenses ? (t('apps.licenceCounts', { available: a.licenses.available, total: a.licenses.total }) || `${a.licenses.available} available of ${a.licenses.total}`)
+                      {a.platformFamily === 'android' ? <span className="text-text-muted">—</span> : a.licenses ? (t('apps.licenceCounts', { available: a.licenses.available, total: a.licenses.total }) || `${a.licenses.available} available of ${a.licenses.total}`)
                         : <span className="text-amber-500">{t('apps.noLicence') || 'No licence'}</span>}
                     </td>
                     <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">{a.assignments}</td>

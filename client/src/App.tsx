@@ -27,6 +27,8 @@ import { ProfilePage } from '@/pages/ProfilePage';
 import { AdminTenantsPage } from '@/pages/AdminTenantsPage';
 import { AndroidPlatformPage } from '@/pages/admin/AndroidPlatformPage';
 import { AndroidZeroTouchPage } from '@/pages/AndroidZeroTouchPage';
+import { AndroidAppsPage } from '@/pages/AndroidAppsPage';
+import { AndroidManagedConfigPage } from '@/pages/AndroidManagedConfigPage';
 import { ApprovalsPage } from '@/pages/ApprovalsPage';
 import { AuditLogPage } from '@/pages/AuditLogPage';
 import { SecurityPage } from '@/pages/SecurityPage';
@@ -116,6 +118,11 @@ export default function App() {
   <Route path="/enrollment/android/zero-touch" element={<AndroidZeroTouchPage />} />
  </Route>
  {/* Device enrollment: profiles, links, invitations, sessions (mdm.enrollment.manage). */}
+ {/* Android apps (lot AN-E): managed Google Play iframes, catalog and managed configuration (mdm.apps.manage). */}
+ <Route element={<ProtectedRoute requiredCapabilities={['mdm.apps.manage']} />}>
+  <Route path="/apps/android" element={<AndroidAppsPage />} />
+  <Route path="/apps/android/:uuid/managed-config" element={<AndroidManagedConfigPage />} />
+ </Route>
  <Route element={<ProtectedRoute requiredCapabilities={['mdm.enrollment.manage']} />}>
   <Route path="/device-enrollment" element={<DeviceEnrollmentPage />} />
  </Route>
