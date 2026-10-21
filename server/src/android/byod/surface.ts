@@ -50,6 +50,29 @@ const perAddress = (max: number): RequestHandler => rateLimit({
   validate: { xForwardedForHeader: false, trustProxy: false },
 });
 
+/** Before the key is resolved (F1R-8, the order of the surface of lot C): every request of an address, whatever the key
+ *  (the resolution reads the base), then a cap per key, KEY_CAP_FACTOR times the budget of the POST of an address, that
+ *  counts only the answers refused (400 and beyond: wrong codes, unknown keys): the enrollments that succeed never fill
+ *  it; only many addresses sending wrong codes together reach it. */
+export const BYOD_PRE_ADDRESS_PER_MINUTE = 60;
+/** Lot C's KEY_CAP_FACTOR (apple/enrollment/surface.ts, decision C2 A of 19/10/2026), not imported: that module pulls
+ *  the whole Apple surface. */
+const KEY_CAP_FACTOR = 10;
+export const BYOD_KEY_CAP_PER_MINUTE = 10 * KEY_CAP_FACTOR;
+const beforeResolution = (): RequestHandler[] => [
+  rateLimit({
+    windowMs: 60_000, limit: BYOD_PRE_ADDRESS_PER_MINUTE, standardHeaders: false, legacyHeaders: false,
+    keyGenerator: (req) => `abp:${req.ip ?? 'unknown'}`, handler: tooMany,
+    validate: { xForwardedForHeader: false, trustProxy: false },
+  }),
+  rateLimit({
+    windowMs: 60_000, limit: BYOD_KEY_CAP_PER_MINUTE, standardHeaders: false, legacyHeaders: false,
+    keyGenerator: (req) => `abk:${String(req.params.key ?? '').slice(0, 64)}`, handler: tooMany,
+    skipSuccessfulRequests: true,
+    validate: { xForwardedForHeader: false, trustProxy: false },
+  }),
+];
+
 const route = (template: string): RequestHandler => (_req, res, next) => { locals(res).route = template; next(); };
 const asyncHandler = (fn: (req: Request, res: Response) => Promise<void>): RequestHandler =>
   (req, res, next) => { fn(req, res).catch(next); };
@@ -75,6 +98,8 @@ export function createAndroidByodSurface(): Router {
     if (androidConfig().mode === 'off') { notFound(res); return; }
     next();
   });
+
+  router.use(...beforeResolution());
 
   router.use((req: Request, res: Response, next: NextFunction) => {
     const resolve = async (): Promise<boolean> => {

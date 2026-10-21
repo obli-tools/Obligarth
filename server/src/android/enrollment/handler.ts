@@ -33,7 +33,7 @@ import {
 import { readAndroidProfile, readSnapshot } from './profiles';
 import { androidSenders } from './senders';
 import { endToken } from './tokens';
-import { invitationForEnrollment, markInvitationUsed } from '../byod/enrollmentGuard';
+import { invitationForEnrollment, markInvitationUsed, type EnrollmentInvitation } from '../byod/enrollmentGuard';
 import { markSigninSessionUsed, signinSessionForEnrollment } from '../signin/guard';
 import type { z } from 'zod';
 
@@ -154,9 +154,9 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   if (mismatch) return notAccepted(ctx, d, mismatch, token);
   // Lot AN-F1: a BYOD link token enrolls a device only through an invitation issued after its notice was acknowledged
   // (not revoked, not used): otherwise an unknown enrollment, quarantined (a personal device is never deleted).
-  let invitation: { id: string; noticeVersionId: string } | null = null;
+  let invitation: EnrollmentInvitation | null = null;
   if (token.kind === 'byod_link') {
-    invitation = await invitationForEnrollment(trx, tenantId, token.id);
+    invitation = await invitationForEnrollment(trx, tenantId, token.id, at);
     if (!invitation) return notAccepted(ctx, d, 'unknown_token', token);
   }
   // Lot AN-F2: a sign-in token enrolls a device only through its session of the device surface, issued after Obligate
@@ -278,10 +278,11 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
   await trx('android_enrollment_tokens').where({ id: token.id }).update({ uses: trx.raw('uses + 1'), last_used_at: now });
   if (token.one_time && token.state === 'active') await endToken(trx, token, 'used');
   if (invitation) {
-    await markInvitationUsed(trx, tenantId, invitation.id, deviceId);
+    await markInvitationUsed(trx, tenantId, invitation, deviceId);
     ctx.audit({
       tenantId, action: 'android.byod_invitation_used', target: { type: 'android_byod_invitation', id: invitation.id },
-      details: { invitationId: invitation.id, deviceId, noticeVersionId: invitation.noticeVersionId },
+      details: { invitationId: invitation.id, deviceId, noticeVersionId: invitation.noticeVersionId,
+        ...(invitation.state !== 'issued' ? { late: invitation.state } : {}) },
     });
   }
 
