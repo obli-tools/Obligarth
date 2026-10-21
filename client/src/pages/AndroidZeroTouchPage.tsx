@@ -8,14 +8,17 @@ import { Button } from '@/components/common/Button';
 import { PageContainer } from '@/components/common/PageContainer';
 import { Labeled, dateOf, errorToast, fieldClass } from '@/components/android/ui';
 import { trCode } from '@/utils/apiError';
+import { useOwnDocument } from '@/hooks/useOwnDocument';
 
 // The zero-touch portal of the client, embedded (android-amapi §10.5, ANDROID_ZERO_TOUCH_PAGE; lots AN-F2 and AN-C2):
 // the console asks the server for the iframe URL of an active zero-touch token (step-up; the URL carries the value of
 // the long token: in memory only, never stored nor logged) and shows Google's page, whose parentFrameUrl is this page.
-// The console's proxy sets no Content-Security-Policy today (note AN-E1): the day it gets one, this path receives
-// androidFrameCsp (frame-src and script-src of Google) [AR: Google's iframe checked at AN-J].
+// The console's proxy gives this path its own Content-Security-Policy (client/nginx.conf, lot AN-E: Google's frames,
+// the sign-in of a Google account included [NV]); reached by an in-app link, the page reloads the document at its own
+// path first (useOwnDocument) [AR: Google's iframe checked at AN-J].
 
 export function AndroidZeroTouchPage() {
+  const own = useOwnDocument();
   const { t } = useTranslation();
   const [params, setParams] = useSearchParams();
   const [tokens, setTokens] = useState<AndroidEnrollmentTokenView[]>([]);
@@ -23,8 +26,9 @@ export function AndroidZeroTouchPage() {
   const [frame, setFrame] = useState<AndroidZeroTouchIframe | null>(null);
   const [busy, setBusy] = useState(false);
   useEffect(() => {
+    if (!own) return;
     androidApi.tokens().then((all) => setTokens(all.filter((x) => x.kind === 'zero_touch' && x.state === 'active'))).catch(() => setTokens([]));
-  }, []);
+  }, [own]);
   const open = async () => {
     setBusy(true);
     try {
@@ -32,6 +36,7 @@ export function AndroidZeroTouchPage() {
       setParams((p) => { const n = new URLSearchParams(p); n.delete('token'); return n; }, { replace: true });
     } catch (err) { errorToast(err); } finally { setBusy(false); }
   };
+  if (!own) return <PageContainer><p className="text-sm text-text-muted italic">{t('common.loading') || 'Loading…'}</p></PageContainer>;
   return (
     <PageContainer className="space-y-4">
       <Link to="/device-enrollment" className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary coarse:min-h-10">

@@ -4,6 +4,7 @@ import type {
   AndroidDeadLetterView, AndroidDeadline, AndroidDeviceAction, AndroidDeviceView, AndroidEnrollmentProfileRequest, AndroidEnrollmentProfileView,
   AndroidEnrollmentTokenView, AndroidFormCatalogView, AndroidKioskState, AndroidKmeConfiguration, AndroidOffboardingView, AndroidOnboardingView,
   AndroidPendingDeviceView, AndroidPresumedGoneView, AndroidQuotaView, AndroidSigninConfig, AndroidSigninConfigRequest, AndroidZeroTouchIframe,
+  AndroidAppDetail, AndroidAppKind, AndroidAppView, AndroidIframeScreen, AndroidIframeTokenView,
 } from '@obligarth/shared';
 
 // The Android console (android-amapi §12; lots AN-A2 and AN-C2). Tenant side (/api/android): the enterprise card and
@@ -180,6 +181,33 @@ export const androidApi = {
   // ── Policies ──
   async policyCatalog(): Promise<AndroidFormCatalogView> {
     return data(await apiClient.get<ApiResponse<AndroidFormCatalogView>>('/android/policy-catalog'));
+  },
+
+  // ── Apps (lot AN-E; mdm.apps.manage) ──
+  async apps(): Promise<AndroidAppView[]> {
+    return data(await apiClient.get<ApiResponse<AndroidAppView[]>>('/android/apps'));
+  },
+  async app(uuid: string): Promise<AndroidAppDetail> {
+    return data(await apiClient.get<ApiResponse<AndroidAppDetail>>(`/android/apps/${encodeURIComponent(uuid)}`));
+  },
+  /** Adds the app chosen in the iframe (its package): the server reads it at Google for the tenant's enterprise. */
+  async addApp(body: { packageName: string; kind?: AndroidAppKind; languageCode?: string }): Promise<{ app: AndroidAppView; created: boolean }> {
+    return data(await apiClient.post<ApiResponse<{ app: AndroidAppView; created: boolean }>>('/android/apps', body));
+  },
+  async refreshApp(uuid: string): Promise<string> {
+    return data(await apiClient.post<ApiResponse<{ result: string }>>(`/android/apps/${encodeURIComponent(uuid)}/refresh`, {})).result;
+  },
+  async archiveApp(uuid: string): Promise<void> {
+    await apiClient.delete(`/android/apps/${encodeURIComponent(uuid)}`);
+  },
+  /** Checks the options of an assignment of the app (paths and codes only, nothing stored). */
+  async checkAppOptions(uuid: string, options: unknown): Promise<{ issues: Array<{ path: string; code: string }>; warnings: Array<{ path: string; code: string }> }> {
+    return data(await apiClient.post<ApiResponse<{ issues: Array<{ path: string; code: string }>; warnings: Array<{ path: string; code: string }> }>>(
+      `/android/apps/${encodeURIComponent(uuid)}/options/check`, { options }));
+  },
+  /** A token for one iframe of this page (never kept: the URL lives in the page's memory only). */
+  async iframeToken(body: { screen: AndroidIframeScreen; parentPath: string; appId?: string; locale?: string }): Promise<AndroidIframeTokenView> {
+    return data(await apiClient.post<ApiResponse<AndroidIframeTokenView>>('/android/web-tokens', body));
   },
 };
 

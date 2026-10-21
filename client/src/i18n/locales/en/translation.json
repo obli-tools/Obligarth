@@ -1578,7 +1578,10 @@
       "apple_enrollment_released": "Enrollments unknown to the brain released",
       "apple_restore_check": "Device service checked after a restore",
       "apple_device_identity_revoked": "Device identity revoked",
-      "apple_ddm_sync_requested": "DDM synchronisation forced"
+      "apple_ddm_sync_requested": "DDM synchronisation forced",
+      "android_app_added": "Android: app added to the catalog",
+      "android_app_archived": "Android: app archived",
+      "android_web_token_created": "Android: managed Google Play iframe opened"
     },
     "families": {
       "auth": "Authentication",
@@ -3663,7 +3666,8 @@
     "invalidOwnership": "Invalid ownership.",
     "invalidSerial": "Invalid serial number.",
     "invalidSetting": "Invalid setting of the profile.",
-    "tenantHasAndroidEnterprise": "This tenant still has an Android enterprise: unlink it first."
+    "tenantHasAndroidEnterprise": "This tenant still has an Android enterprise: unlink it first.",
+    "androidAppReadOnly": "The name, author and icon of an Android app come from Google."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -4689,6 +4693,180 @@
         "DEVICE_INCOMPATIBLE": "device incompatible",
         "PROJECT_NOT_PERMITTED": "not permitted for this project"
       }
+    }
+  },
+  "androidApps": {
+    "back": "Back to the apps",
+    "title": "Android apps",
+    "badge": "Android",
+    "openCatalog": "Android apps",
+    "subtitle": "Apps of managed Google Play for the tenant's Android enterprise: public apps, private apps and web apps, and their assignments.",
+    "play": {
+      "title": "Managed Google Play",
+      "screens": {
+        "catalog": "Search and publish",
+        "store_builder": "Organise the store"
+      },
+      "close": "Close",
+      "hint": "Search an app, or publish a private app or a web app, then select it: it is added to the catalog. A private app never becomes public."
+    },
+    "frameTitle": "Managed Google Play",
+    "gapiFailed": "Google's iframe library could not be loaded.",
+    "added": "{{name}} added to the catalog",
+    "alreadyThere": "{{name}} is in the catalog already",
+    "addByPackage": "Or add by its package name",
+    "add": "Add",
+    "empty": "No Android app yet",
+    "emptyHint": "Open managed Google Play above and select the apps of the tenant.",
+    "name": "Name",
+    "package": "Package",
+    "kind": "Kind",
+    "managedConfiguration": "Managed configuration",
+    "refreshed": "Read at Google",
+    "unavailable": "Withdrawn by Google",
+    "detailTitle": "Android app",
+    "unavailableHint": "Google no longer serves this app to the enterprise: its last metadata are kept.",
+    "privateHint": "Private app of the tenant's enterprise: it never becomes public.",
+    "minSdk": "Minimum Android API",
+    "permissions": "Permissions",
+    "tracks": "Test tracks",
+    "refresh": "Read again at Google",
+    "managedConfigPage": "Managed configuration",
+    "archiveBlocked": "Remove the assignments of this app first",
+    "confirmArchive": "Archive the app {{name}}?",
+    "archivedDone": "App archived",
+    "archive": "Archive",
+    "editOptions": "Edit the options",
+    "editOptionsTitle": "Options of the assignment",
+    "kinds": {
+      "play": "Public (Google Play)",
+      "private": "Private",
+      "web": "Web app"
+    },
+    "configKinds": {
+      "json": "Form",
+      "iframe": "Google's iframe only",
+      "none": "None"
+    },
+    "refreshResults": {
+      "fresh": "Read less than 5 minutes ago: nothing to do",
+      "refreshed": "Metadata read again",
+      "unavailable": "Google no longer serves this app",
+      "gone": "The app is no longer in the catalog"
+    },
+    "config": {
+      "back": "Back to the app",
+      "title": "Managed configuration of {{name}}",
+      "subtitle": "Create or edit a configuration in Google's iframe, then apply it to an assignment of the app. The configuration stays at Google: Obligarth keeps its id only.",
+      "open": "Open the configurations",
+      "frameTitle": "Managed configuration",
+      "chosen": "Configuration « {{name}} » (id {{id}}) saved.",
+      "noAssignment": "The app has no assignment yet.",
+      "apply": "Apply to this assignment",
+      "assignWith": "Assign the app with this configuration"
+    },
+    "options": {
+      "title": "Options of the Android app",
+      "default": "Default",
+      "installType": "Installation",
+      "installTypeDefault": "Available (default)",
+      "autoUpdateMode": "Updates",
+      "minimumVersionCode": "Minimum version code",
+      "installPriority": "Install priority (0 to 10,000, lower first)",
+      "constraint": "Installation constraint",
+      "permissions": "Runtime permissions",
+      "defaultPermissionPolicy": "Default policy",
+      "permission": "Permission",
+      "permissionPolicy": "Policy of the permission",
+      "removePermission": "Remove",
+      "addPermission": "Add a permission",
+      "tracks": "Test tracks the devices may receive",
+      "managedConfiguration": "Managed configuration",
+      "configModes": {
+        "none": "None",
+        "form": "Form",
+        "template": "Configuration saved in Google's iframe"
+      },
+      "oemConfigHint": "An OEMConfig app is configured in the managed configurations iframe only.",
+      "templateId": "Id of the configuration saved in the iframe",
+      "templateHint": "Saved from the page « Managed configuration » of the app.",
+      "secretStored": "Secret stored in the vault",
+      "secretReplace": "Replace",
+      "unset": "Not set",
+      "yes": "Yes",
+      "no": "No",
+      "hiddenHint": "Hidden property: kept in the vault, never shown again.",
+      "asSecret": "Secret (kept in the vault)",
+      "removeItem": "Remove the item",
+      "addItem": "Add an item",
+      "errors": {
+        "minimumVersionCode": "The minimum version code is a whole number from 1.",
+        "installPriorityType": "An install priority applies to a forced or preinstalled app only.",
+        "installPriority": "The install priority is a whole number from 0 to 10,000.",
+        "permission": "A permission is malformed or given twice.",
+        "templateId": "The id of the configuration is made of digits."
+      }
+    },
+    "installTypes": {
+      "AVAILABLE": "Available",
+      "PREINSTALLED": "Preinstalled",
+      "FORCE_INSTALLED": "Forced",
+      "REQUIRED_FOR_SETUP": "Required for the setup",
+      "BLOCKED": "Blocked",
+      "KIOSK": "Kiosk"
+    },
+    "autoUpdateModes": {
+      "AUTO_UPDATE_DEFAULT": "Default (Wi-Fi, charging, idle)",
+      "AUTO_UPDATE_POSTPONED": "Postponed (up to 90 days)",
+      "AUTO_UPDATE_HIGH_PRIORITY": "As soon as possible"
+    },
+    "constraints": {
+      "networkTypeConstraint": "Network",
+      "chargingConstraint": "Charging",
+      "deviceIdleConstraint": "Idle device"
+    },
+    "constraintValues": {
+      "INSTALL_ON_ANY_NETWORK": "Any network",
+      "INSTALL_ONLY_ON_UNMETERED_NETWORK": "Unmetered network only",
+      "CHARGING_NOT_REQUIRED": "Not required",
+      "INSTALL_ONLY_WHEN_CHARGING": "While charging only",
+      "DEVICE_IDLE_NOT_REQUIRED": "Not required",
+      "INSTALL_ONLY_WHEN_DEVICE_IDLE": "Idle device only"
+    },
+    "permissionPolicies": {
+      "PROMPT": "Ask the user",
+      "GRANT": "Grant",
+      "DENY": "Deny"
+    },
+    "issues": {
+      "invalid_options": "The options are not an object.",
+      "unknown_option": "Unknown option.",
+      "option_reserved": "Option reserved to Obligarth.",
+      "type_mismatch": "Value of the wrong type.",
+      "out_of_range": "Value out of range.",
+      "install_type_invalid": "Unknown install type.",
+      "install_priority_not_applicable": "An install priority applies to a forced or preinstalled app only.",
+      "too_many_install_constraints": "One installation constraint at most.",
+      "duplicate_value": "Value given twice.",
+      "managed_configuration_exclusive": "A form configuration and a configuration of Google's iframe exclude each other.",
+      "template_id_invalid": "The id of the configuration is made of digits.",
+      "template_variables_invalid": "Invalid variables of the configuration.",
+      "metadata_missing": "The schema of the app is unknown: read it again at Google, or use the iframe.",
+      "oemconfig_iframe_only": "An OEMConfig app is configured in the iframe only.",
+      "managed_configuration_unknown_key": "Property unknown to the app.",
+      "managed_configuration_type": "Value of the wrong type for this property.",
+      "managed_configuration_value": "Value not offered by the app.",
+      "too_deep": "Configuration nested too deep.",
+      "secret_expected": "A hidden property takes a secret, never a value in clear.",
+      "secret_invalid": "Invalid secret.",
+      "secret_not_allowed": "A secret is admitted in a text property only.",
+      "unknown_variable": "Unknown variable.",
+      "permission_invalid": "Malformed permission.",
+      "track_unknown": "Track unknown to the app.",
+      "package_invalid": "Malformed package name.",
+      "package_reserved": "Package reserved by Obligarth.",
+      "web_app_no_managed_configuration": "A web app has no managed configuration.",
+      "secret_not_found": "Secret not found in the vault of the tenant."
     }
   }
 }

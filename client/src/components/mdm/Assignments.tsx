@@ -3,8 +3,8 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import toast from 'react-hot-toast';
-import { Building2, FolderOpen, Minus, Plus, Smartphone, Trash2 } from 'lucide-react';
-import type { AppleAppOptions, Assignment, AssignmentChange, AssignmentMode, AssignmentTargetScope, DeviceSummary, JsonValue, Policy, SubmitOutcome } from '@obligarth/shared';
+import { Building2, FolderOpen, Minus, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
+import type { AndroidAppDetail, AppleAppOptions, Assignment, AssignmentChange, AssignmentMode, AssignmentTargetScope, DeviceSummary, JsonValue, Policy, SubmitOutcome } from '@obligarth/shared';
 import { APPLE_APP_OPTION_DEFAULTS, ASSIGNMENT_PRIORITY } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
 import { isStepUpHandled } from '@/api/client';
@@ -13,15 +13,19 @@ import { Button } from '@/components/common/Button';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
 import { ImpactConfirmDialog } from '@/components/mdm/ImpactPreview';
 import { anonymize } from '@/utils/anonymize';
-import { apiErrorMessage } from '@/utils/apiError';
+import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { androidApi } from '@/api/android.api';
+import { AndroidAppOptionsFields, AndroidOptionIssues, draftOf, optionsOf, type AndroidOptionsDraft } from '@/components/android/AndroidAppOptions';
 
 // Assignments of the policies (modele-donnees-mdm §7.5): a policy applies to the whole tenant, to a group (and its
 // subgroups) or to a device, as an inclusion or an exclusion, with a priority that breaks ties (smaller is
 // stronger). Every change goes through the impact preview, then the second factor or a second approver.
 // An app (lot C4, modele §8.2) is assigned the same way, with its options (removable, removed with the management,
-// no backup, takeover of an app the user installed, managed configuration without secret).
+// no backup, takeover of an app the user installed, managed configuration without secret). An Android app (lot AN-E)
+// carries its Android options (AndroidAppOptionsFields), checked by the server before the preview, and editable on an
+// existing assignment (op update, through the same preview and guard).
 
-export type AssignableResource = { id: number; tenantId: number; name: string; type?: 'policy' | 'app' };
+export type AssignableResource = { id: number; tenantId: number; name: string; type?: 'policy' | 'app'; android?: AndroidAppDetail };
 
 /** The options of an app assignment (AppleAppOptions), edited in place. */
 export function AppOptionsFields({ value, onChange, configText, onConfigText }: {
@@ -134,12 +138,14 @@ function DevicePicker({ value, onChange }: { value: DeviceSummary | null; onChan
  * Composes assignments (one policy on one or several targets), previews them, then applies them.
  * `resource` fixed: the user picks the target; `targets` fixed: the user picks the policy.
  */
-export function AssignmentCreateDialog({ open, onClose, resource, targets, onDone }: {
+export function AssignmentCreateDialog({ open, onClose, resource, targets, onDone, initialAndroidOptions }: {
   open: boolean;
   onClose: () => void;
   resource?: AssignableResource;
   targets?: AssignmentTarget[];
   onDone?: (outcome: SubmitOutcome) => void;
+  /** An Android app: the options the dialog starts from (a configuration chosen in the iframe). */
+  initialAndroidOptions?: Record<string, JsonValue>;
 }) {
   const { t } = useTranslation();
   const [policies, setPolicies] = useState<Policy[]>([]);
@@ -153,13 +159,18 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
   const [appOptions, setAppOptions] = useState<AppleAppOptions>({ ...APPLE_APP_OPTION_DEFAULTS });
   const [configText, setConfigText] = useState('');
   const isApp = resource?.type === 'app';
+  const android = isApp ? resource?.android : undefined;
+  const [androidDraft, setAndroidDraft] = useState<AndroidOptionsDraft>(() => draftOf(initialAndroidOptions));
+  const [androidIssues, setAndroidIssues] = useState<Array<{ path: string; code: string }>>([]);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPolicyId(''); setScope('group'); setGroupId(null); setDevice(null); setMode('include');
     setPriority(ASSIGNMENT_PRIORITY.default); setPreviewing(false); setAppOptions({ ...APPLE_APP_OPTION_DEFAULTS }); setConfigText('');
+    setAndroidDraft(draftOf(initialAndroidOptions)); setAndroidIssues([]);
     if (!resource) mdmApi.listPolicies({ state: 'published' }).then(setPolicies).catch(() => setPolicies([]));
-  }, [open, resource]);
+  }, [open, resource, initialAndroidOptions]);
 
   const chosen = resource ?? (() => {
     const p = policies.find((x) => x.id === policyId);
@@ -171,12 +182,28 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
     if (scope === 'group') return groupId ? [{ scope, id: groupId }] : [];
     return device ? [{ scope, id: device.id, name: device.label }] : [];
   }, [targets, scope, groupId, device]);
-  const config = isApp ? parseAppConfig(configText) : null;
+  const config = isApp && !android ? parseAppConfig(configText) : null;
+  const androidOut = android ? optionsOf(androidDraft, android) : null;
   // An exclusion of the whole tenant is refused by the model (assignments_no_tenant_exclude).
   const invalid = !chosen || chosenTargets.length === 0 || (mode === 'exclude' && chosenTargets.some((x) => x.scope === 'tenant'))
     || !Number.isInteger(priority) || priority < ASSIGNMENT_PRIORITY.min || priority > ASSIGNMENT_PRIORITY.max
-    || (isApp && mode === 'include' && config === undefined);
-  const options = isApp && mode === 'include' ? { ...appOptions, ...(config ? { config } : {}) } as unknown as Record<string, JsonValue> : undefined;
+    || (isApp && mode === 'include' && config === undefined)
+    || (!!androidOut && mode === 'include' && androidOut.errors.length > 0);
+  const options = !isApp || mode !== 'include' ? undefined
+    : androidOut ? androidOut.options
+      : { ...appOptions, ...(config ? { config } : {}) } as unknown as Record<string, JsonValue>;
+  // An Android app: the server checks the options against the app's schema first (paths and codes, nothing stored).
+  const toPreview = async () => {
+    if (!android || mode !== 'include' || !options) { setPreviewing(true); return; }
+    setChecking(true);
+    try {
+      const r = await androidApi.checkAppOptions(android.uuid, options);
+      setAndroidIssues(r.issues);
+      if (!r.issues.length) setPreviewing(true);
+    } catch (err) {
+      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+    } finally { setChecking(false); }
+  };
   const changes: AssignmentChange[] = chosen ? chosenTargets.map((x) => ({
     op: 'create', resourceType: isApp ? 'app' : 'policy', resourceId: chosen.id, resourceTenantId: chosen.tenantId,
     targetScope: x.scope, targetId: x.id, mode, priority, ...(options ? { options } : {}),
@@ -193,7 +220,7 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
         footer={(
           <>
             <Button variant="secondary" onClick={onClose}>{t('common.cancel') || 'Cancel'}</Button>
-            <Button onClick={() => setPreviewing(true)} disabled={invalid}>{t('mdm.assignments.preview') || 'Preview the impact'}</Button>
+            <Button onClick={() => void toPreview()} disabled={invalid} loading={checking}>{t('mdm.assignments.preview') || 'Preview the impact'}</Button>
           </>
         )}
       >
@@ -254,7 +281,14 @@ export function AssignmentCreateDialog({ open, onClose, resource, targets, onDon
             </label>
           </div>
           <p className="text-[11px] text-text-muted">{t('mdm.assignments.priorityHint') || 'Priority: 0 to 1000, smaller is stronger; it only breaks ties between policies assigned at the same level.'}</p>
-          {isApp && mode === 'include' && (
+          {android && mode === 'include' && (
+            <>
+              <AndroidAppOptionsFields app={android} value={androidDraft} onChange={(d) => { setAndroidDraft(d); setAndroidIssues([]); }} />
+              {androidOut && androidOut.errors.map((e) => <p key={e} className="text-xs text-red-400">{trCode(`androidApps.options.errors.${e}`, e)}</p>)}
+              <AndroidOptionIssues issues={androidIssues} />
+            </>
+          )}
+          {isApp && !android && mode === 'include' && (
             <>
               <AppOptionsFields value={appOptions} onChange={setAppOptions} configText={configText} onConfigText={setConfigText} />
               {config === undefined && <p className="text-xs text-red-400">{t('apps.options.configInvalid') || 'The managed configuration must be a JSON object.'}</p>}
@@ -297,6 +331,8 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
   const [items, setItems] = useState<Assignment[] | null>(null);
   const [adding, setAdding] = useState(false);
   const [removing, setRemoving] = useState<Assignment | null>(null);
+  const [editing, setEditing] = useState<Assignment | null>(null);
+  const android = resource?.type === 'app' ? resource.android : undefined;
 
   const load = useCallback(() => {
     const params = resource
@@ -351,7 +387,23 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
                 {a.mode === 'exclude' ? <Minus className="w-3 h-3" /> : <Plus className="w-3 h-3" />}
                 {a.mode === 'exclude' ? (t('mdm.assignments.exclude') || 'Exclude') : (t('mdm.assignments.include') || 'Include')}
               </span>
+              {android && a.mode === 'include' && (
+                <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-bg-tertiary text-text-secondary">
+                  {trCode(`androidApps.installTypes.${typeof a.options?.installType === 'string' ? a.options.installType : 'AVAILABLE'}`, String(a.options?.installType ?? 'AVAILABLE'))}
+                </span>
+              )}
               <span className="shrink-0 text-[11px] text-text-muted tabular-nums" title={t('mdm.assignments.priority') || 'Priority'}>P{a.priority}</span>
+              {canManage && android && a.mode === 'include' && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(a)}
+                  aria-label={t('androidApps.editOptions') || 'Edit the options'}
+                  title={t('androidApps.editOptions') || 'Edit the options'}
+                  className="shrink-0 p-1 rounded text-text-muted hover:text-accent coarse:min-h-10 coarse:min-w-10"
+                >
+                  <Pencil className="w-3.5 h-3.5" />
+                </button>
+              )}
               {canManage && (
                 <button
                   type="button"
@@ -368,10 +420,13 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
         </ul>
       )}
 
+      {android && editing && (
+        <AndroidAssignmentEditDialog app={android} assignment={editing} onClose={() => setEditing(null)} onDone={() => { load(); onChanged?.(); }} />
+      )}
       <AssignmentCreateDialog
         open={adding}
         onClose={() => setAdding(false)}
-        resource={resource ? { id: resource.id, tenantId: resource.tenantId, name: resource.name, type: resource.type } : undefined}
+        resource={resource ? { id: resource.id, tenantId: resource.tenantId, name: resource.name, type: resource.type, android: resource.android } : undefined}
         targets={target ? [target] : undefined}
         onDone={() => { load(); onChanged?.(); }}
       />
@@ -396,5 +451,75 @@ export function AssignmentsPanel({ resource, target, canManage, onChanged }: {
         }}
       />
     </div>
+  );
+}
+
+/**
+ * The options of an existing assignment of an Android app, edited (lot AN-E): `patch` (a configuration chosen in the
+ * iframe) is applied to the draft first. Checked by the server, then the impact preview and the guard (op update).
+ */
+export function AndroidAssignmentEditDialog({ app, assignment, patch, onClose, onDone }: {
+  app: AndroidAppDetail;
+  assignment: Assignment;
+  patch?: Partial<AndroidOptionsDraft>;
+  onClose: () => void;
+  onDone?: (outcome: SubmitOutcome) => void;
+}) {
+  const { t } = useTranslation();
+  const [draft, setDraft] = useState<AndroidOptionsDraft>(() => ({ ...draftOf(assignment.options), ...(patch ?? {}) }));
+  const [issues, setIssues] = useState<Array<{ path: string; code: string }>>([]);
+  const [previewing, setPreviewing] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const out = optionsOf(draft, app);
+  const changes: AssignmentChange[] = [{ op: 'update', id: assignment.id, options: out.options }];
+  const toPreview = async () => {
+    setChecking(true);
+    try {
+      const r = await androidApi.checkAppOptions(app.uuid, out.options);
+      setIssues(r.issues);
+      if (!r.issues.length) setPreviewing(true);
+    } catch (err) {
+      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+    } finally { setChecking(false); }
+  };
+  return (
+    <>
+      <Modal
+        open={!previewing}
+        onClose={onClose}
+        size="md"
+        title={t('androidApps.editOptionsTitle') || 'Options of the assignment'}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={onClose}>{t('common.cancel') || 'Cancel'}</Button>
+            <Button onClick={() => void toPreview()} disabled={out.errors.length > 0} loading={checking}>{t('mdm.assignments.preview') || 'Preview the impact'}</Button>
+          </>
+        )}
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-text-secondary">{app.name} → {targetLabel(t, assignment)}</p>
+          <AndroidAppOptionsFields app={app} value={draft} onChange={(d) => { setDraft(d); setIssues([]); }} />
+          {out.errors.map((e) => <p key={e} className="text-xs text-red-400">{trCode(`androidApps.options.errors.${e}`, e)}</p>)}
+          <AndroidOptionIssues issues={issues} />
+        </div>
+      </Modal>
+      <ImpactConfirmDialog
+        open={previewing}
+        onClose={() => setPreviewing(false)}
+        title={t('mdm.assignments.previewTitle') || 'Impact of the assignment'}
+        load={() => mdmApi.previewAssignments(changes)}
+        apply={async () => {
+          try {
+            const outcome = await mdmApi.changeAssignments(changes);
+            announceSubmitOutcome(t, outcome);
+            onDone?.(outcome);
+            onClose();
+          } catch (err) {
+            if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+            throw err;
+          }
+        }}
+      />
+    </>
   );
 }
