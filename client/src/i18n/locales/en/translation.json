@@ -1581,7 +1581,14 @@
       "apple_ddm_sync_requested": "DDM synchronisation forced",
       "android_app_added": "Android: app added to the catalog",
       "android_app_archived": "Android: app archived",
-      "android_web_token_created": "Android: managed Google Play iframe opened"
+      "android_web_token_created": "Android: managed Google Play iframe opened",
+      "android_signin_configured": "Android: sign-in URL configured",
+      "android_signin_notice_acknowledged": "Android: notice acknowledged in the sign-in flow",
+      "android_signin_refused": "Android: sign-in enrollment refused",
+      "android_signin_completed": "Android: sign-in enrollment token issued",
+      "android_signin_session_used": "Android: device enrolled by the sign-in URL",
+      "android_zero_touch_iframe_opened": "Android: zero-touch portal opened",
+      "android_kme_configuration_shown": "Android: Knox Mobile Enrollment configuration shown"
     },
     "families": {
       "auth": "Authentication",
@@ -2767,7 +2774,8 @@
       "retire_released": "Retirement: released at the device service",
       "retired": "Retirement: record retired",
       "retire_manual_apple_business": "Retirement: released in Apple Business",
-      "retire_manual_activation_lock": "Retirement: activation lock handled"
+      "retire_manual_activation_lock": "Retirement: activation lock handled",
+      "lost_mode_user_exit": "The user left the lost mode on the device (lost mode refused for {{cooldownHours}} h)"
     },
     "status": {
       "app": {
@@ -4326,7 +4334,8 @@
         "not_enrolled": "The device is no longer under management.",
         "not_amapi": "Not an Android Enterprise device.",
         "not_found": "Device not found.",
-        "use_erase": "A company device leaves management by an erase."
+        "use_erase": "A company device leaves management by an erase.",
+        "lost_mode_cooldown": "The user left the lost mode, or the password was reset, less than 12 hours ago: Google refuses the lost mode until then."
       },
       "flags": {
         "PRESERVE_RESET_PROTECTION_DATA": "Keep the factory reset protection",
@@ -4555,13 +4564,22 @@
       "title": "Enrollment by Google sign-in",
       "enabled": "enabled",
       "disabled": "disabled",
-      "help": "A user who adds a work account on a new device is sent to Obligarth to authenticate (Obligate), then receives a single-use enrollment.",
+      "help": "A user who adds a work account on a new device is sent to Obligarth to authenticate (Obligate), then receives a single-use enrollment for 15 minutes.",
+      "endUsers": "Only an active end user of this tenant whose e-mail is the one Obligate authenticates can enroll a device this way.",
+      "prerequisites": "Prerequisites",
+      "req": {
+        "surface": "Public HTTPS address of the device service (mdm.)",
+        "mdmKey": "MDM key of the tenant",
+        "profiles": "Enabled sign-in URL profile with its enrollment policy at Google ({{pushed}} of {{count}})",
+        "identityProvider": "Obligate configured for the authentication of the users"
+      },
+      "notReady": "The sign-in URL cannot be enabled until every prerequisite is met.",
       "personalUsage": "Personal use",
       "enable": "Enable",
       "disable": "Disable",
       "usage": {
-        "PERSONAL_USAGE_ALLOWED": "Allowed (work profile on a company device)",
-        "PERSONAL_USAGE_DISALLOWED": "Not allowed (fully managed device)"
+        "PERSONAL_USAGE_ALLOWED": "Allowed (work profile: company device as COPE, or personal device)",
+        "PERSONAL_USAGE_DISALLOWED": "Not allowed (fully managed company device)"
       }
     },
     "offboarding": {

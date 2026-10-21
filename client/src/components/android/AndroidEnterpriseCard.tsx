@@ -211,13 +211,38 @@ function SigninPanel({ config, canManage, onSaved }: { config: AndroidSigninConf
       toast.success(t('android.signin.saved') || 'Sign-in enrollment saved');
     } catch (err) { errorToast(err); } finally { setBusy(false); }
   };
+  // The prerequisites the server reports (lot AN-F2, raccord): enabling is offered once all of them are met.
+  const readiness = config.readiness;
+  const checks: Array<[string, boolean, string]> = readiness ? [
+    ['surface', readiness.surface, t('android.signin.req.surface') || 'Public HTTPS address of the device service (mdm.)'],
+    ['mdmKey', readiness.mdmKey, t('android.signin.req.mdmKey') || 'MDM key of the tenant'],
+    ['profiles', readiness.profilesPushed > 0, t('android.signin.req.profiles', { pushed: readiness.profilesPushed, count: readiness.profiles })
+      || `Enabled sign-in URL profile with its enrollment policy at Google (${readiness.profilesPushed} of ${readiness.profiles})`],
+    ['identityProvider', readiness.identityProvider, t('android.signin.req.identityProvider') || 'Obligate configured for the authentication of the users'],
+  ] : [];
+  const ready = !readiness || checks.every(([, done]) => done);
   return (
     <div className="space-y-2 rounded border border-border p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-semibold text-text-primary">{t('android.signin.title') || 'Enrollment by Google sign-in'}</h3>
         <StateBadge tone={config.enabled ? 'green' : 'gray'} label={config.enabled ? (t('android.signin.enabled') || 'enabled') : (t('android.signin.disabled') || 'disabled')} />
       </div>
-      <p className="text-xs text-text-muted">{t('android.signin.help') || 'A user who adds a work account on a new device is sent to Obligarth to authenticate (Obligate), then receives a single-use enrollment.'}</p>
+      <p className="text-xs text-text-muted">{t('android.signin.help') || 'A user who adds a work account on a new device is sent to Obligarth to authenticate (Obligate), then receives a single-use enrollment for 15 minutes.'}</p>
+      <p className="text-xs text-text-muted">{t('android.signin.endUsers') || 'Only an active end user of this tenant whose e-mail is the one Obligate authenticates can enroll a device this way.'}</p>
+      {readiness && (
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-text-secondary">{t('android.signin.prerequisites') || 'Prerequisites'}</p>
+          <ul className="space-y-0.5 text-xs">
+            {checks.map(([key, done, label]) => (
+              <li key={key} className="flex items-center gap-1.5">
+                {done ? <CheckCircle2 className="w-3.5 h-3.5 text-green-400" /> : <CircleDashed className="w-3.5 h-3.5 text-text-muted" />}
+                <span className={done ? 'text-text-primary' : 'text-text-secondary'}>{label}</span>
+              </li>
+            ))}
+          </ul>
+          {!config.enabled && !ready && <p className="text-xs text-amber-400">{t('android.signin.notReady') || 'The sign-in URL cannot be enabled until every prerequisite is met.'}</p>}
+        </div>
+      )}
       {config.signinUrl && <p className="font-mono text-xs break-all text-text-secondary">{config.signinUrl}</p>}
       {canManage && (
         <div className="flex flex-wrap items-end gap-2">
@@ -226,7 +251,7 @@ function SigninPanel({ config, canManage, onSaved }: { config: AndroidSigninConf
               {ANDROID_SIGNIN_PERSONAL_USAGE.map((u) => <option key={u} value={u}>{trCode(`android.signin.usage.${u}`, u)}</option>)}
             </select>
           </Labeled>
-          <Button size="sm" disabled={busy} onClick={() => void save(true)}>{config.enabled ? (t('common.save') || 'Save') : (t('android.signin.enable') || 'Enable')}</Button>
+          <Button size="sm" disabled={busy || (!config.enabled && !ready)} onClick={() => void save(true)}>{config.enabled ? (t('common.save') || 'Save') : (t('android.signin.enable') || 'Enable')}</Button>
           {config.enabled && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void save(false)}>{t('android.signin.disable') || 'Disable'}</Button>}
         </div>
       )}
