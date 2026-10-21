@@ -9,6 +9,60 @@ x-logging: &logging
     max-file: "5"
 
 services:
+  # One-shot, first of all: creates the missing secrets in ./secrets
+  # (SECRETS_DIR), never overwrites one, then gives each service a copy of its
+  # own in ./secrets/<service> (mounted read-only on /run/secrets), owned by
+  # the service's user: compose + .env are enough to start, no installer.
+  # Never in .env. Escrow server_kek and edge_kek: without them, no backup of
+  # the database can be restored (vault escrow split).
+  secrets-init:
+    image: alpine:3.20
+    restart: "no"
+    network_mode: none
+    volumes:
+      - ${SECRETS_DIR:-./secrets}:/secrets
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        chmod 700 /secrets
+        cd /secrets
+        created=""
+        key() { if [ ! -s "$$1" ]; then head -c 32 /dev/urandom | base64 > "$$1"; created="$$created $$1"; fi; }
+        key rls_context_key
+        key server_kek
+        key edge_kek
+        key apple_edge_ddm_hmac
+        if [ ! -s apple_edge_api_token ]; then
+          { head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=\n'; echo; } > apple_edge_api_token
+          created="$$created apple_edge_api_token"
+        fi
+        if [ ! -s apple_edge_db_password ]; then
+          { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32; echo; } > apple_edge_db_password
+          created="$$created apple_edge_db_password"
+        fi
+        chmod 600 rls_context_key server_kek edge_kek apple_edge_ddm_hmac apple_edge_api_token apple_edge_db_password
+        give() {
+          dir="$$1"; owner="$$2"; shift 2
+          mkdir -p "$$dir"
+          for f in "$$@"; do
+            cp "$$f" "$$dir/.$$f.tmp"
+            chown "$$owner" "$$dir/.$$f.tmp"
+            chmod 600 "$$dir/.$$f.tmp"
+            mv -f "$$dir/.$$f.tmp" "$$dir/$$f"
+          done
+          chown "$$owner" "$$dir"
+          chmod 500 "$$dir"
+        }
+        give server-migrate 0:0 rls_context_key
+        give server 0:0 rls_context_key server_kek apple_edge_api_token apple_edge_ddm_hmac
+        give apple-edge-migrate 65532:65532 apple_edge_db_password
+        give apple-edge 65532:65532 apple_edge_db_password edge_kek apple_edge_api_token apple_edge_ddm_hmac
+        if [ -n "$$created" ]; then
+          echo "secrets-init: created$$created in the secrets directory (SECRETS_DIR, default ./secrets)."
+          echo "secrets-init: escrow server_kek and edge_kek now: without them, no backup of the database can be restored."
+        fi
+
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -92,6 +146,8 @@ services:
     command: ["node", "dist/src/db/migrate.js"]
     restart: "no"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
     environment:
@@ -102,8 +158,8 @@ services:
       # Signed database context (rls-tenant §4.6, R12): the key the database
       # checks the server's contexts with, registered by server-migrate.
       RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
-    secrets:
-      - rls_context_key
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/server-migrate:/run/secrets:ro
     # The image's health check is the server's: nothing listens here.
     healthcheck:
       disable: true
@@ -117,6 +173,8 @@ services:
     command: ["migrate", "up"]
     restart: "no"
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       server-migrate:
@@ -127,8 +185,8 @@ services:
       EDGE_APP_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
       # The owner role of the brain: the runtime role reads the outbox through its guarded functions only.
       EDGE_OUTBOX_READER_GRANTEE: obligarth_owner
-    secrets:
-      - apple_edge_db_password
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/apple-edge-migrate:/run/secrets:ro
     networks:
       - backend
     read_only: true
@@ -144,8 +202,7 @@ services:
   # Apple MDM engine (NanoMDM embedded, one CA and one push certificate per
   # tenant): the device listener (9000) behind the edge-proxy, the internal API
   # (9100) for the server only. Neither port is published. The image runs as
-  # uid 65532 (distroless nonroot): its secret files must be readable by it
-  # (install.sh: chown 65532:65532).
+  # uid 65532 (distroless nonroot): secrets-init gives it its copies.
   apple-edge:
     image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
     command: ["serve"]
@@ -153,6 +210,8 @@ services:
     # Drain (5 s) and graceful stop (20 s) of apple-edge.
     stop_grace_period: 30s
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       apple-edge-migrate:
         condition: service_completed_successfully
     environment:
@@ -177,11 +236,8 @@ services:
       # sizes its budget of large device bodies from it (a sixteenth: 25.6 MiB, one
       # body of 16 MiB and smaller ones at once, one per device, 17 MiB per tenant).
       GOMEMLIMIT: 410MiB
-    secrets:
-      - apple_edge_db_password
-      - edge_kek
-      - apple_edge_api_token
-      - apple_edge_ddm_hmac
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/apple-edge:/run/secrets:ro
     # edge: reached by the edge-proxy; backend: the server and the database.
     networks:
       - edge
@@ -212,6 +268,8 @@ services:
     # 25 s exit budget; Docker's default (10 s) would cut it short.
     stop_grace_period: 30s
     depends_on:
+      secrets-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       server-migrate:
@@ -291,12 +349,8 @@ services:
       # Delegated reads from sibling apps (off unless source apps are named; platform-admin subjects refused) — see .env.example
       OBLIGATE_DELEGATION_APPS: ${OBLIGATE_DELEGATION_APPS:-none}
       OBLIGATE_DELEGATION_ALLOW_ADMIN: ${OBLIGATE_DELEGATION_ALLOW_ADMIN:-}
-    secrets:
-      - rls_context_key
-      - server_kek
-      - apple_edge_api_token
-      - apple_edge_ddm_hmac
     volumes:
+      - ${SECRETS_DIR:-./secrets}/server:/run/secrets:ro
       # Persistent custom directory: reports, software repository, phone-key cache.
       - ${CUSTOM_DIR:-./custom}:/custom
     # default: the console and the database; edge: the enrollment pages
@@ -320,8 +374,11 @@ services:
   # edge-proxy/mdm.conf (downloaded by install.sh) and the certificate of the
   # device host in certs/mdm (fullchain.pem, privkey.pem), renewed by your
   # ACME client. Relays only /t/<key>/… and /healthz (deny by default).
+  # Profile mdm: started once mdm.conf and the certificate are in place
+  # (COMPOSE_PROFILES=mdm in .env) — see .env.example.
   edge-proxy:
     image: nginx:stable-alpine
+    profiles: ["mdm"]
     restart: unless-stopped
     depends_on:
       apple-edge:
@@ -365,28 +422,9 @@ networks:
   # apple-edge, the server and the database.
   backend:
 
-secrets:
-  # 32 random bytes (base64), mode 600, created by install.sh; never in .env.
-  rls_context_key:
-    file: ./secrets/rls_context_key
-  # Key-encryption key of the server's vault (coffre-secrets §9.1): 32 random
-  # bytes (base64), mode 600, created by install.sh, never overwritten; never
-  # in .env, never in a backup of the database: escrow it (vault escrow split).
-  server_kek:
-    file: ./secrets/server_kek
-  # apple-edge's secrets, created by install.sh, never overwritten, owned by
-  # uid 65532 (apple-edge's user; compose mounts them as they are on the host).
-  # Key-encryption key of apple-edge: 32 random bytes (base64), escrowed with
-  # server_kek (vault escrow split --kek edge=…), never the same value.
-  edge_kek:
-    file: ./secrets/edge_kek
-  # Bearer token of apple-edge's internal API (32 random bytes, base64url),
-  # shared with the server.
-  apple_edge_api_token:
-    file: ./secrets/apple_edge_api_token
-  # HMAC key of the DDM relay (32 random bytes, base64), shared with the server.
-  apple_edge_ddm_hmac:
-    file: ./secrets/apple_edge_ddm_hmac
-  # Password of the database role apple_edge_app.
-  apple_edge_db_password:
-    file: ./secrets/apple_edge_db_password
+# Secrets (created by secrets-init in ./secrets, never overwritten, never in
+# .env): rls_context_key (signed database context), server_kek and edge_kek
+# (key-encryption keys of the two vaults, one per service: escrow both),
+# apple_edge_api_token (internal API, shared by the server and apple-edge),
+# apple_edge_ddm_hmac (DDM relay, shared), apple_edge_db_password (role
+# apple_edge_app).

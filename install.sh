@@ -1,8 +1,8 @@
 #!/bin/sh
 set -e
 
-REPO="https://raw.githubusercontent.com/MeeJay/Obligarth/main"
-RELEASES_API="https://api.github.com/repos/MeeJay/Obligarth/releases/latest"
+REPO="https://raw.githubusercontent.com/obli-tools/Obligarth/main"
+RELEASES_API="https://api.github.com/repos/obli-tools/Obligarth/releases/latest"
 INSTALL_DIR="${OBLIGARTH_DIR:-./obligarth}"
 ADMIN_PASSWORD=""
 
@@ -39,11 +39,6 @@ random_token() {
 # an optional port, no path. Final for every enrolled device.
 valid_mdm_base() {
   printf '%s' "$1" | grep -Eq '^https://[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?(:[0-9]{1,5})?$'
-}
-
-# Owner (numeric uid) of a file, without GNU stat.
-owner_of() {
-  ls -ln "$1" 2>/dev/null | awk '{print $3}'
 }
 
 # 32 random bytes, base64: a key file of secrets/. No weak fallback either.
@@ -252,28 +247,8 @@ if [ -n "$NEW_KEKS" ]; then
   echo "    documentation): without them, no backup of the database can be restored."
 fi
 
-# apple-edge runs as uid 65532 (distroless nonroot) and compose mounts its
-# secret files as they are on the host: they must belong to that uid (the
-# server, root in its container, still reads the two it shares).
-EDGE_SECRETS="edge_kek apple_edge_api_token apple_edge_ddm_hmac apple_edge_db_password"
-if [ "$(id -u)" = "0" ]; then
-  for name in $EDGE_SECRETS; do
-    if ! { chown 65532:65532 "secrets/$name" && chmod 600 "secrets/$name"; }; then
-      echo "✗ Cannot give secrets/$name to uid 65532 (apple-edge)." >&2
-      exit 1
-    fi
-  done
-else
-  NOT_OWNED=""
-  for name in $EDGE_SECRETS; do
-    [ "$(owner_of "secrets/$name")" = "65532" ] || NOT_OWNED="$NOT_OWNED secrets/$name"
-  done
-  if [ -n "$NOT_OWNED" ]; then
-    echo "  ⚠ apple-edge runs as uid 65532 and cannot read its secrets yet: as root, run"
-    echo "      cd $(pwd) && chown 65532:65532$NOT_OWNED"
-    echo "    then docker compose up -d (until then, apple-edge and the edge-proxy do not start)."
-  fi
-fi
+# apple-edge runs as uid 65532: the one-shot service secrets-init gives each
+# service its own copy of its secrets (secrets/<service>), owned by its user.
 
 # TLS certificate of the device host (MDM_PUBLIC_BASE), read by the
 # edge-proxy: fullchain.pem and privkey.pem, renewed by your ACME client.
@@ -284,7 +259,8 @@ chmod 700 "$TLS_DIR"
 if [ ! -s "$TLS_DIR/fullchain.pem" ] || [ ! -s "$TLS_DIR/privkey.pem" ]; then
   echo "  ⚠ No TLS certificate for $MDM_BASE yet: put fullchain.pem and privkey.pem in"
   echo "    $TLS_DIR (public certificate, renewed by your ACME client); the edge-proxy"
-  echo "    serves the devices once they are there (docker compose restart edge-proxy)."
+  echo "    serves the devices once they are there, with COMPOSE_PROFILES=mdm in .env"
+  echo "    (then docker compose up -d)."
 fi
 
 # Persistent custom directory (reports, software repository, phone-key cache)
@@ -296,7 +272,6 @@ docker compose pull
 if ! docker compose up -d; then
   echo ""
   echo "  ⚠ Some services did not start: docker compose ps, then docker compose logs <service>"
-  echo "    (apple-edge-migrate and apple-edge need their secret files readable by uid 65532)."
 fi
 
 # Port published by the client container: LISTEN_PORT of .env (default 3005)
