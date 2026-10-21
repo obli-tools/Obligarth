@@ -10,21 +10,21 @@ interface ThemePickerProps {
 /* ─── SVG mini-dashboard previews ─────────────────────────────────────────── */
 
 function OperatorPreviewSvg() {
- // Obli Operator: night-blue background, magenta accent (fill tone), no card borders.
+ // Obli Operator: night-blue background, raspberry accent (fill tone), no card borders.
  // Spec: Obli Design System §2 + §10.
  return (
  <svg viewBox="0 0 280 170" xmlns="http://www.w3.org/2000/svg" className="w-full rounded-md">
  <rect width="280" height="170" fill="#0b0d1a" rx="6" />
  {/* Sidebar — pas de bordure, juste différence de fond */}
  <rect x="0" y="0" width="60" height="170" fill="#0f1220" rx="6" />
- <rect x="10" y="12" width="16" height="16" rx="3" fill="#bb37bb" />
+ <rect x="10" y="12" width="16" height="16" rx="3" fill="#e30557" />
  <rect x="31" y="15" width="22" height="5" rx="2" fill="#8c93b6" />
  {[40, 62, 84, 106].map((y, i) => (
  <g key={y}>
  <rect x="7" y={y} width="46" height="16" rx="3"
  fill={i === 0 ? 'rgba(255,255,255,0.06)' : 'transparent'} />
  <rect x="13" y={y + 4} width="8" height="8" rx="2"
- fill={i === 0 ? '#bb37bb' : '#4b5273'} />
+ fill={i === 0 ? '#e30557' : '#4b5273'} />
  <rect x="25" y={y + 6} width={i === 0 ? 22 : 18} height="4" rx="2"
  fill={i === 0 ? '#e8ecf5' : '#8c93b6'} />
  </g>
@@ -54,7 +54,7 @@ function OperatorPreviewSvg() {
  <rect x="70" y="68" width="200" height="58" rx="4" fill="#131728" />
  <rect x="78" y="76" width="50" height="5" rx="2" fill="#e8ecf5" />
  <rect x="78" y="86" width="184" height="3" rx="1.5" fill="#181c30" />
- <rect x="78" y="86" width="120" height="3" rx="1.5" fill="#bb37bb" />
+ <rect x="78" y="86" width="120" height="3" rx="1.5" fill="#e30557" />
  <rect x="78" y="96" width="184" height="3" rx="1.5" fill="#181c30" />
  <rect x="78" y="96" width="80" height="3" rx="1.5" fill="#1edd8a" />
  <rect x="78" y="106" width="184" height="3" rx="1.5" fill="#181c30" />
@@ -63,13 +63,13 @@ function OperatorPreviewSvg() {
  <rect x="70" y="132" width="200" height="30" rx="4" fill="#131728" />
  <rect x="78" y="140" width="35" height="4" rx="2" fill="#e8ecf5" />
  <rect x="78" y="150" width="90" height="3" rx="1.5" fill="#181c30" />
- <rect x="78" y="150" width="55" height="3" rx="1.5" fill="#bb37bb" />
+ <rect x="78" y="150" width="55" height="3" rx="1.5" fill="#e30557" />
  </svg>
  );
 }
 
 function ModernPreviewSvg() {
- // Modern UI: very dark background, magenta accent.
+ // Modern UI: very dark background, raspberry accent.
  return (
  <svg viewBox="0 0 280 170" xmlns="http://www.w3.org/2000/svg" className="w-full rounded-md">
  {/* Page background */}
@@ -79,7 +79,7 @@ function ModernPreviewSvg() {
  <rect x="0" y="0" width="60" height="170" fill="#13101b" rx="6" />
  <rect x="60" y="0" width="1" height="170" fill="#363048" />
  {/* Sidebar logo */}
- <rect x="10" y="12" width="16" height="16" rx="3" fill="#bb37bb" opacity="0.9" />
+ <rect x="10" y="12" width="16" height="16" rx="3" fill="#e30557" opacity="0.9" />
  <rect x="31" y="15" width="22" height="5" rx="2" fill="#8c857e" />
  {/* Sidebar nav items */}
  {[40, 62, 84, 106].map((y, i) => (
@@ -87,7 +87,7 @@ function ModernPreviewSvg() {
  <rect x="7" y={y} width="46" height="16" rx="3"
  fill={i === 0 ? '#28233a' : 'transparent'} />
  <rect x="13" y={y + 4} width="8" height="8" rx="2"
- fill={i === 0 ? '#bb37bb' : '#6b657a'} />
+ fill={i === 0 ? '#e30557' : '#6b657a'} />
  <rect x="25" y={y + 6} width={i === 0 ? 22 : 18} height="4" rx="2"
  fill={i === 0 ? '#e4e0f2' : '#6b657a'} />
  </g>
@@ -101,7 +101,7 @@ function ModernPreviewSvg() {
 
  {/* Stats row */}
  {[0, 1, 2, 3].map((i) => {
- const colors = ['#2ea043', '#f85149', '#d29922', '#bb37bb'];
+ const colors = ['#2ea043', '#f85149', '#d29922', '#e30557'];
  const labels = [68, 4, 2, 8];
  const x = 70 + i * 52;
  return (
@@ -147,15 +147,15 @@ function ModernPreviewSvg() {
  <rect x="78" y="132" width="5" height="5" rx="2.5" fill="#2ea043" />
  <rect x="87" y="133" width="35" height="4" rx="2" fill="#e4e0f2" />
  <rect x="78" y="143" width="90" height="3" rx="2" fill="#1a1725" />
- <rect x="78" y="143" width="55" height="3" rx="2" fill="#bb37bb" opacity="0.85" />
+ <rect x="78" y="143" width="55" height="3" rx="2" fill="#e30557" opacity="0.85" />
  <rect x="175" y="143" width="88" height="3" rx="2" fill="#1a1725" />
- <rect x="175" y="143" width="40" height="3" rx="2" fill="#bb37bb" opacity="0.85" />
+ <rect x="175" y="143" width="40" height="3" rx="2" fill="#e30557" opacity="0.85" />
  </svg>
  );
 }
 
 function NeonPreviewSvg() {
- // Neon UI: electric magenta accent with glow effects
+ // Neon UI: electric raspberry accent with glow effects
  return (
  <svg viewBox="0 0 280 170" xmlns="http://www.w3.org/2000/svg" className="w-full rounded-md">
  <defs>
@@ -181,7 +181,7 @@ function NeonPreviewSvg() {
  <rect x="60" y="0" width="1" height="#342355" />
  <line x1="60" y1="0" x2="60" y2="170" stroke="#342355" strokeWidth="1" />
  {/* Sidebar logo — neon accent */}
- <rect x="10" y="12" width="16" height="16" rx="3" fill="#bb37bb" opacity="0.9" filter="url(#glow-accent)" />
+ <rect x="10" y="12" width="16" height="16" rx="3" fill="#e30557" opacity="0.9" filter="url(#glow-accent)" />
  <rect x="31" y="15" width="22" height="5" rx="2" fill="#9b80c8" />
  {/* Sidebar nav items */}
  {[40, 62, 84, 106].map((y, i) => (
@@ -189,15 +189,15 @@ function NeonPreviewSvg() {
  {/* Active item (i=0) has left border glow */}
  {i === 0 && (
  <rect x="7" y={y} width="3" height="16" rx="1.5"
- fill="#bb37bb" filter="url(#glow-accent)" />
+ fill="#e30557" filter="url(#glow-accent)" />
  )}
  <rect x="10" y={y} width="43" height="16" rx="3"
- fill={i === 0 ? 'rgba(187,55,187,0.12)' : 'transparent'} />
+ fill={i === 0 ? 'rgba(227,5,87,0.12)' : 'transparent'} />
  <rect x="13" y={y + 4} width="8" height="8" rx="2"
- fill={i === 0 ? '#bb37bb' : '#6c5594'}
+ fill={i === 0 ? '#e30557' : '#6c5594'}
  filter={i === 0 ? 'url(#glow-accent)' : undefined} />
  <rect x="25" y={y + 6} width={i === 0 ? 22 : 18} height="4" rx="2"
- fill={i === 0 ? '#bb37bb' : '#6c5594'}
+ fill={i === 0 ? '#e30557' : '#6c5594'}
  filter={i === 0 ? 'url(#glow-accent)' : undefined} />
  </g>
  ))}
@@ -209,9 +209,9 @@ function NeonPreviewSvg() {
  <defs>
  <linearGradient id="headerGlow" x1="0%" y1="0%" x2="100%" y2="0%">
  <stop offset="0%" stopColor="transparent" />
- <stop offset="30%" stopColor="rgba(187,55,187,0.15)" />
- <stop offset="50%" stopColor="rgba(187,55,187,0.8)" />
- <stop offset="70%" stopColor="rgba(187,55,187,0.15)" />
+ <stop offset="30%" stopColor="rgba(227,5,87,0.15)" />
+ <stop offset="50%" stopColor="rgba(227,5,87,0.8)" />
+ <stop offset="70%" stopColor="rgba(227,5,87,0.15)" />
  <stop offset="100%" stopColor="transparent" />
  </linearGradient>
  </defs>
@@ -220,7 +220,7 @@ function NeonPreviewSvg() {
 
  {/* Stats row */}
  {[0, 1, 2, 3].map((i) => {
- const colors = ['#00dc6e', '#ff3860', '#ffbe00', '#bb37bb'];
+ const colors = ['#00dc6e', '#ff3860', '#ffbe00', '#e30557'];
  const filters = ['url(#glow-green)', 'url(#glow-red)', undefined, 'url(#glow-accent)'];
  const labels = [68, 4, 2, 8];
  const x = 70 + i * 52;
@@ -271,7 +271,7 @@ function NeonPreviewSvg() {
  <rect x="78" y="132" width="5" height="5" rx="2.5" fill="#00dc6e" filter="url(#glow-green)" />
  <rect x="87" y="133" width="35" height="4" rx="2" fill="#ece4ff" />
  <rect x="78" y="143" width="90" height="3" rx="2" fill="#110d1c" />
- <rect x="78" y="143" width="55" height="3" rx="2" fill="#bb37bb" opacity="0.95" filter="url(#glow-accent)" />
+ <rect x="78" y="143" width="55" height="3" rx="2" fill="#e30557" opacity="0.95" filter="url(#glow-accent)" />
  <rect x="175" y="143" width="88" height="3" rx="2" fill="#110d1c" />
  <rect x="175" y="143" width="40" height="3" rx="2" fill="#9333ea" opacity="0.9" />
  </svg>
@@ -281,7 +281,7 @@ function NeonPreviewSvg() {
 function DaylightPreviewSvg() {
  // Obli Daylight: light companion of Obli Operator — Nordic Mist palette
  // (Nord Snow Storm), blue-grey page #e5e9f0, cards #eceff4 (depth by a soft
- // shadow, drawn here as a thin outline), Polar Night text #2e3440, magenta
+ // shadow, drawn here as a thin outline), Polar Night text #2e3440, raspberry
  // accent in its deeper light-theme tone.
  return (
  <svg viewBox="0 0 280 170" xmlns="http://www.w3.org/2000/svg" className="w-full rounded-md">
@@ -289,14 +289,14 @@ function DaylightPreviewSvg() {
  {/* Sidebar */}
  <rect x="0" y="0" width="60" height="170" fill="#eceff4" rx="6" />
  <line x1="60" y1="0" x2="60" y2="170" stroke="#d4dce7" />
- <rect x="10" y="12" width="16" height="16" rx="3" fill="#962c96" />
+ <rect x="10" y="12" width="16" height="16" rx="3" fill="#d30551" />
  <rect x="31" y="15" width="22" height="5" rx="2" fill="#818da1" />
  {[40, 62, 84, 106].map((y, i) => (
  <g key={y}>
  <rect x="7" y={y} width="46" height="16" rx="3"
- fill={i === 0 ? 'rgba(150,44,150,0.08)' : 'transparent'} />
+ fill={i === 0 ? 'rgba(211,5,81,0.08)' : 'transparent'} />
  <rect x="13" y={y + 4} width="8" height="8" rx="2"
- fill={i === 0 ? '#962c96' : '#aeb8c9'} />
+ fill={i === 0 ? '#d30551' : '#aeb8c9'} />
  <rect x="25" y={y + 6} width={i === 0 ? 22 : 18} height="4" rx="2"
  fill={i === 0 ? '#2e3440' : '#818da1'} />
  </g>
@@ -327,7 +327,7 @@ function DaylightPreviewSvg() {
  <rect x="70" y="68" width="200" height="58" rx="4" fill="#eceff4" stroke="#d4dce7" />
  <rect x="78" y="76" width="50" height="5" rx="2" fill="#2e3440" />
  <rect x="78" y="86" width="184" height="3" rx="1.5" fill="#d8dee9" />
- <rect x="78" y="86" width="120" height="3" rx="1.5" fill="#962c96" />
+ <rect x="78" y="86" width="120" height="3" rx="1.5" fill="#d30551" />
  <rect x="78" y="96" width="184" height="3" rx="1.5" fill="#d8dee9" />
  <rect x="78" y="96" width="80" height="3" rx="1.5" fill="#10a360" />
  <rect x="78" y="106" width="184" height="3" rx="1.5" fill="#d8dee9" />
@@ -336,7 +336,7 @@ function DaylightPreviewSvg() {
  <rect x="70" y="132" width="200" height="30" rx="4" fill="#eceff4" stroke="#d4dce7" />
  <rect x="78" y="140" width="35" height="4" rx="2" fill="#2e3440" />
  <rect x="78" y="150" width="90" height="3" rx="1.5" fill="#d8dee9" />
- <rect x="78" y="150" width="55" height="3" rx="1.5" fill="#962c96" />
+ <rect x="78" y="150" width="55" height="3" rx="1.5" fill="#d30551" />
  </svg>
  );
 }
@@ -344,7 +344,7 @@ function DaylightPreviewSvg() {
 function DimPreviewSvg() {
  // Obli Dim: dark companion of Obli Daylight — Nord "Polar Night" neutrals
  // (page #2e3440, cards #3b4252, topbar + sidebar #282d37 one step darker),
- // Dim statuses. Magenta accent identical to Operator's: Dim only changes
+ // Dim statuses. Raspberry accent identical to Operator's: Dim only changes
  // the neutrals.
  const bg = '#2e3440';
  const chrome = '#282d37';
@@ -354,7 +354,7 @@ function DimPreviewSvg() {
  const borderLight = '#5e6a82';
  const text = '#eceff4';
  const muted = '#a3abbc';
- const accent = '#bb37bb';
+ const accent = '#e30557';
  return (
  <svg viewBox="0 0 280 170" xmlns="http://www.w3.org/2000/svg" className="w-full rounded-md">
  <rect width="280" height="170" fill={bg} rx="6" />
