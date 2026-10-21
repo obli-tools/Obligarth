@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  AndroidByodInvitationCreated, AndroidByodInvitationRequest, AndroidByodInvitationView, AndroidCreatedTokenView, AndroidDeadLetterDetail,
+  AndroidByodInvitationCreated, AndroidByodInvitationRequest, AndroidByodInvitationView, AndroidByodNoticeView, AndroidCreatedTokenView, AndroidDeadLetterDetail,
   AndroidDeadLetterView, AndroidDeadline, AndroidDeviceAction, AndroidDeviceView, AndroidEnrollmentProfileRequest, AndroidEnrollmentProfileView,
   AndroidEnrollmentTokenView, AndroidFormCatalogView, AndroidKioskState, AndroidKmeConfiguration, AndroidOffboardingView, AndroidOnboardingView,
   AndroidPendingDeviceView, AndroidPresumedGoneView, AndroidQuotaView, AndroidSigninConfig, AndroidSigninConfigRequest, AndroidZeroTouchIframe,
@@ -155,6 +155,9 @@ export const androidApi = {
   },
   async createByodInvitation(body: AndroidByodInvitationRequest): Promise<AndroidByodInvitationCreated> {
     return data(await apiClient.post<ApiResponse<AndroidByodInvitationCreated>>('/android/byod/invitations', body));
+  },
+  async byodNotice(locale: 'fr' | 'en'): Promise<AndroidByodNoticeView> {
+    return data(await apiClient.get<ApiResponse<AndroidByodNoticeView>>(`/android/byod/notice?locale=${locale}`));
   },
   async revokeByodInvitation(id: string): Promise<void> {
     await apiClient.post(`/android/byod/invitations/${id}/revoke`, {});
