@@ -779,7 +779,9 @@
     "apps": "Apps",
     "accountMenu": "Account menu",
     "appSettings": "App settings",
-    "appUpdates": "App updates"
+    "appUpdates": "App updates",
+    "moreApps": "More…",
+    "otherApps": "Other apps"
   },
   "tenant": {
     "pageTitle": "Workspaces",

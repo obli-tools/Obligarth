@@ -779,7 +779,9 @@
     "apps": "Applications",
     "accountMenu": "Menu du compte",
     "appSettings": "Réglages de l'application",
-    "appUpdates": "Mises à jour de l'application"
+    "appUpdates": "Mises à jour de l'application",
+    "moreApps": "Plus…",
+    "otherApps": "Autres applications"
   },
   "tenant": {
     "pageTitle": "Espaces de travail",

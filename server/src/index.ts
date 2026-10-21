@@ -10,6 +10,7 @@ import { logger } from './utils/logger';
 import { generatePassword, hashPassword } from './utils/crypto';
 import { deviceService } from './services/device.service';
 import { setLiveAlertIO } from './services/liveAlert.service';
+import { obligateService } from './services/obligate.service';
 import {
   installUpgradeDispatcher,
   runBootTasks,
@@ -217,6 +218,9 @@ async function main() {
 
   server.listen(config.port, () => {
     logger.info({ port: config.port, env: config.nodeEnv, jobsMode: jobs.mode() }, 'Obligarth MDM started');
+    // This app's colour in the suite's switchers, announced to Obligate
+    // (best-effort, non-blocking; again after each write of its settings).
+    void obligateService.announceSelfInfo();
   });
 
   // Shutdown (SIGTERM, SIGINT; once): forced exit past 25 s; no new HTTP
