@@ -79,3 +79,77 @@ export function androidIframeUrl(screen: AndroidIframeScreen, token: string, o: 
   q.set('mode', 'SELECT');
   return `https://play.google.com/work/embedded/search?${q.toString()}`;
 }
+
+// ── Console (lot AN-E) ─────────────────────────────────────────────────────────
+
+/** Types of a managed property of an app (managedProperties of applications.get). */
+export const ANDROID_MANAGED_PROPERTY_TYPES = ['BOOL', 'STRING', 'INTEGER', 'CHOICE', 'MULTISELECT', 'HIDDEN', 'BUNDLE', 'BUNDLE_ARRAY'] as const;
+export type AndroidManagedPropertyType = typeof ANDROID_MANAGED_PROPERTY_TYPES[number];
+
+/** A managed property of an app's schema, as the catalog keeps it (minimized and bounded by the server). */
+export interface AndroidManagedPropertyView {
+  key: string;
+  type: AndroidManagedPropertyType;
+  /** Google's text (the developer's), shown as text, never as HTML. */
+  title?: string;
+  /** CHOICE and MULTISELECT: the values offered. */
+  entries?: Array<{ name: string; value: string }>;
+  nested?: AndroidManagedPropertyView[];
+}
+
+/** What a route shows of an Android app of the catalog (never Google's whole answer). */
+export interface AndroidAppView {
+  id: number;
+  uuid: string;
+  kind: AndroidAppKind;
+  packageName: string;
+  name: string;
+  publisher: string | null;
+  iconUrl: string | null;
+  /** How its managed configuration is set: a form generated from its schema, the iframe only, or not at all. */
+  managedConfiguration: 'json' | 'iframe' | 'none';
+  oemConfig: boolean;
+  tracks: Array<{ trackId: string; trackAlias: string | null }>;
+  permissions: string[];
+  minAndroidSdkVersion: number | null;
+  metadataRefreshedAt: string | null;
+  unavailable: boolean;
+}
+
+/** GET /api/android/apps/:id: the app, its managed configuration schema and the number of its assignments. */
+export interface AndroidAppDetail extends AndroidAppView {
+  tenantId: number;
+  managedProperties: AndroidManagedPropertyView[] | null;
+  assignments: number;
+}
+
+/** POST /api/android/web-tokens: the URL of one iframe (carries a short-lived token: kept in memory only). */
+export interface AndroidIframeTokenView {
+  screen: AndroidIframeScreen;
+  features: string[];
+  iframeUrl: string;
+  parentFrameUrl: string;
+}
+
+/** Events of the managed Google Play iframes the console listens to (gapi.iframes). [AR: names and payloads checked
+ *  against Google's iframes at AN-B/AN-J.] */
+export const ANDROID_IFRAME_EVENTS = {
+  productSelect: 'onproductselect',
+  configUpdated: 'onconfigupdated',
+  configDeleted: 'onconfigdeleted',
+} as const;
+
+/** Google's library of embedded iframes (gapi), loaded by the pages hosting a managed Google Play iframe only. */
+export const ANDROID_GAPI_URL = 'https://apis.google.com/js/api.js';
+
+/** The zero-touch portal may send its frame through Google's sign-in (the customer's Google account) [NV: checked
+ *  against the real portal at AN-J]: that page alone also admits accounts.google.com. */
+export const ANDROID_ZERO_TOUCH_FRAME_SOURCES = [...ANDROID_FRAME_SOURCES, 'https://accounts.google.com'] as const;
+
+/**
+ * The content security policy of every page of the console (client/nginx.conf, map $obligarth_csp): it never lets a
+ * third-party site frame the console (frame-ancestors, plus X-Frame-Options), lets the console frame itself only, and
+ * refuses plugins and a foreign <base>. Scripts, styles, images and connections stay unrestricted (no default-src):
+ * the pages hosting a Google iframe get androidFrameCsp(CONSOLE_BASE_CSP), Google's frames added to frame-src only.
+ */
+export const CONSOLE_BASE_CSP = "base-uri 'self'; object-src 'none'; frame-src 'self'; frame-ancestors 'self'";

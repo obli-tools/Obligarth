@@ -220,6 +220,8 @@ export async function patchApp(trx: Knex.Transaction, tenantId: number, id: numb
   }
   const cur = await appRow(trx, tenantId, id, true);
   if (cur.archived_at) throw new AppError(409, 'An archived app does not change', 'appArchived');
+  // Lot AN-E: the name, author and icon of an Android app are Google's (applications.get, refreshed once a day).
+  if (cur.platform_family === 'android') throw new AppError(409, 'The metadata of an Android app come from Google', 'androidAppReadOnly');
   const b = r.data;
   const set: Record<string, unknown> = {};
   if (b.name !== undefined) set.name = b.name;
