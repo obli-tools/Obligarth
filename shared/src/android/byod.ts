@@ -58,6 +58,8 @@ export interface AndroidByodInvitationView {
   id: string;
   profileId: string;
   endUserId: number | null;
+  /** The end user's display name (or e-mail), for the console. */
+  endUserName: string | null;
   prefix: string;
   label: string | null;
   state: AndroidByodInvitationState;
@@ -68,4 +70,15 @@ export interface AndroidByodInvitationView {
   createdAt: string;
   revokedAt: string | null;
   usedAt: string | null;
+}
+
+/** GET /api/android/byod/notice?locale=fr|en: the notice of a personal device exactly as the device surface shows it to
+ *  the user before the Google link (plain text: the console renders it escaped). */
+export interface AndroidByodNoticeView {
+  versionId: string;
+  locale: string;
+  title: string;
+  sections: Array<{ heading: string; paragraphs: string[] }>;
+  consentSummary: string;
+  contact: string | null;
 }

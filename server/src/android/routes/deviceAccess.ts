@@ -13,11 +13,15 @@ import { resolveRequestDevice } from '../../services/deviceScope.service';
 export { ANDROID_COMMAND_CAPABILITY, ANDROID_COMMAND_RESTRICTION } from '../commands/console';
 
 /** The device of a route (its id in `raw`): seen by the caller in the request's tenant, else 404; with `capability`,
- *  that capability on it and write access, else 403. */
-export async function androidDeviceOf(req: Request, raw: unknown, capability?: DeviceCapability): Promise<number> {
+ *  that capability on it and write access, else 403; with `o.write` (no device capability), write access to it, else
+ *  403 (lot AN-F1: approval and refusal of a device held for approval, bounded by the team scopes like the list). */
+export async function androidDeviceOf(req: Request, raw: unknown, capability?: DeviceCapability, o: { write?: boolean } = {}): Promise<number> {
   const outcome = await resolveRequestDevice(req, raw);
   if (!outcome.ok || Number(outcome.device.tenant_id) !== Number(req.tenantId)) throw new AppError(404, 'Not found', 'notFound');
   const id = Number(outcome.device.id);
+  if (!capability && o.write && !outcome.isAdmin && !(await permissionService.canWriteDevice(Number(req.session.userId), id, false))) {
+    throw new AppError(403, 'Write access to this device is not permitted for your team', 'capabilityMissing');
+  }
   if (capability && !outcome.isAdmin) {
     const userId = Number(req.session.userId);
     if (!(await permissionService.canUseCapability(userId, id, false, capability)) || !(await permissionService.canWriteDevice(userId, id, false))) {

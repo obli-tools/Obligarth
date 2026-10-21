@@ -427,6 +427,13 @@ export class GoogleGateway implements AndroidGateway {
     if (!mask.length) throw new AndroidRequestError('empty device patch');
     if (patch.state !== undefined) await this.freezeLock(e, 'devices.patch (state)');
     if (patch.policyName !== undefined) await this.policyAttachLock(e, String(body.policyName));
+    // Lot AN-F1 (defence in depth of the review, F1R-1): a personal device is attached only to a personal policy (its
+    // own d-<uuid>, the enrollment policy e-<id> of a BYOD profile) or to 'default', never to a corporate one (settings
+    // and reports of a company device on a personal one). The device is read only for another policy.
+    if (patch.policyName !== undefined && patch.policyName !== 'default' && !(await personalPolicyId(e, String(patch.policyName)))
+      && await this.personalDevice(e, deviceId)) {
+      throw personalRefusal(e, 'personal_policy_attach');
+    }
     if (patch.state === 'DISABLED') await this.destructiveCap(e, 'disable');
     await this.limit('device', e, deviceId);
     const r = await this.amapi.patchDevice(name, body, mask);

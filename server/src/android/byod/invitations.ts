@@ -83,6 +83,9 @@ interface InvitationRow {
   used_at: Date | null;
   revoked_at: Date | null;
   created_at: Date;
+  /** Joined by the list only. */
+  end_user_name?: string | null;
+  end_user_email?: string | null;
 }
 
 const COLUMNS = ['id', 'tenant_id', 'enterprise_id', 'profile_id', 'end_user_id', 'prefix', 'label', 'locale', 'state', 'expires_at',
@@ -166,16 +169,30 @@ function viewState(r: InvitationRow, now: number): AndroidByodInvitationState {
 const viewOf = (r: InvitationRow, now: number): AndroidByodInvitationView => ({
   id: String(r.id), profileId: String(r.profile_id), endUserId: r.end_user_id === null ? null : Number(r.end_user_id), prefix: r.prefix,
   label: r.label ?? null, state: viewState(r, now), expiresAt: new Date(r.expires_at).toISOString(), acknowledgedAt: iso(r.acknowledged_at),
-  noticeVersionId: r.notice_version_id ?? null, deviceId: r.device_id === null ? null : Number(r.device_id), createdAt: new Date(r.created_at).toISOString(),
+  noticeVersionId: r.notice_version_id ?? null, endUserName: r.end_user_name ?? r.end_user_email ?? null, deviceId: r.device_id === null ? null : Number(r.device_id), createdAt: new Date(r.created_at).toISOString(),
   revokedAt: iso(r.revoked_at), usedAt: iso(r.used_at),
 });
 
 /** GET /api/android/byod/invitations: the tenant's invitations (RLS), newest first, never a code. */
 export async function listInvitations(tenantId: number, userId: number, f: { state?: AndroidByodInvitationState } = {}): Promise<AndroidByodInvitationView[]> {
   return asTenant(tenantId, { type: 'user', userId }, async () => {
-    const rows = await db('android_byod_invitations').where({ tenant_id: tenantId }).orderBy('created_at', 'desc').limit(500).select(COLUMNS) as InvitationRow[];
+    // The state filtered in SQL, before the limit (F1R-9), with the rule of viewState: an open invitation past its end
+    // is shown expired.
+    const OPEN: AndroidByodInvitationState[] = ['active', 'issuing', 'issued'];
+    let q = db('android_byod_invitations as i')
+      .leftJoin('end_users as u', function j() { this.on('u.id', '=', 'i.end_user_id').andOn('u.tenant_id', '=', 'i.tenant_id'); })
+      .where({ 'i.tenant_id': tenantId });
+    if (f.state === 'expired') {
+      q = q.where((w) => { w.where('i.state', 'expired').orWhere((o) => { o.whereIn('i.state', OPEN).where('i.expires_at', '<=', db.fn.now()); }); });
+    } else if (f.state && OPEN.includes(f.state)) {
+      q = q.where('i.state', f.state).where('i.expires_at', '>', db.fn.now());
+    } else if (f.state) {
+      q = q.where('i.state', f.state);
+    }
+    const rows = await q.orderBy('i.created_at', 'desc').limit(500)
+      .select([...COLUMNS.map((c) => `i.${c}`), 'u.display_name as end_user_name', 'u.email as end_user_email']) as InvitationRow[];
     const now = Date.now();
-    return rows.map((r) => viewOf(r, now)).filter((v) => !f.state || v.state === f.state);
+    return rows.map((r) => viewOf(r, now));
   });
 }
 
@@ -350,25 +367,31 @@ export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; 
     if (!profile || !profile.enabled || profile.method !== 'android_byod_link' || !e || e.state !== 'linked' || e.id !== Number(inv.enterprise_id)) {
       return { kind: 'done', out: { kind: 'unavailable' } };
     }
-    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId, { sessionId: inv.id, versionId: notice.versionId, locale: a.locale, at: now });
-    const ack = { notice_version_id: notice.versionId, notice_ack_id: ackId, acknowledged_at: now, ack_locale: a.locale, updated_at: now };
-    if (inv.state === 'issued' && inv.token_id) {
-      await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id }).update(ack);
-      return { kind: 'reuse', inv };
-    }
     if (inv.state === 'issuing' && inv.issuing_at && now.getTime() - new Date(inv.issuing_at).getTime() < ISSUING_STALE_MS) {
       return { kind: 'done', out: { kind: 'busy' } };
     }
-    if (inv.state === 'issuing' && inv.issuing_at) {
-      // An interrupted creation: a token of this invitation's profile and end user created since then is adopted.
-      const tok = await trx('android_enrollment_tokens').where({ tenant_id: t.tenantId, profile_id: inv.profile_id, end_user_id: inv.end_user_id,
-        kind: 'byod_link' }).whereIn('state', ['creating', 'active']).where('created_at', '>=', new Date(new Date(inv.issuing_at).getTime() - 5_000))
-        .whereNotExists(function taken() { this.select(1).from('android_byod_invitations as o').whereRaw('o.token_id = android_enrollment_tokens.id'); })
-        .orderBy('created_at', 'desc').first('id', 'state') as { id: string; state: string } | undefined;
+    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId, { sessionId: inv.id, versionId: notice.versionId, locale: a.locale, at: now });
+    const ack = { notice_version_id: notice.versionId, notice_ack_id: ackId, acknowledged_at: now, ack_locale: a.locale, updated_at: now };
+    // Every passage acknowledges the notice and leaves its own audit entry (F1R-6); the invitation keeps the FIRST
+    // acknowledgement that led to its token, never overwritten by a later passage (the proof of the consent).
+    const passage = (again: boolean) => audit.appendInTx(trx, {
+      tenantId: t.tenantId, action: 'android.byod_notice_acknowledged', target: { type: 'android_byod_invitation', id: inv.id },
+      details: { invitationId: inv.id, noticeVersionId: notice.versionId, locale: a.locale, ackId, again },
+    }, byodAuditCtx());
+    if (inv.state === 'issued' && inv.token_id) {
+      await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id }).update({ updated_at: now });
+      await passage(true);
+      return { kind: 'reuse', inv };
+    }
+    if (inv.state === 'issuing' && inv.issuing_at && inv.token_id) {
+      // An interrupted creation (F1R-7): the token was bound to this invitation in the first transaction of its
+      // creation (createEnrollmentToken), so it is adopted by its id, never the token of another invitation.
+      const tok = await trx('android_enrollment_tokens').where({ tenant_id: t.tenantId, id: inv.token_id }).first('id', 'state') as
+        { id: string; state: string } | undefined;
       if (tok?.state === 'creating') return { kind: 'done', out: { kind: 'busy' } };
-      if (tok) {
-        await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id })
-          .update({ ...ack, state: 'issued', issuing_at: null, token_id: tok.id });
+      if (tok?.state === 'active') {
+        await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id }).update({ state: 'issued', issuing_at: null, updated_at: now });
+        await passage(true);
         return { kind: 'reuse', inv: { ...inv, state: 'issued', token_id: tok.id } };
       }
     }
@@ -378,11 +401,8 @@ export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; 
       wrong = true;
       return { kind: 'done', out: { kind: 'wrong_code' } };
     }
-    await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id }).update({ ...ack, state: 'issuing', issuing_at: now });
-    await audit.appendInTx(trx, {
-      tenantId: t.tenantId, action: 'android.byod_notice_acknowledged', target: { type: 'android_byod_invitation', id: inv.id },
-      details: { invitationId: inv.id, noticeVersionId: notice.versionId, locale: a.locale },
-    }, byodAuditCtx());
+    await trx('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id }).update({ ...ack, state: 'issuing', issuing_at: now, token_id: null });
+    await passage(false);
     return { kind: 'issue', inv, seconds };
   }));
   if (wrong) await countWrongCode(t.tenantId, address, clock());
@@ -402,7 +422,7 @@ export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; 
       byodAuditCtx(), { gateway: o.gateway, actor: BYOD_ACTOR, byodInvitation: inv.id });
   } catch (err) {
     await asTenant(t.tenantId, BYOD_ACTOR, () => db('android_byod_invitations').where({ tenant_id: t.tenantId, id: inv.id, state: 'issuing' })
-      .update({ state: 'active', issuing_at: null, updated_at: new Date() }));
+      .update({ state: 'active', issuing_at: null, token_id: null, updated_at: new Date() }));
     if (err instanceof AndroidError || err instanceof TokenError) {
       logger.warn({ android: { byod: 'token_not_created', tenantId: t.tenantId, kind: err instanceof AndroidError ? err.kind : err.code } },
         'android: BYOD token not created');

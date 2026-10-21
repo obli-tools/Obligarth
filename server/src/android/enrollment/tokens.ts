@@ -134,6 +134,12 @@ export async function createEnrollmentToken(tenantId: number, userId: number | n
         created_by: userId,
       }).returning('id');
       const id = String((row as { id: string }).id ?? row);
+      // Lot AN-F1 (F1R-7): the token is bound to its invitation right away, so that a creation interrupted between
+      // Google and the record is adopted by this invitation only (byod/invitations.ts).
+      if (plan.kind === 'byod_link') {
+        const bound = await trx('android_byod_invitations').where({ tenant_id: tenantId, id: o.byodInvitation, state: 'issuing' }).update({ token_id: id });
+        if (Number(bound) !== 1) throw new TokenError(409, 'androidByodByInvitation', 'the invitation changed meanwhile');
+      }
       await audit.appendInTx(trx, {
         tenantId, action: 'android.enrollment_token_created', target: { type: 'android_enrollment_token', id },
         details: { tokenId: id, profileId: profile.id, kind: plan.kind, oneTime: plan.oneTime, requiresApproval: approval, durationSeconds: plan.durationSeconds },
@@ -246,6 +252,20 @@ export async function revokeEnrollmentToken(tenantId: number, userId: number, id
       await audit.appendInTx(trx, {
         tenantId, action: 'android.enrollment_token_revoked', target: { type: 'android_enrollment_token', id }, details: { tokenId: id, kind: row.kind },
       }, auditCtx);
+      // Lot AN-F1 (F1R-9): a BYOD token revoked by the console revokes its invitation (its code no longer served
+      // anything, yet the list showed it issued).
+      if (row.kind === 'byod_link') {
+        const inv = await trx('android_byod_invitations').where({ tenant_id: tenantId, token_id: id }).whereIn('state', ['issuing', 'issued'])
+          .forUpdate().first('id', 'prefix') as { id: string; prefix: string } | undefined;
+        if (inv) {
+          await trx('android_byod_invitations').where({ tenant_id: tenantId, id: inv.id })
+            .update({ state: 'revoked', revoked_at: trx.fn.now(), revoked_by: userId, issuing_at: null, updated_at: trx.fn.now() });
+          await audit.appendInTx(trx, {
+            tenantId, action: 'android.byod_invitation_revoked', target: { type: 'android_byod_invitation', id: String(inv.id) },
+            details: { invitationId: String(inv.id), prefix: inv.prefix, tokenId: id, byToken: true },
+          }, auditCtx);
+        }
+      }
     });
     return 'revoked';
   });
@@ -255,8 +275,14 @@ export async function revokeEnrollmentToken(tenantId: number, userId: number, id
 export async function expireEnrollmentTokens(tenantId: number, actor: DbActor = TOKENS_ACTOR): Promise<number> {
   return asTenant(tenantId, actor, () => db.transaction(async (trx) => {
     const rows = await trx('android_enrollment_tokens').where({ state: 'active' }).where('expires_at', '<=', trx.fn.now())
-      .forUpdate().skipLocked().select('id', 'value_ref') as Array<{ id: string; value_ref: string | null }>;
+      .forUpdate().skipLocked().select('id', 'value_ref', 'kind') as Array<{ id: string; value_ref: string | null; kind: string }>;
     for (const r of rows) await endToken(trx, r, 'expired');
+    // Lot AN-F1: the invitation of an expired BYOD token is expired too (its life bounds the token's).
+    const byod = rows.filter((r) => r.kind === 'byod_link').map((r) => r.id);
+    if (byod.length) {
+      await trx('android_byod_invitations').whereIn('token_id', byod).where({ state: 'issued' })
+        .update({ state: 'expired', issuing_at: null, updated_at: trx.fn.now() });
+    }
     return rows.length;
   }));
 }

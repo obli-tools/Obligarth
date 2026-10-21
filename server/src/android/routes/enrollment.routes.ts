@@ -9,6 +9,7 @@
 //   DELETE /enrollment-tokens/:id           revokes a token (deleted at Google, value destroyed), audited
 //   POST   /devices/:id/approve             approves a device enrolled with a token that requires it
 //   POST   /devices/:id/refuse              refuses it (its deletion: android.device_forget, lot AN-D)
+//                                           (both: a device the caller sees in its team scopes, with write access)
 // Capability: mdm.enrollment.manage (AN41, §22.8). Mounted under /api/android by routes/index.ts (lot AN-A2).
 // The value of a token is never logged: the payload is in the body of the answer only, with Cache-Control no-store.
 // The answers of a QR token carry the image of its QR code (qrDataUrl, lot AN-C2).
@@ -27,6 +28,7 @@ import {
 } from '../enrollment/profileService';
 import { logger } from '../../utils/logger';
 import { toRouteError } from './enterprise.routes';
+import { androidDeviceOf } from './deviceAccess';
 
 const CreateBody = z.object({
   profileId: z.string().uuid(),
@@ -150,10 +152,11 @@ export function createAndroidEnrollmentRouter(): Router {
 
   for (const [path, fn] of [['approve', approveAndroidDevice], ['refuse', refuseAndroidDevice]] as const) {
     router.post(`/devices/:id/${path}`, capability, wrap(async (req, res) => {
-      const deviceId = Number(req.params.id);
-      if (!Number.isSafeInteger(deviceId) || deviceId <= 0) throw new AppError(404, 'Not found', 'notFound');
+      // Lot AN-F1 (reserve of the review of AN-C2): the team scopes bound the decision like the list of the devices held
+      // for approval: a device the caller does not see → 404 (another tenant's too: rls-tenant §11.5), one seen without
+      // write access → 403 capabilityMissing.
+      const deviceId = await androidDeviceOf(req, req.params.id, undefined, { write: true });
       const tenantId = Number(req.tenantId);
-      // A device of another tenant names nothing here (404, never a state of it: rls-tenant §11.5).
       if (!(await db('android_devices').where({ tenant_id: tenantId, device_id: deviceId }).first('device_id'))) throw new AppError(404, 'Not found', 'notFound');
       try {
         const r = await fn(tenantId, Number(req.session.userId), deviceId, await audit.fromRequest(req, tenantId));

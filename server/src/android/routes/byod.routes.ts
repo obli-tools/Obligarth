@@ -3,20 +3,22 @@
 //                                       201 { id, code (once), prefix, link, expiresAt, mail }
 //   GET  /byod/invitations              the tenant's invitations (never a code)
 //   POST /byod/invitations/:id/revoke   revokes an invitation (and its token at Google), audited
+//   GET  /byod/notice?locale=fr|en      the notice of a personal device, as the device surface shows it to the user
 // Capability: mdm.enrollment.manage (AN41, §22.8). Mounted under /api/android by routes/index.ts (lot AN-A2). The
 // code is in the body of the answer only, with Cache-Control no-store; never logged. The link names the notice page of
 // the device surface (<base>/a/<MDM key>/byod), which carries no secret.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
-import { ANDROID_BYOD_INVITATION_STATES, ANDROID_BYOD_INVITATION_TTL_HOURS, type AndroidByodInvitationCreated, type AndroidByodMailOutcome }
-  from '@obligarth/shared';
+import {
+  ANDROID_BYOD_INVITATION_STATES, ANDROID_BYOD_INVITATION_TTL_HOURS, type AndroidByodInvitationCreated, type AndroidByodMailOutcome, type AndroidByodNoticeView,
+} from '@obligarth/shared';
 import { audit } from '../../audit';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
 import { appleTenants } from '../../apple/tenants/registry';
-import { ByodError, createInvitation, listInvitations, revokeInvitation } from '../byod/invitations';
+import { ByodError, byodNotice, createInvitation, listInvitations, revokeInvitation, tenantFactsOf } from '../byod/invitations';
 import { sendByodMail } from '../byod/mail';
 import { TokenError } from '../enrollment/tokens';
 import { toRouteError } from './enterprise.routes';
@@ -32,6 +34,7 @@ const CreateBody = z.object({
 }).strict();
 const ListQuery = z.object({ state: z.enum(ANDROID_BYOD_INVITATION_STATES).optional() }).strict();
 const UUID = z.string().uuid();
+const NoticeQuery = z.object({ locale: z.enum(['fr', 'en']).optional() }).strict();
 
 let surfaceBase: () => string | null = () => null;
 /** The public base of the device surface (https://mdm.<domain>): config.apple.mdmPublicBase of lot C, plugged at the
@@ -90,6 +93,21 @@ export function createAndroidByodRouter(): Router {
     const q = ListQuery.safeParse(req.query);
     if (!q.success) throw new AppError(400, 'Invalid input', 'invalidInput');
     res.json({ success: true, data: await listInvitations(Number(req.tenantId), Number(req.session.userId), q.data) });
+  }));
+
+  // The notice the user acknowledges on the device before the Google link (section 10.5, USR-01): the same provider
+  // and the same text as the device surface, for the administrator to know what the user reads.
+  router.get('/byod/notice', capability, wrap(async (req, res) => {
+    const q = NoticeQuery.safeParse(req.query);
+    if (!q.success) throw new AppError(400, 'Invalid input', 'invalidInput');
+    const facts = await tenantFactsOf(Number(req.tenantId));
+    const notice = facts ? await byodNotice(facts, q.data.locale ?? 'fr') : null;
+    if (!notice) throw new AppError(503, 'No notice is available', 'androidByodNoticeUnavailable');
+    const out: AndroidByodNoticeView = {
+      versionId: notice.versionId, locale: notice.locale, title: notice.title, sections: notice.sections, consentSummary: notice.consentSummary,
+      contact: notice.contact,
+    };
+    res.json({ success: true, data: out });
   }));
 
   router.post('/byod/invitations/:id/revoke', capability, wrap(async (req, res) => {
