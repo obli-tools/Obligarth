@@ -4570,7 +4570,7 @@
       "req": {
         "surface": "Public HTTPS address of the device service (mdm.)",
         "mdmKey": "MDM key of the tenant",
-        "profiles": "Enabled sign-in URL profile with its enrollment policy at Google ({{pushed}} of {{count}})",
+        "profilesForUsage": "Enabled sign-in URL profile for this personal use, with its enrollment policy at Google ({{pushed}} of {{total}} sign-in URL profiles)",
         "identityProvider": "Obligate configured for the authentication of the users"
       },
       "notReady": "The sign-in URL cannot be enabled until every prerequisite is met.",

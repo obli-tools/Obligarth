@@ -285,6 +285,12 @@ export async function runOffboarding(tenantId: number, o: { gateway?: AndroidGat
         off.step = 'deleting';
       }
       if (off.step === 'deleting') {
+        // Again (review AN-F2): a sign-in URL enabled by a console request that read the enterprise linked just before
+        // the unlinking wrote it back after the revoking step; idempotent, nothing is sent when none is stored.
+        if (e && e.state === 'unlinking') {
+          const ctx = audit.fromJob({ name: 'android.offboard-tenant', requestId: `android-offboard-${tenantId}-${off.id}` });
+          try { await clearSigninForOffboarding(gw, e, tenantId, ctx); } catch (err) { if (!goneAtGoogle(err)) throw err; }
+        }
         const r = await deletePolicies(gw, e, tenantId, off.enterprise_id);
         if (e && e.state === 'unlinking') {
           try { await recoverEnrollmentTokens(tenantId, { gateway: gw, actor: OFFBOARD_ACTOR }); } catch (err) { if (!goneAtGoogle(err)) throw err; }
