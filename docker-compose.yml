@@ -373,10 +373,11 @@ services:
   # TLS of the device surface (MDM_PUBLIC_BASE, ATS profile): the console
   # image in its edge-proxy role (client/edge-proxy: nginx, mdm.conf built in),
   # nothing to put in place by hand. Relays only the device routes and
-  # /healthz (deny by default). Published on MDM_LISTEN_PORT (3443): behind a
-  # reverse proxy holding the public certificate of the host of
-  # MDM_PUBLIC_BASE (forward to https://<docker host>:3443), or 443 directly
-  # with your certificate in MDM_TLS_DIR — see .env.example.
+  # /healthz (deny by default). Behind a reverse proxy holding the public
+  # certificate of the host of MDM_PUBLIC_BASE: http://<this container>:80 on a
+  # shared Docker network (never published), or https on MDM_LISTEN_PORT
+  # (3443); or 443 directly with your certificate in MDM_TLS_DIR — see
+  # .env.example.
   edge-proxy:
     image: meejay/obligarth-client:${OBLIGARTH_VERSION:-latest}
     restart: unless-stopped
