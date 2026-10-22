@@ -370,26 +370,42 @@ services:
         hard: 131072
       core: 0
 
-  # TLS of the device surface (MDM_PUBLIC_BASE, ATS profile): nginx with
-  # edge-proxy/mdm.conf (downloaded by install.sh) and the certificate of the
-  # device host in certs/mdm (fullchain.pem, privkey.pem), renewed by your
-  # ACME client. Relays only /t/<key>/… and /healthz (deny by default).
-  # Profile mdm: started once mdm.conf and the certificate are in place
-  # (COMPOSE_PROFILES=mdm in .env) — see .env.example.
+  # TLS of the device surface (MDM_PUBLIC_BASE, ATS profile): the console
+  # image in its edge-proxy role (client/edge-proxy: nginx, mdm.conf built in),
+  # nothing to put in place by hand. Relays only the device routes and
+  # /healthz (deny by default). Published on MDM_LISTEN_PORT (3443): behind a
+  # reverse proxy holding the public certificate of the host of
+  # MDM_PUBLIC_BASE (forward to https://<docker host>:3443), or 443 directly
+  # with your certificate in MDM_TLS_DIR — see .env.example.
   edge-proxy:
-    image: nginx:stable-alpine
-    profiles: ["mdm"]
+    image: meejay/obligarth-client:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
     restart: unless-stopped
+    environment:
+      OBLIGARTH_ROLE: edge-proxy
+      MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
+      EDGE_TRUSTED_PROXIES: ${EDGE_TRUSTED_PROXIES-10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,127.0.0.0/8,fc00::/7,::1/128}
+    # nginx worker_rlimit_nofile (65536) needs the container ulimit to allow it.
+    ulimits:
+      nofile:
+        soft: 131072
+        hard: 131072
     depends_on:
       apple-edge:
         condition: service_healthy
       server:
         condition: service_healthy
     ports:
-      - "${MDM_LISTEN_PORT:-443}:443"
+      - "${MDM_LISTEN_PORT:-3443}:443"
+    # Certificate: a named volume (self-signed, created at the first start) or
+    # your directory MDM_TLS_DIR (fullchain.pem, privkey.pem).
     volumes:
-      - ${EDGE_PROXY_CONF:-./edge-proxy/mdm.conf}:/etc/nginx/conf.d/default.conf:ro
-      - ${MDM_TLS_DIR:-./certs/mdm}:/etc/nginx/certs/mdm:ro
+      - ${MDM_TLS_DIR:-mdm_tls}:/etc/nginx/certs/mdm
+    # Any HTTP answer (404 at /) means nginx serves TLS.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sk -o /dev/null https://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
     networks:
       - edge
     security_opt:
@@ -412,6 +428,8 @@ services:
 
 volumes:
   postgres_data:
+  # Self-signed certificate of the edge-proxy (when MDM_TLS_DIR is not set).
+  mdm_tls:
 
 networks:
   # The console, the server and the database.

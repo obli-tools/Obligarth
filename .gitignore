@@ -22,12 +22,10 @@
 !/apple-edge/
 !/docker-compose.build.yml
 
-# ...et à l'installation : install.sh télécharge docker-compose.yml,
-# edge-proxy/mdm.conf (nginx de la surface des appareils) et .env.example
-# depuis GitHub (voir la fin du fichier pour .env.example)
+# ...et à l'installation : install.sh télécharge docker-compose.yml et
+# .env.example depuis GitHub (voir la fin du fichier pour .env.example)
 !/install.sh
 !/docker-compose.yml
-!/edge-proxy/
 
 # ...et la licence (Elastic License 2.0, décision des propriétaires)
 !/LICENSE

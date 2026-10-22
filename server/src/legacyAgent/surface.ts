@@ -23,7 +23,7 @@ import { withAgentTransaction } from './session';
 // mounted at /agent/v1 by app.ts right after helmet, before cors, the JSON
 // parser, the cookies, the session and the limiter of the API: its own body
 // reader (the signature covers the exact bytes), no session, no cookie.
-// Reached through the edge proxy (mdm.<domain>, edge-proxy/mdm.conf).
+// Reached through the edge proxy (mdm.<domain>, client/edge-proxy/mdm.conf).
 //   POST /agent/v1/enroll               token + proof of possession of the key
 //   POST /agent/v1/poll                 state, results, events → commands
 //   POST /agent/v1/inventory            full inventory

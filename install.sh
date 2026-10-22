@@ -128,12 +128,6 @@ echo ""
 # Download compose + env example
 echo "→ Downloading docker-compose.yml..."
 curl -fsSL "$REPO/docker-compose.yml" -o docker-compose.yml
-# nginx configuration of the edge-proxy (TLS of the device surface): a file
-# of the product, replaced at each run. To change it (PROXY protocol behind an
-# L4 proxy), copy it and name the copy in .env (EDGE_PROXY_CONF).
-echo "→ Downloading edge-proxy/mdm.conf..."
-mkdir -p edge-proxy
-curl -fsSL "$REPO/edge-proxy/mdm.conf" -o edge-proxy/mdm.conf
 
 if [ ! -f ".env" ]; then
   echo "→ Downloading .env.example..."
@@ -250,18 +244,13 @@ fi
 # apple-edge runs as uid 65532: the one-shot service secrets-init gives each
 # service its own copy of its secrets (secrets/<service>), owned by its user.
 
-# TLS certificate of the device host (MDM_PUBLIC_BASE), read by the
-# edge-proxy: fullchain.pem and privkey.pem, renewed by your ACME client.
-TLS_DIR=$(sed -n 's/^MDM_TLS_DIR=//p' .env | tail -n 1)
-[ -n "$TLS_DIR" ] || TLS_DIR=./certs/mdm
-mkdir -p "$TLS_DIR"
-chmod 700 "$TLS_DIR"
-if [ ! -s "$TLS_DIR/fullchain.pem" ] || [ ! -s "$TLS_DIR/privkey.pem" ]; then
-  echo "  ⚠ No TLS certificate for $MDM_BASE yet: put fullchain.pem and privkey.pem in"
-  echo "    $TLS_DIR (public certificate, renewed by your ACME client); the edge-proxy"
-  echo "    serves the devices once they are there, with COMPOSE_PROFILES=mdm in .env"
-  echo "    (then docker compose up -d)."
-fi
+# TLS of the device host (MDM_PUBLIC_BASE): the edge-proxy creates its own
+# self-signed certificate (named volume mdm_tls) unless MDM_TLS_DIR names a
+# directory with yours. Behind a reverse proxy holding the public certificate,
+# nothing to do: forward https://<host of MDM_PUBLIC_BASE> to this host's
+# MDM_LISTEN_PORT (3443), scheme https.
+MDM_PORT=$(sed -n 's/^MDM_LISTEN_PORT=\([0-9][0-9]*\).*/\1/p' .env | tail -n 1)
+[ -n "$MDM_PORT" ] || MDM_PORT=3443
 
 # Persistent custom directory (reports, software repository, phone-key cache)
 mkdir -p custom
@@ -284,7 +273,9 @@ echo "  ║        Obligarth is running!         ║"
 echo "  ╚══════════════════════════════════════╝"
 echo ""
 echo "  → Open: http://localhost:$PORT"
-echo "  → Apple devices: $MDM_BASE (health: $MDM_BASE/healthz, through the edge-proxy)"
+echo "  → Devices: $MDM_BASE, served by the edge-proxy on port $MDM_PORT (https):"
+echo "    point your reverse proxy there (public certificate of $MDM_BASE)."
+echo "    Health: $MDM_BASE/healthz"
 if [ -n "$ADMIN_PASSWORD" ]; then
   echo "  → Sign in: admin / $ADMIN_PASSWORD"
   echo "    Shown only this once (also in .env, used only to create this first account)."

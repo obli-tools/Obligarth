@@ -22,14 +22,21 @@ RUN npm run build --workspace=client
 # ---- Production stage ----
 FROM nginx:alpine AS production
 
-# curl is more reliable than busybox wget for healthchecks
-RUN apk add --no-cache curl
+# curl is more reliable than busybox wget for healthchecks; openssl creates the
+# self-signed certificate of the edge-proxy role
+RUN apk add --no-cache curl openssl
 
 COPY --from=builder /app/client/dist/ /usr/share/nginx/html/
 # Main config (events/worker_connections — can't be set from conf.d) + the
 # server block (upstream keepalive pool, proxy routes, SPA).
 COPY client/nginx-main.conf /etc/nginx/nginx.conf
 COPY client/nginx.conf /etc/nginx/conf.d/default.conf
+# Role edge-proxy (OBLIGARTH_ROLE=edge-proxy, service edge-proxy of
+# docker-compose.yml): TLS of the device surface, set up at start by the
+# script below (run by the entrypoint of the nginx image; no-op for the console).
+COPY client/edge-proxy/mdm.conf /etc/obligarth/edge-proxy/mdm.conf
+COPY client/edge-proxy/40-obligarth-edge-proxy.sh /docker-entrypoint.d/40-obligarth-edge-proxy.sh
+RUN chmod 755 /docker-entrypoint.d/40-obligarth-edge-proxy.sh
 
 EXPOSE 80
 
