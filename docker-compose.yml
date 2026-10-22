@@ -142,7 +142,7 @@ services:
   # only once it has completed successfully; an upgrade runs it first (take a
   # backup before: the migrations have no way back).
   server-migrate:
-    image: meejay/obligarth-server:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-server:${OBLIGARTH_VERSION:-latest}
     command: ["node", "dist/src/db/migrate.js"]
     restart: "no"
     depends_on:
@@ -169,7 +169,7 @@ services:
   # nanodep and apple_edge and their migrations, with the administration
   # account. After server-migrate, which creates the role obligarth.
   apple-edge-migrate:
-    image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:-latest}
     command: ["migrate", "up"]
     restart: "no"
     depends_on:
@@ -204,7 +204,7 @@ services:
   # (9100) for the server only. Neither port is published. The image runs as
   # uid 65532 (distroless nonroot): secrets-init gives it its copies.
   apple-edge:
-    image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:-latest}
     command: ["serve"]
     restart: unless-stopped
     # Drain (5 s) and graceful stop (20 s) of apple-edge.
@@ -262,7 +262,7 @@ services:
     logging: *logging
 
   server:
-    image: meejay/obligarth-server:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-server:${OBLIGARTH_VERSION:-latest}
     restart: unless-stopped
     # pg-boss graceful stop (JOBS_STOP_TIMEOUT_MS, 15 s) inside the server's
     # 25 s exit budget; Docker's default (10 s) would cut it short.
@@ -378,7 +378,7 @@ services:
   # MDM_PUBLIC_BASE (forward to https://<docker host>:3443), or 443 directly
   # with your certificate in MDM_TLS_DIR — see .env.example.
   edge-proxy:
-    image: meejay/obligarth-client:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-client:${OBLIGARTH_VERSION:-latest}
     restart: unless-stopped
     environment:
       OBLIGARTH_ROLE: edge-proxy
@@ -413,7 +413,7 @@ services:
     logging: *logging
 
   client:
-    image: meejay/obligarth-client:${OBLIGARTH_VERSION:?set it in .env to the version to run, never latest (install.sh writes it)}
+    image: meejay/obligarth-client:${OBLIGARTH_VERSION:-latest}
     restart: unless-stopped
     # nginx worker_rlimit_nofile (65536) needs the container ulimit to allow it.
     ulimits:
