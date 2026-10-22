@@ -85,6 +85,8 @@ export function registerOutboxJobs(): void {
     scope: 'platform',
     description: 'Lag of the apple-edge outbox, new dead letters, consumer state: alerts of the master tenant',
     payload: empty,
+    // Explicit: the schedule depends on the mode, the policy of the queue must not (a queue never changes it).
+    policy: 'exclusive',
     // Nothing to watch with OUTBOX_CONSUMER=off and APPLE_EDGE_MODE=off (no event written, none read)
     ...(config.outbox.consumer !== 'off' || config.apple.mode === 'on' ? { schedule: { cron: '* * * * *' } } : {}),
     notify: true,

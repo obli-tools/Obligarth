@@ -244,6 +244,8 @@ export function registerTenantJobs(): void {
     scope: 'platform',
     description: 'Provision at apple-edge every tenant without MDM key (or whose mirror stayed in error)',
     payload: empty,
+    // Explicit: the schedule depends on the mode, the policy of the queue must not (a queue never changes it).
+    policy: 'exclusive',
     // APPLE_EDGE_MODE=off: neither scheduled nor sent at start (no call to make; file-durable L3)
     ...(config.apple.mode === 'on' ? { schedule: { cron: '7 * * * *' }, runAtStart: true } : {}),
     pollSeconds: 60,
@@ -256,6 +258,8 @@ export function registerTenantJobs(): void {
     scope: 'platform',
     description: 'Probe of apple-edge (GET /internal/v1/status): reachability, version, alerts of the master tenant',
     payload: empty,
+    // Explicit: the schedule depends on the mode, the policy of the queue must not (a queue never changes it).
+    policy: 'exclusive',
     ...(config.apple.mode === 'on' ? { schedule: { cron: '* * * * *' } } : {}),   // off: no probe
     retry: { limit: 0 },
     timeoutSeconds: 30,

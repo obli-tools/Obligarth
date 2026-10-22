@@ -28,6 +28,11 @@ import type { JobDefinition, JobHandle, JobsMode, RegisteredJob, SendJobOptions,
 // nothing executes, /health/jobs answers 503.
 // =============================================================================
 
+/** Queues created with the wrong policy by an earlier version (until 0.1.5, the policy of these jobs depended on
+ *  APPLE_EDGE_MODE and OUTBOX_CONSUMER: standard when off, exclusive when on). Their jobs are probes and catch-ups
+ *  re-sent by their schedule: a queue with another policy is deleted and recreated instead of refusing to start. */
+const RECREATED_ON_POLICY_CHANGE = new Set(['apple-edge.provision-all', 'apple-edge.health', 'apple-edge.outbox-monitor']);
+
 /** A start that must stop the server (exit code 1), with a message for the
  *  operator. */
 export class JobsStartError extends Error {
@@ -214,6 +219,14 @@ export class JobsRuntime {
       const have = await boss.getQueue(def.name);
       if (!have) {
         await boss.createQueue(def.name, createOptions(want));
+        continue;
+      }
+      if ((have.policy ?? 'standard') !== def.policy && RECREATED_ON_POLICY_CHANGE.has(def.name)) {
+        // Only idempotent jobs re-sent by their schedule: their queue is recreated, its jobs dropped.
+        await boss.deleteQueue(def.name);
+        await boss.createQueue(def.name, createOptions(want));
+        logger.warn({ queue: def.name, from: have.policy ?? 'standard', to: def.policy },
+          'job queue recreated with the policy of this server (its pending jobs were dropped)');
         continue;
       }
       if ((have.policy ?? 'standard') !== def.policy) {
