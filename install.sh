@@ -2,7 +2,6 @@
 set -e
 
 REPO="https://raw.githubusercontent.com/obli-tools/Obligarth/main"
-RELEASES_API="https://api.github.com/repos/obli-tools/Obligarth/releases/latest"
 INSTALL_DIR="${OBLIGARTH_DIR:-./obligarth}"
 ADMIN_PASSWORD=""
 
@@ -55,21 +54,10 @@ random_key() {
   printf '%s\n' "$key"
 }
 
-# Version of the images to run, written in .env: never "latest" (an image
-# newer than its database's migrations must not start by surprise). From
-# OBLIGARTH_VERSION when given, else the latest published release.
+# Version of the images to run, written in .env: OBLIGARTH_VERSION when given
+# (a tag such as 1.0.0 pins it), latest otherwise.
 resolve_version() {
-  version="${OBLIGARTH_VERSION:-}"
-  if [ -z "$version" ]; then
-    version=$(curl -fsSL "$RELEASES_API" 2>/dev/null \
-      | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v\{0,1\}\([^"]*\)".*/\1/p' | head -n 1) || version=""
-  fi
-  case "$version" in
-    "" | latest)
-      echo "✗ No version to install: run the installer again with OBLIGARTH_VERSION=<version>" >&2
-      echo "  (a published image tag, e.g. OBLIGARTH_VERSION=1.0.0 sh install.sh; never latest)." >&2
-      return 1 ;;
-  esac
+  version="${OBLIGARTH_VERSION:-latest}"
   if ! printf '%s' "$version" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$'; then
     echo "✗ Invalid version: $version" >&2
     return 1
@@ -167,18 +155,14 @@ if [ ! -f ".env" ]; then
   echo ""
 else
   echo "  → .env already exists, skipping."
-  # Required since the row level security (lot A1): a pinned version and the
-  # database administrator's password (it only acts on a new database volume).
-  for key in OBLIGARTH_VERSION DB_ADMIN_PASSWORD; do
+  # Required since the row level security (lot A1): the database
+  # administrator's password (it only acts on a new database volume).
+  for key in DB_ADMIN_PASSWORD; do
     if ! grep -q "^$key=[A-Za-z0-9]" .env; then
       echo "✗ .env has no $key value: add it (see .env.example) and run the installer again."
       exit 1
     fi
   done
-  if grep -q "^OBLIGARTH_VERSION=latest[[:space:]]*$" .env; then
-    echo "✗ OBLIGARTH_VERSION=latest in .env: set the version to run (never latest)."
-    exit 1
-  fi
   # Required since apple-edge (lot B0): the public URL of the devices, taken
   # from MDM_PUBLIC_BASE when .env has none yet, never changed once set.
   if ! grep -q "^MDM_PUBLIC_BASE=[A-Za-z0-9]" .env; then
@@ -289,7 +273,7 @@ echo ""
 echo "  Useful commands:"
 echo "    docker compose -f $(pwd)/docker-compose.yml logs -f"
 echo "    docker compose -f $(pwd)/docker-compose.yml down"
-echo "  Update: back up the database, set the new OBLIGARTH_VERSION in .env, then"
+echo "  Update: back up the database (and set OBLIGARTH_VERSION in .env if pinned), then"
 echo "    docker compose -f $(pwd)/docker-compose.yml pull && docker compose -f $(pwd)/docker-compose.yml up -d"
 echo "    (server-migrate, then apple-edge-migrate, migrate the database first; the server and"
 echo "    apple-edge start once they have succeeded)"
