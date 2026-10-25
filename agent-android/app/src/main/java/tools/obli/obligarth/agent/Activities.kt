@@ -41,6 +41,12 @@ class SetupActivity : Activity() {
         rt.refreshStatusNotification()
         Thread { ConfigFile.importIfPresent(rt) }.start()
         importFromIntent(intent)
+        // The MobiControl script runs again with each new version of the package: once the
+        // administrator is on, the activation request ends here without showing anything.
+        if (intent?.action == ACTION_ACTIVATE_ADMIN && rt.facts.adminActive()) {
+            finish()
+            return
+        }
 
         val pad = dp(16)
         val root = LinearLayout(this).apply {
@@ -173,6 +179,7 @@ class SetupActivity : Activity() {
     }
 
     private fun render() {
+        if (!::statusView.isInitialized) return
         val rt = AgentRuntime.get(this)
         val s = rt.state
         val yes = getString(R.string.yes)
