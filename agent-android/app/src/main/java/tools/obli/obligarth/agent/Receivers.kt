@@ -9,6 +9,8 @@ import android.content.IntentSender
 import android.content.pm.PackageInstaller
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import tools.obli.obligarth.agent.core.Phase
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -36,6 +38,40 @@ class AgentAdminReceiver : DeviceAdminReceiver() {
         rt.log.warn("administrator disabled")
         rt.refreshStatusNotification()
         PollScheduler.pollNow(context)
+    }
+}
+
+/**
+ * Each time the device is unlocked while the administrator is still off, the
+ * activation screen comes back (at most every few minutes): administration can
+ * only be enabled by a tap on the device, and a declined screen must not end
+ * the matter. Manifest receiver, delivered under targetSdk 25; from Android 10
+ * the start needs the "display over other apps" access (MobiControl:
+ * request_appops_permission), otherwise the notification remains.
+ */
+class UnlockReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) {
+        if (intent.action != Intent.ACTION_USER_PRESENT) return
+        val rt = AgentRuntime.get(context)
+        if (rt.facts.adminActive()) return
+        if (rt.state.phase != Phase.CONFIGURED && rt.state.phase != Phase.ENROLLED) return
+        val prefs = context.getSharedPreferences("unlock", Context.MODE_PRIVATE)
+        val now = SystemClock.elapsedRealtime()
+        val last = prefs.getLong("lastPrompt", 0L)
+        if (last in 1..now && now - last < PROMPT_INTERVAL_MS) return
+        prefs.edit().putLong("lastPrompt", now).apply()
+        try {
+            context.startActivity(
+                Intent(context, SetupActivity::class.java).setAction(SetupActivity.ACTION_ACTIVATE_ADMIN)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            )
+        } catch (e: Exception) {
+            rt.log.warn("administrator prompt on unlock: ${e.javaClass.simpleName}: ${e.message}")
+        }
+    }
+
+    companion object {
+        private const val PROMPT_INTERVAL_MS = 3 * 60 * 1000L
     }
 }
 
