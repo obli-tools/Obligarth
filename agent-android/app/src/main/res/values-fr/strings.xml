@@ -4,9 +4,11 @@
     <string name="keepalive_title">Appareil géré par Obligarth</string>
     <string name="admin_required_title">Administration requise</string>
     <string name="admin_required_text">Touchez pour activer l\'administration de l\'appareil par l\'Agent Obligarth.</string>
-    <string name="admin_explanation">L\'Agent Obligarth gère cet appareil d\'entreprise : verrouillage de l\'écran, effacement en cas de perte et installation d\'applications, selon les décisions de votre service informatique.</string>
+    <string name="admin_explanation">Appuyez sur ACTIVER en bas de l\'écran. L\'Agent Obligarth gère cet appareil d\'entreprise : verrouillage de l\'écran, effacement en cas de perte et installation d\'applications, selon les décisions de votre service informatique.</string>
     <string name="admin_disable_warning">Cet appareil d\'entreprise est géré par Obligarth. La désactivation de l\'administration est signalée à votre service informatique.</string>
     <string name="admin_already_active">L\'administration est déjà activée.</string>
+    <string name="admin_description">Gestion de l\'appareil d\'entreprise par votre service informatique.</string>
+    <string name="admin_settings_hint">Touchez « Agent Obligarth », puis ACTIVER.</string>
     <string name="install_prompt_title">Installation en attente</string>
     <string name="install_prompt_text">Votre service informatique demande une installation. Touchez pour confirmer.</string>
     <string name="status_revoked">Appareil retiré de la gestion</string>

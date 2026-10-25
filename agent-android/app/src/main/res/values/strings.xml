@@ -4,9 +4,11 @@
     <string name="keepalive_title">Device managed by Obligarth</string>
     <string name="admin_required_title">Administration required</string>
     <string name="admin_required_text">Tap to enable the device administration of Obligarth Agent.</string>
-    <string name="admin_explanation">Obligarth Agent manages this company device: screen lock, erase on loss and application installation, as decided by your IT department.</string>
+    <string name="admin_explanation">Tap ACTIVATE at the bottom of the screen. Obligarth Agent manages this company device: screen lock, erase on loss and application installation, as decided by your IT department.</string>
     <string name="admin_disable_warning">This company device is managed by Obligarth. Disabling the administration is reported to your IT department.</string>
     <string name="admin_already_active">Administration is already enabled.</string>
+    <string name="admin_description">Management of this company device by your IT department.</string>
+    <string name="admin_settings_hint">Tap "Obligarth Agent", then ACTIVATE.</string>
     <string name="install_prompt_title">Installation waiting</string>
     <string name="install_prompt_text">Your IT department requests an installation. Tap to confirm.</string>
     <string name="status_revoked">Device removed from management</string>
