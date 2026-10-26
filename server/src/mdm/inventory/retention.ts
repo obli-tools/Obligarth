@@ -35,6 +35,8 @@ export interface MdmRetentionRule {
 export const DEPARTED_END_USER_DAYS = 90;
 /** Days of the DDM status history (integration §4.9). */
 export const STATUS_HISTORY_DAYS = 90;
+/** Days a lost-mode position is kept, Apple and Android alike (lost_mode_locations_purge_cap allows 62). */
+export const LOST_MODE_LOCATION_DAYS = 30;
 
 const days = (n: number) => n * 86_400_000;
 

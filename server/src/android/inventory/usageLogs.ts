@@ -9,14 +9,15 @@
 // No network call (G-A3); identifiers only in the logs (G-A4): never a coordinate.
 import type { z } from 'zod';
 import { deviceEvents } from '../../apple/devices/events';
+import { LOST_MODE_LOCATION_DAYS } from '../../mdm/inventory/retention';
 import { registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { UsageLogsSchema } from '../inbox/schemas';
 
 type Logs = z.infer<typeof UsageLogsSchema>;
 type Ctx = AndroidEventContext<Logs>;
 
-/** Positions are kept 30 days (lost_mode_locations_purge_cap allows 62). */
-export const LOST_MODE_LOCATION_DAYS = 30;
+/** Positions are kept 30 days (lost_mode_locations_purge_cap allows 62): the data model's constant, shared with Apple. */
+export { LOST_MODE_LOCATION_DAYS };
 /** Events read per notification (a batch of usage logs may hold thousands of events of other kinds). */
 const MAX_EVENTS = 500;
 const MAX_POSITIONS = 50;

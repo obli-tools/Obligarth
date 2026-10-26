@@ -44,6 +44,13 @@ const REASON_FALLBACK: Record<ComplianceReason['code'], string> = {
   os_update_overdue: 'An operating system update is overdue',
   stale: 'No contact for too long',
   supervision_required: 'Supervision is required',
+  // The Android evaluator's (android/inventory/compliance.ts).
+  os_outdated: 'The security patch level is too old',
+  amapi_noncompliant: 'The device does not apply some settings of its policy',
+  integrity_at_risk: 'The device integrity is at risk',
+  no_contact: 'No status report for too long',
+  policy_not_applied: 'The latest policy is not applied yet',
+  management_disabled: 'Management is disabled on the device',
 };
 
 export const enrollmentLabel = (t: TFunction, s: EnrollmentState): string => t(`mdm.enrollmentState.${s}`) || ENROLLMENT_FALLBACK[s] || s;
@@ -113,17 +120,21 @@ export function ConfigBadge({ state, size }: { state: ConfigState; size?: 'sm' |
 }
 
 /** Shown only while the lost mode is on or changing. */
-export function LostModeBadge({ state, size }: { state: LostModeState; size?: 'sm' | 'md' }) {
+export function LostModeBadge({ state, size, pulse }: {
+  state: LostModeState; size?: 'sm' | 'md';
+  /** Pulse even when on (a list row, where it must catch the eye); by default only while changing. */
+  pulse?: boolean;
+}) {
   const { t } = useTranslation();
   if (state === 'off') return null;
-  return <StateBadge tone="red" label={lostModeLabel(t, state)} size={size} pulse={state !== 'on'} />;
+  return <StateBadge tone="red" label={lostModeLabel(t, state)} size={size} pulse={pulse || state !== 'on'} />;
 }
 
 /**
  * The states of a device in a row: the enrollment always; the contact, the compliance and the configuration only
  * when they say something (an enrolled device in recent contact, compliant and configured shows one green badge).
  */
-export function DeviceStateBadges({ device, size = 'sm', all = false }: {
+export function DeviceStateBadges({ device, size = 'sm', all = false, pulseLost = false }: {
   device: {
     enrollmentState: EnrollmentState; contactState: ContactState; lastCheckinAt: string | null;
     complianceState: ComplianceState; complianceReasons: ComplianceReason[]; configState: ConfigState; lostModeState: LostModeState;
@@ -131,6 +142,8 @@ export function DeviceStateBadges({ device, size = 'sm', all = false }: {
   size?: 'sm' | 'md';
   /** Every state, whatever its value (device page). */
   all?: boolean;
+  /** The lost-mode badge pulses even when on (a list row). */
+  pulseLost?: boolean;
 }) {
   const managed = device.enrollmentState !== 'unenrolled';
   return (
@@ -145,7 +158,7 @@ export function DeviceStateBadges({ device, size = 'sm', all = false }: {
       {(all || (managed && (device.configState === 'error' || device.configState === 'pending'))) && (
         <ConfigBadge state={device.configState} size={size} />
       )}
-      <LostModeBadge state={device.lostModeState} size={size} />
+      <LostModeBadge state={device.lostModeState} size={size} pulse={pulseLost} />
     </span>
   );
 }

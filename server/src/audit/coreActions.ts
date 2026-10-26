@@ -84,6 +84,9 @@ export function registerCoreAuditActions(): void {
     { name: 'device.ownership_changed', criticality: 'critical', label: 'Device ownership changed' },
     { name: 'device.group_changed', criticality: 'standard', label: 'Device moved to a group' },
     { name: 'device.end_user_assigned', criticality: 'standard', label: 'End user of a device assigned' },
+    // A read of the lost-mode positions of a device (SEC-05, audit-durci §3.4): P2, the critical intent written before
+    // the read (refused with 503 when it is not), then the result with the number of positions.
+    { name: 'lost_mode.location_viewed', criticality: 'critical', label: 'Lost-mode positions of a device viewed' },
     { name: 'end_user.created', criticality: 'standard', label: 'End user created' },
     { name: 'end_user.updated', criticality: 'standard', label: 'End user updated' },
     { name: 'end_user.departed', criticality: 'standard', label: 'End user departed' },

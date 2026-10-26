@@ -14,6 +14,7 @@ import { registerAlertMaintenanceJobs } from '../apple/alerts/maintenance';
 import { registerAppleAlertJobs } from '../apple/alerts/service';
 import { registerAppleAuditActions } from '../apple/audit';
 import { registerAppleCommands, sendDdmSyncCommand } from '../apple/commands';
+import { registerLostModeResultIngestors } from '../apple/commands/lostMode';
 import { registerMvpResultIngestors, registerResultJobs } from '../apple/commands/results';
 import { requestResubmitAll, requestResubmitHeld } from '../apple/commands/submit';
 import { registerAppleDdm } from '../apple/ddm';
@@ -82,6 +83,7 @@ export function registerAppleModule(): void {
   registerDeviceJobs();           // apple.device-onboard, apple.await-configuration, devices.unenroll-cleanup
   registerResultJobs();           // apple.command-result-ingest
   registerMvpResultIngestors();   // §7.6: the ingestors whose writers the data model provides
+  registerLostModeResultIngestors();   // SEC-05: DeviceLocation positions, the lost mode's state at its acknowledgement
   // §8: catalogue, bus jobs (mdm.commands.*), guarded MDM actions, restrictable actions, approvals of restricted
   // commands, initial and periodic inventory (apple.inventory.*), setup plan (apple.setup-timeout)
   registerAppleCommands();

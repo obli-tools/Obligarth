@@ -546,7 +546,7 @@ export function DashboardPage() {
           color={(summary?.configErrors ?? 0) > 0 ? 'text-orange-400' : 'text-text-primary'} to="/devices?state=managed&config=error"
           sub={(summary?.configPending ?? 0) > 0 ? (t('dashboard.configPending', { count: summary?.configPending ?? 0 }) || `${summary?.configPending} pending`) : undefined} />
         <MiniStat icon={<AlertCircle size={15} />} label={t('dashboard.lostMode') || 'Lost mode'} value={summary?.lostMode ?? 0}
-          color={(summary?.lostMode ?? 0) > 0 ? 'text-red-400' : 'text-text-primary'} />
+          color={(summary?.lostMode ?? 0) > 0 ? 'text-red-400' : 'text-text-primary'} to="/devices?lost=1" />
         <MiniStat icon={<Wifi size={15} />} label={t('dashboard.recentContact') || 'In contact within 24 h'} value={summary?.contact?.recent ?? 0}
           to="/devices?state=managed&contact=recent" sub={(summary?.contact?.never ?? 0) > 0 ? (t('dashboard.neverSeen', { count: summary?.contact?.never ?? 0 }) || `${summary?.contact?.never} never seen`) : undefined} />
       </div>

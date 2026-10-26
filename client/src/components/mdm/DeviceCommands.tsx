@@ -1,17 +1,16 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { Ban, BellRing, Play, RefreshCw, ShieldAlert } from 'lucide-react';
 import type { MdmDeviceAction, MdmTargetState, MdmTargetView } from '@obligarth/shared';
 import { MDM_OPEN_TARGET_STATES, SocketEvents } from '@obligarth/shared';
-import { appleApi, isAwaitingApproval, newIdempotencyKey } from '@/api/apple.api';
+import { appleApi } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
 import { registerSocketListener } from '@/socket/socketListeners';
 import { Button } from '@/components/common/Button';
-import { Modal } from '@/components/common/Modal';
-import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
+import { appleCommandLabel, appleLaunchable, useAppleActionRunner } from '@/components/mdm/actions/useAppleActionRunner';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { apiErrorBody, apiErrorCode, apiErrorMessage, apiErrorStatus, trCode } from '@/utils/apiError';
 
@@ -26,7 +25,7 @@ const STATE_TONE: Record<MdmTargetState, 'green' | 'gray' | 'blue' | 'amber' | '
 };
 /** The label of a command type: Apple's, or the Android one for a command of the platform android (field platform, lot AN-D). */
 const commandTypeLabel = (type: string, platform?: string): string => (platform === 'android'
-  ? trCode(`android.commands.types.${type}`, type) : trCode(`apple.commands.types.${type}`, type));
+  ? trCode(`android.commands.types.${type}`, type) : appleCommandLabel(type));
 const stateLabel = (s: string): string => trCode(`apple.commands.state.${s}`, s);
 
 /** The page of the guarded action a command belongs to (its withdrawal is asked there). */
@@ -180,16 +179,6 @@ export function DeviceCommandsTab({ deviceId, canAct }: { deviceId: number; canA
 
 // ── Actions ─────────────────────────────────────────────────────────────────
 
-/** The actions the console can launch without a form of its own: no parameter. */
-const SIMPLE = new Set(['DeviceInformation', 'SecurityInfo', 'InstalledApplicationList', 'ManagedApplicationList', 'ProfileList',
-  'CertificateList', 'ActivationLockBypassCode', 'RestartDevice', 'ShutDownDevice', 'ClearPasscode', 'DisableLostMode', 'DeviceLocation',
-  'PlayLostModeSound']);
-/** The guarded actions and their parameters (apple/commands/guarded.ts). */
-const GUARDED: Record<string, { actionKey: string; fields: Array<'message' | 'phoneNumber' | 'footnote'>; needsOne?: boolean; toggles?: Array<'preserveDataPlan' | 'disallowProximitySetup'> }> = {
-  DeviceLock: { actionKey: 'mdm.device_lock', fields: ['message', 'phoneNumber'] },
-  EnableLostMode: { actionKey: 'mdm.lost_mode_enable', fields: ['message', 'phoneNumber', 'footnote'], needsOne: true },
-  EraseDevice: { actionKey: 'mdm.erase_device', fields: [], toggles: ['preserveDataPlan', 'disallowProximitySetup'] },
-};
 const GROUPS: Array<{ key: string; types: string[] }> = [
   { key: 'inventory', types: ['DeviceInformation', 'SecurityInfo', 'InstalledApplicationList', 'ManagedApplicationList', 'ProfileList', 'CertificateList', 'ActivationLockBypassCode'] },
   { key: 'power', types: ['RestartDevice', 'ShutDownDevice'] },
@@ -208,16 +197,14 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
   const { t } = useTranslation();
   const [actions, setActions] = useState<MdmDeviceAction[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [reasonFor, setReasonFor] = useState<MdmDeviceAction | null>(null);
-  const [guardFor, setGuardFor] = useState<{ type: string; actionKey: string } | null>(null);
-  const [guardParams, setGuardParams] = useState<Record<string, unknown>>({});
-  const [paramsFor, setParamsFor] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
     appleApi.actions(deviceId).then((a) => { setActions(a); setError(null); }).catch((err) => { setActions([]); setError(apiErrorMessage(err)); });
   }, [deviceId]);
   useEffect(() => { load(); }, [load]);
+  // The parameters, the reason and the guard dialogs of an action (shared with the quick actions of the record).
+  const runner = useAppleActionRunner({ deviceId, onQueued: () => { onQueued?.(); load(); } });
 
   // AE-C0-R2bis (decision of 19/10/2026): a re-enrollment without proof of this device is refused by the device service
   // unless allowed here (24 hours, one enrollment).
@@ -240,38 +227,7 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
     }
   };
 
-  const send = async (action: MdmDeviceAction, reason?: string) => {
-    setBusy(action.requestType);
-    try {
-      const r = action.requestType === 'DeviceInformation'
-        ? await appleApi.refreshInventory(deviceId).then(() => null)
-        : await appleApi.enqueue(deviceId, { requestType: action.requestType, reason }, newIdempotencyKey());
-      if (r && isAwaitingApproval(r)) toast(t('mdm.outcome.awaitingApproval') || 'Waiting for a second approver: nothing has changed yet.', { duration: 7000 });
-      else toast.success(t('apple.commands.queuedOne') || 'Command queued: it reaches the device at its next contact.');
-      onQueued?.();
-      load();
-    } catch (err) {
-      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
-    } finally {
-      setBusy(null);
-    }
-  };
-  const start = (action: MdmDeviceAction) => {
-    const guarded = GUARDED[action.requestType];
-    if (guarded) {
-      setGuardParams(guarded.toggles ? { preserveDataPlan: true, disallowProximitySetup: false } : {});
-      if (guarded.fields.length || guarded.toggles) setParamsFor(action.requestType);
-      else setGuardFor({ type: action.requestType, actionKey: guarded.actionKey });
-      return;
-    }
-    if (action.reasonRequired) { setReasonFor(action); return; }
-    void send(action);
-  };
-
   const byType = new Map((actions ?? []).map((a) => [a.requestType, a]));
-  const launchable = (a: MdmDeviceAction): boolean => SIMPLE.has(a.requestType) || a.requestType in GUARDED;
-  const paramsSpec = paramsFor ? GUARDED[paramsFor] : null;
-  const paramsOk = !paramsSpec?.needsOne || paramsSpec.fields.some((f) => String(guardParams[f] ?? '').trim().length > 0);
 
   return (
     <div className="space-y-5">
@@ -279,7 +235,7 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
       {actions === null ? <p className="text-sm text-text-muted italic">{t('common.loading') || 'Loading…'}</p> : (
         <>
           {GROUPS.map((g) => {
-            const list = g.types.map((x) => byType.get(x)).filter((a): a is MdmDeviceAction => !!a && launchable(a));
+            const list = g.types.map((x) => byType.get(x)).filter((a): a is MdmDeviceAction => !!a && appleLaunchable(a));
             if (list.length === 0) return null;
             return (
               <section key={g.key}>
@@ -294,7 +250,7 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
                           <span className="block text-[11px] text-text-muted">{trCode(`apple.commands.unavailable.${a.unavailable}`, a.unavailable)}</span>
                         )}
                       </span>
-                      <Button size="sm" variant={g.key === 'destructive' ? 'danger' : 'secondary'} disabled={!canAct || !a.available || busy === a.requestType} onClick={() => start(a)}>
+                      <Button size="sm" variant={g.key === 'destructive' ? 'danger' : 'secondary'} disabled={!canAct || !a.available || runner.busy === a.requestType} onClick={() => runner.run(a)}>
                         <Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}
                       </Button>
                     </li>
@@ -312,7 +268,7 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
                   <span className="ml-2 text-[10px] uppercase text-red-400">{t('apple.actions.guarded') || 'guarded'}</span>
                   <span className="block text-[11px] text-text-muted">{t('apple.actions.removeManagementHint') || 'Removes the enrollment profile: the device leaves management and loses everything management installed.'}</span>
                 </span>
-                <Button size="sm" variant="danger" disabled={!canAct} onClick={() => setGuardFor({ type: 'RemoveManagement', actionKey: 'mdm.remove_management' })}>
+                <Button size="sm" variant="danger" disabled={!canAct} onClick={() => runner.guard('RemoveManagement', 'mdm.remove_management')}>
                   <Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}
                 </Button>
               </div>
@@ -334,98 +290,7 @@ export function DeviceActionsTab({ deviceId, managed, canAct, onQueued }: {
         </>
       )}
 
-      {/* A reason the command requires (10 characters at least) */}
-      <ReasonDialog
-        action={reasonFor}
-        onClose={() => setReasonFor(null)}
-        onConfirm={(reason) => { const a = reasonFor; setReasonFor(null); if (a) void send(a, reason); }}
-      />
-
-      {/* Parameters of a guarded action, before its dialog */}
-      <Modal
-        open={paramsFor !== null}
-        onClose={() => setParamsFor(null)}
-        size="sm"
-        title={paramsFor ? commandTypeLabel(paramsFor) : ''}
-        footer={(
-          <>
-            <Button variant="secondary" onClick={() => setParamsFor(null)}>{t('common.cancel') || 'Cancel'}</Button>
-            <Button
-              disabled={!paramsOk}
-              onClick={() => {
-                const spec = paramsFor ? GUARDED[paramsFor] : null;
-                if (!spec || !paramsFor) return;
-                // Empty texts are left out: the server refuses an empty message.
-                setGuardParams((p) => Object.fromEntries(Object.entries(p).filter(([, v]) => typeof v === 'boolean' || String(v).trim() !== '').map(([k, v]) => [k, typeof v === 'string' ? v.trim() : v])));
-                setGuardFor({ type: paramsFor, actionKey: spec.actionKey });
-                setParamsFor(null);
-              }}
-            >
-              {t('common.next') || 'Next'}
-            </Button>
-          </>
-        )}
-      >
-        <div className="space-y-3 text-sm">
-          {paramsSpec?.fields.map((f) => (
-            <label key={f} className="block">
-              <span className="text-xs text-text-muted">{t(`apple.actions.param.${f}`) || f}</span>
-              <input
-                value={String(guardParams[f] ?? '')}
-                onChange={(e) => setGuardParams((p) => ({ ...p, [f]: e.target.value }))}
-                maxLength={f === 'phoneNumber' ? 30 : 200}
-                className="mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary"
-              />
-            </label>
-          ))}
-          {paramsSpec?.toggles?.map((f) => (
-            <label key={f} className="flex items-center gap-2">
-              <input type="checkbox" checked={guardParams[f] === true} onChange={(e) => setGuardParams((p) => ({ ...p, [f]: e.target.checked }))} className="accent-accent" />
-              <span>{t(`apple.actions.param.${f}`) || f}</span>
-            </label>
-          ))}
-          {paramsSpec?.needsOne && <p className="text-[11px] text-text-muted">{t('apple.actions.messageOrPhone') || 'A message or a phone number is required: it is shown on the locked screen.'}</p>}
-        </div>
-      </Modal>
-
-      <GuardedActionDialog
-        open={guardFor !== null}
-        onClose={() => setGuardFor(null)}
-        actionKey={guardFor?.actionKey ?? 'mdm.device_lock'}
-        selection={{ deviceIds: [deviceId] }}
-        params={guardFor && guardFor.type in GUARDED ? guardParams : undefined}
-        onDone={() => { onQueued?.(); load(); }}
-      />
+      {runner.dialogs}
     </div>
-  );
-}
-
-function ReasonDialog({ action, onClose, onConfirm }: { action: MdmDeviceAction | null; onClose: () => void; onConfirm: (reason: string) => void }) {
-  const { t } = useTranslation();
-  const [reason, setReason] = useState('');
-  const last = useRef<string | null>(null);
-  useEffect(() => {
-    if (action && last.current !== action.requestType) setReason('');
-    last.current = action?.requestType ?? null;
-  }, [action]);
-  return (
-    <Modal
-      open={action !== null}
-      onClose={onClose}
-      size="sm"
-      title={action ? commandTypeLabel(action.requestType) : ''}
-      footer={(
-        <>
-          <Button variant="secondary" onClick={onClose}>{t('common.cancel') || 'Cancel'}</Button>
-          <Button disabled={reason.trim().length < 10} onClick={() => onConfirm(reason.trim())}>{t('apple.commands.send') || 'Send'}</Button>
-        </>
-      )}
-    >
-      <label className="block text-sm">
-        <span className="text-xs text-text-muted">{t('apple.commands.reasonRequired') || 'Reason (10 characters at least): it is written to the audit log'}</span>
-        <textarea value={reason} onChange={(e) => setReason(e.target.value)} maxLength={500} rows={3}
-          className="mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary" />
-      </label>
-    </Modal>
   );
 }

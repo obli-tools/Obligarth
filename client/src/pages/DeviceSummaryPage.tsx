@@ -1,16 +1,14 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import {
-  ArrowLeft, Briefcase, Building2, FolderOpen, History, KeyRound, LayoutGrid, Package, Pencil, RefreshCw,
-  ScrollText, SlidersHorizontal, Smartphone, TerminalSquare, User, Zap,
+  ArrowLeft, History, KeyRound, LayoutGrid, Package, ScrollText, SlidersHorizontal, Smartphone, TerminalSquare, Zap,
 } from 'lucide-react';
-import type { CollectedField, DeviceDeclarationsView, DeviceDetail, DeviceStatusItemView, EndUser } from '@obligarth/shared';
-import { ANDROID_MODES, SocketEvents } from '@obligarth/shared';
+import type { DeviceDetail, EndUser, ManagementChannel } from '@obligarth/shared';
+import { SocketEvents } from '@obligarth/shared';
 import { useDeviceMove } from '@/components/mdm/DeviceMoveChange';
 import { mdmApi } from '@/api/mdm.api';
-import { appleApi } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
@@ -20,31 +18,61 @@ import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedT
 import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
-import { DeviceStateBadges, StateBadge } from '@/components/mdm/DeviceStateBadges';
-import {
-  PlatformIcon, enrollmentMethodLabel, formatBytes, formatDate, formatDateTime, formatDay, managementModeLabel, osLabel, ownershipLabel,
-} from '@/components/mdm/PlatformIcon';
+import { ownershipLabel } from '@/components/mdm/PlatformIcon';
 import { DeviceConfigurationTab } from '@/components/mdm/DeviceConfigurationTab';
 import { DeviceAppsTab, DeviceCertificatesTab, DeviceProfilesTab } from '@/components/mdm/DeviceInventoryTabs';
 import { DeviceActionsTab, DeviceCommandsTab } from '@/components/mdm/DeviceCommands';
 import { AndroidDeviceActions, AndroidDeviceTab } from '@/components/android/AndroidDeviceTab';
 import { DeviceHistoryTab } from '@/components/mdm/DeviceHistoryTab';
-import { DeviceRetirementCard } from '@/components/mdm/DeviceRetirementCard';
+import { DeviceHero } from '@/components/mdm/device/DeviceHero';
+import { DeviceOverview, LOCATION_ANCHOR } from '@/components/mdm/device/DeviceOverview';
+import { LegacyActionsTab, LegacyCommandsTab } from '@/components/mdm/device/LegacyActionsTab';
+import { LostModeBanner } from '@/components/mdm/device/LostModeBanner';
+import { channelOf, useDeviceActions } from '@/components/mdm/device/useDeviceActions';
 import { anonymize } from '@/utils/anonymize';
-import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { apiErrorMessage } from '@/utils/apiError';
 
-// The record of a device (modele-donnees-mdm §11.3): overview (states, ownership and privacy rules, end user,
-// hardware, identity, push, declarative management), effective configuration, applications, profiles,
-// certificates, commands (the queue of the integration), history (episodes and timeline), actions.
+// The record of a device (modele-donnees-mdm §11.3): a header with its states and the quick actions of a lost or
+// stolen device, the lost mode banner, then the tabs of its channel — the overview (figures, health, lost device panel,
+// location, security, management, hardware, identifiers, network, declarative management), the Android Enterprise
+// view, applications, configuration, profiles, certificates, commands (the queue of the channel), history, actions.
 
 type Tab = 'overview' | 'android' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions';
 const TABS: Tab[] = ['overview', 'android', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions'];
-
-const COLLECTED: CollectedField[] = ['serialNumber', 'hardwareIds', 'deviceName', 'phoneNumber', 'network', 'allApps', 'allCertificates'];
-const COLLECTED_FALLBACK: Record<CollectedField, string> = {
-  serialNumber: 'Serial number', hardwareIds: 'Hardware identifiers', deviceName: 'Device name', phoneNumber: 'Phone number',
-  network: 'Network information', allApps: 'Every application', allCertificates: 'Every certificate',
+/** The tabs of each channel, in their order. */
+const CHANNEL_TABS: Record<ManagementChannel, Tab[]> = {
+  apple_mdm: ['overview', 'apps', 'configuration', 'profiles', 'certificates', 'commands', 'history', 'actions'],
+  amapi: ['overview', 'android', 'apps', 'configuration', 'commands', 'history', 'actions'],
+  legacy_agent: ['overview', 'apps', 'commands', 'history', 'actions'],
 };
+
+/** The shape of the record while it loads: header, figures, cards (no spinner in the middle of the page). */
+function DeviceSkeleton({ note }: { note?: string | null }) {
+  const block = 'animate-pulse rounded-xl border border-border bg-bg-secondary';
+  return (
+    <PageContainer className="space-y-5" aria-busy>
+      <div className="h-5 w-32 animate-pulse rounded bg-bg-secondary" />
+      <div className={`${block} p-4 sm:p-5`}>
+        <div className="flex items-start gap-4">
+          <div className="h-12 w-12 shrink-0 rounded-xl bg-bg-tertiary sm:h-14 sm:w-14" />
+          <div className="flex-1 space-y-2">
+            <div className="h-6 w-1/2 rounded bg-bg-tertiary" />
+            <div className="h-4 w-2/3 rounded bg-bg-tertiary" />
+            <div className="h-4 w-1/3 rounded bg-bg-tertiary" />
+          </div>
+        </div>
+      </div>
+      {note && <p className="text-center text-sm text-text-muted">{note}</p>}
+      <div className="h-11 animate-pulse rounded-lg bg-bg-secondary" />
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {[0, 1, 2, 3].map((i) => <div key={i} className={`${block} h-28`} />)}
+      </div>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className={`${block} h-48`} />)}
+      </div>
+    </PageContainer>
+  );
+}
 
 export function DeviceSummaryPage() {
   const { id } = useParams<{ id: string }>();
@@ -79,6 +107,7 @@ export function DeviceSummaryPage() {
       return null;
     }
   }, [deviceId]);
+  const reloadQuietly = useCallback(() => { void reload(); }, [reload]);
 
   // Runs again after a tenant change, so that the load is retried under the tenant it switched to.
   useEffect(() => {
@@ -114,16 +143,24 @@ export function DeviceSummaryPage() {
     return () => { cancelled = true; };
   }, [deviceId, validId, reload, currentTenantId]);
 
-  // Live: the registry or the Apple satellite of this device changed.
+  // Live: the registry or the Apple satellite of this device changed, or one of its commands (an acknowledged lost
+  // mode changes the record without a DEVICE_UPDATED).
   useEffect(() => {
     const onChange = (p: { deviceId?: number; deviceIds?: number[] }) => {
       const ids = Array.isArray(p?.deviceIds) ? p.deviceIds.map(Number) : p?.deviceId !== undefined ? [Number(p.deviceId)] : null;
       if (ids === null || ids.includes(deviceId)) void reload();
     };
-    const offs = [SocketEvents.DEVICE_UPDATED, SocketEvents.APPLE_DEVICE_CHANGED, SocketEvents.DEVICE_CONFIG_CHANGED]
+    const offs = [SocketEvents.DEVICE_UPDATED, SocketEvents.APPLE_DEVICE_CHANGED, SocketEvents.DEVICE_CONFIG_CHANGED, SocketEvents.MDM_COMMAND_CHANGED]
       .map((ev) => registerSocketListener(ev, onChange));
     return () => offs.forEach((off) => off());
   }, [deviceId, reload]);
+
+  const canWrite = device ? canWriteDevice(device.id, device.groupId) : false;
+  // The actions of a lost or stolen device, whatever its channel (header, banner, panel, location card).
+  const deviceActions = useDeviceActions(device, { canAct: canWrite, onQueued: reloadQuietly });
+  // "See the location" of the lost mode banner: the location card shows its positions once (an explicit request,
+  // journaled by the server), then the request is consumed so that coming back to the overview reads nothing.
+  const [locationReveal, setLocationReveal] = useState(0);
 
   const backLink = (
     <Link to="/devices" className="inline-flex items-center gap-1 text-sm text-text-secondary hover:text-text-primary coarse:min-h-10">
@@ -134,14 +171,9 @@ export function DeviceSummaryPage() {
 
   if (isLoading) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <RefreshCw className="w-6 h-6 animate-spin text-text-muted" />
-        {tenantSwitchTarget && (
-          <p className="text-sm text-text-muted">
-            {t('deviceSummary.switchingTenant', { tenant: tenantSwitchTarget }) || `Switching to ${tenantSwitchTarget}…`}
-          </p>
-        )}
-      </div>
+      <DeviceSkeleton
+        note={tenantSwitchTarget ? (t('deviceSummary.switchingTenant', { tenant: tenantSwitchTarget }) || `Switching to ${tenantSwitchTarget}…`) : null}
+      />
     );
   }
   if (!device) {
@@ -153,181 +185,80 @@ export function DeviceSummaryPage() {
     );
   }
 
-  const canWrite = canWriteDevice(device.id, device.groupId);
   const canManageDevices = isAdmin() || caps.includes('devices.manage');
   const canManagePolicies = isAdmin() || caps.includes('mdm.policies.manage');
   const managed = device.enrollmentState !== 'unenrolled';
   const collected = device.privacy?.collected ?? [];
   const tenantName = device.tenantName ?? tenants.find((tn) => tn.id === device.tenantId)?.name ?? `#${device.tenantId}`;
   const apple = device.apple;
-  // A device of the channel amapi (Android Enterprise, lot AN-C2): its Android tab and the menu of the Android commands.
-  const isAmapi = device.platform === 'android' && (ANDROID_MODES as readonly string[]).includes(device.managementMode);
-  const tabs: SegmentedTab<Tab>[] = [
-    { id: 'overview', label: t('deviceSummary.tabs.overview') || 'Overview', icon: <LayoutGrid size={15} /> },
-    ...(isAmapi ? [{ id: 'android' as const, label: t('deviceSummary.tabs.android') || 'Android', icon: <Smartphone size={15} /> }] : []),
-    { id: 'configuration', label: t('deviceSummary.tabs.configuration') || 'Configuration', icon: <SlidersHorizontal size={15} /> },
-    { id: 'apps', label: t('deviceSummary.tabs.apps') || 'Applications', icon: <Package size={15} /> },
-    { id: 'profiles', label: t('deviceSummary.tabs.profiles') || 'Profiles', icon: <ScrollText size={15} /> },
-    { id: 'certificates', label: t('deviceSummary.tabs.certificates') || 'Certificates', icon: <KeyRound size={15} /> },
-    { id: 'commands', label: t('deviceSummary.tabs.commands') || 'Commands', icon: <TerminalSquare size={15} /> },
-    { id: 'history', label: t('deviceSummary.tabs.history') || 'History', icon: <History size={15} /> },
-    { id: 'actions', label: t('deviceSummary.tabs.actions') || 'Actions', icon: <Zap size={15} /> },
-  ];
+  const channel = channelOf(device);
+  const shownTabs = CHANNEL_TABS[channel];
+  // A ?tab= of a tab this channel does not have falls back on the overview.
+  const current: Tab = shownTabs.includes(tab) ? tab : 'overview';
+  const pending = deviceActions.pendingCount ?? 0;
+  const pendingBadge = pending > 0 ? (
+    <span className={`min-w-5 rounded-full px-1.5 text-[11px] leading-5 tabular-nums ${current === 'commands' ? 'bg-white/20 text-white' : 'bg-accent/15 text-accent'}`}>
+      {pending}{deviceActions.pendingMore ? '+' : ''}
+    </span>
+  ) : undefined;
+  const allTabs: Record<Tab, SegmentedTab<Tab>> = {
+    overview: { id: 'overview', label: t('deviceSummary.tabs.overview') || 'Overview', icon: <LayoutGrid size={15} /> },
+    android: { id: 'android', label: t('deviceSummary.tabs.android') || 'Android', icon: <Smartphone size={15} /> },
+    configuration: { id: 'configuration', label: t('deviceSummary.tabs.configuration') || 'Configuration', icon: <SlidersHorizontal size={15} /> },
+    apps: { id: 'apps', label: t('deviceSummary.tabs.apps') || 'Applications', icon: <Package size={15} /> },
+    profiles: { id: 'profiles', label: t('deviceSummary.tabs.profiles') || 'Profiles', icon: <ScrollText size={15} /> },
+    certificates: { id: 'certificates', label: t('deviceSummary.tabs.certificates') || 'Certificates', icon: <KeyRound size={15} /> },
+    commands: { id: 'commands', label: t('deviceSummary.tabs.commands') || 'Commands', icon: <TerminalSquare size={15} />, badge: pendingBadge },
+    history: { id: 'history', label: t('deviceSummary.tabs.history') || 'History', icon: <History size={15} /> },
+    actions: { id: 'actions', label: t('deviceSummary.tabs.actions') || 'Actions', icon: <Zap size={15} /> },
+  };
+  const tabs = shownTabs.map((k) => allTabs[k]);
+  const showLocation = () => {
+    setTab('overview');
+    setLocationReveal(Date.now());
+    window.requestAnimationFrame(() => document.getElementById(LOCATION_ANCHOR)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  };
 
   return (
     <PageContainer className="space-y-5">
       {backLink}
 
-      <div className="flex flex-wrap items-start gap-3">
-        <PlatformIcon platform={device.platform} className="w-7 h-7 shrink-0 text-text-muted mt-1" />
-        <div className="min-w-0 flex-1">
-          <h1 className="text-2xl font-semibold text-text-primary break-words">{anonymize(device.label)}</h1>
-          <p className="text-sm text-text-muted">
-            {[osLabel(device.platform, device.osVersion), device.modelName || device.model, tenantName].filter(Boolean).join(' · ')}
-          </p>
-          <div className="mt-2"><DeviceStateBadges device={device} size="md" all={managed} /></div>
-        </div>
-        {device.managementMode === 'device_admin' && (
-          // The Android bridge agent (agent-pont-android §7): its panel, actions and queue live on its own page.
-          <Link to={`/legacy-agent?device=${device.id}`} className="text-sm text-accent hover:underline mt-1">
-            {t('legacyAgent.openPanel') || 'Android agent panel'}
-          </Link>
-        )}
-        {canWrite && (
-          <Button variant="secondary" size="sm" onClick={() => setEditOpen(true)}>
-            <Pencil size={14} className="mr-1.5" />{t('common.edit') || 'Edit'}
-          </Button>
-        )}
-      </div>
+      <DeviceHero device={device} tenantName={tenantName} actions={deviceActions} canWrite={canWrite} onEdit={() => setEditOpen(true)} />
+      <LostModeBanner device={device} actions={deviceActions} onShowLocation={showLocation} />
 
-      <SegmentedTabs tabs={tabs} value={tab} onChange={setTab} ariaLabel={t('deviceSummary.tabs.label') || 'Sections of the device'} />
+      <SegmentedTabs tabs={tabs} value={current} onChange={setTab} ariaLabel={t('deviceSummary.tabs.label') || 'Sections of the device'} />
 
-      {tab === 'overview' && (
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card title={t('deviceSummary.cards.management') || 'Management'}>
-            <Field label={t('deviceSummary.enrollmentMethod') || 'Enrollment'}>{enrollmentMethodLabel(t, device.enrollmentMethod)}</Field>
-            <Field label={t('deviceSummary.managementMode') || 'Management mode'}>
-              {managementModeLabel(t, device.managementMode)}{device.supervised ? ` · ${t('deviceSummary.supervised') || 'supervised'}` : ''}
-            </Field>
-            <Field label={t('deviceSummary.enrolledAt') || 'Enrolled'}>{formatDateTime(device.enrolledAt)}</Field>
-            <Field label={t('deviceSummary.lastCheckin') || 'Last contact'}>{device.lastCheckinAt ? formatDateTime(device.lastCheckinAt) : (t('mdm.contactState.never') || 'Never seen')}</Field>
-            {device.unenrolledAt && (
-              <Field label={t('deviceSummary.unenrolledAt') || 'Left management'}>
-                {formatDateTime(device.unenrolledAt)}{device.unenrollReason ? ` (${trCode(`mdm.unenrollReason.${device.unenrollReason}`, device.unenrollReason)})` : ''}
-              </Field>
-            )}
-            {device.complianceState === 'non_compliant' && device.complianceReasons.length > 0 && (
-              <Field label={t('deviceSummary.complianceReasons') || 'Non compliant because'}>
-                <ul className="list-disc pl-4">
-                  {device.complianceReasons.map((r, i) => <li key={`${r.code}-${i}`}>{trCode(`mdm.complianceReason.${r.code}`, r.code)}</li>)}
-                </ul>
-              </Field>
-            )}
-            <Field label={t('deviceSummary.group') || 'Group'} icon={<FolderOpen size={14} />}>
-              <span className="inline-flex flex-wrap items-center gap-2">
-                {device.groupId != null ? (
-                  <Link to={`/group/${device.groupId}`} className="text-accent hover:underline">{anonymize(device.groupName) || `#${device.groupId}`}</Link>
-                ) : (t('deviceSummary.ungrouped') || 'Ungrouped')}
-                {canManageDevices && canWrite && <LinkButton onClick={() => setGroupOpen(true)}>{t('deviceSummary.change') || 'Change'}</LinkButton>}
-              </span>
-            </Field>
-            <Field label={t('deviceSummary.tenant') || 'Tenant'} icon={<Building2 size={14} />}>{tenantName}</Field>
-          </Card>
-
-          <Card title={t('deviceSummary.cards.ownership') || 'Ownership and privacy'}>
-            <Field label={t('deviceSummary.ownership') || 'Ownership'} icon={<Briefcase size={14} />}>
-              <span className="inline-flex flex-wrap items-center gap-2">
-                {ownershipLabel(t, device.ownership)}
-                {canManageDevices && canWrite && managed && device.managementMode === 'device' && device.ownership !== 'personal' && (
-                  <LinkButton onClick={() => setOwnershipOpen(true)}>{t('deviceSummary.change') || 'Change'}</LinkButton>
-                )}
-              </span>
-            </Field>
-            <Field label={t('deviceSummary.collected') || 'Collected on this device'}>
-              <span className="flex flex-wrap gap-1">
-                {COLLECTED.map((f) => (
-                  <span key={f} className={`px-1.5 py-0.5 rounded text-[11px] ${collected.includes(f) ? 'bg-accent/10 text-accent' : 'bg-bg-tertiary text-text-muted line-through'}`}>
-                    {t(`mdm.collected.${f}`) || COLLECTED_FALLBACK[f]}
-                  </span>
-                ))}
-              </span>
-              <span className="mt-1 block text-[11px] text-text-muted">{t('deviceSummary.collectedHint') || 'What is struck through is never collected for this ownership: it is absent, not empty.'}</span>
-            </Field>
-            <Field label={t('deviceSummary.endUser') || 'End user'} icon={<User size={14} />}>
-              <span className="inline-flex flex-wrap items-center gap-2">
-                {device.endUser ? anonymize(device.endUser.displayName || device.endUser.email || `#${device.endUser.id}`) : '—'}
-                {canManageDevices && canWrite && <LinkButton onClick={() => setUserOpen(true)}>{t('deviceSummary.change') || 'Change'}</LinkButton>}
-              </span>
-            </Field>
-          </Card>
-
-          <Card title={t('deviceSummary.cards.hardware') || 'Hardware'}>
-            <Field label={t('deviceSummary.model') || 'Model'}>{[device.modelName, device.model].filter(Boolean).join(' · ') || '—'}</Field>
-            <Field label={t('deviceSummary.os') || 'Operating system'}>{osLabel(device.platform, device.osVersion)}{device.osBuild ? ` (${device.osBuild})` : ''}</Field>
-            {device.serialNumber !== undefined && <Field label={t('deviceSummary.serial') || 'Serial number'}><span className="font-mono">{anonymize(device.serialNumber) || '—'}</span></Field>}
-            {device.deviceName !== undefined && <Field label={t('deviceSummary.deviceName') || 'Name on the device'}>{anonymize(device.deviceName) || '—'}</Field>}
-            <Field label={t('deviceSummary.storage') || 'Storage'}>
-              {device.storageCapacityBytes ? `${formatBytes(device.storageAvailableBytes)} ${t('deviceSummary.storageFree') || 'free of'} ${formatBytes(device.storageCapacityBytes)}` : '—'}
-            </Field>
-            {device.description && <Field label={t('common.description') || 'Description'}>{device.description}</Field>}
-            {device.tags.length > 0 && (
-              <Field label={t('devices.filters.tagsLabel') || 'Tags'}>
-                <span className="flex flex-wrap gap-1">{device.tags.map((tag) => <span key={tag} className="px-1.5 py-0.5 rounded-full bg-accent/10 text-accent text-[11px]">{tag}</span>)}</span>
-              </Field>
-            )}
-            {(device.asset.warrantyExpiry || device.asset.purchaseDate) && (
-              <Field label={t('deviceSummary.warranty') || 'Warranty'}>
-                {[
-                  device.asset.warrantyVendor,
-                  device.asset.warrantyExpiry && (t('devices.row.warrantyUntil', { date: formatDay(device.asset.warrantyExpiry) }) || `Warranty until ${formatDay(device.asset.warrantyExpiry)}`),
-                  device.asset.purchaseDate && (t('deviceSummary.purchasedOn', { date: formatDay(device.asset.purchaseDate) }) || `Purchased on ${formatDay(device.asset.purchaseDate)}`),
-                ].filter(Boolean).join(' · ') || '—'}
-              </Field>
-            )}
-          </Card>
-
-          {apple && (
-            <Card title={t('deviceSummary.cards.identity') || 'Identity and push'}>
-              <Field label={t('deviceSummary.identity') || 'Management identity'}>
-                <StateBadge
-                  tone={apple.identityState === 'valid' ? 'green' : 'red'}
-                  label={trCode(`mdm.identityState.${apple.identityState}`, apple.identityState)}
-                  title={apple.certNotAfter ? formatDateTime(apple.certNotAfter) : undefined}
-                />
-                {apple.certNotAfter && <span className="ml-2 text-[11px] text-text-muted">{t('deviceSummary.validUntil', { date: formatDate(apple.certNotAfter) }) || `until ${formatDate(apple.certNotAfter)}`}</span>}
-              </Field>
-              <Field label={t('deviceSummary.push') || 'Push'}>
-                <StateBadge tone={apple.pushState === 'ready' ? 'green' : apple.pushState === 'unknown' ? 'gray' : 'red'} label={trCode(`mdm.pushState.${apple.pushState}`, apple.pushState)} />
-              </Field>
-              {apple.udid !== undefined && <Field label="UDID"><span className="font-mono break-all">{anonymize(apple.udid) || '—'}</span></Field>}
-              {apple.imei !== undefined && apple.imei && <Field label="IMEI"><span className="font-mono">{anonymize(apple.imei)}</span></Field>}
-              <Field label={t('deviceSummary.activationLock') || 'Activation lock'}>
-                {apple.activationLockEnabled === null ? '—' : apple.activationLockEnabled ? (t('common.enable') || 'Enabled') : (t('common.disable') || 'Disabled')}
-                {apple.activationLockBypassEscrowed && <span className="ml-2 text-[11px] text-text-muted">{t('deviceSummary.bypassEscrowed') || 'bypass code kept'}</span>}
-              </Field>
-              <Field label={t('deviceSummary.unlockToken') || 'Unlock token'}>
-                {apple.hasUnlockToken ? (t('deviceSummary.present') || 'Present') : (t('deviceSummary.absent') || 'Absent')}
-              </Field>
-              <Field label={t('deviceSummary.lastInventory') || 'Last inventory'}>{formatDateTime(apple.lastInventory.deviceInfo)}</Field>
-            </Card>
-          )}
-
-          {apple && <DdmCard deviceId={device.id} enabled={apple.ddmEnabled} canSync={canWrite && device.tenantId === currentTenantId} />}
-          {apple && <DeviceRetirementCard deviceId={device.id} canAct={canWrite} isApple />}
-        </div>
+      {current === 'overview' && (
+        <DeviceOverview
+          device={device}
+          tenantName={tenantName}
+          actions={deviceActions}
+          canWrite={canWrite}
+          canManageDevices={canManageDevices}
+          canSyncDdm={canWrite && device.tenantId === currentTenantId}
+          onGroup={() => setGroupOpen(true)}
+          onOwnership={() => setOwnershipOpen(true)}
+          onEndUser={() => setUserOpen(true)}
+          locationReveal={locationReveal}
+          onLocationRevealed={() => setLocationReveal(0)}
+        />
       )}
+      {current === 'configuration' && <DeviceConfigurationTab deviceId={device.id} groupId={device.groupId} canManagePolicies={canManagePolicies && canWrite} />}
+      {current === 'apps' && <DeviceAppsTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.apps} />}
+      {current === 'profiles' && <DeviceProfilesTab deviceId={device.id} lastAt={apple?.lastInventory.profiles} />}
+      {current === 'certificates' && <DeviceCertificatesTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.certificates} />}
+      {current === 'commands' && (channel === 'legacy_agent'
+        ? <LegacyCommandsTab deviceId={device.id} canAct={canWrite} onChanged={deviceActions.reload} />
+        : <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />)}
+      {current === 'history' && <DeviceHistoryTab deviceId={device.id} />}
+      {current === 'android' && channel === 'amapi' && <AndroidDeviceTab deviceId={device.id} canAct={canWrite} />}
+      {current === 'actions' && (channel === 'amapi'
+        ? <AndroidDeviceActions deviceId={device.id} ownership={device.ownership} canAct={canWrite} onQueued={() => { void reload(); deviceActions.reload(); }} />
+        : channel === 'legacy_agent'
+          ? <LegacyActionsTab deviceId={device.id} canAct={canWrite} onQueued={() => { void reload(); deviceActions.reload(); }} />
+          : <DeviceActionsTab deviceId={device.id} managed={managed} canAct={canWrite} onQueued={() => { void reload(); deviceActions.reload(); }} />)}
 
-      {tab === 'configuration' && <DeviceConfigurationTab deviceId={device.id} groupId={device.groupId} canManagePolicies={canManagePolicies && canWrite} />}
-      {tab === 'apps' && <DeviceAppsTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.apps} />}
-      {tab === 'profiles' && <DeviceProfilesTab deviceId={device.id} lastAt={apple?.lastInventory.profiles} />}
-      {tab === 'certificates' && <DeviceCertificatesTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.certificates} />}
-      {tab === 'commands' && <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />}
-      {tab === 'history' && <DeviceHistoryTab deviceId={device.id} />}
-      {tab === 'android' && isAmapi && <AndroidDeviceTab deviceId={device.id} canAct={canWrite} />}
-      {tab === 'actions' && (isAmapi
-        ? <AndroidDeviceActions deviceId={device.id} ownership={device.ownership} canAct={canWrite} onQueued={() => { void reload(); }} />
-        : <DeviceActionsTab deviceId={device.id} managed={managed} canAct={canWrite} onQueued={() => { void reload(); }} />)}
-
+      {deviceActions.dialogs}
       <EditDeviceDialog open={editOpen} onClose={() => setEditOpen(false)} device={device} onSaved={setDevice} />
       <GroupDialog open={groupOpen} onClose={() => setGroupOpen(false)} device={device} onDone={() => { void reload(); }} />
       <EndUserDialog open={userOpen} onClose={() => setUserOpen(false)} device={device} onDone={() => { void reload(); }} />
@@ -336,117 +267,7 @@ export function DeviceSummaryPage() {
   );
 }
 
-function Card({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <section className="rounded-lg bg-bg-secondary">
-      <h2 className="px-4 pt-3 pb-1 text-xs font-semibold uppercase tracking-wider text-text-muted">{title}</h2>
-      <dl className="divide-y divide-border/50">{children}</dl>
-    </section>
-  );
-}
-
-function Field({ icon, label, children }: { icon?: ReactNode; label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-start gap-3 px-4 py-2.5 max-sm:flex-col max-sm:gap-1">
-      <dt className="flex items-center gap-2 w-44 shrink-0 text-sm text-text-muted max-sm:w-auto">
-        {icon && <span className="shrink-0">{icon}</span>}
-        {label}
-      </dt>
-      <dd className="min-w-0 flex-1 text-sm text-text-primary break-words">{children}</dd>
-    </div>
-  );
-}
-
-function LinkButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
-  return <button type="button" onClick={onClick} className="text-xs text-accent hover:underline coarse:min-h-9">{children}</button>;
-}
-
 const inputCls = 'mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary';
-
-/** Declarative management: the set the engine serves, what the device reported, the status items. */
-function DdmCard({ deviceId, enabled, canSync }: { deviceId: number; enabled: boolean; canSync: boolean }) {
-  const { t } = useTranslation();
-  const [view, setView] = useState<DeviceDeclarationsView | null>(null);
-  const [items, setItems] = useState<DeviceStatusItemView[]>([]);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const load = useCallback(() => {
-    // 503 when the integration is off: the card then shows the satellite's flag alone.
-    appleApi.declarations(deviceId).then(setView).catch(() => setView(null));
-    appleApi.statusItems(deviceId).then(setItems).catch(() => setItems([]));
-  }, [deviceId]);
-  useEffect(() => { load(); }, [load]);
-  const sync = async () => {
-    setBusy(true);
-    try {
-      const r = await appleApi.ddmSync(deviceId);
-      toast.success(r.requested
-        ? (t('deviceSummary.ddm.syncRequested') || 'Synchronisation requested')
-        : (t('deviceSummary.ddm.syncAlready') || 'A synchronisation was already requested within the minute'));
-      load();
-    } catch (err) {
-      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
-    } finally {
-      setBusy(false);
-    }
-  };
-  const inSync = view ? !!view.declarationsToken && view.declarationsToken === view.fetchedToken : null;
-  const invalid = view?.declarations.filter((d) => d.status?.valid === 'invalid').length ?? 0;
-  return (
-    <Card title={t('deviceSummary.cards.ddm') || 'Declarative management'}>
-      <Field label={t('common.status') || 'Status'}>
-        <span className="inline-flex flex-wrap items-center gap-2">
-          <StateBadge tone={enabled ? 'green' : 'gray'} label={enabled ? (t('deviceSummary.ddm.enabled') || 'Enabled') : (t('deviceSummary.ddm.disabled') || 'Not enabled')} />
-          {view && inSync !== null && (
-            <StateBadge
-              tone={inSync ? 'green' : view.syncOpen ? 'blue' : 'amber'}
-              label={inSync ? (t('deviceSummary.ddm.inSync') || 'In sync') : view.syncOpen ? (t('deviceSummary.ddm.syncing') || 'Synchronising') : (t('deviceSummary.ddm.outOfSync') || 'Not fetched yet')}
-            />
-          )}
-          {canSync && enabled && <Button size="sm" variant="secondary" loading={busy} onClick={sync}>{t('deviceSummary.ddm.sync') || 'Synchronise'}</Button>}
-        </span>
-      </Field>
-      {view && (
-        <Field label={t('deviceSummary.ddm.declarations') || 'Declarations'}>
-          {view.declarations.length}
-          {invalid > 0 && <span className="ml-2 text-red-400">{t('deviceSummary.ddm.invalid', { count: invalid }) || `${invalid} invalid`}</span>}
-          {view.fetchedAt && <span className="ml-2 text-[11px] text-text-muted">{t('deviceSummary.ddm.fetchedAt', { at: formatDateTime(view.fetchedAt) }) || `fetched ${formatDateTime(view.fetchedAt)}`}</span>}
-          {view.declarations.length > 0 && (
-            <ul className="mt-1 space-y-0.5 text-[11px]">
-              {view.declarations.slice(0, open ? 200 : 5).map((d) => (
-                <li key={d.identifier} className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono break-all text-text-secondary">{d.identifier}</span>
-                  <span className={d.status === null ? 'text-text-muted' : d.status.valid === 'invalid' ? 'text-red-400' : d.status.active ? 'text-green-400' : 'text-text-muted'}>
-                    {d.status === null ? (t('deviceSummary.ddm.notReported') || 'not reported yet')
-                      : d.status.valid === 'invalid' ? (t('deviceSummary.ddm.invalidOne') || 'invalid')
-                        : d.status.active ? (t('deviceSummary.ddm.active') || 'active') : (t('deviceSummary.ddm.inactive') || 'inactive')}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Field>
-      )}
-      {items.length > 0 && (
-        <Field label={t('deviceSummary.ddm.statusItems') || 'Status items'}>
-          <ul className="space-y-0.5 text-[11px]">
-            {items.slice(0, open ? 200 : 6).map((i) => (
-              <li key={i.item} className="flex flex-wrap gap-1.5">
-                <span className="text-text-secondary">{trCode(i.i18nKey, i.item)}</span>
-                <span className="font-mono break-all text-text-primary">{typeof i.value === 'object' ? JSON.stringify(i.value).slice(0, 80) : String(i.value)}</span>
-              </li>
-            ))}
-          </ul>
-        </Field>
-      )}
-      {((view?.declarations.length ?? 0) > 5 || items.length > 6) && (
-        <div className="px-4 py-2">
-          <LinkButton onClick={() => setOpen(!open)}>{open ? (t('approvals.showLess') || 'Show less') : (t('approvals.showMore') || 'Show more')}</LinkButton>
-        </div>
-      )}
-    </Card>
-  );
-}
 
 /** The operator's fields of a record: name, description, tags. */
 function EditDeviceDialog({ open, onClose, device, onSaved }: { open: boolean; onClose: () => void; device: DeviceDetail; onSaved: (d: DeviceDetail) => void }) {

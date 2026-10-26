@@ -70,6 +70,8 @@ export interface DeviceListFilters {
   ungrouped?: boolean;
   tags?: string[];
   endUserId?: number;
+  /** Only the devices whose lost mode is not off (enabling, on, disabling). */
+  lostMode?: boolean;
   /** Free text: label, names, serial number, model, end user. */
   q?: string;
   /** Global view only: a subset of tenants. */
@@ -99,8 +101,32 @@ const DETAIL_COLUMNS = [
   'devices.storage_capacity_bytes', 'devices.storage_available_bytes', 'devices.unenrolled_at',
   'devices.unenroll_reason', 'devices.purchase_date', 'devices.warranty_expiry', 'devices.warranty_vendor',
   'devices.warranty_status', 'devices.expected_lifetime_years', 'devices.lifecycle_status',
-  'devices.enrollment_profile_id', 'devices.created_at', 'devices.updated_at',
+  'devices.enrollment_profile_id', 'devices.created_at', 'devices.updated_at', 'devices.lost_mode_changed_at',
+  'devices.management_channel',
 ];
+
+/**
+ * The battery level of a list row, integer percent (NULL without a source): Apple's DeviceInformation BatteryLevel
+ * (0 to 1, -1 when unknown), else the bridge agent's status item. Two scalar subqueries on primary keys, correlated
+ * on the row; the list only (the export does not show it).
+ */
+const BATTERY_LEVEL_SQL = `COALESCE(
+  (SELECT CASE WHEN jsonb_typeof(ad.device_information->'BatteryLevel') = 'number'
+                AND (ad.device_information->>'BatteryLevel')::numeric >= 0
+               THEN LEAST(100, round((ad.device_information->>'BatteryLevel')::numeric * 100))::int END
+     FROM obligarth.apple_devices ad WHERE ad.device_id = devices.id AND ad.tenant_id = devices.tenant_id),
+  (SELECT CASE WHEN jsonb_typeof(s.value) = 'number' THEN LEAST(100, GREATEST(0, round((s.value)::numeric)))::int END
+     FROM obligarth.device_status_items s
+    WHERE s.tenant_id = devices.tenant_id AND s.device_id = devices.id AND s.item = 'agent.battery.level')
+) AS battery_level`;
+
+/** DDM status items the record reads for the security of an Apple device. */
+const SECURITY_STATUS_ITEMS = ['passcode.is-present', 'passcode.is-compliant', 'softwareupdate.pending-version'];
+
+const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
+const textOrNull = (v: unknown, max = 200): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
+const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+const later = (a: unknown, b: unknown): boolean => !!a && (!b || new Date(a as string).getTime() > new Date(b as string).getTime());
 
 /** Sortable columns: a whitelist, never the caller's text. */
 const SORT_COLUMNS: Record<string, string> = {
@@ -165,6 +191,8 @@ class DeviceService {
     if (row.tenant_name) summary.tenantName = row.tenant_name;
     // Absent, never null, when the rules of the device's ownership do not collect it (EX-19).
     if (r.storeSerialNumber) summary.serialNumber = row.serial_number ?? null;
+    // The list's column only (BATTERY_LEVEL_SQL): absent without a source.
+    if (row.battery_level !== null && row.battery_level !== undefined) summary.batteryLevel = Number(row.battery_level);
     return summary;
   }
 
@@ -242,6 +270,7 @@ class DeviceService {
       q.whereRaw('devices.tags \\?| ?::text[]', [f.tags]);
     }
     if (f.endUserId) q.where('devices.end_user_id', f.endUserId);
+    if (f.lostMode === true) q.whereNot('devices.lost_mode_state', 'off');
     if (Array.isArray(f.contact) && f.contact.length > 0) {
       const days = this.staleDaysSql(thresholds);
       q.where(function contact() {
@@ -289,7 +318,7 @@ class DeviceService {
     const dir = filters.sortOrder === 'desc' ? 'desc' : 'asc';
     if (sortCol) q.orderByRaw(`${sortCol} ${dir} NULLS LAST, devices.id asc`);
     else q.orderBy('devices.id', 'asc');
-    const rows = await q.select(SUMMARY_COLUMNS).limit(pageSize).offset((page - 1) * pageSize);
+    const rows = await q.select([...SUMMARY_COLUMNS, db.raw(BATTERY_LEVEL_SQL)]).limit(pageSize).offset((page - 1) * pageSize);
     const rules = new RulesCache();
     const now = new Date();
     const items = await Promise.all(rows.map((row: any) => this.toSummary(row, rules, thresholds, now)));
@@ -333,6 +362,30 @@ class DeviceService {
       .joinRaw("CROSS JOIN LATERAL jsonb_array_elements_text(COALESCE(devices.tags, '[]'::jsonb)) AS t(tag)")
       .groupByRaw('t.tag').select(db.raw('t.tag AS value')).count<{ value: string; n: string }[]>('devices.id as n')
       .orderBy('n', 'desc').orderBy('value', 'asc');
+    // The lost mode and the contact, in one pass: the same expressions as the filter of the contact (applyFilters).
+    const thresholds = await this.thresholds(isGlobalView(tenantId, view) ? 'all' : [tenantId]);
+    const days = this.staleDaysSql(thresholds);
+    const statesOf = (q: Knex.QueryBuilder) => q.first(db.raw(`
+      count(*)::int AS total,
+      count(*) FILTER (WHERE devices.compliance_state = 'non_compliant')::int AS non_compliant,
+      count(*) FILTER (WHERE devices.lost_mode_state <> 'off')::int AS lost_mode,
+      count(*) FILTER (WHERE devices.last_checkin_at IS NULL)::int AS c_never,
+      count(*) FILTER (WHERE devices.last_checkin_at >= now() - interval '24 hours')::int AS c_recent,
+      count(*) FILTER (WHERE devices.last_checkin_at < now() - interval '24 hours'
+                         AND devices.last_checkin_at >= now() - make_interval(days => ${days.sql}))::int AS c_quiet,
+      count(*) FILTER (WHERE devices.last_checkin_at < now() - make_interval(days => ${days.sql}))::int AS c_stale`,
+    [...days.bindings, ...days.bindings])) as Promise<Record<string, number> | undefined>;
+    const contactOf = (s: Record<string, number> | undefined): Record<ContactState, number> => ({
+      never: Number(s?.c_never ?? 0), recent: Number(s?.c_recent ?? 0), quiet: Number(s?.c_quiet ?? 0), stale: Number(s?.c_stale ?? 0),
+    });
+    const states = await statesOf(base());
+    // The fleet counters above the list: the devices under management only (an unenrolled record keeps its lost mode
+    // and never checks in again).
+    const managed = await statesOf(base().whereNot('devices.enrollment_state', 'unenrolled'));
+    const managedPlatform = (await base().whereNot('devices.enrollment_state', 'unenrolled').groupBy('devices.platform')
+      .select('devices.platform as value').count<{ value: string; n: string }[]>('devices.id as n').orderBy('n', 'desc').orderBy('value', 'asc'))
+      .filter((r) => r.value !== null && r.value !== undefined)
+      .map((r) => ({ value: String(r.value), count: Number(r.n) }));
     return {
       platform: await count('devices.platform'),
       ownership: await count('devices.ownership'),
@@ -342,6 +395,15 @@ class DeviceService {
       osVersion: os.map((r) => ({ platform: r.platform, value: r.os_version, count: Number(r.n) })),
       model: await count('devices.model_name'),
       tag: tagRows.map((r) => ({ value: String(r.value), count: Number(r.n) })),
+      lostMode: Number(states?.lost_mode ?? 0),
+      contact: contactOf(states),
+      managed: {
+        total: Number(managed?.total ?? 0),
+        platform: managedPlatform,
+        nonCompliant: Number(managed?.non_compliant ?? 0),
+        lostMode: Number(managed?.lost_mode ?? 0),
+        contact: contactOf(managed),
+      },
     };
   }
 
@@ -383,6 +445,8 @@ class DeviceService {
         lifecycleStatus: row.lifecycle_status ?? null,
       },
       enrollmentProfileId: row.enrollment_profile_id ?? null,
+      managementChannel: row.management_channel,
+      lostModeChangedAt: iso(row.lost_mode_changed_at),
       privacy: { collected: collectedFields(r) },
     };
     if (r.storeDeviceName) detail.deviceName = row.device_name ?? null;
@@ -390,7 +454,21 @@ class DeviceService {
       'nano_enroll_type', 'proof', 'cert_not_after', 'identity_state', 'push_state', 'has_unlock_token',
       'activation_lock_enabled', 'find_my_enabled', 'activation_lock_bypass_ref', 'ddm_enabled', 'imei', 'udid',
       'last_device_info_at', 'last_security_info_at', 'last_apps_at', 'last_profiles_at', 'last_certificates_at',
+      'device_information', 'security_info', 'model_number',
     );
+    if (row.management_channel === 'legacy_agent') {
+      // The bridge agent's last status (agent.battery.*): its own observation time.
+      const items = await db('device_status_items').where({ tenant_id: deviceTenant, device_id: id })
+        .whereIn('item', ['agent.battery.level', 'agent.battery.charging']).select('item', 'value', 'observed_at') as
+        Array<{ item: string; value: unknown; observed_at: Date }>;
+      const level = items.find((s) => s.item === 'agent.battery.level');
+      const charging = items.find((s) => s.item === 'agent.battery.charging');
+      const n = numOrNull(level?.value);
+      if (level && n !== null) {
+        detail.battery = { level: Math.min(100, Math.max(0, Math.round(n))), charging: boolOrNull(charging?.value),
+          observedAt: iso(level.observed_at), source: 'agent' };
+      }
+    }
     if (apple) {
       const a: AppleDeviceDetail = {
         enrollmentType: apple.nano_enroll_type, proof: apple.proof,
@@ -406,6 +484,59 @@ class DeviceService {
       if (r.storeHardwareIds) {
         a.imei = apple.imei ?? null;
         a.udid = apple.udid ?? null;
+      }
+      const info = asObject(apple.device_information);
+      // DeviceInformation refiltered with the rules resolved for the record (a field not collected is absent, EX-19):
+      // what was stored under broader rules (before a change of ownership) is not shown.
+      if (apple.last_device_info_at || apple.model_number) {
+        const v: NonNullable<AppleDeviceDetail['info']> = {
+          modelNumber: textOrNull(apple.model_number, 64) ?? textOrNull(info.ModelNumber, 64),
+          cloudBackup: boolOrNull(info.IsCloudBackupEnabled),
+        };
+        if (r.storeNetwork) {
+          v.carrier = textOrNull(info.CurrentCarrierNetwork, 100);
+          v.subscriberCarrier = textOrNull(info.SubscriberCarrierNetwork, 100);
+          v.roaming = boolOrNull(info.IsRoaming);
+        }
+        if (r.storePhoneNumber) {
+          v.phoneNumber = textOrNull(info.PhoneNumber, 32);
+          v.iccid = textOrNull(info.ICCID, 32);
+          v.eid = textOrNull(info.EID, 64);
+        }
+        if (r.storeNetwork && r.storeHardwareIds) {
+          v.wifiMac = textOrNull(info.WiFiMAC, 32);
+          v.bluetoothMac = textOrNull(info.BluetoothMAC, 32);
+        }
+        a.info = v;
+      }
+      const level = numOrNull(info.BatteryLevel);
+      if (level !== null && level >= 0) {
+        detail.battery = { level: Math.min(100, Math.round(level * 100)), charging: null, observedAt: iso(apple.last_device_info_at), source: 'apple' };
+      }
+      // SecurityInfo, and the DDM status items of the passcode when they were observed after it.
+      const sec = asObject(apple.security_info);
+      const status = await db('device_status_items').where({ tenant_id: deviceTenant, device_id: id })
+        .whereIn('item', SECURITY_STATUS_ITEMS).select('item', 'value', 'observed_at') as
+        Array<{ item: string; value: unknown; observed_at: Date }>;
+      const item = (name: string) => status.find((s) => s.item === name);
+      const present = item('passcode.is-present');
+      const compliant = item('passcode.is-compliant');
+      const pending = item('softwareupdate.pending-version');
+      if (apple.last_security_info_at || status.length > 0) {
+        const ddmPresent = present && later(present.observed_at, apple.last_security_info_at) ? boolOrNull(present.value) : null;
+        const ddmCompliant = compliant && later(compliant.observed_at, apple.last_security_info_at) ? boolOrNull(compliant.value) : null;
+        const caps = numOrNull(sec.HardwareEncryptionCaps);
+        // pending-version: a dictionary { os-version, build-version, target-local-date-time? } (null: nothing pending).
+        const pv = pending?.value;
+        const pendingOs = textOrNull(pv, 64) ?? textOrNull(asObject(pv)['os-version'], 64);
+        a.security = {
+          passcodePresent: ddmPresent ?? boolOrNull(sec.PasscodePresent),
+          passcodeCompliant: ddmCompliant ?? boolOrNull(sec.PasscodeCompliant),
+          passcodeCompliantWithProfiles: boolOrNull(sec.PasscodeCompliantWithProfiles),
+          hardwareEncryptionCaps: caps,
+          pendingOsVersion: pendingOs,
+        };
+        if (typeof sec.FDE_Enabled === 'boolean') a.security.fdeEnabled = sec.FDE_Enabled;
       }
       detail.apple = a;
     }

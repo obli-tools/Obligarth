@@ -4,7 +4,7 @@ import { DevicesPageLayout } from '@/components/devices/DevicesPageLayout';
 import type { InitialDeviceFilters } from '@/components/devices/DeviceTable';
 
 // The inventory (modele-donnees-mdm §11.3). A link may land on a filtered list: the cards of the dashboard
-// (?state=, ?contact=stale, ?compliance=non_compliant, ?config=error, ?platform=ios), the end users
+// (?state=, ?contact=stale, ?compliance=non_compliant, ?config=error, ?platform=ios, ?lost=1), the end users
 // (?endUserId=), the groups (?groupId=).
 export function DeviceListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -22,6 +22,7 @@ export function DeviceListPage() {
       platform: p.get('platform') || undefined,
       ownership: p.get('ownership') || undefined,
       endUserId: Number.isInteger(endUser) && endUser > 0 ? endUser : undefined,
+      lost: p.get('lost') === '1' || p.get('lost') === 'true' ? true : undefined,
     };
   }, [key]);
 

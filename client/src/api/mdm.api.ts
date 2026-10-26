@@ -1,7 +1,7 @@
 import apiClient from './client';
 import type {
   Assignment, AssignmentChange, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
-  DeviceFacets, DeviceProfileView, DeviceSummary, EndUser, EndUserImportReport, EnrollmentEpisode, GuardOutcome,
+  DeviceFacets, DeviceLocations, DeviceProfileView, DeviceSummary, EndUser, EndUserImportReport, EnrollmentEpisode, GuardOutcome,
   ImpactDevicesPage, MdmFleetPoint, MdmFleetSummary, Policy, PolicyConflict, PolicyContentV1, PolicyImpact,
   PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome, AppCatalogEntry, AppDetail,
 } from '@obligarth/shared';
@@ -34,6 +34,8 @@ export interface DeviceListParams {
   ungrouped?: boolean;
   tags?: string[];
   endUserId?: number;
+  /** Only the devices whose lost mode is not off (sent as lostMode=true). */
+  lostMode?: boolean;
   q?: string;
   /** Master tenant only (global view): a subset of the tenants. */
   tenantIds?: number[];
@@ -105,7 +107,11 @@ export const mdmApi = {
   },
   async facets(): Promise<DeviceFacets> {
     const res = await apiClient.get<ApiResponse<DeviceFacets>>('/mdm/devices/facets');
-    return res.data.data ?? { platform: [], ownership: [], enrollmentState: [], complianceState: [], configState: [], osVersion: [], model: [], tag: [] };
+    return res.data.data ?? {
+      platform: [], ownership: [], enrollmentState: [], complianceState: [], configState: [], osVersion: [], model: [], tag: [],
+      lostMode: 0, contact: { never: 0, recent: 0, quiet: 0, stale: 0 },
+      managed: { total: 0, platform: [], nonCompliant: 0, lostMode: 0, contact: { never: 0, recent: 0, quiet: 0, stale: 0 } },
+    };
   },
   async exportDevices(format: 'csv' | 'xlsx' | 'pdf', params?: DeviceListParams): Promise<{ blob: Blob; filename: string }> {
     const res = await apiClient.get('/mdm/devices/export', { params: { ...query(params), format }, responseType: 'blob' });
@@ -116,6 +122,11 @@ export const mdmApi = {
   async getDevice(id: number): Promise<DeviceDetail> {
     const res = await apiClient.get<ApiResponse<DeviceDetail>>(`/mdm/devices/${id}`);
     return res.data.data!;
+  },
+  /** The last lost-mode positions (journaled); none for a personal device or without mdm:lost_mode (the reason says so). */
+  async locations(deviceId: number, limit?: number): Promise<DeviceLocations> {
+    const res = await apiClient.get<ApiResponse<DeviceLocations>>(`/mdm/devices/${deviceId}/locations`, { params: limit ? { limit } : undefined });
+    return res.data.data ?? { available: false, unavailable: null, points: [], retentionDays: 0 };
   },
   async updateDevice(id: number, patch: DevicePatch): Promise<DeviceDetail> {
     const res = await apiClient.patch<ApiResponse<DeviceDetail>>(`/mdm/devices/${id}`, patch);

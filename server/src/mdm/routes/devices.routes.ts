@@ -1,7 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  COMPLIANCE_STATES, CONFIG_STATES, ENROLLMENT_STATES, OWNERSHIPS, PLATFORMS, type DeviceSummary,
+  COMPLIANCE_STATES, CONFIG_STATES, ENROLLMENT_STATES, OWNERSHIPS, PLATFORMS, type DeviceLocationPoint, type DeviceLocations,
+  type DeviceSummary,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { audit } from '../../audit';
@@ -17,6 +18,7 @@ import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership } from '../registry/ownership';
 import { changeDevicesGroup } from '../policies/deviceMove';
 import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
+import { LOST_MODE_LOCATION_DAYS } from '../inventory/retention';
 import { deviceConfiguration } from '../policies/configuration';
 import { requestDeviceResolution } from '../policies/triggers';
 
@@ -63,6 +65,7 @@ const ListQuery = z.object({
   tags: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map((s) => String(s).trim()).filter(Boolean)),
     z.array(z.string().max(100)).max(20).optional()),
   endUserId: intOpt,
+  lostMode: boolOpt,
   q: z.string().max(200).optional(),
   tenantIds: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map(Number)),
     z.array(z.number().int().positive()).max(200).optional()),
@@ -370,6 +373,56 @@ router.delete('/devices/:id', requireTenantCapability('devices.manage'), async (
 router.get('/devices/:id/enrollments', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
   try {
     res.json({ data: await listEpisodes(req.mdmDevice!.tenantId, req.mdmDevice!.id) });
+  } catch (err) { next(err); }
+});
+
+const LocationsQuery = z.object({
+  limit: z.preprocess((v) => (v === undefined || v === '' ? undefined : Number(v)), z.number().int().min(1).max(50).optional()),
+}).passthrough();
+
+// GET /api/mdm/devices/:id/locations?limit=20 — the last lost-mode positions (SEC-05: "only during the lost mode"):
+// only while the lost mode is on (or changing) on a device under management, never for a personal device (the table
+// is not even read), and only for whoever may use the lost mode on the device (mdm:lost_mode, write scope); otherwise
+// an empty answer that says why. A read is journaled in the device's tenant (audit-durci §3.4, P2): the critical
+// intent before the read — no coordinate leaves when it cannot be written (503 auditUnavailable) — then the count.
+router.get('/devices/:id/locations', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
+  try {
+    const parsed = LocationsQuery.safeParse(req.query);
+    if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid query', 'invalidRequest');
+    const limit = parsed.data.limit ?? 20;
+    const { id, tenantId } = req.mdmDevice!;
+    const empty = (unavailable: NonNullable<DeviceLocations['unavailable']>): DeviceLocations =>
+      ({ available: false, unavailable, points: [], retentionDays: LOST_MODE_LOCATION_DAYS });
+    res.setHeader('Cache-Control', 'no-store');
+    const d = await db('devices').where({ tenant_id: tenantId, id }).first('ownership', 'enrollment_state', 'lost_mode_state') as
+      { ownership: string; enrollment_state: string; lost_mode_state: string } | undefined;
+    if (!d) throw new AppError(404, 'Device not found');
+    if (d.ownership === 'personal') { res.json({ data: empty('personal') }); return; }
+    if (d.enrollment_state === 'unenrolled') { res.json({ data: empty('unenrolled') }); return; }
+    if (d.lost_mode_state === 'off') { res.json({ data: empty('lostModeOff') }); return; }
+    const isAdmin = req.session.role === 'admin';
+    const userId = req.session.userId!;
+    const allowed = isAdmin || ((await permissionService.canWriteDevice(userId, id, false))
+      && (await permissionService.canUseCapability(userId, id, false, 'mdm:lost_mode')));
+    if (!allowed) { res.json({ data: empty('capabilityMissing') }); return; }
+    const num = (v: unknown): number | null => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
+    const read = async (): Promise<DeviceLocationPoint[]> => {
+      const rows = await db('lost_mode_locations').where({ tenant_id: tenantId, device_id: id }).where('purge_at', '>', db.fn.now())
+        .orderBy('observed_at', 'desc').orderBy('id', 'desc').limit(limit)
+        .select('latitude', 'longitude', 'horizontal_accuracy', 'altitude', 'speed', 'course', 'observed_at', 'command_id') as
+        Array<Record<string, unknown>>;
+      return rows.map((r) => ({
+        latitude: Number(r.latitude), longitude: Number(r.longitude),
+        horizontalAccuracy: num(r.horizontal_accuracy), altitude: num(r.altitude), speed: num(r.speed), course: num(r.course),
+        observedAt: (r.observed_at instanceof Date ? r.observed_at : new Date(String(r.observed_at))).toISOString(),
+        source: r.command_id ? 'apple_command' : 'android_lost_mode',
+      }));
+    };
+    // Filed in the device's tenant (from the global view: the client's log); the result carries the count only.
+    const points = await asTargetTenant(req, tenantId, async () => audit.withIntent({
+      tenantId, action: 'lost_mode.location_viewed', target: { type: 'device', id: String(id), device: id },
+    }, await audit.fromRequest(req, tenantId), read, { resultDetails: (p) => ({ count: p.length }) }));
+    res.json({ data: { available: true, unavailable: null, points, retentionDays: LOST_MODE_LOCATION_DAYS } satisfies DeviceLocations });
   } catch (err) { next(err); }
 });
 
