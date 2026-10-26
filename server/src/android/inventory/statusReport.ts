@@ -1,7 +1,8 @@
 // Handler of the STATUS_REPORT notifications (amapi.status_report, sections 8.1 to 8.4, 9.4 step 5; criterion 6).
 // Monotonic: a report older than the last one applied only moves last_checkin_at (maximum). Otherwise: the satellite
 // (state, applied policy, posture, normalised non-compliance, API level, patch level, filtered inventory), the columns
-// of devices that changed, the apps (the whole set replaced; Google reports the work profile only), the state of the
+// of devices that changed, the apps (the set of the report: upserted, the absent ones deleted; Google reports the work
+// profile only; managed when the effective settings deliver them), the state of the
 // device's policy (applied when the applied version reaches the pushed one without a non-compliance of the policy;
 // error with <reason>:<setting> otherwise; PENDING stays delivering), then the compliance. A report of a device the
 // instance does not know yet waits for its ENROLLMENT (MissingPrerequisite); one of a quarantined device is ignored.
@@ -18,6 +19,7 @@ import { evaluateAndroidDevices } from './compliance';
 import { filterInventory } from './privacy';
 import { byodApps } from '../byod/policy';
 import { policyArtifactHash, syncPolicyArtifact } from '../policies/channel';
+import { appsMerge } from '../../mdm/inventory/appMerge';
 import { rollupConfigState } from '../../mdm/policies/artifacts';
 import { requestDeviceResolution } from '../../mdm/policies/triggers';
 import { androidSenders } from '../enrollment/senders';
@@ -132,7 +134,7 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
     await syncPolicyArtifact(trx, tenantId, deviceId, { delivered: true });
     await rollupConfigState(trx, [deviceId]);
   }
-  // Apps: the whole set replaced (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
+  // Apps: the set of the report (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
   // device keeps the apps of the tenant's catalog only (lot AN-F1, criterion 6): never a personal app, whatever the
   // report carries. A COPE device (work profile on a company device) too (lot AN-F2, section 10.5: « apps
   // personnelles jamais inventoriées »): its personal profile is the employee's.
@@ -142,12 +144,25 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
       .whereIn('identifier', apps.map((a) => a.identifier)).pluck('identifier') as string[]);
     apps = byodApps(apps, catalog);
   }
-  await trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId }).delete();
+  // Upserted (first_seen_at and version_changed_at survive a report), the absent ones deleted. Managed: an app the
+  // device's effective settings deliver (android:app[<package>], available: a setting not applicable never reaches the
+  // policy, mdm/android/compile.ts), not every app Google reports.
+  const keep = apps.map((a) => a.identifier);
+  const gone = trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId });
+  if (keep.length) gone.whereNotIn('identifier', keep);
+  await gone.delete();
   if (apps.length) {
-    await trx('device_apps').insert(apps.map((a) => ({
-      tenant_id: tenantId, device_id: deviceId, identifier: a.identifier, name: a.name, version: a.version, short_version: a.shortVersion,
-      managed: true, management_status: a.state, source: 'amapi_report',
-    })));
+    const delivered = new Set((await trx('device_effective_settings').where({ tenant_id: tenantId, device_id: deviceId, removed: false, availability: 'available' })
+      .where('setting_key', 'like', 'android:app[%').pluck('setting_key') as string[]).map((k) => k.slice('android:app['.length, -1)));
+    const at = new Date();
+    for (let i = 0; i < apps.length; i += 500) {
+      await trx('device_apps').insert(apps.slice(i, i + 500).map((a) => ({
+        tenant_id: tenantId, device_id: deviceId, identifier: a.identifier, name: a.name, version: a.version, short_version: a.shortVersion,
+        managed: delivered.has(a.identifier), management_status: a.state, is_system: a.isSystem, installer: a.installer, source: 'amapi_report',
+        first_seen_at: at, last_seen_at: at,
+      }))).onConflict(['tenant_id', 'device_id', 'identifier'])
+        .merge(appsMerge(trx, ['name', 'version', 'short_version', 'managed', 'management_status', 'is_system', 'installer', 'source', 'last_seen_at']));
+    }
   }
   // §8.3: the facts the availability depends on changed (an upgrade): resolution of the device and push of its policy.
   const apiChanged = inv.apiLevel !== null && inv.apiLevel !== undefined && row.api_level !== null && Number(row.api_level) !== Number(inv.apiLevel);

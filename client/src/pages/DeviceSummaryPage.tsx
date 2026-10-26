@@ -244,7 +244,7 @@ export function DeviceSummaryPage() {
         />
       )}
       {current === 'configuration' && <DeviceConfigurationTab deviceId={device.id} groupId={device.groupId} canManagePolicies={canManagePolicies && canWrite} />}
-      {current === 'apps' && <DeviceAppsTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.apps} />}
+      {current === 'apps' && <DeviceAppsTab deviceId={device.id} collected={collected} />}
       {current === 'profiles' && <DeviceProfilesTab deviceId={device.id} lastAt={apple?.lastInventory.profiles} />}
       {current === 'certificates' && <DeviceCertificatesTab deviceId={device.id} collected={collected} lastAt={apple?.lastInventory.certificates} />}
       {current === 'commands' && (channel === 'legacy_agent'

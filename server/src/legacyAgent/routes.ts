@@ -172,13 +172,13 @@ router.get('/devices/:id', wrap(async (req, res) => {
   const status = await db('device_status_items').where({ tenant_id: tenantId, device_id: id }).where('item', 'like', 'agent.%').orderBy('item')
     .select('item', 'value', 'observed_at') as Array<{ item: string; value: unknown; observed_at: Date }>;
   const apps = await db('device_apps').where({ tenant_id: tenantId, device_id: id, source: 'agent_report' }).orderBy('identifier').limit(2000)
-    .select('identifier', 'name', 'version', 'short_version', 'managed') as Array<Record<string, any>>;
+    .select('identifier', 'name', 'version', 'short_version', 'managed', 'is_system') as Array<Record<string, any>>;
   const detail: LegacyAgentDeviceDetail = {
     ...deviceView(r), androidId: r.android_id ?? null, claimedSerial: r.claimed_serial ?? null, samsungSerial: r.samsung_serial ?? null,
     imeis: Array.isArray(r.imeis) ? r.imeis : [], hints: jsonOf(r.hints), knoxInfo: jsonOf(r.knox_info), pollSeconds: r.poll_seconds ?? null,
     clockOffsetSeconds: r.clock_offset_s ?? null,
     status: status.map((s) => ({ item: s.item, value: jsonOf(s.value), observedAt: iso(s.observed_at) as string })),
-    apps: apps.map((a) => ({ packageName: a.identifier, label: a.name ?? null, versionName: a.version ?? null, versionCode: a.short_version ?? null, managed: a.managed === true })),
+    apps: apps.map((a) => ({ packageName: a.identifier, label: a.name ?? null, versionName: a.version ?? null, versionCode: a.short_version ?? null, managed: a.managed === true, system: a.is_system === true })),
   };
   res.json({ success: true, data: detail });
 }));

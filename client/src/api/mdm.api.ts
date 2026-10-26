@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  Assignment, AssignmentChange, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
+  Assignment, AssignmentChange, DeviceAppsMeta, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
   DeviceFacets, DeviceLocations, DeviceProfileView, DeviceSummary, EndUser, EndUserImportReport, EnrollmentEpisode, GuardOutcome,
   ImpactDevicesPage, MdmFleetPoint, MdmFleetSummary, Policy, PolicyConflict, PolicyContentV1, PolicyImpact,
   PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome, AppCatalogEntry, AppDetail,
@@ -170,9 +170,10 @@ export const mdmApi = {
     const res = await apiClient.get<ApiResponse<EnrollmentEpisode[]>>(`/mdm/devices/${id}/enrollments`);
     return res.data.data ?? [];
   },
-  async apps(id: number): Promise<DeviceAppView[]> {
-    const res = await apiClient.get<ApiResponse<DeviceAppView[]>>(`/mdm/devices/${id}/apps`);
-    return res.data.data ?? [];
+  /** The apps of a device's inventory, and when its channel last collected them (meta). */
+  async apps(id: number): Promise<{ apps: DeviceAppView[]; collectedAt: string | null }> {
+    const res = await apiClient.get<ApiResponse<DeviceAppView[]> & { meta?: DeviceAppsMeta }>(`/mdm/devices/${id}/apps`);
+    return { apps: res.data.data ?? [], collectedAt: res.data.meta?.collectedAt ?? null };
   },
   async profiles(id: number): Promise<DeviceProfileView[]> {
     const res = await apiClient.get<ApiResponse<DeviceProfileView[]>>(`/mdm/devices/${id}/profiles`);

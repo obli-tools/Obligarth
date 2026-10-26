@@ -106,7 +106,7 @@ export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
   pollSeconds: number | null;
   clockOffsetSeconds: number | null;
   status: Array<{ item: string; value: unknown; observedAt: string }>;
-  apps: Array<{ packageName: string; label: string | null; versionName: string | null; versionCode: string | null; managed: boolean }>;
+  apps: Array<{ packageName: string; label: string | null; versionName: string | null; versionCode: string | null; managed: boolean; system?: boolean }>;
 }
 
 /** One entry of GET /api/legacy-agent/devices/:id/actions: the menu of a bridge agent's device. */

@@ -8,6 +8,7 @@ import type {
   EpisodeEndReason, IdentityState, LostModeState, ManagementChannel, ManagementMode, NanoEnrollType, Ownership, Platform,
   PushState, UnenrollReason,
 } from './enums';
+import type { SourceScope } from './effective';
 import type { ContactState } from './states';
 
 /** A reason of non-compliance (MVP evaluator, §4.4; the Android evaluator, android/inventory/compliance.ts): no
@@ -127,6 +128,44 @@ export interface DeviceAppView {
   managed: boolean; managementStatus: string | null; source: string;
   bundleSize: number | null; dynamicSize: number | null; hasConfiguration: boolean | null; isValidated: boolean | null;
   appId: number | null; firstSeenAt: string; lastSeenAt: string;
+  /** The platform family of the device. */
+  platformFamily: 'apple' | 'android';
+  /** managed (by the MDM), else system (a system app or service), else user (installed by the user). */
+  category: DeviceAppCategory;
+  /** A system app (Android: the agent's flag, AMAPI's applicationSource); null when the channel does not say. */
+  system: boolean | null;
+  /** Has a launcher activity (bridge agent 1.0.2 and later); null when unknown. */
+  launchable: boolean | null;
+  /** The version shown: Apple ShortVersion ?? Version; Android versionName ?? versionCode. */
+  displayVersion: string | null;
+  /** The build: Apple Version (CFBundleVersion); Android versionCode. */
+  build: string | null;
+  /** The installer package (Android). */
+  installer: string | null;
+  installedAt: string | null;
+  /** The last update: reported by the device, else the last change of version the server saw. */
+  updatedAt: string | null;
+  /** The icon: the catalog's (https), else the one a device of the tenant sent (/api/mdm/devices/:id/app-icons/:sha256). */
+  iconUrl: string | null;
+  /** The catalog app of the identifier (the tenant's, or a master app shared with it). */
+  catalogApp: { id: number; uuid: string; name: string; shared: boolean } | null;
+  /** The assignments that deliver the app to this device (its effective settings). */
+  managedBy: DeviceAppManagedBy[];
+  /** The delivery: its artifact (Apple), the last install command (bridge agent), the device's policy (AMAPI). */
+  delivery: { via: 'artifact' | 'agent_command' | 'amapi'; state: string; reasons: string[]; at: string | null } | null;
+}
+
+export type DeviceAppCategory = 'managed' | 'user' | 'system';
+
+/** An assignment that delivers an app to a device (device_effective_settings <family>:app[<identifier>]). */
+export interface DeviceAppManagedBy {
+  assignmentId: number; scope: SourceScope; scopeId: number | null; scopeName: string | null; availability: string;
+}
+
+/** The meta of GET /api/mdm/devices/:id/apps. */
+export interface DeviceAppsMeta {
+  /** When the channel last collected the apps (Apple: the app list; Android: the last status report; agent: the last inventory). */
+  collectedAt: string | null;
 }
 
 /** A configuration profile installed on an Apple device (ProfileList). */

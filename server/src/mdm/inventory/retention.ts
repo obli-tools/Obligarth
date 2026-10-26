@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import { requestEndUserResolution } from '../policies/triggers';
+import { ICON_FAILED_DAYS } from './pngIcon';
 
 // =============================================================================
 // Retention rules of the data model (docs: modele-donnees-mdm §5.5, EX-17,
@@ -13,7 +14,10 @@ import { requestEndUserResolution } from '../policies/triggers';
 //     devices that lose their end user are resolved again: the variables
 //     {{user.…}} of their policies no longer have a value, §7.12);
 //   - device_status_history: 90 days;
-//   - lost_mode_locations: purge_at (62 days at most, by constraint).
+//   - lost_mode_locations: purge_at (62 days at most, by constraint);
+//   - app_icons: a lease unanswered for 7 days (a failure of a device is
+//     kept 30 days: it is not asked again meanwhile); an icon (or its
+//     absence) whose app no device of the tenant has, untouched for 90 days.
 // The record of a device past its retention_until is NOT one of these rules:
 // a record is deleted only after its enrollments were purged at apple-edge
 // (integration §13.3), which no generic caller can do. The retention job
@@ -37,6 +41,10 @@ export const DEPARTED_END_USER_DAYS = 90;
 export const STATUS_HISTORY_DAYS = 90;
 /** Days a lost-mode position is kept, Apple and Android alike (lost_mode_locations_purge_cap allows 62). */
 export const LOST_MODE_LOCATION_DAYS = 30;
+/** Days an icon lease (app_icons 'pending') is kept unanswered; days an icon outlives the last device that had its app
+ *  (stored or none, by its updated_at: a device sending it again moves it). */
+export const ICON_LEASE_DAYS = 7;
+export const ICON_ORPHAN_DAYS = 90;
 
 const days = (n: number) => n * 86_400_000;
 
@@ -102,6 +110,27 @@ export const mdmRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
       const ids = await trx('lost_mode_locations').where({ tenant_id: tenantId }).where('purge_at', '<=', now)
         .orderBy('purge_at', 'asc').limit(limit).pluck('id') as string[];
       return ids.length ? trx('lost_mode_locations').where({ tenant_id: tenantId }).whereIn('id', ids).del() : 0;
+    },
+  },
+  {
+    name: 'app_icons',
+    description: `App icons: leases unanswered for ${ICON_LEASE_DAYS} days, icons of apps no device of the tenant has had for ${ICON_ORPHAN_DAYS} days`,
+    async purge(trx, tenantId, now, limit) {
+      const leaseCutoff = new Date(now.getTime() - days(ICON_LEASE_DAYS));
+      const orphanCutoff = new Date(now.getTime() - days(ICON_ORPHAN_DAYS));
+      const failedCutoff = new Date(now.getTime() - days(ICON_FAILED_DAYS));
+      const res = await trx.raw(`
+        DELETE FROM app_icons ic USING (
+          SELECT c.tenant_id, c.platform_family, c.identifier FROM app_icons c
+           WHERE c.tenant_id = :tenantId
+             AND ((c.state = 'pending' AND (c.requested_at IS NULL OR c.requested_at < :leaseCutoff)
+                   AND (c.failed_at IS NULL OR c.failed_at < :failedCutoff))
+               OR (c.state IN ('stored', 'none') AND c.updated_at < :orphanCutoff
+                   AND NOT EXISTS (SELECT 1 FROM device_apps da WHERE da.tenant_id = c.tenant_id AND da.identifier = c.identifier)))
+           LIMIT :limit) due
+         WHERE ic.tenant_id = due.tenant_id AND ic.platform_family = due.platform_family AND ic.identifier = due.identifier`,
+      { tenantId, leaseCutoff, orphanCutoff, failedCutoff, limit }) as { rowCount: number | null };
+      return Number(res.rowCount ?? 0);
     },
   },
 ]);

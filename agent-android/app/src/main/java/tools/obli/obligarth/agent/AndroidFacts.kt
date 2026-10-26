@@ -10,6 +10,9 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.drawable.Drawable
 import android.net.ConnectivityManager
 import android.os.BatteryManager
 import android.os.Build
@@ -20,8 +23,11 @@ import android.provider.Settings
 import android.telephony.TelephonyManager
 import tools.obli.obligarth.agent.core.Bounds
 import tools.obli.obligarth.agent.core.DeviceFacts
+import tools.obli.obligarth.agent.core.IconRender
+import tools.obli.obligarth.agent.core.Icons
 import tools.obli.obligarth.agent.core.clip
 import tools.obli.obligarth.agent.core.Sha256
+import java.io.ByteArrayOutputStream
 import java.net.Inet4Address
 import java.net.NetworkInterface
 
@@ -134,6 +140,13 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
     @Suppress("DEPRECATION")
     private fun apps(withSystem: Boolean): List<Map<String, Any?>> {
         val list = try { pm.getInstalledPackages(0) } catch (e: Exception) { emptyList<PackageInfo>() }
+        // One query for the whole set: the packages with an activity in the launcher (null when unreadable).
+        val launchable: Set<String>? = try {
+            pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+                .mapNotNull { it.activityInfo?.packageName }.toSet()
+        } catch (e: Exception) {
+            null
+        }
         return list.asSequence().mapNotNull { p ->
             val ai = p.applicationInfo ?: return@mapNotNull null
             val system = (ai.flags and (ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP)) != 0
@@ -144,11 +157,42 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
                 "versionName" to p.versionName?.take(64),
                 "versionCode" to (if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong()).coerceAtLeast(0),
                 "system" to system,
+                "launchable" to launchable?.contains(p.packageName),
                 "installer" to safe { pm.getInstallerPackageName(p.packageName) },
                 "firstInstallAt" to p.firstInstallTime / 1000,
                 "lastUpdateAt" to p.lastUpdateTime / 1000,
             )
         }.take(2000).toList()
+    }
+
+    /**
+     * The launcher icon of a package as a square PNG (§4.6, 1.0.2): drawn on an ARGB bitmap of [sizePx] (an adaptive
+     * icon included), compressed, tried again at [Icons.FALLBACK_PX] when larger than [Icons.MAX_PNG_BYTES]. NoIcon
+     * when the package declares no icon; null when it cannot be rendered (absent package, too large, any error,
+     * out of memory included).
+     */
+    override fun icon(packageName: String, sizePx: Int): IconRender? = try {
+        val ai = pm.getApplicationInfo(packageName, 0)
+        if (ai.icon == 0) IconRender.NoIcon else {
+            val drawable = pm.getApplicationIcon(ai)
+            (render(drawable, sizePx) ?: render(drawable, Icons.FALLBACK_PX))?.let { IconRender.Png(it) }
+        }
+    } catch (e: Throwable) {
+        null
+    }
+
+    private fun render(drawable: Drawable, px: Int): ByteArray? {
+        val bitmap = Bitmap.createBitmap(px, px, Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = Canvas(bitmap)
+            drawable.setBounds(0, 0, px, px)
+            drawable.draw(canvas)
+            val out = ByteArrayOutputStream()
+            if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, out)) return null
+            return out.toByteArray().takeIf { it.size <= Icons.MAX_PNG_BYTES }
+        } finally {
+            bitmap.recycle()
+        }
     }
 
     private fun storage(): Pair<Long?, Long?> = try {
