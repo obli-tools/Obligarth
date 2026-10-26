@@ -73,7 +73,8 @@
     "integrations": "Integrations",
     "apps": "Apps",
     "androidPlatform": "Android",
-    "legacyAgent": "Android agent"
+    "legacyAgent": "Android agent",
+    "privacy": "Privacy"
   },
   "login": {
     "title": "Sign in to your account",
@@ -3321,7 +3322,8 @@
         "no_active_token": "No active content token",
         "unsigned_profiles": "Profiles not signed",
         "default_notice": "Default notice, for trials only",
-        "default_rules": "Default privacy rules, for trials only",
+        "default_rules": "Default privacy rules: publish a privacy profile for each ownership enrolled",
+        "notice_incomplete": "Employee notice not complete (data controller, contact): enrollments are refused outside the laboratory",
         "relay_idle": "Declarative management relay without activity",
         "suspended": "Suspended at the device service",
         "retiring": "Being retired",
@@ -3835,8 +3837,12 @@
     "tenantFrozen": "The commands of this tenant are frozen.",
     "commandRefused": "The command cannot be sent to this device.",
     "locationDisabledByPrivacy": "The privacy profile of this device's ownership does not allow locating it.",
+    "invalidNoticeSettings": "A setting of the notice is not accepted (too long, or holding markup).",
     "invalidPrivacyRules": "The privacy rules are not valid.",
     "justificationRequired": "A justification of 10 characters at least is required.",
+    "noticeIncomplete": "The notice of the employees is not complete (data controller, contact): enrollments are refused.",
+    "noticeSettingsChanged": "The settings of the notice changed meanwhile: read them again.",
+    "noticeVersionNotFound": "This version of the notice does not exist.",
     "privacyProfileChangePending": "A change of this privacy profile already waits for its approval.",
     "privacyProfileUnchanged": "The privacy profile already has these rules.",
     "privacyRetentionChangePending": "A change of the retention already waits for its approval.",
@@ -4684,7 +4690,9 @@
         "not_amapi": "Not an Android Enterprise device.",
         "not_found": "Device not found.",
         "use_erase": "A company device leaves management by an erase.",
-        "lost_mode_cooldown": "The user left the lost mode, or the password was reset, less than 12 hours ago: Google refuses the lost mode until then."
+        "lost_mode_cooldown": "The user left the lost mode, or the password was reset, less than 12 hours ago: Google refuses the lost mode until then.",
+        "automatic": "Sent by the device itself while in lost mode.",
+        "locationDisabledByPrivacy": "Location disabled by the privacy profile"
       },
       "flags": {
         "PRESERVE_RESET_PROTECTION_DATA": "Keep the factory reset protection",
@@ -5260,6 +5268,256 @@
       "package_reserved": "Package reserved by Obligarth.",
       "web_app_no_managed_configuration": "A web app has no managed configuration.",
       "secret_not_found": "Secret not found in the vault of the tenant."
+    }
+  },
+  "privacy": {
+    "title": "Privacy",
+    "subtitle": "What the organisation collects from its devices, how long it keeps it, and what the employees are told before enrolling.",
+    "tabs": {
+      "profiles": "Profiles",
+      "retention": "Retention",
+      "notice": "Notice"
+    },
+    "requestFiledClient": "Request #{{id}} filed: a client approver of the tenant reviews it.",
+    "requestFiledPlatform": "Request #{{id}} filed: another platform administrator reviews it.",
+    "justification": "Justification",
+    "justificationPlaceholder": "Why this change (10 characters at least)",
+    "requestApproval": "Request approval",
+    "discard": "Discard the changes",
+    "readOnly": "You can read these settings; changing them needs the capability \"{{capability}}\".",
+    "seeApprovals": "See the approvals",
+    "requestedAt": "Filed {{date}}, expires {{expires}}",
+    "current": "In force",
+    "approvalRef": "request #{{id}}",
+    "units": {
+      "days_one": "{{count}} day",
+      "days_other": "{{count}} days",
+      "months_one": "{{count}} month",
+      "months_other": "{{count}} months",
+      "daysShort": "days",
+      "monthsShort": "months"
+    },
+    "rules": {
+      "serialNumber": {
+        "label": "Serial number",
+        "hint": "Identifies the device in the inventory."
+      },
+      "hardwareIds": {
+        "label": "Hardware identifiers",
+        "hint": "IMEI, MEID, EID and MAC addresses."
+      },
+      "deviceName": {
+        "label": "Device name",
+        "hint": "The name the user gave the device."
+      },
+      "phoneNumber": {
+        "label": "Phone number",
+        "hint": "Phone number, ICCID and subscriptions."
+      },
+      "network": {
+        "label": "Network",
+        "hint": "Carrier, roaming, Wi-Fi and Bluetooth addresses."
+      },
+      "lostModeLocation": {
+        "label": "Location in lost mode",
+        "hint": "The position of a lost device, only while the lost mode is on."
+      },
+      "installedApps": {
+        "label": "Installed applications",
+        "hint": "Every application, or only those the organisation manages.",
+        "scope": {
+          "all": "All",
+          "managed_only": "Managed only"
+        }
+      },
+      "certificates": {
+        "label": "Certificates",
+        "hint": "Every certificate, or only those the organisation installed.",
+        "scope": {
+          "all": "All",
+          "managed_only": "Managed only"
+        }
+      },
+      "collected": "Collected",
+      "notCollected": "Not collected"
+    },
+    "profiles": {
+      "intro": "What the organisation collects from its devices, per ownership. Each change is a request that a second person approves before it applies.",
+      "pendingShort": "Change waiting",
+      "ownership": "Ownership",
+      "version": "Version {{version}}",
+      "defaults": "Default rules",
+      "since": "since {{date}}",
+      "defaultsHint": "No version published for this ownership: the rules applied before the privacy profiles stay in force (Android devices then collect less than shown, until a first version).",
+      "imposed": "Imposed",
+      "imposedHint": "Fixed for this ownership: no profile may change it.",
+      "changed": "Changed",
+      "dpiaBanner": "Before filing: update the data protection impact assessment (DPIA) and consult the employee representatives. The notice of the employees is generated again once the version is published.",
+      "pending": "Request #{{id}} waits for its approval",
+      "narrowed": "Collects less:",
+      "widened": "Collects more:",
+      "impact": "Impact of the change",
+      "computing": "Computing the impact…",
+      "devices_one": "{{count}} device of this ownership (Apple {{apple}}, Android {{android}}, Android agent {{agent}})",
+      "devices_other": "{{count}} devices of this ownership (Apple {{apple}}, Android {{android}}, Android agent {{agent}})",
+      "scrub": "Removed at the publication: {{apps}} application(s) not managed, {{locations}} position(s).",
+      "narrowedHint": "The data no longer collected are cleaned from the records once the version is published.",
+      "widenedHint": "New data will be collected: the employees are told by the notice, generated again at the publication.",
+      "firstVersionHint": "First version of this ownership: it replaces the default rules, and Android devices may then collect more than before (IMEI of a corporate device, network of a personally enabled one) if these rules allow it.",
+      "history": "Versions"
+    },
+    "retention": {
+      "intro": "How long the tenant keeps each category of data. A change is a request that a second person approves: a longer duration applies at the approval, a shorter one {{days}} days after it. A decrease waiting for its date is cancelled the same way, by asking the value in force again.",
+      "requestPending": "Request #{{id}} waits for its approval",
+      "decreasesOn": "Shorter durations approved take effect on {{date}}.",
+      "defaultRange": "Default {{default}} · from {{min}} to {{max}} {{unit}}",
+      "default": "Default",
+      "pendingValue": "→ {{value}} soon",
+      "cancelDecrease": "Cancel the decrease",
+      "outOfRange": "From {{min}} to {{max}}",
+      "summary": "The request",
+      "raised": "Longer, at the approval:",
+      "lowered": "Shorter, {{days}} days after the approval:",
+      "restored": "Decrease cancelled:",
+      "loweredHint": "Once in force, a shorter duration also purges the data already older than it.",
+      "lastChange": "Change {{version}}, {{date}}",
+      "auditLog": "Audit log",
+      "auditPending": "→ {{value}} on {{date}}",
+      "auditSettings": "Settings of the audit log",
+      "auditHint": "Set per tenant by the platform administrators, in the settings of the audit log.",
+      "fixedTitle": "Durations of the platform",
+      "fixedHint": "Set for every tenant by the platform; shown for the record of processing.",
+      "categories": {
+        "unenrolled_corporate_days": {
+          "label": "Corporate device out of management",
+          "hint": "Its record, after the unenrollment."
+        },
+        "unenrolled_corporate_personal_days": {
+          "label": "Corporate device, personally enabled, out of management",
+          "hint": "Its record, after the unenrollment."
+        },
+        "unenrolled_personal_days": {
+          "label": "Personal device out of management",
+          "hint": "Its record, after the unenrollment."
+        },
+        "departed_end_user_days": {
+          "label": "Departed employee",
+          "hint": "The link between a device and an employee who left."
+        },
+        "lost_mode_location_days": {
+          "label": "Positions in lost mode",
+          "hint": "The positions of a lost device."
+        },
+        "technical_log_months": {
+          "label": "Technical log",
+          "hint": "The commands sent to the devices and their timeline."
+        },
+        "status_history_days": {
+          "label": "Status history",
+          "hint": "The history of the declarative status of the devices."
+        },
+        "notice_ack_months": {
+          "label": "Acknowledgements of the notice",
+          "hint": "The proof that an employee read the notice before an enrollment."
+        }
+      },
+      "fixed": {
+        "enrollment_sessions": "Enrollment sessions",
+        "enrollment_tokens": "Enrollment links and tokens",
+        "inventory_commands": "Inventory requests",
+        "ade_removed_devices": "Devices removed from Apple Business",
+        "notification_log": "Notification log",
+        "live_alerts": "Live alerts",
+        "app_icons_orphaned": "Icons of applications no longer installed",
+        "android_inbox": "Android events applied",
+        "backups": "Backups"
+      }
+    },
+    "notice": {
+      "intro": "The notice an employee reads before enrolling a device: generated from the privacy profiles, the retention and the settings below, in French and in English.",
+      "complete": "Notice complete",
+      "incomplete": "Notice incomplete",
+      "stageBadge": "Stage: {{stage}}",
+      "missingList": "Missing: {{list}}.",
+      "refused": "Every enrollment of the tenant is refused until the notice is complete.",
+      "labServed": "In the laboratory stage the notice is shown anyway; from the pilot stage on, the enrollments are refused until it is complete.",
+      "publicPage": "Public page of the notice",
+      "copyLink": "Copy the link",
+      "open": "Open",
+      "publicHint": "Anyone with the link reads the notice in force, before any enrollment (the link carries the key of the enrollment links).",
+      "noPublicPage": "No public page: this instance serves no device surface yet.",
+      "settings": "Settings of the notice",
+      "settingsVersion": "Version {{version}}, {{date}}",
+      "plainText": "Plain text only: no markup (angle brackets are refused). Changed without a second person; each change is written to the audit log.",
+      "required": "A complete notice needs the data controller, and the data protection officer or another contact.",
+      "unchanged": "Nothing changed.",
+      "saved": "Settings saved: the notices are generated again.",
+      "stale": "Someone changed these settings meanwhile: they are read again, check them before saving.",
+      "markup": "Angle brackets and control characters are not accepted.",
+      "tooLong": "{{max}} characters at most.",
+      "preview": "The notice",
+      "platform": "Platform",
+      "locale": "Language",
+      "inForce": "In force",
+      "generatedAt": "Generated {{date}}",
+      "notPublished": "Not generated yet: preview",
+      "notDisplayed": "Not shown at enrollment yet",
+      "notDisplayedHint": "The notice of the Android company devices is generated, not yet shown at their enrollment.",
+      "consentSummary": "Summary in the enrollment profile",
+      "versions": "Versions",
+      "supersededAt": "replaced {{date}}",
+      "fromDefaults": "default rules",
+      "fromProfile": "profile version {{version}}",
+      "acknowledgements_one": "{{count}} acknowledgement",
+      "acknowledgements_other": "{{count}} acknowledgements",
+      "fields": {
+        "controllerName": {
+          "label": "Data controller",
+          "hint": "The employer, its legal name."
+        },
+        "controllerAddress": {
+          "label": "Address of the data controller",
+          "hint": "Its postal address."
+        },
+        "dpoContact": {
+          "label": "Data protection officer",
+          "hint": "Name, e-mail or address of the DPO."
+        },
+        "contact": {
+          "label": "Other contact",
+          "hint": "Who answers the employees' questions, when there is no DPO."
+        },
+        "recipientsExtra": {
+          "label": "Other recipients",
+          "hint": "Who else receives the data, beyond the operator of the platform and Apple or Google."
+        },
+        "introFr": {
+          "label": "Paragraph of the organisation (French)",
+          "hint": "Shown after who manages the device, in the French notice."
+        },
+        "introEn": {
+          "label": "Paragraph of the organisation (English)",
+          "hint": "Shown after who manages the device, in the English notice."
+        }
+      },
+      "missing": {
+        "controllerName": "the data controller",
+        "contact": "a contact (the DPO or another)"
+      },
+      "stage": {
+        "lab": "Laboratory",
+        "pilot": "Pilot",
+        "production": "Production"
+      },
+      "locales": {
+        "fr": "French",
+        "en": "English"
+      },
+      "channels": {
+        "apple_session": "Apple enrollment",
+        "android_byod_invitation": "Android invitation",
+        "android_signin": "Android sign-in"
+      }
     }
   }
 }

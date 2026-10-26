@@ -12,6 +12,10 @@ import { fill, isSurfaceLocale, textsFor } from './i18n';
 // notice_version_id is one), acknowledgement kept in enrollment_sessions
 // (notice_version_id, acknowledged_at, notice_ack_id) for want of USR-01's
 // table.
+// Since P0-13 T5 (USR-01) the generated notice of the tenant replaces it in
+// every process (privacy/notice/provider.ts, installed by
+// registerPrivacyModule): versions in notice_versions, acknowledgements in
+// notice_acknowledgements; the default provider serves the unit tests only.
 // =============================================================================
 
 export interface EnrollmentNotice {
@@ -27,8 +31,9 @@ export interface EnrollmentNotice {
 export interface EnrollmentNoticeProvider {
   noticeFor(trx: Knex | Knex.Transaction, tenantId: number, ownership: Ownership, locale: string,
     ctx: { method: EnrollmentProfileMethod; organization: string }): Promise<EnrollmentNotice | null>;
+  /** endUserId: the end user of the session when known (its link or invitation). */
   recordAcknowledgement(trx: Knex.Transaction, tenantId: number,
-    ack: { sessionId: string; versionId: string; locale: string; at: Date }): Promise<string>;   // acknowledgement id
+    ack: { sessionId: string; versionId: string; locale: string; at: Date; endUserId?: number | null }): Promise<string>;   // acknowledgement id
 }
 
 /** A UUID derived from a name (SHA-256, version nibble 8): the stable version id of a default notice. */

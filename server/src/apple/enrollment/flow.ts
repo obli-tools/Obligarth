@@ -5,6 +5,7 @@ import { config } from '../../config';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { logger } from '../../utils/logger';
+import { isNoticeIncomplete } from '../../privacy/notice/errors';
 import { edgeActorOf } from '../actors';
 import { raiseAlert, resolveAlert } from '../alerts/service';
 import { isAppleEdgeError } from '../edge/errors';
@@ -118,7 +119,8 @@ export async function acknowledgeLink(t: TenantFacts, token: string, locale: Sur
       nonce_hash: nonce.hash, nonce_expires_at: new Date(now.getTime() + NONCE_TTL_MS),
       notice_version_id: notice.versionId, acknowledged_at: now, locale, expires_at: new Date(now.getTime() + OTA_SESSION_TTL_MS),
     });
-    const ackId = await enrollmentNotice().recordAcknowledgement(trx, t.tenantId, { sessionId, versionId: notice.versionId, locale, at: now });
+    const ackId = await enrollmentNotice().recordAcknowledgement(trx, t.tenantId,
+      { sessionId, versionId: notice.versionId, locale, at: now, endUserId: link.endUserId });
     await trx('enrollment_sessions').where({ tenant_id: t.tenantId, id: sessionId }).update({ notice_ack_id: ackId });
     return { kind: 'acknowledged', sessionId, nonce: nonce.value };
   }));
@@ -319,7 +321,9 @@ export interface SignOptions {
  * Outside any transaction: the enrollment configuration (a cached configuration without topic is read again: a
  * push certificate may have just been imported), the SCEP challenge bound to the session (and to its MachineInfo
  * for ADE), the composition and the signature (unsigned while no identity is imported, unless
- * APPLE_REQUIRE_SIGNED_PROFILES). The caller moves the session; nothing is written here but the alerts.
+ * APPLE_REQUIRE_SIGNED_PROFILES). The caller moves the session; nothing is written here but the alerts and, on
+ * reading the notice, the publication of its current version (with its audit). The notice is read before the
+ * challenge is created: an incomplete notice outside the laboratory (D7) leaves nothing at apple-edge.
  */
 export async function composeSigned(t: TenantFacts, s: SessionToSign, actor: DbActor, o: SignOptions): Promise<SignOutcome> {
   const edgeActor = { actor: edgeActorOf(actor) };
@@ -330,16 +334,17 @@ export async function composeSigned(t: TenantFacts, s: SessionToSign, actor: DbA
       await raiseAlert(actor, t.tenantId, 'apns.no_certificate').catch(() => undefined);
       return { kind: 'not_ready' };
     }
-    const challenge = await appleEdge.createScepChallenge(t.key, {
-      session_ref: s.id, ttl_seconds: o.ttlSeconds, ...(o.machineInfoId ? { machine_info_id: o.machineInfoId } : {}),
-    }, edgeActor);
-    const tx = textsFor(s.locale);
-    const v = { org: t.name };
+    // The notice before the challenge (D7: refused outside the laboratory, nothing created at apple-edge).
     const consent: Record<string, string> = {};
     for (const lang of ['en', 'fr'] as const) {
       const n = await asTenant(t.tenantId, actor, () => enrollmentNotice().noticeFor(db, t.tenantId, s.ownership, lang, { method: s.method, organization: t.name }));
       if (n?.consentSummary) consent[lang === 'en' ? 'default' : lang] = n.consentSummary;
     }
+    const challenge = await appleEdge.createScepChallenge(t.key, {
+      session_ref: s.id, ttl_seconds: o.ttlSeconds, ...(o.machineInfoId ? { machine_info_id: o.machineInfoId } : {}),
+    }, edgeActor);
+    const tx = textsFor(s.locale);
+    const v = { org: t.name };
     const unsigned = composeEnrollmentProfile({
       key: t.key, config: cfg, challenge: challenge.challenge, sessionId: s.id, organization: t.name,
       displayName: fill(tx.profileName, v), description: fill(tx.profileDescription, v), scepName: tx.scepName, mdmName: tx.mdmName,
@@ -358,6 +363,8 @@ export async function composeSigned(t: TenantFacts, s: SessionToSign, actor: DbA
     if (signed) await signingAlertState(false, actor);
     return { kind: 'ok', body, signed, challengeId: challenge.challenge_id.toLowerCase() };
   } catch (err) {
+    // The notice became incomplete outside the laboratory since its page (P0-13 T5, D7): no profile, retried later.
+    if (isNoticeIncomplete(err)) return { kind: 'retry', code: 'noticeIncomplete' };
     if (err instanceof ProfileCompositionError || isAppleEdgeError(err)) {
       logger.warn({ tenantId: t.tenantId, code: (err as { code?: unknown }).code }, 'enrollment profile not issued');
       return { kind: 'retry', code: String((err as { code?: unknown }).code ?? '') || null };

@@ -28,7 +28,8 @@ export interface AppleConfig {
   /** https://mdm.<domain>, no path, no trailing slash; same as apple-edge's. */
   mdmPublicBase: string | null;
   requireSignedProfiles: boolean;
-  /** APPLE_ALLOW_DEFAULT_NOTICE: the default notice and privacy rules, outside development and test. */
+  /** APPLE_ALLOW_DEFAULT_NOTICE: read for the existing .env files, without effect since P0-13 (the privacy profiles and the
+   *  generated notice are always installed; P0-13 T11 refuses it outside the stage lab). */
   allowDefaultNotice: boolean;
   allowPushKeyImport: boolean;
   /** APPLE_MDM_VENDOR_CERT_SHA256: SHA-256 fingerprints (lower-case hex) of the instance's "MDM Vendor" certificates,
@@ -234,7 +235,8 @@ export function appleStartupErrors(c: AppleConfig): string[] {
   return errors;
 }
 
-/** May the default notice and privacy rules serve an enrollment (section 10.7)? */
+/** May the default notice and privacy rules serve an enrollment (section 10.7)? Without effect since P0-13 T5: no start-up
+ *  check reads it any more (the default notices are replaced in every process, privacy/notice). */
 export function defaultNoticeAllowed(c: AppleConfig, nodeEnv: string): boolean {
   return c.allowDefaultNotice || nodeEnv === 'development' || nodeEnv === 'test';
 }

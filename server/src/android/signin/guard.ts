@@ -4,6 +4,7 @@
 // issued (the token handed to that device, not used yet). Kept apart from flow.ts so that enrollment/tokens.ts and
 // enrollment/handler.ts depend on it without a cycle.
 import type { Knex } from 'knex';
+import { linkNoticeAcknowledgement } from '../../privacy/notice/link';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -33,8 +34,10 @@ export async function signinSessionForEnrollment(trx: Knex.Transaction, tenantId
   return { id: String(row.id) };
 }
 
-/** The session used by the device just recorded (same transaction). */
+/** The session used by the device just recorded (same transaction). The acknowledgement of its notice takes the device
+ *  (P0-13 T5: it outlives the session). */
 export async function markSigninSessionUsed(trx: Knex.Transaction, tenantId: number, sessionId: string, deviceId: number): Promise<void> {
   await trx('android_signin_sessions').where({ tenant_id: tenantId, id: sessionId, state: 'issued' })
     .update({ state: 'used', used_at: trx.fn.now(), device_id: deviceId, updated_at: trx.fn.now() });
+  await linkNoticeAcknowledgement(trx, tenantId, 'android_signin_sessions', sessionId);
 }

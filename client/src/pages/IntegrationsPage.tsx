@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { CheckCircle2, CircleDashed, Download, ExternalLink, KeyRound, Plus, RefreshCw, Server, Trash2, Upload, XCircle } from 'lucide-react';
 import {
   isMasterTenant, MANUAL_DEADLINE_KINDS, SocketEvents,
   type AdeServerState, type AdeServerView, type DeadlineLevel, type DeadlineView, type IntegrationCardState, type IntegrationsSummary,
-  type ManualDeadlineKind, type PushCertState, type PushOverview, type PushRequestView, type ReadinessItem, type ReadinessState,
+  type ManualDeadlineKind, type PushCertState, type PushOverview, type PushRequestView, type ReadinessItem, type ReadinessState, type TenantCapability,
   type VppOperationListItem, type VppTokenState, type VppTokenView,
 } from '@obligarth/shared';
 import { integrationsApi, isPendingApproval, type Download as FileDownload } from '@/api/integrations.api';
@@ -130,10 +131,16 @@ const READINESS_FALLBACK: Record<string, string> = {
   'signing.identity': 'Signing of the enrollment profiles', 'notice.custom': 'Notice of the employees', 'privacy.profile': 'Privacy rules',
   'ddm.relay': 'Declarative management relay',
 };
+/** The items settled on the privacy page (P0-13 T7): their label leads there. */
+const READINESS_LINK: Record<string, string> = { 'notice.custom': '/privacy?tab=notice', 'privacy.profile': '/privacy?tab=profiles' };
+const PRIVACY_READER_CAPS: readonly TenantCapability[] = ['settings', 'audit.read', 'mdm.privacy.manage'];
 
 export function ReadinessPanel({ items, compact = false }: { items: ReadinessItem[]; compact?: boolean }) {
   const { t } = useTranslation();
   const shown = compact ? items.filter((i) => i.state !== 'ready' && i.state !== 'not_applicable') : items;
+  // The privacy page opens with settings, audit.read or mdm.privacy.manage (its route's gate).
+  const privacyReader = useAuthStore((s) => s.user?.role === 'admin'
+    || (s.permissions?.tenantCapabilities ?? []).some((c) => PRIVACY_READER_CAPS.includes(c)));
   if (compact && shown.length === 0) return null;
   return (
     <section className="rounded-lg border border-border bg-bg-secondary p-4">
@@ -143,7 +150,9 @@ export function ReadinessPanel({ items, compact = false }: { items: ReadinessIte
           <li key={i.key} className="flex items-center gap-2 text-sm">
             {i.state === 'ready' ? <CheckCircle2 className="w-4 h-4 text-status-up" /> : i.state === 'error' ? <XCircle className="w-4 h-4 text-status-down" />
               : <CircleDashed className="w-4 h-4 text-text-muted" />}
-            <span className="text-text-primary">{trCode(`apple.readiness.key.${i.key.replace('.', '_')}`, READINESS_FALLBACK[i.key] ?? i.key)}</span>
+            {READINESS_LINK[i.key] && privacyReader
+              ? <Link to={READINESS_LINK[i.key]} className="text-accent hover:underline">{trCode(`apple.readiness.key.${i.key.replace('.', '_')}`, READINESS_FALLBACK[i.key] ?? i.key)}</Link>
+              : <span className="text-text-primary">{trCode(`apple.readiness.key.${i.key.replace('.', '_')}`, READINESS_FALLBACK[i.key] ?? i.key)}</span>}
             <StateBadge tone={READY_TONE[i.state]} label={trCode(`apple.readiness.state.${i.state}`, i.state)} />
             {i.reason && <span className="text-xs text-text-muted">{t(`apple.readiness.reason.${i.reason}`, { ...(i.params ?? {}), defaultValue: i.reason })}</span>}
           </li>

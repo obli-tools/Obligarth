@@ -3,6 +3,7 @@
 // no device of such a token accepted unless its invitation is issued (not revoked, not used). Kept apart from
 // invitations.ts so that enrollment/tokens.ts and enrollment/handler.ts depend on it without a cycle.
 import type { Knex } from 'knex';
+import { linkNoticeAcknowledgement } from '../../privacy/notice/link';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -52,14 +53,16 @@ export async function invitationForEnrollment(trx: Knex.Transaction, tenantId: n
 }
 
 /** The invitation used by the device just recorded (same transaction): its code serves no more. An invitation revoked
- *  or expired after the enrollment keeps its state and names the device. */
+ *  or expired after the enrollment keeps its state and names the device. The acknowledgement of its notice takes the
+ *  device (P0-13 T5: it outlives the invitation). */
 export async function markInvitationUsed(trx: Knex.Transaction, tenantId: number, invitation: string | EnrollmentInvitation, deviceId: number): Promise<void> {
   const inv = typeof invitation === 'string' ? { id: invitation, state: 'issued' as const } : invitation;
   if (inv.state !== 'issued') {
     await trx('android_byod_invitations').where({ tenant_id: tenantId, id: inv.id, state: inv.state }).whereNull('device_id')
       .update({ device_id: deviceId, updated_at: trx.fn.now() });
-    return;
+  } else {
+    await trx('android_byod_invitations').where({ tenant_id: tenantId, id: inv.id, state: 'issued' })
+      .update({ state: 'used', used_at: trx.fn.now(), device_id: deviceId, issuing_at: null, updated_at: trx.fn.now() });
   }
-  await trx('android_byod_invitations').where({ tenant_id: tenantId, id: inv.id, state: 'issued' })
-    .update({ state: 'used', used_at: trx.fn.now(), device_id: deviceId, issuing_at: null, updated_at: trx.fn.now() });
+  await linkNoticeAcknowledgement(trx, tenantId, 'android_byod_invitations', inv.id);
 }

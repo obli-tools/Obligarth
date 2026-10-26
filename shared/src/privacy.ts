@@ -9,6 +9,7 @@
 // =============================================================================
 
 import type { Ownership } from './mdm/enums';
+import type { ObligarthStage } from './ops';
 
 /** Rules that allow or refuse the collection of a datum. */
 export const PRIVACY_BOOLEAN_RULES = [
@@ -279,4 +280,192 @@ export interface RetentionPolicyDto {
   /** The retention of the audit log of the tenant (set apart, audit/admin.routes.ts). */
   auditLog: { months: number; pendingMonths: number | null; pendingEffectiveAt: string | null };
   canManage: boolean;
+}
+
+// ── Notice of the employees (P0-13 T5, USR-01; conception §10.3) ─────────────────────────────────────────────────
+// The notice an employee reads before an enrollment is generated (server: privacy/notice/generate.ts) from the
+// privacy profile of the ownership, the retention of the tenant and the settings below, per platform, ownership and
+// language (D15: fr and en), and kept as immutable versions (obligarth.notice_versions); each acknowledgement is a row
+// of obligarth.notice_acknowledgements, kept notice_ack_months (D5). The settings are plain text: no markup, the pages
+// escape every value. Copied into the CHECKs of the migration notices: both change together.
+
+export const NOTICE_PLATFORMS = ['apple', 'android'] as const;
+export type NoticePlatform = typeof NOTICE_PLATFORMS[number];
+
+export const NOTICE_LOCALES = ['fr', 'en'] as const;
+export type NoticeLocale = typeof NOTICE_LOCALES[number];
+
+/** Where an acknowledgement was given: an Apple enrollment session (OTA, ADE web view, account-driven), a BYOD
+ *  invitation of Android, a sign-in session of Android. */
+export const NOTICE_ACK_CHANNELS = ['apple_session', 'android_byod_invitation', 'android_signin'] as const;
+export type NoticeAckChannel = typeof NOTICE_ACK_CHANNELS[number];
+
+/** The settings of the notice of a tenant (null: not set). */
+export interface NoticeSettings {
+  /** The data controller (the employer, legal name). */
+  controllerName: string | null;
+  controllerAddress: string | null;
+  /** The data protection officer (name, e-mail or address). */
+  dpoContact: string | null;
+  /** Another contact for the employees' questions. */
+  contact: string | null;
+  /** Recipients beyond the operator of the platform and Apple or Google. */
+  recipientsExtra: string | null;
+  /** A paragraph of the organisation, shown after who manages the device. */
+  introFr: string | null;
+  introEn: string | null;
+}
+
+export type NoticeSettingsKey = keyof NoticeSettings;
+
+/** Maximum length of each setting (characters), and whether it may hold several lines. */
+export const NOTICE_SETTINGS_FIELDS: Readonly<Record<NoticeSettingsKey, { max: number; multiline: boolean }>> = {
+  controllerName: { max: 200, multiline: false },
+  controllerAddress: { max: 500, multiline: true },
+  dpoContact: { max: 300, multiline: false },
+  contact: { max: 300, multiline: false },
+  recipientsExtra: { max: 1000, multiline: true },
+  introFr: { max: 2000, multiline: true },
+  introEn: { max: 2000, multiline: true },
+};
+export const NOTICE_SETTINGS_KEYS = Object.keys(NOTICE_SETTINGS_FIELDS) as NoticeSettingsKey[];
+
+export const EMPTY_NOTICE_SETTINGS: Readonly<NoticeSettings> = Object.freeze({
+  controllerName: null, controllerAddress: null, dpoContact: null, contact: null, recipientsExtra: null, introFr: null, introEn: null,
+});
+
+/** What a notice needs before a pilot (D7): the data controller and a contact (the DPO or another). */
+export type NoticeMissing = 'controllerName' | 'contact';
+
+/** The settings a complete notice still lacks (empty: complete). Outside the stage lab, an enrollment is refused while
+ *  the notice is not complete (D7). */
+export function noticeCompleteness(s: Readonly<NoticeSettings>): NoticeMissing[] {
+  const set = (v: string | null): boolean => typeof v === 'string' && v.trim() !== '';
+  const missing: NoticeMissing[] = [];
+  if (!set(s.controllerName)) missing.push('controllerName');
+  if (!set(s.dpoContact) && !set(s.contact)) missing.push('contact');
+  return missing;
+}
+
+/** Markup and control characters a setting may not hold (the notice is plain text): angle brackets, and every control
+ *  character but the line feed and the tab of a multi-line field. */
+const MARKUP = /[<>]/;
+const CONTROL_SINGLE = /[\u0000-\u001f\u007f]/;
+const CONTROL_MULTI = /[\u0000-\u0008\u000b-\u001f\u007f]/;
+
+/** What is wrong with proposed settings: keys outside the list, values that are not a string or null, too long, or
+ *  holding markup or control characters. */
+export function noticeSettingsErrors(values: Readonly<Record<string, unknown>>): { unknown: string[]; invalid: NoticeSettingsKey[]; tooLong: NoticeSettingsKey[]; markup: NoticeSettingsKey[] } {
+  const unknown: string[] = [];
+  const invalid: NoticeSettingsKey[] = [];
+  const tooLong: NoticeSettingsKey[] = [];
+  const markup: NoticeSettingsKey[] = [];
+  for (const [k, v] of Object.entries(values)) {
+    if (!(NOTICE_SETTINGS_KEYS as string[]).includes(k)) { unknown.push(k); continue; }
+    const key = k as NoticeSettingsKey;
+    if (v === null) continue;
+    if (typeof v !== 'string') { invalid.push(key); continue; }
+    const f = NOTICE_SETTINGS_FIELDS[key];
+    if ([...v].length > f.max) tooLong.push(key);
+    if (MARKUP.test(v) || (f.multiline ? CONTROL_MULTI : CONTROL_SINGLE).test(v)) markup.push(key);
+  }
+  return { unknown, invalid, tooLong, markup };
+}
+
+/** A setting as it is checked and stored: trimmed (each line of a multi-line one at its end), line ends as LF, empty
+ *  as null. */
+export function normalizeNoticeSetting(key: NoticeSettingsKey, v: string | null): string | null {
+  if (v === null) return null;
+  const s = NOTICE_SETTINGS_FIELDS[key].multiline ? v.replace(/\r\n?/g, '\n').split('\n').map((l) => l.replace(/\s+$/, '')).join('\n').trim() : v.trim();
+  return s === '' ? null : s;
+}
+
+/** Is the notice of this platform and ownership shown at an enrollment? Every Apple ownership; on Android the personal
+ *  devices only (BYOD link, sign-in): the texts of the company devices are generated, their display waits for the v1
+ *  (D13). The console and the public page offer these combinations. */
+export function noticeDisplayed(platform: NoticePlatform, ownership: Ownership): boolean {
+  return platform === 'apple' || ownership === 'personal';
+}
+
+// ── Console API of the notice (P0-13 T6, USR-01): GET/PUT /api/privacy/notice-settings, GET /api/privacy/notices… ──
+
+/** The text of a notice version: plain text only (the console renders it escaped). */
+export interface NoticeContentDto {
+  title: string;
+  sections: Array<{ heading: string; paragraphs: string[] }>;
+  /** The summary written into the enrollment profile (ConsentText), 500 characters at most. */
+  consentSummary: string;
+  contact: string | null;
+}
+
+/** GET /api/privacy/notice-settings (and the answer of PUT). */
+export interface NoticeSettingsDto {
+  settings: NoticeSettings;
+  /** Changes of the settings (0: never set). */
+  version: number;
+  updatedAt: string | null;
+  updatedBy: number | null;
+  /** What a complete notice still lacks (D7). */
+  missing: NoticeMissing[];
+  /** The stage of the instance (D8). */
+  stage: ObligarthStage;
+  /** An enrollment is refused while the notice is not complete (stage pilot or production, D7). */
+  enrollmentRefused: boolean;
+  /** The public page of the notice in force (https://mdm.<domain>/t/<key>/notice), null without a device surface. */
+  publicUrl: string | null;
+  canManage: boolean;
+  /** The answer of PUT only: whether the settings changed (false: the values given were those in force). */
+  changed?: boolean;
+}
+
+/** PUT /api/privacy/notice-settings: the settings given replace theirs (null clears one), the others stay;
+ *  baseVersion (the version read) refuses a change made meanwhile (409 noticeSettingsChanged). */
+export interface NoticeSettingsUpdate {
+  settings: Partial<Record<NoticeSettingsKey, string | null>>;
+  baseVersion?: number;
+}
+
+/** A version of the notice (immutable). */
+export interface NoticeVersionDto {
+  id: string;
+  platform: NoticePlatform;
+  ownership: Ownership;
+  locale: NoticeLocale;
+  sha256: string;
+  generatedAt: string;
+  /** null: the current version of its platform, ownership and language. */
+  supersededAt: string | null;
+  /** The privacy profile it was generated from (null: the default profile). */
+  profileVersion: number | null;
+  settingsVersion: number;
+  retentionVersion: number;
+  generatorVersion: number;
+  acknowledgements: number;
+  /** Shown at an enrollment (noticeDisplayed, D13). */
+  displayed: boolean;
+}
+
+/** GET /api/privacy/notices: the current versions with their text, and the versions of the tenant, the latest first. */
+export interface NoticesDto {
+  current: Array<NoticeVersionDto & { content: NoticeContentDto }>;
+  history: NoticeVersionDto[];
+  /** The public page of the notice (as NoticeSettingsDto). */
+  publicUrl: string | null;
+}
+
+/** GET /api/privacy/notices/preview: the notice the inputs in force give now (nothing is published). */
+export interface NoticePreviewDto {
+  platform: NoticePlatform;
+  ownership: Ownership;
+  locale: NoticeLocale;
+  content: NoticeContentDto;
+  missing: NoticeMissing[];
+  displayed: boolean;
+}
+
+/** GET /api/privacy/notices/:id/acknowledgements/count. */
+export interface NoticeAcknowledgementCountDto {
+  versionId: string;
+  total: number;
+  byChannel: Record<NoticeAckChannel, number>;
 }

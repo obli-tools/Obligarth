@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import { OWNERSHIPS, noticeCompleteness, type Ownership } from '@obligarth/shared';
 import type {
   DeadlineKind, DeadlineLevel, DeadlineView, IntegrationCardState, IntegrationsSummary, PushCertState, ReadinessItem,
 } from '@obligarth/shared';
@@ -7,7 +8,9 @@ import { ddmMetrics } from '../ddm/metrics';
 import { edgeHealth } from '../edge/health';
 import { usesDefaultNotice } from '../enrollment/notice';
 import { usesDefaultPrivacyRules } from '../devices/privacy';
-import { tenantHasPrivacyProfile } from '../../privacy/profiles';
+import { currentProfile } from '../../privacy/profiles';
+import { noticeSettingsOf } from '../../privacy/notice/provider';
+import { instanceStage } from '../../ops/stage';
 
 // =============================================================================
 // What the Integrations tab shows (docs: integration-apple-edge §11.4, §11.5,
@@ -115,10 +118,8 @@ export async function readiness(q: Knex, tenantId: number): Promise<ReadinessIte
     out.push(days <= 30 ? { key: 'signing.identity', state: 'warning', reason: 'expiring', params: { daysLeft: Math.max(0, days) } }
       : { key: 'signing.identity', state: 'ready' });
   }
-  out.push(usesDefaultNotice() ? { key: 'notice.custom', state: 'warning', reason: 'default_notice' } : { key: 'notice.custom', state: 'ready' });
-  // The tenant's own privacy profile (P0-13, CNF-02): ready once it published one, the default rules otherwise.
-  out.push(usesDefaultPrivacyRules() || !(await tenantHasPrivacyProfile(q, tenantId))
-    ? { key: 'privacy.profile', state: 'warning', reason: 'default_rules' } : { key: 'privacy.profile', state: 'ready' });
+  out.push(await noticeReadiness(q, tenantId));
+  out.push(await privacyProfileReadiness(q, tenantId));
 
   const ddmDevices = await count(q('apple_devices as a').join('devices as d', function on() { this.on('d.id', 'a.device_id').andOn('d.tenant_id', 'a.tenant_id'); })
     .where({ 'a.tenant_id': tenantId, 'a.ddm_enabled': true }).whereNot('d.enrollment_state', 'unenrolled'));
@@ -129,6 +130,34 @@ export async function readiness(q: Knex, tenantId: number): Promise<ReadinessIte
     out.push(lastAt > now - DAY ? { key: 'ddm.relay', state: 'ready' } : { key: 'ddm.relay', state: 'warning', reason: 'relay_idle' });
   }
   return out;
+}
+
+/** The notice of the employees (P0-13 T6, USR-01): the default notice of the laboratory while no provider is installed;
+ *  else the generated notice, ready once its settings are complete (D7: the data controller and a contact); not
+ *  complete: a warning in the stage lab (served), an error beyond it (every enrollment of the tenant is refused). */
+async function noticeReadiness(q: Knex, tenantId: number): Promise<ReadinessItem> {
+  if (usesDefaultNotice()) return { key: 'notice.custom', state: 'warning', reason: 'default_notice' };
+  const missing = noticeCompleteness((await noticeSettingsOf(q, tenantId)).settings);
+  if (missing.length === 0) return { key: 'notice.custom', state: 'ready' };
+  return { key: 'notice.custom', state: instanceStage() === 'lab' ? 'warning' : 'error', reason: 'notice_incomplete', params: { missing: missing.length } };
+}
+
+/** The tenant's own privacy profiles (P0-13, CNF-02) for the ownerships it enrolls (its enrollment profiles in use, of
+ *  every platform): ready once each of them has a profile published, the default rules otherwise (params.ownerships:
+ *  how many still have them). A tenant without an enrollment profile yet: ready once it published one profile. */
+async function privacyProfileReadiness(q: Knex, tenantId: number): Promise<ReadinessItem> {
+  if (usesDefaultPrivacyRules()) return { key: 'privacy.profile', state: 'warning', reason: 'default_rules' };
+  const rows = await q('enrollment_profiles').where({ tenant_id: tenantId, enabled: true }).whereNull('archived_at')
+    .distinct('ownership') as Array<{ ownership: string }>;
+  const inUse = OWNERSHIPS.filter((o) => rows.some((r) => r.ownership === o));
+  const published = new Set<Ownership>();
+  for (const o of OWNERSHIPS) if (await currentProfile(q, tenantId, o)) published.add(o);
+  if (inUse.length === 0) {
+    return published.size ? { key: 'privacy.profile', state: 'ready' } : { key: 'privacy.profile', state: 'warning', reason: 'default_rules' };
+  }
+  const missing = inUse.filter((o) => !published.has(o)).length;
+  return missing === 0 ? { key: 'privacy.profile', state: 'ready' }
+    : { key: 'privacy.profile', state: 'warning', reason: 'default_rules', params: { ownerships: missing } };
 }
 
 const WORST: Record<string, number> = { ready: 0, todo: 1, attention: 2, error: 3 };

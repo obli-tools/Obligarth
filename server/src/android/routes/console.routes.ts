@@ -4,7 +4,9 @@
 //   GET /enrollment-tokens?profileId=  the tokens of the tenant (never a value), newest first
 //   GET /devices/pending-approval      the devices held until approved (long tokens, AN17)
 //   GET /devices/:id                   the Android facet of a device record (minimised inventory)
-//   GET /devices/:id/actions           the menu of the Android commands and guarded actions of a device
+//   GET /devices/:id/actions           the menu of the Android commands and guarded actions of a device, and the
+//                                      location (LOCATE, never a command: the device sends its positions by itself in
+//                                      lost mode; why none may come, P0-13: personal device, privacy profile)
 // Capabilities: mdm.integrations.manage (onboarding), mdm.enrollment.manage (tokens, approvals); a device is read by
 // whoever sees it (team scopes; 404 otherwise, rls-tenant §11.5). Mounted under /api/android by routes/index.ts.
 import { Router, type NextFunction, type Request, type Response } from 'express';
@@ -23,6 +25,7 @@ import { ANDROID_COMMANDS, refusalOf, type AndroidCommandType } from '../command
 import { ANDROID_COMMAND_CAPABILITY, ANDROID_COMMAND_RESTRICTION } from '../commands/console';
 import { ANDROID_GUARDED_DEFAULTS, type AndroidGuardedKey } from '../commands/guarded';
 import { androidOnboardStep } from '../operations/raccord';
+import { lostModeLocationAllowed } from '../../privacy/profiles';
 import { androidDeviceOf } from './deviceAccess';
 
 const wrap = (fn: (req: Request, res: Response) => Promise<void>) =>
@@ -198,6 +201,14 @@ export function createAndroidConsoleRouter(): Router {
     actions.push({ type: disabled ? 'ENABLE' : 'DISABLE', actionKey: 'mdm.android_disable', guarded: true,
       available: disableCap && enrolled && !frozen,
       unavailable: !disableCap ? 'capabilityMissing' : !enrolled ? 'not_enrolled' : frozen ? 'frozen' : null });
+    // The location (P0-13 T7): never a command on Android (the device sends its positions by itself in lost mode,
+    // inventory/usageLogs.ts), so never available. Its reason says whether positions may come at all: never for a
+    // personal device; refused by the privacy profile of the ownership (positions neither stored nor shown, as
+    // GET /api/mdm/devices/:id/locations says); sent by the device otherwise. The location card tells it at once.
+    const locatable = target.ownership !== 'personal' && await lostModeLocationAllowed(db, tenantId, target.ownership);
+    actions.push({ type: 'LOCATE', actionKey: ANDROID_COMMAND_RESTRICTION.START_LOST_MODE ?? ANDROID_COMMANDS.START_LOST_MODE.action,
+      guarded: false, available: false,
+      unavailable: target.ownership === 'personal' ? 'ownership' : locatable ? 'automatic' : 'locationDisabledByPrivacy' });
     res.json({ success: true, data: actions });
   }));
 

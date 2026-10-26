@@ -5,6 +5,8 @@
 // setAndroidNoticeProvider and nothing else changes. The default provider: the text of lot C for a personal device
 // (i18n.ts), version default-android_byod_link-personal-v1; the acknowledgement is kept on the invitation
 // (notice_version_id, acknowledged_at, ack_locale, notice_ack_id) for want of USR-01's table.
+// Since P0-13 T5 (USR-01) the generated notice of the tenant replaces it in every process (privacy/notice/provider.ts,
+// installed by registerPrivacyModule; channels android_byod_invitation and android_signin of notice_acknowledgements).
 import { createHash, randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import { byodTexts, fill, isByodLocale } from './i18n';
@@ -24,8 +26,11 @@ export interface AndroidNotice {
 export interface AndroidNoticeProvider {
   noticeFor(trx: Knex | Knex.Transaction, tenantId: number, ownership: 'personal', locale: string,
     ctx: { method: 'android_byod_link'; organization: string }): Promise<AndroidNotice | null>;
+  /** sessionId: the invitation (channel android_byod_invitation, by default) or the sign-in session (android_signin);
+   *  endUserId: its end user when known. */
   recordAcknowledgement(trx: Knex.Transaction, tenantId: number,
-    ack: { sessionId: string; versionId: string; locale: string; at: Date }): Promise<string>;
+    ack: { sessionId: string; versionId: string; locale: string; at: Date; channel?: 'android_byod_invitation' | 'android_signin';
+      endUserId?: number | null }): Promise<string>;
 }
 
 /** A UUID derived from a name (SHA-256, version nibble 8): lot C's nameUuid. */

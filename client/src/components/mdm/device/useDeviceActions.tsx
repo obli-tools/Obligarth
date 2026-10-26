@@ -206,8 +206,13 @@ export function useDeviceActions(device: DeviceDetail | null, { canAct, onQueued
         if (a) { available = a.available; code = a.unavailable; guarded = a.guarded; run = () => legacyRunner.run(a); }
         pending = queued.has(LEGACY_TYPES[key] as string);
       }
+      // Android never requests a position (the device sends it in lost mode), but the server tells whether the privacy
+      // profile refuses it (LOCATE, P0-13): that refusal replaces the reason of the channel, known before any read.
+      const privacyRefused = channel === 'amapi' && key === 'locate'
+        && android?.find((x) => x.type === 'LOCATE')?.unavailable === 'locationDisabledByPrivacy';
       // What the record says first (personal, not a capability of the channel), then the write access, then the server.
       const reason = device?.ownership === 'personal' && LOST_KEYS.has(key) ? 'personal'
+        : privacyRefused ? 'locationDisabledByPrivacy'
         : block ? block
           : !canAct ? 'readOnly'
             : !loaded ? 'loading'

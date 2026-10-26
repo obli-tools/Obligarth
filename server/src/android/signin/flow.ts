@@ -21,6 +21,7 @@ import { audit } from '../../audit';
 import type { AuditWriteContext } from '../../audit/types';
 import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
+import { linkNoticeAcknowledgement } from '../../privacy/notice/link';
 import { logger } from '../../utils/logger';
 import { androidNotice, type AndroidNotice } from '../byod/notice';
 import type { TenantFacts } from '../byod/invitations';
@@ -218,7 +219,8 @@ export async function acknowledgeSigninNotice(t: TenantFacts, a: { state: unknow
     }
     const notice = await androidNotice().noticeFor(trx, t.tenantId, 'personal', a.locale, { method: 'android_byod_link', organization: t.name });
     if (!notice || notice.versionId !== a.noticeVersionId) return { kind: 'notice_changed', notice, state: String(a.state) };
-    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId, { sessionId: r.id, versionId: notice.versionId, locale: a.locale, at: now });
+    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId,
+      { sessionId: r.id, versionId: notice.versionId, locale: a.locale, at: now, channel: 'android_signin' });
     await trx('android_signin_sessions').where({ tenant_id: t.tenantId, id: r.id, state: 'notice' }).update({
       state: 'pending', state_hash: stateHash(t.uuid, next), notice_version_id: notice.versionId, notice_ack_id: ackId, acknowledged_at: now,
       locale: a.locale, updated_at: now,
@@ -287,6 +289,8 @@ export async function completeSignin(t: TenantFacts, a: { state: unknown; code: 
     const n = await trx('android_signin_sessions').where({ tenant_id: t.tenantId, id: session.id, state: 'exchanging' })
       .update({ state: 'authenticated', end_user_id: users[0].id, authenticated_at: trx.fn.now(), updated_at: trx.fn.now() });
     if (Number(n) !== 1) return { reason: 'replayed' };
+    // The acknowledgement of the notice, recorded before the sign-in, takes its end user (P0-13 T5).
+    await linkNoticeAcknowledgement(trx, t.tenantId, 'android_signin_sessions', session.id);
     return { endUserId: Number(users[0].id) };
   }));
   if ('reason' in auth) return fail(auth.reason);

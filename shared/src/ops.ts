@@ -43,3 +43,11 @@ export interface OpsStatusDto {
   commands: OpsCommandBacklogDto[] | null;
   process: { rssBytes: number; heapUsedBytes: number; eventLoopDelayP99Seconds: number | null };
 }
+
+// ── Stage of the instance (P0-13 D8, OBLIGARTH_STAGE) ──────────────────────────────────────────────────────────
+// lab by default; the owners move to pilot before the pilot, then production. Outside lab the prerequisites of a
+// pilot are imposed: a complete notice before any enrollment (D7, P0-13 T5), and at start the signed profiles and the
+// backups (P0-13 T11).
+
+export const OBLIGARTH_STAGES = ['lab', 'pilot', 'production'] as const;
+export type ObligarthStage = typeof OBLIGARTH_STAGES[number];
