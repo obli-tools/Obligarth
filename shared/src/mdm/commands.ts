@@ -101,6 +101,7 @@ export interface MdmDeviceAction {
   reasonRequired: boolean;
   available: boolean;
   /** Why it is not: capabilityMissing, notApple, notEnrolled, awaitingConfigurationOnly, ownership, notSupervised,
-   *  noUnlockToken, frozen. */
+   *  noUnlockToken, frozen; lostModeOff (sound, location, disabling: the lost mode is off), lostModeOn (enabling: it
+   *  is already on or coming), from the recorded state, the menu only. */
   unavailable: string | null;
 }

@@ -4,13 +4,11 @@ import toast from 'react-hot-toast';
 import { Play, RefreshCw } from 'lucide-react';
 import type { AndroidDeviceAction, AndroidDeviceView, AndroidKioskState } from '@obligarth/shared';
 import { androidApi } from '@/api/android.api';
-import { newIdempotencyKey } from '@/api/apple.api';
 import { Button } from '@/components/common/Button';
-import { Modal } from '@/components/common/Modal';
-import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
+import { androidActionLabel, useAndroidActionRunner } from '@/components/mdm/actions/useAndroidActionRunner';
 import { trCode } from '@/utils/apiError';
-import { Fact, Labeled, dateOf, errorToast, fieldClass } from './ui';
+import { Fact, dateOf, errorToast } from './ui';
 
 // The Android side of a device record (android-amapi §8, §11, §12.1; lot AN-C2): mode, ownership, API level, security
 // patch, posture, its own policy (name, versions pushed and applied, state), the non-compliances, the approval and the
@@ -128,84 +126,25 @@ function KioskPanel({ deviceId, state, canAct, onChanged }: { deviceId: number; 
 
 // ── Menu of the Android commands ────────────────────────────────────────────────
 
-type ParamField = 'message' | 'phoneNumber' | 'email' | 'streetAddress' | 'organization' | 'wipeReason' | 'newPassword' | 'packageNames';
-const PARAMS: Record<string, { fields: ParamField[]; flags?: { key: 'flags' | 'wipeDataFlags'; values: string[] }; needsOne?: ParamField[] }> = {
-  START_LOST_MODE: { fields: ['message', 'phoneNumber', 'email', 'streetAddress', 'organization'], needsOne: ['message', 'phoneNumber', 'email', 'streetAddress'] },
-  WIPE: { fields: ['wipeReason'], flags: { key: 'wipeDataFlags', values: ['PRESERVE_RESET_PROTECTION_DATA', 'WIPE_EXTERNAL_STORAGE', 'WIPE_ESIMS'] } },
-  RESET_PASSWORD: { fields: ['newPassword'], flags: { key: 'flags', values: ['REQUIRE_ENTRY', 'DO_NOT_ASK_CREDENTIALS_ON_BOOT', 'LOCK_NOW'] } },
-  CLEAR_APP_DATA: { fields: ['packageNames'], needsOne: ['packageNames'] },
-  DISABLE: { fields: ['message'] },
-};
 const GROUPS: Array<{ key: string; types: string[] }> = [
   { key: 'power', types: ['REBOOT', 'CLEAR_APP_DATA'] },
   { key: 'security', types: ['LOCK', 'RESET_PASSWORD', 'START_LOST_MODE', 'STOP_LOST_MODE', 'DISABLE', 'ENABLE'] },
   { key: 'destructive', types: ['WIPE', 'RELINQUISH_OWNERSHIP', 'REMOVE_MANAGEMENT'] },
 ];
 const GROUP_FALLBACK: Record<string, string> = { power: 'Device', security: 'Security', destructive: 'Destructive actions' };
-const actionLabel = (type: string): string => trCode(`android.commands.types.${type}`, type);
 
 export function AndroidDeviceActions({ deviceId, ownership, canAct, onQueued }: { deviceId: number; ownership: string; canAct: boolean; onQueued?: () => void }) {
   const { t } = useTranslation();
   const [actions, setActions] = useState<AndroidDeviceAction[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [paramsFor, setParamsFor] = useState<AndroidDeviceAction | null>(null);
-  const [values, setValues] = useState<Record<string, string>>({});
-  const [flags, setFlags] = useState<string[]>([]);
-  const [factoryReset, setFactoryReset] = useState(false);
-  const [guard, setGuard] = useState<{ actionKey: string; params: Record<string, unknown> } | null>(null);
-  const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(() => {
     androidApi.actions(deviceId).then((a) => { setActions(a); setError(null); }).catch((err) => { setActions([]); setError(trCode(`errors.${(err as { response?: { data?: { code?: string } } })?.response?.data?.code ?? ''}`, t('common.error') || 'Error')); });
   }, [deviceId, t]);
   useEffect(() => { load(); }, [load]);
+  // The parameters and the guard dialog of a command (shared with the quick actions of the record).
+  const runner = useAndroidActionRunner({ deviceId, ownership, onQueued: () => { onQueued?.(); load(); } });
 
-  /** The parameters of an action as the server reads them (empty texts left out). */
-  const paramsOf = (a: AndroidDeviceAction): Record<string, unknown> => {
-    const spec = PARAMS[a.type];
-    const out: Record<string, unknown> = {};
-    for (const f of spec?.fields ?? []) {
-      const v = (values[f] ?? '').trim();
-      if (!v) continue;
-      out[f] = f === 'packageNames' ? v.split(/[\s,;]+/).filter(Boolean) : v;
-    }
-    if (spec?.flags && flags.length) out[spec.flags.key] = flags;
-    if (a.type === 'DISABLE') out.enable = false;
-    if (a.type === 'ENABLE') out.enable = true;
-    if (a.type === 'REMOVE_MANAGEMENT' && ownership === 'corporate_personal' && factoryReset) out.mode = 'wipe';
-    return out;
-  };
-
-  const send = async (a: AndroidDeviceAction, params: Record<string, unknown>) => {
-    setBusy(a.type);
-    try {
-      const r = await androidApi.enqueue(deviceId, { type: a.type, params }, newIdempotencyKey());
-      if (r && 'approvalId' in r && r.approvalId) toast(t('mdm.outcome.awaitingApproval') || 'Waiting for a second approver: nothing has changed yet.', { duration: 7000 });
-      else toast.success(t('android.commands.queued') || 'Command queued: Google delivers it to the device.');
-      onQueued?.();
-      load();
-    } catch (err) { errorToast(err); } finally { setBusy(null); }
-  };
-
-  const start = (a: AndroidDeviceAction) => {
-    setValues({}); setFlags([]); setFactoryReset(false);
-    if (PARAMS[a.type] || (a.type === 'REMOVE_MANAGEMENT' && ownership === 'corporate_personal')) { setParamsFor(a); return; }
-    if (a.guarded) setGuard({ actionKey: a.actionKey, params: paramsOf(a) });
-    else void send(a, {});
-  };
-  const next = () => {
-    const a = paramsFor;
-    if (!a) return;
-    setParamsFor(null);
-    const params = paramsOf(a);
-    // The typed values (a new password among them) do not stay in the state of the menu once the request is built.
-    setValues({});
-    if (a.guarded) setGuard({ actionKey: a.actionKey, params });
-    else void send(a, params);
-  };
-
-  const spec = paramsFor ? PARAMS[paramsFor.type] : null;
-  const paramsOk = !spec?.needsOne || spec.needsOne.some((f) => (values[f] ?? '').trim().length > 0);
   const byType = new Map((actions ?? []).map((a) => [a.type, a]));
   return (
     <div className="space-y-5">
@@ -220,13 +159,13 @@ export function AndroidDeviceActions({ deviceId, ownership, canAct, onQueued }: 
               {list.map((a) => (
                 <li key={a.type} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
                   <span className="min-w-0 flex-1">
-                    <span className={a.available ? 'text-text-primary' : 'text-text-muted'}>{actionLabel(a.type)}</span>
+                    <span className={a.available ? 'text-text-primary' : 'text-text-muted'}>{androidActionLabel(a.type)}</span>
                     {a.guarded && <span className="ml-2 text-[10px] uppercase text-red-400">{t('apple.actions.guarded') || 'guarded'}</span>}
                     {!a.available && a.unavailable && (
                       <span className="block text-[11px] text-text-muted">{trCode(`android.commands.unavailable.${a.unavailable}`, a.unavailable)}</span>
                     )}
                   </span>
-                  <Button size="sm" variant={g.key === 'destructive' ? 'danger' : 'secondary'} disabled={!canAct || !a.available || busy === a.type} onClick={() => start(a)}>
+                  <Button size="sm" variant={g.key === 'destructive' ? 'danger' : 'secondary'} disabled={!canAct || !a.available || runner.busy === a.type} onClick={() => runner.run(a)}>
                     <Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}
                   </Button>
                 </li>
@@ -237,45 +176,7 @@ export function AndroidDeviceActions({ deviceId, ownership, canAct, onQueued }: 
       })}
       {!canAct && <p className="text-xs text-text-muted">{t('apple.actions.readOnly') || 'You can read this device but not act on it.'}</p>}
 
-      <Modal open={paramsFor !== null} onClose={() => { setParamsFor(null); setValues({}); }} size="sm" title={paramsFor ? actionLabel(paramsFor.type) : ''}
-        footer={(
-          <>
-            <Button variant="secondary" onClick={() => { setParamsFor(null); setValues({}); }}>{t('common.cancel') || 'Cancel'}</Button>
-            <Button disabled={!paramsOk} onClick={next}>{t('common.next') || 'Next'}</Button>
-          </>
-        )}>
-        <div className="space-y-3">
-          {spec?.fields.map((f) => (
-            <Labeled key={f} label={t(`android.commands.param.${f}`) || f}
-              hint={f === 'newPassword' ? (t('android.commands.passwordHint') || 'Sealed in the vault at once, never shown again. Empty: the password is removed.') : f === 'packageNames' ? (t('android.commands.packagesHint') || 'Packages separated by spaces or commas.') : undefined}>
-              {f === 'packageNames' || f === 'streetAddress'
-                ? <textarea rows={2} value={values[f] ?? ''} onChange={(e) => setValues((v) => ({ ...v, [f]: e.target.value }))} className={fieldClass} spellCheck={false} />
-                : <input type={f === 'newPassword' ? 'password' : f === 'email' ? 'email' : 'text'} autoComplete="off" value={values[f] ?? ''}
-                  onChange={(e) => setValues((v) => ({ ...v, [f]: e.target.value }))} maxLength={f === 'phoneNumber' ? 30 : f === 'newPassword' ? 64 : 200} className={fieldClass} />}
-            </Labeled>
-          ))}
-          {spec?.flags?.values.map((flag) => (
-            <label key={flag} className="flex items-center gap-2 text-sm text-text-secondary">
-              <input type="checkbox" checked={flags.includes(flag)} className="accent-accent"
-                onChange={(e) => setFlags((prev) => (e.target.checked ? [...prev, flag] : prev.filter((x) => x !== flag)))} />
-              {trCode(`android.commands.flags.${flag}`, flag)}
-            </label>
-          ))}
-          {paramsFor?.type === 'REMOVE_MANAGEMENT' && ownership === 'corporate_personal' && (
-            <label className="flex items-center gap-2 text-sm text-text-secondary">
-              <input type="checkbox" checked={factoryReset} onChange={(e) => setFactoryReset(e.target.checked)} className="accent-accent" />
-              {t('android.commands.factoryReset') || 'Factory reset the device (otherwise only the work profile is removed and the device is handed to its user)'}
-            </label>
-          )}
-          {spec?.needsOne && paramsFor?.type === 'START_LOST_MODE' && (
-            <p className="text-[11px] text-text-muted">{t('android.commands.lostModeContact') || 'A message, a phone number, an e-mail or an address is required: it is shown on the locked device.'}</p>
-          )}
-        </div>
-      </Modal>
-
-      <GuardedActionDialog open={guard !== null} onClose={() => setGuard(null)} actionKey={guard?.actionKey ?? 'mdm.device_lock'}
-        selection={{ deviceIds: [deviceId] }} params={guard?.params}
-        previewParams={guard?.params && 'newPassword' in guard.params ? Object.fromEntries(Object.entries(guard.params).filter(([k]) => k !== 'newPassword')) : undefined} onDone={() => { onQueued?.(); load(); }} />
+      {runner.dialogs}
     </div>
   );
 }

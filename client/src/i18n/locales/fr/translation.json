@@ -860,7 +860,8 @@
       "osBelowValue": "OS antérieur à {{version}}",
       "osBelowHint": "Appareils dont le système d'exploitation est plus ancien qu'une version",
       "osBelowTitle": "Système d'exploitation antérieur à",
-      "endUser": "Un utilisateur final"
+      "endUser": "Un utilisateur final",
+      "lostMode": "Mode perdu"
     },
     "pagination": {
       "treeCapped": "Affichage des {{shown}} premiers sur {{total}} — utilisez la recherche ou choisissez un sous-groupe pour restreindre.",
@@ -903,6 +904,16 @@
       "count_one": "{{count}} appareil",
       "count_other": "{{count}} appareils"
     },
+    "kpi": {
+      "title": "Parc",
+      "hint": "Compteurs des appareils sous gestion, pas de la vue filtrée. Une tuile active ou retire son filtre.",
+      "total": "Appareils gérés",
+      "nonCompliant": "Non conformes",
+      "stale": "Sans contact",
+      "lostMode": "Mode perdu",
+      "apple": "Apple",
+      "android": "Android"
+    },
     "row": {
       "select": "Sélectionner",
       "warrantyUntil": "Garantie jusqu'au {{date}}",
@@ -928,7 +939,8 @@
       "compliance": "Conformité",
       "serial": "Numéro de série",
       "tags": "Étiquettes",
-      "warranty": "Garantie"
+      "warranty": "Garantie",
+      "battery": "Batterie"
     },
     "selection": {
       "exit": "Quitter le mode sélection",
@@ -1019,7 +1031,21 @@
       "invalidOne": "invalide",
       "active": "active",
       "inactive": "inactive",
-      "statusItems": "Éléments de statut"
+      "statusItems": "Éléments de statut",
+      "installStateValue": {
+        "none": "Aucune mise à jour",
+        "downloading": "Téléchargement en cours",
+        "downloaded": "Téléchargée",
+        "installing": "Installation en cours",
+        "idle": "En attente"
+      },
+      "item": {
+        "passcodePresent": "Code défini",
+        "passcodeCompliant": "Code conforme",
+        "pendingVersion": "Mise à jour système en attente",
+        "installState": "État de la mise à jour système",
+        "other": "Autres éléments d'état"
+      }
     },
     "edit": {
       "title": "Modifier la fiche",
@@ -1040,7 +1066,177 @@
       "widen": "Davantage de données seront collectées sur cet appareil (toutes les applications, le numéro de téléphone…) : un ticket est exigé.",
       "narrow": "Moins de données seront collectées : ce qui ne l'est plus est effacé de la fiche."
     },
-    "purchasedOn": "Acheté le {{date}}"
+    "purchasedOn": "Acheté le {{date}}",
+    "yes": "Oui",
+    "no": "Non",
+    "hero": {
+      "supervised": "Supervisé",
+      "unsupervised": "Non supervisé",
+      "noEndUser": "Aucun utilisateur",
+      "more": "Plus d'actions"
+    },
+    "quick": {
+      "locate": "Localiser",
+      "lock": "Verrouiller",
+      "lostOn": "Mode perdu",
+      "lostOff": "Désactiver le mode perdu",
+      "sound": "Faire sonner",
+      "erase": "Effacer",
+      "message": "Message",
+      "restart": "Redémarrer",
+      "inventory": "Actualiser l'inventaire"
+    },
+    "lostBanner": {
+      "on": "Mode perdu activé",
+      "enabling": "Mode perdu en cours d'activation",
+      "disabling": "Mode perdu en cours de désactivation",
+      "since": "Depuis le {{date}}",
+      "disable": "Désactiver",
+      "locate": "Localiser",
+      "sound": "Faire sonner",
+      "seeLocation": "Voir la position"
+    },
+    "lost": {
+      "title": "Appareil perdu ou volé ?",
+      "subtitle": "Agissez d'ici : chaque action atteint l'appareil à son prochain contact. Les actions gardées demandent un motif et une confirmation.",
+      "lockHint": "Verrouille l'écran tout de suite, avec un message si vous le souhaitez.",
+      "lostOnHint": "Verrouille l'appareil avec votre message et permet de le localiser.",
+      "lostOffHint": "Met fin au mode perdu : l'appareil redevient utilisable.",
+      "soundHint": "Fait sonner l'appareil, même en mode silencieux.",
+      "locateHint": "Demande sa position à l'appareil (en mode perdu uniquement).",
+      "eraseHint": "Efface toutes les données de l'appareil. Irréversible.",
+      "messageHint": "Affiche un message sur l'appareil.",
+      "pending": "En attente de l'appareil",
+      "supervisionRequired": "Mode perdu : un appareil supervisé est nécessaire.",
+      "reason": {
+        "platformUnsupported": "Non pris en charge sur Android",
+        "androidAuto": "Android envoie sa position de lui-même en mode perdu",
+        "agentUnsupported": "Non disponible avec l'agent Android",
+        "personal": "Jamais sur un appareil personnel"
+      }
+    },
+    "location": {
+      "title": "Localisation",
+      "none": "Aucune position connue.",
+      "noneHint": "Les positions n'existent qu'en mode perdu : demandez-les avec « Localiser » (Apple), ou elles arrivent d'elles-mêmes (Android).",
+      "show": "Afficher les positions",
+      "showHint": "Chaque consultation des positions est inscrite au journal d'audit.",
+      "lostModeOff": "Les positions n'existent que pendant le mode perdu.",
+      "unenrolled": "Hors gestion : aucune position n'est affichée.",
+      "anonymous": "Mode anonyme : la carte et ses liens sont masqués.",
+      "personal": "Jamais de localisation : c'est un appareil personnel.",
+      "capabilityMissing": "Votre équipe ne détient pas la capacité mode perdu sur cet appareil : ses positions ne sont pas affichées.",
+      "coordinates": "Coordonnées",
+      "accuracy": "Précision",
+      "altitude": "Altitude",
+      "speed": "Vitesse",
+      "observed": "Relevée",
+      "origin": "Source",
+      "openOsm": "Ouvrir dans OpenStreetMap",
+      "openMaps": "Ouvrir dans l'app de cartes",
+      "showPreview": "Afficher l'aperçu de carte",
+      "hidePreview": "Masquer la carte",
+      "previewHint": "L'aperçu charge des tuiles depuis openstreetmap.org, qui apprend alors cette position.",
+      "previewFailed": "La carte n'a pas pu être chargée (réseau ou politique de sécurité). Utilisez le lien OpenStreetMap.",
+      "attribution": "© les contributeurs d'OpenStreetMap",
+      "history": "Positions précédentes",
+      "retention": "Les positions sont conservées {{count}} jours, uniquement en mode perdu.",
+      "source": {
+        "apple_command": "Réponse à « Localiser »",
+        "android_lost_mode": "Envoyée par l'appareil en mode perdu"
+      }
+    },
+    "stats": {
+      "health": "Santé",
+      "battery": "Batterie",
+      "storage": "Stockage",
+      "storageFree": "{{free}} libres sur {{total}}",
+      "lastContact": "Dernier contact",
+      "unknown": "Inconnue"
+    },
+    "health": {
+      "title": "Santé",
+      "derived": "Calculée par la console à partir des états de la fiche ; non enregistrée.",
+      "noIssue": "Aucun problème détecté",
+      "issue": {
+        "nonCompliant": "Non conforme",
+        "stale": "Sans contact depuis trop longtemps",
+        "never": "Jamais vu",
+        "quiet": "Silencieux depuis un moment",
+        "configError": "Une configuration a échoué",
+        "configPending": "Configuration en attente",
+        "noPasscode": "Aucun code",
+        "storageFull": "Stockage presque plein",
+        "batteryLow": "Batterie faible",
+        "osUpdatePending": "Mise à jour système en attente",
+        "integrityRisk": "Intégrité à risque",
+        "adminInactive": "Administrateur de l'appareil désactivé",
+        "lostMode": "En mode perdu"
+      }
+    },
+    "security": {
+      "title": "Sécurité",
+      "passcode": "Code",
+      "passcodeCompliant": "Code conforme",
+      "encryption": "Chiffrement",
+      "findMy": "Localiser (Find My)",
+      "activationLock": "Verrouillage d'activation",
+      "unlockToken": "Jeton de déverrouillage",
+      "supervision": "Supervision",
+      "pendingOs": "Mise à jour système en attente",
+      "patch": "Correctif de sécurité",
+      "posture": "Posture de sécurité",
+      "knox": "Knox",
+      "adminActive": "Administrateur de l'appareil",
+      "unknownSources": "Sources inconnues autorisées"
+    },
+    "network": {
+      "title": "Réseau",
+      "carrier": "Opérateur",
+      "subscriberCarrier": "Opérateur de l'abonné",
+      "roaming": "Itinérance",
+      "phoneNumber": "Numéro de téléphone",
+      "iccid": "ICCID",
+      "eid": "EID",
+      "wifiMac": "Adresse Wi-Fi",
+      "bluetoothMac": "Adresse Bluetooth",
+      "connection": "Connexion",
+      "ip": "Adresse IP",
+      "operator": "Opérateur",
+      "type": {
+        "wifi": "Wi-Fi",
+        "cellular": "Réseau mobile",
+        "ethernet": "Ethernet",
+        "none": "Aucune"
+      },
+      "notCollected": "Non collecté pour cette propriété : {{fields}}"
+    },
+    "ids": {
+      "title": "Identifiants",
+      "udid": "UDID",
+      "imei": "IMEI",
+      "eid": "EID",
+      "modelNumber": "Numéro de modèle",
+      "androidId": "Android ID",
+      "samsungSerial": "Numéro de série Samsung"
+    },
+    "asset": {
+      "title": "Matériel et actif",
+      "maker": "Fabricant",
+      "purchase": "Acheté le",
+      "lifecycle": "Cycle de vie",
+      "age": "Âge",
+      "ageValue": "{{years}} an(s) {{months}} mois",
+      "lifetime": "Durée de vie prévue",
+      "lifetimeValue_one": "{{count}} an",
+      "lifetimeValue_other": "{{count}} ans",
+      "warrantyActive": "Sous garantie",
+      "warrantyExpired": "Expirée"
+    },
+    "collectedToggle": "Données collectées",
+    "confirmRestartAgent": "Redémarrer cet appareil ? Un Knox sous licence est nécessaire.",
+    "confirmLostOff": "Désactiver le mode perdu ? L'appareil sera déverrouillé et de nouveau utilisable.",
+    "confirmRestart": "Redémarrer cet appareil ?"
   },
   "apiKeys": {
     "defaultGroup": "Groupe par défaut",
@@ -1460,6 +1656,7 @@
       "device_ownership_changed": "Propriété de l'appareil changée",
       "device_group_changed": "Appareil déplacé dans un groupe",
       "device_end_user_assigned": "Utilisateur de l'appareil affecté",
+      "lost_mode_location_viewed": "Positions de l'appareil en mode perdu consultées",
       "end_user_created": "Utilisateur final créé",
       "end_user_updated": "Utilisateur final modifié",
       "end_user_departed": "Départ d'un utilisateur final",
@@ -2348,7 +2545,9 @@
         "noUnlockToken": "Aucun jeton de déverrouillage",
         "alreadyOpen": "Déjà demandée",
         "identityUnavailable": "Identité pas encore connue",
-        "frozen": "Tenant gelé"
+        "frozen": "Tenant gelé",
+        "lostModeOff": "Le mode perdu est désactivé",
+        "lostModeOn": "Le mode perdu est déjà activé"
       },
       "types": {
         "DeviceInformation": "Informations de l'appareil",
@@ -3194,7 +3393,23 @@
       "passcode": "Le code ne respecte pas la politique",
       "os_update_overdue": "Une mise à jour du système d'exploitation est en retard",
       "stale": "Sans contact depuis trop longtemps",
-      "supervision_required": "La supervision est exigée"
+      "supervision_required": "La supervision est exigée",
+      "os_outdated": "Le niveau de correctif de sécurité est trop ancien",
+      "amapi_noncompliant": "L'appareil n'applique pas certains réglages de sa politique",
+      "integrity_at_risk": "L'intégrité de l'appareil est compromise",
+      "no_contact": "Aucun rapport d'état depuis trop longtemps",
+      "policy_not_applied": "La dernière politique n'est pas encore appliquée",
+      "management_disabled": "La gestion est désactivée sur l'appareil"
+    },
+    "ui": {
+      "copy": "Copier",
+      "copied": "Copié",
+      "copyFailed": "Copie impossible",
+      "battery": "Batterie",
+      "charging": "En charge",
+      "batteryUnknown": "Batterie inconnue",
+      "lastSeenNever": "Jamais vu",
+      "lastSeenAt": "Dernier contact : {{date}}"
     },
     "ownership": {
       "corporate": "Entreprise",
@@ -4227,7 +4442,15 @@
       "minVersionCode": "versionCode minimal",
       "inventorySeconds": "Période d'inventaire (s)"
     },
-    "openPanel": "Panneau de l'agent Android"
+    "openPanel": "Panneau de l'agent Android",
+    "unavailable": {
+      "capabilityMissing": "Votre équipe n'a pas cette capacité",
+      "revoked": "L'agent est révoqué",
+      "notEnrolled": "Non enrôlé",
+      "adminInactive": "L'administrateur de l'appareil de l'agent est désactivé",
+      "knoxRequired": "Exige un Knox sous licence",
+      "frozen": "Tenant gelé"
+    }
   },
   "android": {
     "device": {

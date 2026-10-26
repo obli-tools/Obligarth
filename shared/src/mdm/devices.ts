@@ -5,14 +5,16 @@
 // =============================================================================
 import type {
   ComplianceState, ConfigState, DeviceUsage, EndUserSource, EndUserStatus, EnrollmentMethod, EnrollmentState,
-  EpisodeEndReason, IdentityState, LostModeState, ManagementMode, NanoEnrollType, Ownership, Platform, PushState,
-  UnenrollReason,
+  EpisodeEndReason, IdentityState, LostModeState, ManagementChannel, ManagementMode, NanoEnrollType, Ownership, Platform,
+  PushState, UnenrollReason,
 } from './enums';
 import type { ContactState } from './states';
 
-/** A reason of non-compliance (MVP evaluator, §4.4): no personal data in `detail`. */
+/** A reason of non-compliance (MVP evaluator, §4.4; the Android evaluator, android/inventory/compliance.ts): no
+ *  personal data in `detail`. */
 export interface ComplianceReason {
-  code: 'config_error' | 'passcode' | 'os_update_overdue' | 'stale' | 'supervision_required';
+  code: 'config_error' | 'passcode' | 'os_update_overdue' | 'stale' | 'supervision_required'
+    | 'os_outdated' | 'amapi_noncompliant' | 'integrity_at_risk' | 'no_contact' | 'policy_not_applied' | 'management_disabled';
   detail?: Record<string, string | number | boolean | null>;
 }
 
@@ -34,6 +36,33 @@ export interface DeviceSummary {
   tags: string[]; enrolledAt: string | null;
   /** End of the warranty (asset data entered by an administrator, YYYY-MM-DD): the inventory's column (§11.3). */
   warrantyExpiry: string | null;
+  /** Battery level, integer percent 0-100 (list only): Apple DeviceInformation or the bridge agent's status; absent
+   *  without a source (AMAPI). */
+  batteryLevel?: number | null;
+}
+
+/** What the record shows of DeviceInformation, refiltered with the privacy rules: a field not collected is ABSENT. */
+export interface AppleDeviceInfoView {
+  modelNumber?: string | null;
+  cloudBackup?: boolean | null;
+  /** storeNetwork */
+  carrier?: string | null; subscriberCarrier?: string | null; roaming?: boolean | null;
+  /** storePhoneNumber */
+  phoneNumber?: string | null; iccid?: string | null; eid?: string | null;
+  /** storeNetwork and storeHardwareIds */
+  wifiMac?: string | null; bluetoothMac?: string | null;
+}
+
+/** The security posture of an Apple device: SecurityInfo, the DDM status items when they are more recent. */
+export interface AppleDeviceSecurityView {
+  passcodePresent: boolean | null;
+  passcodeCompliant: boolean | null;
+  passcodeCompliantWithProfiles: boolean | null;
+  hardwareEncryptionCaps: number | null;
+  /** macOS FileVault (absent when SecurityInfo does not report it). */
+  fdeEnabled?: boolean | null;
+  /** softwareupdate.pending-version (DDM): an OS update waits to be installed. */
+  pendingOsVersion: string | null;
 }
 
 /** The Apple satellite, without its secrets nor the raw responses (identity_cert_pem, device_information). */
@@ -45,6 +74,8 @@ export interface AppleDeviceDetail {
   activationLockBypassEscrowed: boolean; ddmEnabled: boolean; imei?: string | null; udid?: string | null;
   lastInventory: { deviceInfo: string | null; securityInfo: string | null; apps: string | null;
                    profiles: string | null; certificates: string | null };
+  info?: AppleDeviceInfoView;
+  security?: AppleDeviceSecurityView;
 }
 
 /** The record of one device (GET /api/mdm/devices/:id). */
@@ -56,6 +87,11 @@ export interface DeviceDetail extends DeviceSummary {
   asset: { purchaseDate: string | null; warrantyExpiry: string | null; warrantyVendor: string | null;
            warrantyStatus: string | null; expectedLifetimeYears: number | null; lifecycleStatus: string | null };
   enrollmentProfileId: string | null;
+  managementChannel: ManagementChannel;
+  /** When the lost mode last changed state (an acknowledgement, the device's word, the user's exit). */
+  lostModeChangedAt: string | null;
+  /** Last known battery: Apple DeviceInformation (BatteryLevel) or the bridge agent's status; absent without one. */
+  battery?: { level: number; charging: boolean | null; observedAt: string | null; source: 'apple' | 'agent' };
   apple?: AppleDeviceDetail;
   privacy: { collected: CollectedField[] };
 }
@@ -118,6 +154,40 @@ export interface DeviceFacets {
   osVersion: Array<{ platform: string; value: string; count: number }>;
   model: Array<{ value: string; count: number }>;
   tag: Array<{ value: string; count: number }>;
+  /** Devices whose lost mode is not off (enabling, on, disabling). */
+  lostMode: number;
+  /** Devices by contact (each tenant's mdmStaleAfterDays). */
+  contact: Record<ContactState, number>;
+  /** The same counters for the devices under management only (every state but unenrolled): the fleet counters above
+   *  the list, whose tiles filter the "under management" tab. An unenrolled record keeps its lost mode and never
+   *  checks in again: counted above, not here. */
+  managed: {
+    total: number;
+    platform: Array<{ value: string; count: number }>;
+    nonCompliant: number;
+    lostMode: number;
+    contact: Record<ContactState, number>;
+  };
+}
+
+/** One position of a device in lost mode (lost_mode_locations; never for a personal device). */
+export interface DeviceLocationPoint {
+  latitude: number; longitude: number;
+  horizontalAccuracy: number | null; altitude: number | null; speed: number | null; course: number | null;
+  observedAt: string;
+  /** apple_command: the answer to a DeviceLocation command; android_lost_mode: sent by an AMAPI device in lost mode. */
+  source: 'apple_command' | 'android_lost_mode';
+}
+
+/** GET /api/mdm/devices/:id/locations: the last positions, or why there are none to read. */
+export interface DeviceLocations {
+  available: boolean;
+  /** personal: never located; unenrolled: out of management; lostModeOff: positions exist only during the lost mode
+   *  (SEC-05); capabilityMissing: the user may not use the lost mode on the device. */
+  unavailable: 'personal' | 'unenrolled' | 'lostModeOff' | 'capabilityMissing' | null;
+  points: DeviceLocationPoint[];
+  /** Days a position is kept. */
+  retentionDays: number;
 }
 
 /** The fleet of a tenant (dashboard, GET /api/mdm/fleet/summary): the devices under management. */

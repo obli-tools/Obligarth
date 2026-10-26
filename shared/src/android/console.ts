@@ -32,6 +32,10 @@ export interface AndroidDeviceView {
   posture: { devicePosture: string | null; risks: string[] } | null;
   nonCompliance: Array<{ settingName?: string; nonComplianceReason?: string; packageName?: string; specificNonComplianceReason?: string }>;
   software: { androidVersion: string | null; androidBuildNumber: string | null; deviceKernelVersion: string | null } | null;
+  /** hardwareInfo, as filtered at the ingestion: absent when not collected. */
+  hardware?: { brand: string | null; manufacturer: string | null };
+  /** networkInfo, as filtered at the ingestion: absent when not collected. */
+  network?: { operatorName: string | null };
   lastStatusReportAt: string | null;
   enrolledAt: string;
   releasedAt: string | null;

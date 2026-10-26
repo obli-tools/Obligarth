@@ -109,6 +109,18 @@ export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
   apps: Array<{ packageName: string; label: string | null; versionName: string | null; versionCode: string | null; managed: boolean }>;
 }
 
+/** One entry of GET /api/legacy-agent/devices/:id/actions: the menu of a bridge agent's device. */
+export interface LegacyAgentDeviceAction {
+  type: 'device.lock' | 'device.wipe' | 'device.message' | 'device.reboot' | 'inventory.refresh';
+  /** The guarded action (legacy_agent.device_lock, legacy_agent.erase_device) or the restriction key of the type. */
+  actionKey: string;
+  guarded: boolean;
+  available: boolean;
+  /** capabilityMissing; revoked (the agent's key withdrawn); notEnrolled; adminInactive (the device administrator is
+   *  off: lock and erase fail on the device); knoxRequired (reboot needs a licensed Knox); frozen. */
+  unavailable: 'capabilityMissing' | 'revoked' | 'notEnrolled' | 'adminInactive' | 'knoxRequired' | 'frozen' | null;
+}
+
 export interface LegacyAgentCommandView {
   id: string;
   batchId: string;

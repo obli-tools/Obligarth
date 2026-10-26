@@ -860,7 +860,8 @@
       "osBelowValue": "OS below {{version}}",
       "osBelowHint": "Devices whose operating system is older than a version",
       "osBelowTitle": "Operating system older than",
-      "endUser": "One end user"
+      "endUser": "One end user",
+      "lostMode": "Lost mode"
     },
     "pagination": {
       "treeCapped": "Showing first {{shown}} of {{total}} — use search or pick a sub-group to narrow.",
@@ -903,6 +904,16 @@
       "count_one": "{{count}} device",
       "count_other": "{{count}} devices"
     },
+    "kpi": {
+      "title": "Fleet",
+      "hint": "Counts of the devices under management, not of the filtered view. A tile toggles its filter.",
+      "total": "Managed devices",
+      "nonCompliant": "Non compliant",
+      "stale": "No contact",
+      "lostMode": "Lost mode",
+      "apple": "Apple",
+      "android": "Android"
+    },
     "row": {
       "select": "Select",
       "warrantyUntil": "Warranty until {{date}}",
@@ -928,7 +939,8 @@
       "compliance": "Compliance",
       "serial": "Serial number",
       "tags": "Tags",
-      "warranty": "Warranty"
+      "warranty": "Warranty",
+      "battery": "Battery"
     },
     "selection": {
       "exit": "Exit selection mode",
@@ -1019,7 +1031,21 @@
       "invalidOne": "invalid",
       "active": "active",
       "inactive": "inactive",
-      "statusItems": "Status items"
+      "statusItems": "Status items",
+      "installStateValue": {
+        "none": "No update",
+        "downloading": "Downloading",
+        "downloaded": "Downloaded",
+        "installing": "Installing",
+        "idle": "Idle"
+      },
+      "item": {
+        "passcodePresent": "Passcode set",
+        "passcodeCompliant": "Passcode compliant",
+        "pendingVersion": "System update waiting",
+        "installState": "System update state",
+        "other": "Other status items"
+      }
     },
     "edit": {
       "title": "Edit the record",
@@ -1040,7 +1066,177 @@
       "widen": "More data will be collected on this device (every application, the phone number…): a ticket is required.",
       "narrow": "Less data will be collected: what is no longer collected is erased from the record."
     },
-    "purchasedOn": "Purchased on {{date}}"
+    "purchasedOn": "Purchased on {{date}}",
+    "yes": "Yes",
+    "no": "No",
+    "hero": {
+      "supervised": "Supervised",
+      "unsupervised": "Not supervised",
+      "noEndUser": "No end user",
+      "more": "More actions"
+    },
+    "quick": {
+      "locate": "Locate",
+      "lock": "Lock",
+      "lostOn": "Lost mode",
+      "lostOff": "Disable lost mode",
+      "sound": "Play a sound",
+      "erase": "Erase",
+      "message": "Message",
+      "restart": "Restart",
+      "inventory": "Refresh inventory"
+    },
+    "lostBanner": {
+      "on": "Lost mode is on",
+      "enabling": "Lost mode is being enabled",
+      "disabling": "Lost mode is being disabled",
+      "since": "Since {{date}}",
+      "disable": "Disable",
+      "locate": "Locate",
+      "sound": "Play a sound",
+      "seeLocation": "See the location"
+    },
+    "lost": {
+      "title": "Lost or stolen device?",
+      "subtitle": "Act from here: each action reaches the device at its next contact. The guarded ones ask for a reason and a confirmation.",
+      "lockHint": "Locks the screen now, with a message if you wish.",
+      "lostOnHint": "Locks the device with your message and allows locating it.",
+      "lostOffHint": "Ends the lost mode: the device is usable again.",
+      "soundHint": "Plays a sound on the device, even when it is silent.",
+      "locateHint": "Asks the device for its position (lost mode only).",
+      "eraseHint": "Erases all the data of the device. Cannot be undone.",
+      "messageHint": "Shows a message on the device.",
+      "pending": "Waiting for the device",
+      "supervisionRequired": "Lost mode: a supervised device is required.",
+      "reason": {
+        "platformUnsupported": "Not supported on Android",
+        "androidAuto": "Android sends its position by itself while in lost mode",
+        "agentUnsupported": "Not available with the Android agent",
+        "personal": "Never on a personal device"
+      }
+    },
+    "location": {
+      "title": "Location",
+      "none": "No position known.",
+      "noneHint": "Positions exist only in lost mode: ask with « Locate » (Apple), or they arrive by themselves (Android).",
+      "show": "Show the positions",
+      "showHint": "Each look at the positions is written to the audit log.",
+      "lostModeOff": "Positions exist only while the lost mode is on.",
+      "unenrolled": "Out of management: no position is shown.",
+      "anonymous": "Anonymous mode: the map and its links are hidden.",
+      "personal": "Never located: this is a personal device.",
+      "capabilityMissing": "Your team does not hold the lost mode capability on this device: its positions are not shown.",
+      "coordinates": "Coordinates",
+      "accuracy": "Accuracy",
+      "altitude": "Altitude",
+      "speed": "Speed",
+      "observed": "Observed",
+      "origin": "Source",
+      "openOsm": "Open in OpenStreetMap",
+      "openMaps": "Open in maps",
+      "showPreview": "Show a map preview",
+      "hidePreview": "Hide the map",
+      "previewHint": "The preview loads map tiles from openstreetmap.org, which then learns this position.",
+      "previewFailed": "The map could not be loaded (network or security policy). Use the OpenStreetMap link.",
+      "attribution": "© OpenStreetMap contributors",
+      "history": "Earlier positions",
+      "retention": "Positions are kept {{count}} days, in lost mode only.",
+      "source": {
+        "apple_command": "Answer to « Locate »",
+        "android_lost_mode": "Sent by the device in lost mode"
+      }
+    },
+    "stats": {
+      "health": "Health",
+      "battery": "Battery",
+      "storage": "Storage",
+      "storageFree": "{{free}} free of {{total}}",
+      "lastContact": "Last contact",
+      "unknown": "Unknown"
+    },
+    "health": {
+      "title": "Health",
+      "derived": "Computed by the console from the states of the record; not stored.",
+      "noIssue": "No issue found",
+      "issue": {
+        "nonCompliant": "Not compliant",
+        "stale": "No contact for too long",
+        "never": "Never seen",
+        "quiet": "Quiet for a while",
+        "configError": "A configuration failed",
+        "configPending": "Configuration pending",
+        "noPasscode": "No passcode",
+        "storageFull": "Storage almost full",
+        "batteryLow": "Battery low",
+        "osUpdatePending": "System update waiting",
+        "integrityRisk": "Integrity at risk",
+        "adminInactive": "Device administrator off",
+        "lostMode": "In lost mode"
+      }
+    },
+    "security": {
+      "title": "Security",
+      "passcode": "Passcode",
+      "passcodeCompliant": "Passcode compliant",
+      "encryption": "Encryption",
+      "findMy": "Find My",
+      "activationLock": "Activation lock",
+      "unlockToken": "Unlock token",
+      "supervision": "Supervision",
+      "pendingOs": "System update waiting",
+      "patch": "Security patch",
+      "posture": "Security posture",
+      "knox": "Knox",
+      "adminActive": "Device administrator",
+      "unknownSources": "Unknown sources allowed"
+    },
+    "network": {
+      "title": "Network",
+      "carrier": "Carrier",
+      "subscriberCarrier": "Subscriber carrier",
+      "roaming": "Roaming",
+      "phoneNumber": "Phone number",
+      "iccid": "ICCID",
+      "eid": "EID",
+      "wifiMac": "Wi-Fi address",
+      "bluetoothMac": "Bluetooth address",
+      "connection": "Connection",
+      "ip": "IP address",
+      "operator": "Operator",
+      "type": {
+        "wifi": "Wi-Fi",
+        "cellular": "Mobile network",
+        "ethernet": "Ethernet",
+        "none": "None"
+      },
+      "notCollected": "Not collected for this ownership: {{fields}}"
+    },
+    "ids": {
+      "title": "Identifiers",
+      "udid": "UDID",
+      "imei": "IMEI",
+      "eid": "EID",
+      "modelNumber": "Model number",
+      "androidId": "Android ID",
+      "samsungSerial": "Samsung serial"
+    },
+    "asset": {
+      "title": "Hardware and asset",
+      "maker": "Maker",
+      "purchase": "Purchased",
+      "lifecycle": "Life cycle",
+      "age": "Age",
+      "ageValue": "{{years}} yr {{months}} mo",
+      "lifetime": "Expected lifetime",
+      "lifetimeValue_one": "{{count}} year",
+      "lifetimeValue_other": "{{count}} years",
+      "warrantyActive": "Under warranty",
+      "warrantyExpired": "Expired"
+    },
+    "collectedToggle": "Data collected",
+    "confirmRestartAgent": "Restart this device? A licensed Knox is required.",
+    "confirmLostOff": "Disable the lost mode? The device will be unlocked and usable again.",
+    "confirmRestart": "Restart this device?"
   },
   "apiKeys": {
     "defaultGroup": "Default group",
@@ -1460,6 +1656,7 @@
       "device_ownership_changed": "Device ownership changed",
       "device_group_changed": "Device moved to a group",
       "device_end_user_assigned": "End user of a device assigned",
+      "lost_mode_location_viewed": "Lost-mode positions of a device viewed",
       "end_user_created": "End user created",
       "end_user_updated": "End user updated",
       "end_user_departed": "End user departed",
@@ -2348,7 +2545,9 @@
         "noUnlockToken": "No unlock token",
         "alreadyOpen": "Already requested",
         "identityUnavailable": "Identity not known yet",
-        "frozen": "Tenant frozen"
+        "frozen": "Tenant frozen",
+        "lostModeOff": "Lost mode is off",
+        "lostModeOn": "Lost mode is already on"
       },
       "types": {
         "DeviceInformation": "Device information",
@@ -3194,7 +3393,23 @@
       "passcode": "The passcode does not meet the policy",
       "os_update_overdue": "An operating system update is overdue",
       "stale": "No contact for too long",
-      "supervision_required": "Supervision is required"
+      "supervision_required": "Supervision is required",
+      "os_outdated": "The security patch level is too old",
+      "amapi_noncompliant": "The device does not apply some settings of its policy",
+      "integrity_at_risk": "The device integrity is at risk",
+      "no_contact": "No status report for too long",
+      "policy_not_applied": "The latest policy is not applied yet",
+      "management_disabled": "Management is disabled on the device"
+    },
+    "ui": {
+      "copy": "Copy",
+      "copied": "Copied",
+      "copyFailed": "Could not copy",
+      "battery": "Battery",
+      "charging": "Charging",
+      "batteryUnknown": "Battery unknown",
+      "lastSeenNever": "Never seen",
+      "lastSeenAt": "Last contact: {{date}}"
     },
     "ownership": {
       "corporate": "Corporate",
@@ -4227,7 +4442,15 @@
       "minVersionCode": "Minimal versionCode",
       "inventorySeconds": "Inventory period (s)"
     },
-    "openPanel": "Android agent panel"
+    "openPanel": "Android agent panel",
+    "unavailable": {
+      "capabilityMissing": "Your team does not hold this capability",
+      "revoked": "The agent is revoked",
+      "notEnrolled": "Not enrolled",
+      "adminInactive": "The device administrator of the agent is off",
+      "knoxRequired": "Needs a licensed Knox",
+      "frozen": "Tenant frozen"
+    }
   },
   "android": {
     "device": {

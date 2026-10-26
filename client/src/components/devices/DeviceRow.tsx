@@ -5,9 +5,15 @@ import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/authStore';
 import { anonymize } from '@/utils/anonymize';
-import { useMediaQuery } from '@/hooks/useMediaQuery';
-import { DeviceStateBadges, complianceLabel } from '@/components/mdm/DeviceStateBadges';
-import { PlatformIcon, dayIsPast, formatDay, osLabel, ownershipLabel, shortAge } from '@/components/mdm/PlatformIcon';
+import { useCanHover, useMediaQuery } from '@/hooks/useMediaQuery';
+import { Tip } from '@/components/common/Tip';
+import {
+  COMPLIANCE_TONE, DeviceStateBadges, complianceLabel, complianceReasonLabel, toneDot,
+} from '@/components/mdm/DeviceStateBadges';
+import { dayIsPast, formatDay, osLabel, ownershipLabel } from '@/components/mdm/PlatformIcon';
+import { PlatformAvatar } from '@/components/mdm/PlatformAvatar';
+import { BatteryIndicator } from '@/components/mdm/BatteryIndicator';
+import { LastSeenPill } from '@/components/mdm/LastSeenPill';
 
 interface DeviceRowProps {
   device: DeviceSummary;
@@ -23,12 +29,7 @@ interface DeviceRowProps {
   visibleFields?: Set<string>;
 }
 
-const DEFAULT_FIELDS = ['platform', 'model', 'ownership', 'group', 'endUser'];
-
-/** Colour of the last contact: recent, quiet, without contact (modele-donnees-mdm §4.4). */
-const CONTACT_COLOR: Record<DeviceSummary['contactState'], string> = {
-  recent: 'text-green-400', quiet: 'text-text-muted', stale: 'text-amber-400', never: 'text-text-muted',
-};
+const DEFAULT_FIELDS = ['platform', 'model', 'ownership', 'group', 'endUser', 'battery'];
 
 // Stacked row = line 1 wraps into a "name" line and a "status" line. The
 // single line is kept only where there is room for it: desktop with a
@@ -50,6 +51,8 @@ export const DeviceRow = memo(function DeviceRow({
   const { t } = useTranslation();
   const { isAdmin } = useAuthStore();
   const stacked = useMediaQuery(STACKED_ROW_QUERY);
+  // The tooltips of the row open on hover only: on a touch screen a tap opens the device, as on the rest of the row.
+  const canHover = useCanHover();
   const fieldOn = (key: string): boolean => (visibleFields ? visibleFields.has(key) : DEFAULT_FIELDS.includes(key));
 
   const tags = device.tags ?? [];
@@ -59,9 +62,23 @@ export const DeviceRow = memo(function DeviceRow({
   const model = device.modelName || device.model;
   const endUser = device.endUser?.displayName || device.endUser?.email || null;
 
+  const managed = device.enrollmentState !== 'unenrolled';
+  const lost = device.lostModeState !== 'off';
+
   // The checkbox column: explicit selection mode (any role), or an administrator (always, for the batch actions).
   const showCheckbox = selectionMode || isAdmin();
-  const line2Offset = showCheckbox ? 'pl-[68px]' : 'pl-[40px]';
+  const line2Offset = showCheckbox ? 'pl-[80px]' : 'pl-[52px]';
+
+  // Compliance as a dot on the corner of the platform avatar (managed devices only), its reasons in the tooltip.
+  const complianceText = complianceLabel(t, device.complianceState);
+  const reasons = device.complianceState === 'non_compliant' ? device.complianceReasons ?? [] : [];
+  const complianceDot = managed ? (
+    <span
+      role="img"
+      aria-label={complianceText}
+      className={clsx('block h-2.5 w-2.5 rounded-full ring-2 ring-bg-secondary', toneDot(COMPLIANCE_TONE[device.complianceState] ?? 'gray'))}
+    />
+  ) : null;
 
   const handleCheckbox = (e: MouseEvent) => {
     e.stopPropagation();
@@ -96,7 +113,10 @@ export const DeviceRow = memo(function DeviceRow({
         !stacked && 'md:h-[72px]',
         isSelected && 'bg-accent/10',
         selectionMode && isSelected && 'bg-accent/15',
-        device.enrollmentState === 'unenrolled' && 'opacity-70',
+        // Lost mode: a red edge (an inset shadow, so that nothing shifts) and a faint red tint.
+        lost && 'shadow-[inset_3px_0_0_0_rgb(239,68,68)]',
+        lost && !isSelected && 'bg-red-500/5',
+        !managed && 'opacity-70',
       )}
       onClick={() => (selectionMode ? onSelect(device.id) : onNavigate(device.id))}
       onMouseDown={handleMouseDown}
@@ -130,7 +150,26 @@ export const DeviceRow = memo(function DeviceRow({
           </button>
         )}
 
-        <PlatformIcon platform={device.platform} className="w-4 h-4 text-text-muted flex-shrink-0" />
+        <span className="relative flex-shrink-0">
+          <PlatformAvatar platform={device.platform} size="sm" />
+          {complianceDot && (canHover ? (
+            <Tip
+              className="absolute -bottom-0.5 -right-0.5"
+              content={reasons.length > 0 ? (
+                <div className="text-left">
+                  <div className="font-medium">{complianceText}</div>
+                  <ul className="mt-0.5 space-y-0.5">
+                    {reasons.map((r, i) => <li key={`${r.code}-${i}`}>{complianceReasonLabel(t, r.code)}</li>)}
+                  </ul>
+                </div>
+              ) : complianceText}
+            >
+              {complianceDot}
+            </Tip>
+          ) : (
+            <span className="absolute -bottom-0.5 -right-0.5">{complianceDot}</span>
+          ))}
+        </span>
 
         <span className={clsx('text-sm font-semibold text-text-primary truncate', stacked ? 'flex-1 min-w-0' : 'max-w-[240px]')} title={anonymize(device.label)}>
           {anonymize(device.label)}
@@ -151,15 +190,24 @@ export const DeviceRow = memo(function DeviceRow({
         <div className={stacked ? 'order-2 flex-none w-full h-0' : 'flex-1'} />
 
         {/* The separate states: enrollment always, the others when they say something. */}
-        <span className={clsx('flex', stacked && 'order-3', stacked && (showCheckbox ? 'md:ml-[68px]' : 'md:ml-[40px]'))}>
-          <DeviceStateBadges device={device} />
+        <span className={clsx('flex', stacked && 'order-3', stacked && (showCheckbox ? 'md:ml-[80px]' : 'md:ml-[52px]'))}>
+          <DeviceStateBadges device={device} pulseLost />
         </span>
 
-        <span
-          className={clsx('text-xs flex-shrink-0 tabular-nums w-12 text-right max-md:w-auto', stacked && 'order-1', CONTACT_COLOR[device.contactState])}
-          title={device.lastCheckinAt ? new Date(device.lastCheckinAt).toLocaleString() : (t('mdm.contactState.never') || 'Never seen')}
-        >
-          {shortAge(device.lastCheckinAt)}
+        {/* Battery: absent without a source (AMAPI) or when toggled off, so no empty cell. */}
+        {fieldOn('battery') && device.batteryLevel != null && (
+          <span className={clsx('flex-shrink-0', stacked && 'order-1')}>
+            <BatteryIndicator level={device.batteryLevel} compact tip={canHover} />
+          </span>
+        )}
+
+        {/* Never seen: a dash, the contact badge already says it. */}
+        <span className={clsx('flex-shrink-0 flex justify-end min-w-[3rem] max-md:min-w-0', stacked && 'order-1')}>
+          {device.lastCheckinAt ? (
+            <LastSeenPill lastCheckinAt={device.lastCheckinAt} contactState={device.contactState} compact tip={canHover} />
+          ) : (
+            <span className="text-xs text-text-muted" title={t('mdm.contactState.never') || 'Never seen'}>{'—'}</span>
+          )}
         </span>
 
         {/* Eye: redundant with the row tap, dropped on phone. */}

@@ -1,6 +1,7 @@
 import apiClient from './client';
 import type {
-  LegacyAgentCommandView, LegacyAgentConsoleType, LegacyAgentDeviceDetail, LegacyAgentDeviceView, LegacyAgentInstanceSettings,
+  LegacyAgentCommandView, LegacyAgentConsoleType, LegacyAgentDeviceAction, LegacyAgentDeviceDetail, LegacyAgentDeviceView,
+  LegacyAgentInstanceSettings,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
 } from '@obligarth/shared';
 
@@ -45,6 +46,11 @@ export const legacyAgentApi = {
   async device(id: number): Promise<LegacyAgentDeviceDetail> {
     const res = await apiClient.get<ApiResponse<LegacyAgentDeviceDetail>>(`/legacy-agent/devices/${id}`);
     return res.data.data!;
+  },
+  /** The menu of a device's record, with what greys an entry (lock and erase go through POST /actions). */
+  async actions(id: number): Promise<LegacyAgentDeviceAction[]> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentDeviceAction[]>>(`/legacy-agent/devices/${id}/actions`);
+    return res.data.data ?? [];
   },
   async deviceCommands(id: number): Promise<LegacyAgentCommandView[]> {
     const res = await apiClient.get<ApiResponse<LegacyAgentCommandView[]>>(`/legacy-agent/devices/${id}/commands`);

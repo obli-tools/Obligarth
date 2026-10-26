@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useNavigationType } from 'react-router-dom';
 import { useSessionState } from '@/hooks/useSessionState';
 import {
   Search, RefreshCw, ChevronRight, ChevronDown, X, Trash2, Download, Loader2, MoreHorizontal, SortAsc, SortDesc,
   FolderOpen, MousePointerClick, Check, FolderX, Tag, Building2, SlidersHorizontal, Columns3, FolderTree,
-  ScrollText, TerminalSquare, ShieldCheck,
+  ScrollText, TerminalSquare, ShieldCheck, Siren,
 } from 'lucide-react';
 import { mdmApi, type ContactFilter, type DeviceListParams, type DeviceSortField } from '@/api/mdm.api';
 import { appleApi, isAwaitingApproval, newIdempotencyKey } from '@/api/apple.api';
@@ -17,6 +17,7 @@ import type {
 import { useTenantStore } from '@/store/tenantStore';
 import { groupsApi } from '@/api/groups.api';
 import { DeviceRow } from '@/components/devices/DeviceRow';
+import { DevicesKpiStrip, isApplePlatform, type KpiFilter } from '@/components/devices/DevicesKpiStrip';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
 import { useAuthStore } from '@/store/authStore';
@@ -78,7 +79,15 @@ export interface InitialDeviceFilters {
   platform?: string;
   ownership?: string;
   endUserId?: number;
+  /** Only the devices in lost mode (?lost=1). */
+  lost?: boolean;
 }
+
+// The session keys of the filters a link carries (dropped when a different link lands on the page), and the key
+// of the last link applied.
+const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost']
+  .map((k) => `obligarth:inventory:${k}`);
+const LINK_SESSION_KEY = 'obligarth:inventory:link';
 
 interface DeviceTableProps {
   initialFilters?: InitialDeviceFilters;
@@ -140,7 +149,27 @@ export function DeviceTable({
 
   // ── Filters ───────────────────────────────────────────────────────────────
   // Kept in sessionStorage (per tab) so that coming back from a device page restores them. A link's filters
-  // (initialFilters) seed the values when the session holds none, and replace them when the link changes.
+  // (initialFilters) seed the values when the session holds none, and replace them when the link changes: while
+  // the page is mounted (the effect below), and from one visit to the next (a dashboard card followed after the
+  // list was left): the last link applied is kept in the session, and a different link, before the state is read,
+  // drops the session's values of the filters a link carries. A plain /devices keeps them (the menu entry). The same
+  // link followed again (a PUSH: the dashboard card clicked once more) applies again too; only a return (POP: the
+  // browser's back, a reload) keeps what was changed by hand since.
+  const navigationType = useNavigationType();
+  const linkKey = JSON.stringify(initialFilters ?? {});
+  const firstLink = useRef<string | null>(null);
+  if (firstLink.current === null) {
+    firstLink.current = linkKey;
+    // Not for an embedded table (a group's page): it carries no link.
+    if (initialFilters) {
+      try {
+        if (linkKey !== '{}' && (navigationType !== 'POP' || sessionStorage.getItem(LINK_SESSION_KEY) !== linkKey)) {
+          for (const k of LINK_FILTER_KEYS) sessionStorage.removeItem(k);
+        }
+        sessionStorage.setItem(LINK_SESSION_KEY, linkKey);
+      } catch { /* sessionStorage unavailable: the link seeds the state below */ }
+    }
+  }
   const [search, setSearch] = useSessionState<string>('obligarth:inventory:search', '');
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [stateTab, setStateTab] = useSessionState<StateTab>('obligarth:inventory:state',
@@ -163,14 +192,14 @@ export function DeviceTable({
   const [tagsMenuOpen, setTagsMenuOpen] = useState(false);
   const [endUserId, setEndUserId] = useSessionState<number | undefined>('obligarth:inventory:endUser', initialFilters?.endUserId);
   const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obligarth:inventory:tenants', new Set<number>());
+  const [lostOnly, setLostOnly] = useSessionState<boolean>('obligarth:inventory:lost', () => initialFilters?.lost === true);
   const [facets, setFacets] = useState<DeviceFacets | null>(null);
 
   // A link followed while the page is mounted (another dashboard card): its filters replace the current ones.
-  const linkKey = JSON.stringify(initialFilters ?? {});
-  const firstLink = useRef(linkKey);
   useEffect(() => {
     if (firstLink.current === linkKey) return;
     firstLink.current = linkKey;
+    try { sessionStorage.setItem(LINK_SESSION_KEY, linkKey); } catch { /* session only */ }
     const f = initialFilters ?? {};
     setStateTab(isStateTab(f.state) ? f.state : 'managed');
     setContactFilters(oneOf(f.contact, CONTACTS));
@@ -179,6 +208,7 @@ export function DeviceTable({
     setPlatformFilters(f.platform ? new Set([f.platform]) : new Set());
     setOwnershipFilters(f.ownership ? new Set([f.ownership]) : new Set());
     setEndUserId(f.endUserId);
+    setLostOnly(f.lost === true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkKey]);
 
@@ -288,6 +318,7 @@ export function DeviceTable({
     osBelow: osBelow || undefined,
     tags: [...tagFilters],
     endUserId,
+    lostMode: lostOnly ? true : undefined,
     groupId: ungroupedOnly ? undefined : (groupId ?? undefined),
     includeSubgroups: ungroupedOnly ? undefined : (groupId ? true : undefined),
     ungrouped: ungroupedOnly ? true : undefined,
@@ -295,7 +326,7 @@ export function DeviceTable({
     sortBy: sortBy || undefined,
     sortOrder: sortBy ? sortOrder : undefined,
   }), [debouncedSearch, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters,
-    supervisedOnly, osBelow, tagFilters, endUserId, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder]);
+    supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder]);
 
   const load = useCallback(async (reset: boolean) => {
     const pageToFetch = reset ? 1 : loadedPagesRef.current + 1;
@@ -369,14 +400,50 @@ export function DeviceTable({
   const deviceMove = useDeviceMove((_m, outcome) => { if (outcome !== 'failed') { clearSelection(); void load(true); } });
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
-    + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0);
+    + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0)
+    + (lostOnly ? 1 : 0);
   const hasFilters = !!debouncedSearch || chipFilterCount > 0;
   const activeFilterCount = chipFilterCount + (stateTab !== 'managed' ? 1 : 0) + (isMaster ? tenantFilters.size : 0);
   const clearAllFilters = () => {
     setSearch('');
     setContactFilters(new Set()); setComplianceFilters(new Set()); setConfigFilters(new Set());
     setPlatformFilters(new Set()); setOwnershipFilters(new Set()); setTagFilters(new Set());
-    setSupervisedOnly(false); setOsBelow(''); setOsBelowDraft(''); setEndUserId(undefined);
+    setSupervisedOnly(false); setOsBelow(''); setOsBelowDraft(''); setEndUserId(undefined); setLostOnly(false);
+  };
+
+  // ── Fleet counters (DevicesKpiStrip): their tiles drive the same filters as the chips ─────────────────────
+  // Apple: every Apple platform present in the fleet; on when all of them are filtered on.
+  const applePlatforms = useMemo(() => (facets?.managed.platform ?? []).filter((p) => p.count > 0 && isApplePlatform(p.value)).map((p) => p.value), [facets]);
+  const kpiActive = useMemo(() => {
+    const on = new Set<KpiFilter>();
+    if (complianceFilters.has('non_compliant')) on.add('nonCompliant');
+    if (contactFilters.has('stale')) on.add('stale');
+    if (lostOnly) on.add('lostMode');
+    if (applePlatforms.length > 0 && applePlatforms.every((p) => platformFilters.has(p))) on.add('apple');
+    if (platformFilters.has('android')) on.add('android');
+    return on;
+  }, [complianceFilters, contactFilters, lostOnly, applePlatforms, platformFilters]);
+  const kpiShowingAll = stateTab === 'managed' && complianceFilters.size === 0 && contactFilters.size === 0 && platformFilters.size === 0 && !lostOnly;
+  const toggleKpi = (f: KpiFilter) => {
+    // The tiles count the devices under management: turning one on shows that tab, the list it counts.
+    if (!kpiActive.has(f)) setStateTab('managed');
+    switch (f) {
+      case 'nonCompliant': setComplianceFilters((prev) => toggleIn(prev, 'non_compliant' as ComplianceState)); break;
+      case 'stale': setContactFilters((prev) => toggleIn(prev, 'stale' as ContactFilter)); break;
+      case 'lostMode': setLostOnly((prev) => !prev); break;
+      case 'android': setPlatformFilters((prev) => toggleIn(prev, 'android')); break;
+      case 'apple': setPlatformFilters((prev) => {
+        const next = new Set(prev);
+        if (kpiActive.has('apple')) applePlatforms.forEach((p) => next.delete(p));
+        else applePlatforms.forEach((p) => next.add(p));
+        return next;
+      }); break;
+    }
+  };
+  // "Total": the managed devices, without the filters the tiles drive.
+  const showAllKpi = () => {
+    setComplianceFilters(new Set()); setContactFilters(new Set()); setPlatformFilters(new Set()); setLostOnly(false);
+    setStateTab('managed');
   };
 
   const handleSort = (field: SortField) => {
@@ -470,12 +537,28 @@ export function DeviceTable({
   })() : null;
 
   const platformChips = (facets?.platform ?? []).filter((p) => p.count > 0);
+  // The lost mode and the contact on the "under management" tab: the managed devices only (an unenrolled record keeps
+  // its lost mode and never checks in again, it would count where the list cannot show it).
+  const lostCount = (stateTab === 'managed' ? facets?.managed.lostMode : facets?.lostMode) ?? 0;
+  const contactCounts = stateTab === 'managed' ? facets?.managed.contact : facets?.contact;
   const filterChips = (
     <div className="flex items-center gap-1.5 flex-wrap">
+      {/* Lost mode: only when a device is in it (or the filter is on). */}
+      {(lostCount > 0 || lostOnly) && (
+        <>
+          <button onClick={() => setLostOnly(!lostOnly)} className={chipCls(lostOnly)} aria-pressed={lostOnly}>
+            <Siren className="w-3 h-3 text-red-400" />
+            {t('devices.filters.lostMode') || 'Lost mode'}
+            {facets && <span className="text-text-muted/70">{lostCount}</span>}
+          </button>
+          {divider}
+        </>
+      )}
       {CONTACTS.map((c) => (
         <button key={c} onClick={() => setContactFilters((prev) => toggleIn(prev, c))} className={chipCls(contactFilters.has(c))}>
           <div className={clsx('w-2 h-2 rounded-full', toneDot(CONTACT_TONE[c]))} />
           {contactLabel(t, c)}
+          {contactCounts && <span className="text-text-muted/70">{contactCounts[c] ?? 0}</span>}
         </button>
       ))}
       {divider}
@@ -712,6 +795,12 @@ export function DeviceTable({
 
   return (
     <div className={clsx('flex flex-col space-y-3', embedded ? 'lg:p-6' : 'p-3 sm:p-4 lg:p-6')}>
+      {/* Fleet counters, above the toolbar: they scroll away with the list. Not on a group's page (embedded), where
+          the counts of the whole fleet would read as the group's. */}
+      {!embedded && (
+        <DevicesKpiStrip facets={facets} active={kpiActive} showingAll={kpiShowingAll} onToggle={toggleKpi} onShowAll={showAllKpi} />
+      )}
+
       {/* Sticky toolbar: opaque background, pinned at the top of the scrolling pane. Phone: only the search and a
           compact action row stay sticky; the chips move to the "Filters" sheet. */}
       <div
@@ -719,7 +808,8 @@ export function DeviceTable({
           'sticky top-0 z-20 pb-3 bg-bg-primary space-y-3',
           embedded
             ? 'lg:-mx-6 lg:-mt-6 lg:px-6 lg:pt-6'
-            : '-mx-3 -mt-3 px-3 pt-3 sm:-mx-4 sm:-mt-4 sm:px-4 sm:pt-4 lg:-mx-6 lg:-mt-6 lg:px-6 lg:pt-6',
+            // Below the counters: no pull-up, the padding alone keeps the gap.
+            : '!mt-0 -mx-3 px-3 pt-3 sm:-mx-4 sm:px-4 sm:pt-4 lg:-mx-6 lg:px-6 lg:pt-6',
         )}
       >
         {!compactToolbar && stateTabs}

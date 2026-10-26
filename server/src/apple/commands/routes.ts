@@ -109,17 +109,27 @@ interface DeviceFacts {
   supervised: boolean;
   has_unlock_token: boolean;
   apple: number | null;
+  lost_mode_state: 'off' | 'enabling' | 'on' | 'disabling';
 }
 
 async function deviceFacts(tenantId: number, ids: number[]): Promise<Map<number, DeviceFacts>> {
   const rows = await db('devices as d')
     .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId).whereRaw('d.id = ANY (?::int[])', [ids])
-    .select('d.id', 'd.management_channel', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'a.has_unlock_token', 'a.device_id as apple') as DeviceFacts[];
+    .select('d.id', 'd.management_channel', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'd.lost_mode_state', 'a.has_unlock_token',
+      'a.device_id as apple') as DeviceFacts[];
   return new Map(rows.map((r) => [Number(r.id), { ...r, id: Number(r.id), has_unlock_token: r.has_unlock_token === true }]));
 }
 
 const prerequisite = (spec: CommandSpec<any>, d: DeviceFacts | undefined): MdmRefusalCode | null => refusalOf(spec, d && d.apple !== null ? d : undefined);
+
+/** Why the menu greys out a lost-mode command given the recorded state of the lost mode (null: nothing to say). */
+function lostModeRefusal(requestType: string, state: DeviceFacts['lost_mode_state'] | undefined): 'lostModeOff' | 'lostModeOn' | null {
+  if (state === undefined) return null;
+  if (['PlayLostModeSound', 'DeviceLocation', 'DisableLostMode'].includes(requestType) && state === 'off') return 'lostModeOff';
+  if (requestType === 'EnableLostMode' && (state === 'on' || state === 'enabling')) return 'lostModeOn';
+  return null;
+}
 
 /** The freeze of the Apple commands (the engine's, or apple-edge's mirror: guard/frozen.ts, lot AN-P). */
 const frozen = (tenantId: number): Promise<boolean> => frozenFor(null, tenantId, 'apple_mdm');
@@ -274,7 +284,10 @@ router.get('/devices/:id/actions', async (req, res, next) => {
       if (spec.capability === null) continue;
       const hasCapability = canWrite && (isAdmin || await permissionService.canUseCapability(req.session.userId!, id, false, spec.capability));
       const refusal = prerequisite(spec, facts);
-      const unavailable = !hasCapability ? 'capabilityMissing' : refusal ? REFUSAL_CODES[refusal] : isFrozen ? 'frozen' : null;
+      const otherwise = !hasCapability ? 'capabilityMissing' : refusal ? REFUSAL_CODES[refusal] : isFrozen ? 'frozen' : null;
+      // The menu only (the bus still accepts them: the recorded state may lag behind the device): the sound, the
+      // location and the disabling need the lost mode on; enabling it again while it is on or coming is pointless.
+      const unavailable = otherwise ?? lostModeRefusal(spec.requestType, facts?.lost_mode_state);
       actions.push({ requestType: spec.requestType, capability: spec.capability, restrictionKey: spec.restrictionKey, guarded: spec.guardedBy !== null,
         reasonRequired: spec.reasonRequired, available: unavailable === null, unavailable });
     }

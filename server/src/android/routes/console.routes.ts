@@ -107,6 +107,10 @@ export function createAndroidConsoleRouter(): Router {
     if (!r) throw new AppError(404, 'Not found', 'notFound');
     const posture = json(r.security_posture) as { devicePosture?: unknown; risks?: unknown[] } | null;
     const software = json(r.software_info) as Record<string, unknown> | null;
+    // Filtered at the ingestion (android/inventory/privacy.ts): NULL for what is not collected, never a company device's
+    // field on a personal one (android_devices_personal_no_hw).
+    const hardware = json(r.hardware_info) as Record<string, unknown> | null;
+    const network = json(r.network_info) as Record<string, unknown> | null;
     const nonCompliance = json(r.non_compliance);
     const reasons = json(r.policy_state_reasons);
     const amapiName = String(r.amapi_name ?? '');
@@ -144,6 +148,8 @@ export function createAndroidConsoleRouter(): Router {
         androidVersion: str(software.androidVersion), androidBuildNumber: str(software.androidBuildNumber),
         deviceKernelVersion: str(software.deviceKernelVersion),
       } : null,
+      ...(hardware && typeof hardware === 'object' ? { hardware: { brand: str(hardware.brand), manufacturer: str(hardware.manufacturer) } } : {}),
+      ...(network && typeof network === 'object' ? { network: { operatorName: str(network.networkOperatorName) } } : {}),
       lastStatusReportAt: iso(r.last_status_report_at),
       enrolledAt: iso(r.enrolled_at) as string,
       releasedAt: iso(r.released_at), releaseReason: str(r.release_reason),

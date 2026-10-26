@@ -8,6 +8,7 @@ import { isStepUpHandled } from '@/api/client';
 import { Button } from '@/components/common/Button';
 import { usePrompt } from '@/components/common/ConfirmDialog';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
+import { InfoCard } from '@/components/mdm/ui/InfoCard';
 import { registerSocketListener } from '@/socket/socketListeners';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
 
@@ -23,7 +24,7 @@ const MANUAL_FALLBACK: Record<RetirementManualItem, string> = {
   apple_business: 'Released in Apple Business', activation_lock: 'Activation lock handled',
 };
 
-export function DeviceRetirementCard({ deviceId, canAct, isApple }: { deviceId: number; canAct: boolean; isApple: boolean }) {
+export function DeviceRetirementCard({ deviceId, canAct, isApple, className }: { deviceId: number; canAct: boolean; isApple: boolean; className?: string }) {
   const { t } = useTranslation();
   const prompt = usePrompt();
   const [view, setView] = useState<RetirementView | null>(null);
@@ -68,49 +69,52 @@ export function DeviceRetirementCard({ deviceId, canAct, isApple }: { deviceId: 
   const started = !!view?.startedAt;
   if (!started && !canAct) return null;
   return (
-    <div className="rounded-xl bg-bg-secondary p-4 space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-text-primary">{t('deviceRetirement.title') || 'Retirement'}</h3>
-        {canAct && (
-          <Button size="sm" variant="danger" onClick={() => { void revoke(); }} disabled={busy}>
-            <ShieldOff className="w-4 h-4 mr-1" />{t('deviceRetirement.revoke') || 'Revoke the identity'}
-          </Button>
+    <InfoCard
+      icon={ShieldOff}
+      title={t('deviceRetirement.title') || 'Retirement'}
+      className={className}
+      action={canAct ? (
+        <Button size="sm" variant="danger" onClick={() => { void revoke(); }} disabled={busy}>
+          <ShieldOff className="w-4 h-4 mr-1" />{t('deviceRetirement.revoke') || 'Revoke the identity'}
+        </Button>
+      ) : undefined}
+    >
+      <div className="space-y-3">
+        {started && view ? (
+          <>
+            <p className="text-xs text-text-muted">{t('deviceRetirement.startedAt', { date: formatDateTime(view.startedAt) }) || `Started ${formatDateTime(view.startedAt)}`}</p>
+            <ul className="space-y-1.5 text-sm">
+              {view.steps.map((s) => (
+                <li key={s.step} className="flex items-start gap-2">
+                  {s.outcome === 'cancelled' ? <XCircle className="w-4 h-4 mt-0.5 text-amber-400" />
+                    : s.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-text-muted" />}
+                  <span className={s.at ? 'text-text-primary' : 'text-text-muted'}>
+                    {trCode(`deviceRetirement.step.${s.step}`, STEP_FALLBACK[s.step])}
+                    {s.outcome && <span className="ml-2 text-[11px] text-text-muted">{trCode(`deviceRetirement.outcome.${s.outcome}`, s.outcome)}</span>}
+                  </span>
+                </li>
+              ))}
+              {!view.cancelled && view.manual.map((m) => (
+                <li key={m.item} className="flex items-start gap-2">
+                  {m.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-amber-400" />}
+                  <span className={m.at ? 'text-text-primary' : 'text-text-secondary'}>{trCode(`deviceRetirement.manual.${m.item}`, MANUAL_FALLBACK[m.item])}</span>
+                  {!m.at && canAct && (
+                    <button type="button" disabled={busy} onClick={() => { void tick(m.item); }}
+                      className="ml-auto text-xs text-accent hover:underline disabled:opacity-50">
+                      {t('deviceRetirement.markDone') || 'Mark as done'}
+                    </button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {view.cancelled && (
+              <p className="text-xs text-amber-400">{t('deviceRetirement.cancelled') || 'Retirement cancelled: the remaining steps were not run and the device was not released.'}</p>
+            )}
+          </>
+        ) : (
+          <p className="text-xs text-text-muted">{t('deviceRetirement.none') || 'No retirement started: « Remove from management » starts it.'}</p>
         )}
       </div>
-      {started && view ? (
-        <>
-          <p className="text-xs text-text-muted">{t('deviceRetirement.startedAt', { date: formatDateTime(view.startedAt) }) || `Started ${formatDateTime(view.startedAt)}`}</p>
-          <ul className="space-y-1.5 text-sm">
-            {view.steps.map((s) => (
-              <li key={s.step} className="flex items-start gap-2">
-                {s.outcome === 'cancelled' ? <XCircle className="w-4 h-4 mt-0.5 text-amber-400" />
-                  : s.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-text-muted" />}
-                <span className={s.at ? 'text-text-primary' : 'text-text-muted'}>
-                  {trCode(`deviceRetirement.step.${s.step}`, STEP_FALLBACK[s.step])}
-                  {s.outcome && <span className="ml-2 text-[11px] text-text-muted">{trCode(`deviceRetirement.outcome.${s.outcome}`, s.outcome)}</span>}
-                </span>
-              </li>
-            ))}
-            {!view.cancelled && view.manual.map((m) => (
-              <li key={m.item} className="flex items-start gap-2">
-                {m.at ? <CheckCircle2 className="w-4 h-4 mt-0.5 text-green-400" /> : <Circle className="w-4 h-4 mt-0.5 text-amber-400" />}
-                <span className={m.at ? 'text-text-primary' : 'text-text-secondary'}>{trCode(`deviceRetirement.manual.${m.item}`, MANUAL_FALLBACK[m.item])}</span>
-                {!m.at && canAct && (
-                  <button type="button" disabled={busy} onClick={() => { void tick(m.item); }}
-                    className="ml-auto text-xs text-accent hover:underline disabled:opacity-50">
-                    {t('deviceRetirement.markDone') || 'Mark as done'}
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-          {view.cancelled && (
-            <p className="text-xs text-amber-400">{t('deviceRetirement.cancelled') || 'Retirement cancelled: the remaining steps were not run and the device was not released.'}</p>
-          )}
-        </>
-      ) : (
-        <p className="text-xs text-text-muted">{t('deviceRetirement.none') || 'No retirement started: « Remove from management » starts it.'}</p>
-      )}
-    </div>
+    </InfoCard>
   );
 }

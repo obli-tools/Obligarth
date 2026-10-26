@@ -6,7 +6,8 @@ import { z } from 'zod';
 import {
   LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_TOKEN_BOUNDS,
   type DeviceCapability, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
-  type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated, type LegacyAgentTokenView,
+  type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
+  type LegacyAgentTokenView,
 } from '@obligarth/shared';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
 import { audit } from '../audit';
@@ -39,6 +40,7 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // out of reach answers like an unknown one (404).
 //   GET  /devices                       the agents of the tenant the caller sees
 //   GET  /devices/:id                   one agent: satellite, status items, apps
+//   GET  /devices/:id/actions           its menu (lock, erase, message, reboot, inventory) and what greys an entry
 //   GET  /devices/:id/commands          its queue
 //   POST /devices/:id/commands          capability of the type, restriction → 202
 //   POST /commands/bulk                 the same on 500 devices at most
@@ -187,6 +189,37 @@ router.get('/devices/:id/commands', wrap(async (req, res) => {
   const rows = await db('legacy_agent_commands').where({ tenant_id: req.tenantId!, device_id: id }).orderBy('created_at', 'desc').orderBy('id', 'desc')
     .limit(100).select('*') as Array<Record<string, any>>;
   res.json({ success: true, data: rows.map(commandView) });
+}));
+
+/** The menu of a device's record (lock and erase through their guarded action, the rest through the command route). */
+const MENU_TYPES = ['device.lock', 'device.wipe', 'device.message', 'device.reboot', 'inventory.refresh'] as const;
+
+// GET /api/legacy-agent/devices/:id/actions — the menu of a device, with what makes an action unavailable (the capability
+// of the type on the device and write scope; the revoked key; the enrollment; the device administrator, which the lock
+// and the erase need on the device; Knox licensed, which the reboot needs; the freeze).
+router.get('/devices/:id/actions', wrap(async (req, res) => {
+  const id = await deviceOf(req);
+  const tenantId = req.tenantId!;
+  const r = await agentsQuery(tenantId).where('d.id', id).first('d.enrollment_state', 'a.revoked_at', 'a.admin_active', 'a.knox_state') as
+    Record<string, any> | undefined;
+  if (!r) throw new AppError(404, 'Device not found');
+  const frozen = await frozenFor(null, tenantId, 'legacy_agent');
+  const isAdmin = req.session.role === 'admin';
+  const userId = req.session.userId!;
+  const canWrite = isAdmin || await permissionService.canWriteDevice(userId, id, false);
+  const actions: LegacyAgentDeviceAction[] = [];
+  for (const type of MENU_TYPES) {
+    const spec = commandSpecOrNull(type)!;
+    const has = canWrite && (isAdmin || await permissionService.canUseCapability(userId, id, false, spec.capability));
+    const unavailable: LegacyAgentDeviceAction['unavailable'] = !has ? 'capabilityMissing'
+      : r.revoked_at ? 'revoked'
+        : r.enrollment_state !== 'enrolled' ? 'notEnrolled'
+          : (type === 'device.lock' || type === 'device.wipe') && r.admin_active !== true ? 'adminInactive'
+            : type === 'device.reboot' && r.knox_state !== 'licensed' ? 'knoxRequired'
+              : frozen ? 'frozen' : null;
+    actions.push({ type, actionKey: spec.guardedBy ?? spec.restrictionKey ?? type, guarded: spec.guardedBy !== null, available: unavailable === null, unavailable });
+  }
+  res.json({ success: true, data: actions });
 }));
 
 // ── Commands ─────────────────────────────────────────────────────────────────

@@ -17,6 +17,8 @@ export interface ActionMenuItem {
   label: string;
   /** Secondary line under the label. */
   description?: string;
+  /** Wrap the description instead of truncating it (a disabled item's reason, to be read in full). */
+  wrapDescription?: boolean;
   onClick: () => void;
   danger?: boolean;
   disabled?: boolean;
@@ -171,7 +173,7 @@ export function ActionMenu({
           <span className="min-w-0 flex-1">
             <span className="block truncate">{item.label}</span>
             {item.description && (
-              <span className="block truncate text-xs text-text-muted">{item.description}</span>
+              <span className={cn('block text-xs text-text-muted', item.wrapDescription ? 'whitespace-normal break-words' : 'truncate')}>{item.description}</span>
             )}
           </span>
         </button>
