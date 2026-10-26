@@ -1,7 +1,7 @@
 {
   "name": "obligarth",
   "private": true,
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Multi-tenant Apple and Android device management (MDM) of the Obli* suite",
   "scripts": {
     "dev:server": "npm run build:shared && npm run dev --workspace=server",
