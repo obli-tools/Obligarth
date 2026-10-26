@@ -6,7 +6,8 @@
 //     the BYOD invitations and the sign-in URL;
 //   - mdmStaleAfterDays of the tenant (setting of the MDM data model) for the presumed exits of the reconciliation.
 // Left to their defaults on purpose: the key resolver of the surfaces (the registry of lot C, appleTenants), the
-// notice of a personal device (the default notice, like lot C's until USR-01), the mail channel (the rules of lot C),
+// notice of a personal device (the generated notice of USR-01 since P0-13 T5, installed by registerPrivacyModule, not
+// here), the mail channel (the rules of lot C),
 // the quota of the project and the limit of a tenant (no platform setting yet: nothing refused, nothing alerted).
 import { SETTINGS_KEYS } from '@obligarth/shared';
 import { config } from '../config';

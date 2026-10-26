@@ -2,7 +2,7 @@ import './env';
 import path from 'node:path';
 import { readJobsConfig } from './jobs/config';
 import { readOutboxConfig } from './jobs/outbox/config';
-import { appleStartupErrors, defaultNoticeAllowed, readAppleConfig } from './apple/config';
+import { appleStartupErrors, readAppleConfig } from './apple/config';
 import { opsStartupErrors, readOpsConfig } from './ops/config';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
@@ -276,12 +276,10 @@ export function startupConfigErrors(): string[] {
   errors.push(...outboxEnv.errors);
   errors.push(...appleEnv.errors, ...appleStartupErrors(config.apple));
   errors.push(...opsEnv.errors, ...opsStartupErrors(config.ops));
-  // The employee notice and the privacy rules of the enrollment are the laboratory's defaults until USR-01 and
-  // CNF-02 replace them (integration-apple-edge §10.7): refused in production unless explicitly allowed.
-  if (config.apple.mode === 'on' && !defaultNoticeAllowed(config.apple, config.nodeEnv)) {
-    errors.push('APPLE_EDGE_MODE=on serves enrollments with the default employee notice and privacy rules (laboratory): ' +
-      'set APPLE_ALLOW_DEFAULT_NOTICE=true to accept them until the notice and the privacy profiles of the tenants exist.');
-  }
+  // The employee notice and the privacy rules of the enrollment are no longer the laboratory's defaults: the privacy
+  // profiles (CNF-02, P0-13 T1) and the generated notice (USR-01, P0-13 T5) are installed by registerPrivacyModule in
+  // every process. APPLE_ALLOW_DEFAULT_NOTICE is still read (existing .env files) but has no effect since P0-13; an
+  // incomplete notice is refused at the enrollment outside the stage lab (D7).
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
     errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
       'outside development, the migrations run in the server-migrate service.');

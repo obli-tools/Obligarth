@@ -20,6 +20,7 @@ import { byodAuthenticate, byodEnroll, byodNotice, byodServes, checkFormToken, n
 import { db } from '../../db';
 import { asTenant } from '../../db/context';
 import { vppNotifyHandlers } from '../integrations/vpp.routes.public';
+import { isNoticeIncomplete } from '../../privacy/notice/errors';
 
 // =============================================================================
 // Device surface of the brain (docs: integration-apple-edge §10.8, I5),
@@ -417,8 +418,14 @@ export function createAppleDeviceSurface(): Router {
   // Anything else (route, method): the uniform 404.
   router.use((_req: Request, res: Response) => { notFound(res); });
 
-  // Errors: a body too large or malformed, a failure of the database: no detail, never the URL.
-  router.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+  // Errors: a body too large or malformed, a failure of the database: no detail, never the URL. A notice not complete
+  // outside the laboratory (P0-13 T5, D7, thrown by the notice provider): the page of an enrollment not open yet.
+  router.use((err: unknown, req: Request, res: Response, _next: NextFunction) => {
+    if (isNoticeIncomplete(err)) {
+      const tx = textsFor(pickLocale(req.headers['accept-language'], 'fr'));
+      if (!res.headersSent) sendPage(res, 503, messagePage(tx, tx.noticeIncompleteTitle, fill(tx.noticeIncompleteBody, { org: locals(res).tenant?.name ?? '' })));
+      return;
+    }
     const status = Number((err as { status?: unknown })?.status ?? (err as { statusCode?: unknown })?.statusCode);
     if (status === 413 || status === 400) { if (!res.headersSent) res.status(status).end(); return; }
     logger.error({ surface: locals(res).route, tenantId: locals(res).tenant?.tenantId ?? null, code: (err as { code?: unknown })?.code,

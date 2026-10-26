@@ -44,13 +44,16 @@ export interface AndroidDeviceView {
 
 /** One entry of GET /api/android/devices/:id/actions (section 11.2, §22.8). */
 export interface AndroidDeviceAction {
-  /** An AMAPI command type, or 'DISABLE' / 'ENABLE' (mdm.android_disable, devices.patch state). */
+  /** An AMAPI command type, or 'DISABLE' / 'ENABLE' (mdm.android_disable, devices.patch state), or 'LOCATE' (P0-13 T7:
+   *  never a command, never available; its reason says whether the device sends positions in lost mode). */
   type: string;
   /** The guarded action (guard engine) or the restriction key of the command. */
   actionKey: string;
   guarded: boolean;
   available: boolean;
-  /** capabilityMissing, frozen, or a prerequisite (ownership, mode, api_level_unknown, api_level_too_low, not_enrolled). */
+  /** capabilityMissing, frozen, or a prerequisite (ownership, mode, api_level_unknown, api_level_too_low, not_enrolled);
+   *  for LOCATE: ownership (personal device), locationDisabledByPrivacy (privacy profile), automatic (sent by the
+   *  device). */
   unavailable: string | null;
 }
 

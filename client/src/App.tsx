@@ -17,6 +17,7 @@ import { AppsPage } from '@/pages/AppsPage';
 import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
 import { EndUsersPage } from '@/pages/EndUsersPage';
 import { DeviceEnrollmentPage } from '@/pages/DeviceEnrollmentPage';
+import { PrivacyPage } from '@/pages/PrivacyPage';
 import { IntegrationsPage } from '@/pages/IntegrationsPage';
 import { SupervisionPage } from '@/pages/SupervisionPage';
 import { GroupDetailPage } from '@/pages/GroupDetailPage';
@@ -125,6 +126,10 @@ export default function App() {
  </Route>
  <Route element={<ProtectedRoute requiredCapabilities={['mdm.enrollment.manage']} />}>
   <Route path="/device-enrollment" element={<DeviceEnrollmentPage />} />
+ </Route>
+ {/* Privacy (P0-13 T7): profiles, retention, notice of the employees (settings, audit.read or mdm.privacy.manage). */}
+ <Route element={<ProtectedRoute requiredCapabilities={['settings', 'audit.read', 'mdm.privacy.manage']} />}>
+  <Route path="/privacy" element={<PrivacyPage />} />
  </Route>
  {/* The approval queue on its own (the Security page embeds it): its reviewers, and the members who
      may request a restricted action. */}

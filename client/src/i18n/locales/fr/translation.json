@@ -73,7 +73,8 @@
     "integrations": "Intégrations",
     "apps": "Apps",
     "androidPlatform": "Android",
-    "legacyAgent": "Agent Android"
+    "legacyAgent": "Agent Android",
+    "privacy": "Confidentialité"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -3321,7 +3322,8 @@
         "no_active_token": "Aucun jeton de contenu actif",
         "unsigned_profiles": "Profils non signés",
         "default_notice": "Notice par défaut, réservée aux essais",
-        "default_rules": "Règles de confidentialité par défaut, réservées aux essais",
+        "default_rules": "Règles de confidentialité par défaut : publiez un profil pour chaque propriété inscrite",
+        "notice_incomplete": "Notice des salariés incomplète (responsable du traitement, contact) : inscriptions refusées hors laboratoire",
         "relay_idle": "Relais de la gestion déclarative sans activité",
         "suspended": "Suspendu au service des appareils",
         "retiring": "En cours de retrait",
@@ -3835,8 +3837,12 @@
     "tenantFrozen": "Les commandes de ce tenant sont gelées.",
     "commandRefused": "La commande ne peut pas être envoyée à cet appareil.",
     "locationDisabledByPrivacy": "Le profil de confidentialité de la propriété de cet appareil n'autorise pas sa localisation.",
+    "invalidNoticeSettings": "Un réglage de la notice n'est pas accepté (trop long, ou avec du balisage).",
     "invalidPrivacyRules": "Les règles de confidentialité ne sont pas valides.",
     "justificationRequired": "Une justification d'au moins 10 caractères est exigée.",
+    "noticeIncomplete": "La notice des salariés est incomplète (responsable du traitement, contact) : les inscriptions sont refusées.",
+    "noticeSettingsChanged": "Les réglages de la notice ont changé entre-temps : relisez-les.",
+    "noticeVersionNotFound": "Cette version de la notice n'existe pas.",
     "privacyProfileChangePending": "Une modification de ce profil de confidentialité attend déjà son approbation.",
     "privacyProfileUnchanged": "Le profil de confidentialité a déjà ces règles.",
     "privacyRetentionChangePending": "Une modification de la rétention attend déjà son approbation.",
@@ -4684,7 +4690,9 @@
         "not_amapi": "Pas un appareil Android Enterprise.",
         "not_found": "Appareil introuvable.",
         "use_erase": "Un appareil d'entreprise sort de la gestion par un effacement.",
-        "lost_mode_cooldown": "L'utilisateur a quitté le mode perdu, ou le mot de passe a été réinitialisé, il y a moins de 12 heures : Google refuse le mode perdu d'ici là."
+        "lost_mode_cooldown": "L'utilisateur a quitté le mode perdu, ou le mot de passe a été réinitialisé, il y a moins de 12 heures : Google refuse le mode perdu d'ici là.",
+        "automatic": "Envoyée par l'appareil lui-même en mode perdu.",
+        "locationDisabledByPrivacy": "Localisation désactivée par le profil de confidentialité"
       },
       "flags": {
         "PRESERVE_RESET_PROTECTION_DATA": "Garder la protection contre la réinitialisation",
@@ -5260,6 +5268,256 @@
       "package_reserved": "Paquet réservé par Obligarth.",
       "web_app_no_managed_configuration": "Une app web n'a pas de configuration gérée.",
       "secret_not_found": "Secret introuvable au coffre du tenant."
+    }
+  },
+  "privacy": {
+    "title": "Confidentialité",
+    "subtitle": "Ce que l'organisation collecte sur ses appareils, combien de temps elle le garde, et ce que les salariés en savent avant l'inscription.",
+    "tabs": {
+      "profiles": "Profils",
+      "retention": "Rétention",
+      "notice": "Notice"
+    },
+    "requestFiledClient": "Demande n°{{id}} déposée : un approbateur client du tenant l'examine.",
+    "requestFiledPlatform": "Demande n°{{id}} déposée : un autre administrateur de la plateforme l'examine.",
+    "justification": "Justification",
+    "justificationPlaceholder": "Pourquoi ce changement (10 caractères au moins)",
+    "requestApproval": "Demander l'approbation",
+    "discard": "Annuler les modifications",
+    "readOnly": "Vous pouvez lire ces réglages ; les modifier demande la capacité « {{capability}} ».",
+    "seeApprovals": "Voir les approbations",
+    "requestedAt": "Déposée le {{date}}, expire le {{expires}}",
+    "current": "En vigueur",
+    "approvalRef": "demande n°{{id}}",
+    "units": {
+      "days_one": "{{count}} jour",
+      "days_other": "{{count}} jours",
+      "months_one": "{{count}} mois",
+      "months_other": "{{count}} mois",
+      "daysShort": "jours",
+      "monthsShort": "mois"
+    },
+    "rules": {
+      "serialNumber": {
+        "label": "Numéro de série",
+        "hint": "Identifie l'appareil dans l'inventaire."
+      },
+      "hardwareIds": {
+        "label": "Identifiants matériels",
+        "hint": "IMEI, MEID, EID et adresses MAC."
+      },
+      "deviceName": {
+        "label": "Nom de l'appareil",
+        "hint": "Le nom que l'utilisateur a donné à l'appareil."
+      },
+      "phoneNumber": {
+        "label": "Numéro de téléphone",
+        "hint": "Numéro de téléphone, ICCID et abonnements."
+      },
+      "network": {
+        "label": "Réseau",
+        "hint": "Opérateur, itinérance, adresses Wi-Fi et Bluetooth."
+      },
+      "lostModeLocation": {
+        "label": "Localisation en mode perdu",
+        "hint": "La position d'un appareil perdu, seulement pendant le mode perdu."
+      },
+      "installedApps": {
+        "label": "Applications installées",
+        "hint": "Toutes les applications, ou seulement celles que l'organisation gère.",
+        "scope": {
+          "all": "Toutes",
+          "managed_only": "Gérées seulement"
+        }
+      },
+      "certificates": {
+        "label": "Certificats",
+        "hint": "Tous les certificats, ou seulement ceux que l'organisation a installés.",
+        "scope": {
+          "all": "Tous",
+          "managed_only": "Gérés seulement"
+        }
+      },
+      "collected": "Collecté",
+      "notCollected": "Non collecté"
+    },
+    "profiles": {
+      "intro": "Ce que l'organisation collecte sur ses appareils, par propriété. Chaque modification est une demande qu'une seconde personne approuve avant qu'elle s'applique.",
+      "pendingShort": "Modification en attente",
+      "ownership": "Propriété",
+      "version": "Version {{version}}",
+      "defaults": "Règles par défaut",
+      "since": "depuis le {{date}}",
+      "defaultsHint": "Aucune version publiée pour cette propriété : les règles appliquées avant les profils de confidentialité restent en vigueur (les appareils Android collectent alors moins que ce qui est affiché, jusqu'à une première version).",
+      "imposed": "Imposée",
+      "imposedHint": "Fixée pour cette propriété : aucun profil ne peut la changer.",
+      "changed": "Modifiée",
+      "dpiaBanner": "Avant le dépôt : mettez à jour l'analyse d'impact (AIPD) et consultez le CSE. La notice des salariés est générée à nouveau dès la publication de la version.",
+      "pending": "La demande n°{{id}} attend son approbation",
+      "narrowed": "Collecte moins :",
+      "widened": "Collecte plus :",
+      "impact": "Impact de la modification",
+      "computing": "Calcul de l'impact…",
+      "devices_one": "{{count}} appareil de cette propriété (Apple {{apple}}, Android {{android}}, agent Android {{agent}})",
+      "devices_other": "{{count}} appareils de cette propriété (Apple {{apple}}, Android {{android}}, agent Android {{agent}})",
+      "scrub": "Supprimés à la publication : {{apps}} application(s) non gérée(s), {{locations}} position(s).",
+      "narrowedHint": "Les données qui ne sont plus collectées sont effacées des fiches dès la publication de la version.",
+      "widenedHint": "De nouvelles données seront collectées : les salariés en sont informés par la notice, générée à nouveau à la publication.",
+      "firstVersionHint": "Première version de cette propriété : elle remplace les règles par défaut, et les appareils Android peuvent alors collecter plus qu'avant (IMEI d'un appareil d'entreprise, réseau d'un appareil à usage personnel autorisé) si ces règles le permettent.",
+      "history": "Versions"
+    },
+    "retention": {
+      "intro": "Combien de temps le tenant garde chaque catégorie de données. Une modification est une demande qu'une seconde personne approuve : une durée plus longue s'applique à l'approbation, une durée plus courte {{days}} jours après. Une baisse en attente s'annule de la même façon, en redemandant la valeur en vigueur.",
+      "requestPending": "La demande n°{{id}} attend son approbation",
+      "decreasesOn": "Les durées raccourcies approuvées prennent effet le {{date}}.",
+      "defaultRange": "Par défaut {{default}} · de {{min}} à {{max}} {{unit}}",
+      "default": "Par défaut",
+      "pendingValue": "→ {{value}} bientôt",
+      "cancelDecrease": "Annuler la baisse",
+      "outOfRange": "De {{min}} à {{max}}",
+      "summary": "La demande",
+      "raised": "Plus longues, dès l'approbation :",
+      "lowered": "Plus courtes, {{days}} jours après l'approbation :",
+      "restored": "Baisse annulée :",
+      "loweredHint": "Une fois en vigueur, une durée plus courte purge aussi les données déjà plus anciennes.",
+      "lastChange": "Modification {{version}}, le {{date}}",
+      "auditLog": "Journal d'audit",
+      "auditPending": "→ {{value}} le {{date}}",
+      "auditSettings": "Réglages du journal d'audit",
+      "auditHint": "Fixée par tenant par les administrateurs de la plateforme, dans les réglages du journal d'audit.",
+      "fixedTitle": "Durées de la plateforme",
+      "fixedHint": "Fixées pour tous les tenants par la plateforme ; affichées pour le registre des traitements.",
+      "categories": {
+        "unenrolled_corporate_days": {
+          "label": "Appareil d'entreprise sorti de la gestion",
+          "hint": "Sa fiche, après la désinscription."
+        },
+        "unenrolled_corporate_personal_days": {
+          "label": "Appareil d'entreprise à usage personnel autorisé sorti de la gestion",
+          "hint": "Sa fiche, après la désinscription."
+        },
+        "unenrolled_personal_days": {
+          "label": "Appareil personnel sorti de la gestion",
+          "hint": "Sa fiche, après la désinscription."
+        },
+        "departed_end_user_days": {
+          "label": "Salarié parti",
+          "hint": "Le lien entre un appareil et un salarié qui a quitté l'organisation."
+        },
+        "lost_mode_location_days": {
+          "label": "Positions en mode perdu",
+          "hint": "Les positions d'un appareil perdu."
+        },
+        "technical_log_months": {
+          "label": "Journal technique",
+          "hint": "Les commandes envoyées aux appareils et leur chronologie."
+        },
+        "status_history_days": {
+          "label": "Historique des états",
+          "hint": "L'historique de l'état déclaratif des appareils."
+        },
+        "notice_ack_months": {
+          "label": "Accusés de lecture de la notice",
+          "hint": "La preuve qu'un salarié a lu la notice avant une inscription."
+        }
+      },
+      "fixed": {
+        "enrollment_sessions": "Sessions d'inscription",
+        "enrollment_tokens": "Liens et jetons d'inscription",
+        "inventory_commands": "Demandes d'inventaire",
+        "ade_removed_devices": "Appareils retirés d'Apple Business",
+        "notification_log": "Journal des notifications",
+        "live_alerts": "Alertes en direct",
+        "app_icons_orphaned": "Icônes d'applications qui ne sont plus installées",
+        "android_inbox": "Événements Android appliqués",
+        "backups": "Sauvegardes"
+      }
+    },
+    "notice": {
+      "intro": "La notice qu'un salarié lit avant d'inscrire un appareil : générée à partir des profils de confidentialité, des durées de conservation et des réglages ci-dessous, en français et en anglais.",
+      "complete": "Notice complète",
+      "incomplete": "Notice incomplète",
+      "stageBadge": "Stade : {{stage}}",
+      "missingList": "Manque : {{list}}.",
+      "refused": "Toute inscription du tenant est refusée tant que la notice n'est pas complète.",
+      "labServed": "Au stade laboratoire la notice est affichée quand même ; à partir du stade pilote, les inscriptions sont refusées tant qu'elle n'est pas complète.",
+      "publicPage": "Page publique de la notice",
+      "copyLink": "Copier le lien",
+      "open": "Ouvrir",
+      "publicHint": "Quiconque a le lien lit la notice en vigueur, avant toute inscription (le lien porte la clé des liens d'inscription).",
+      "noPublicPage": "Pas de page publique : cette instance ne sert pas encore de surface pour les appareils.",
+      "settings": "Réglages de la notice",
+      "settingsVersion": "Version {{version}}, le {{date}}",
+      "plainText": "Texte brut seulement : aucun balisage (les chevrons sont refusés). Modifiés sans seconde personne ; chaque modification est inscrite au journal d'audit.",
+      "required": "Une notice complète demande le responsable du traitement, et le délégué à la protection des données ou un autre contact.",
+      "unchanged": "Rien n'a changé.",
+      "saved": "Réglages enregistrés : les notices sont générées à nouveau.",
+      "stale": "Quelqu'un a modifié ces réglages entre-temps : ils sont relus, vérifiez-les avant d'enregistrer.",
+      "markup": "Les chevrons et les caractères de contrôle ne sont pas acceptés.",
+      "tooLong": "{{max}} caractères au plus.",
+      "preview": "La notice",
+      "platform": "Plateforme",
+      "locale": "Langue",
+      "inForce": "En vigueur",
+      "generatedAt": "Générée le {{date}}",
+      "notPublished": "Pas encore générée : aperçu",
+      "notDisplayed": "Pas encore affichée à l'inscription",
+      "notDisplayedHint": "La notice des appareils Android d'entreprise est générée, pas encore affichée à leur inscription.",
+      "consentSummary": "Résumé dans le profil d'inscription",
+      "versions": "Versions",
+      "supersededAt": "remplacée le {{date}}",
+      "fromDefaults": "règles par défaut",
+      "fromProfile": "version {{version}} du profil",
+      "acknowledgements_one": "{{count}} accusé de lecture",
+      "acknowledgements_other": "{{count}} accusés de lecture",
+      "fields": {
+        "controllerName": {
+          "label": "Responsable du traitement",
+          "hint": "L'employeur, sa dénomination sociale."
+        },
+        "controllerAddress": {
+          "label": "Adresse du responsable du traitement",
+          "hint": "Son adresse postale."
+        },
+        "dpoContact": {
+          "label": "Délégué à la protection des données",
+          "hint": "Nom, adresse électronique ou postale du DPO."
+        },
+        "contact": {
+          "label": "Autre contact",
+          "hint": "Qui répond aux questions des salariés, en l'absence de DPO."
+        },
+        "recipientsExtra": {
+          "label": "Autres destinataires",
+          "hint": "Qui d'autre reçoit les données, au-delà de l'opérateur de la plateforme et d'Apple ou Google."
+        },
+        "introFr": {
+          "label": "Paragraphe de l'organisation (français)",
+          "hint": "Affiché après qui gère l'appareil, dans la notice en français."
+        },
+        "introEn": {
+          "label": "Paragraphe de l'organisation (anglais)",
+          "hint": "Affiché après qui gère l'appareil, dans la notice en anglais."
+        }
+      },
+      "missing": {
+        "controllerName": "le responsable du traitement",
+        "contact": "un contact (le DPO ou un autre)"
+      },
+      "stage": {
+        "lab": "Laboratoire",
+        "pilot": "Pilote",
+        "production": "Production"
+      },
+      "locales": {
+        "fr": "Français",
+        "en": "Anglais"
+      },
+      "channels": {
+        "apple_session": "Inscription Apple",
+        "android_byod_invitation": "Invitation Android",
+        "android_signin": "Connexion Android"
+      }
     }
   }
 }

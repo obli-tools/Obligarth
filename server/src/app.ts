@@ -28,6 +28,7 @@ import { createAppleDeviceSurface } from './apple/enrollment';
 import { createAndroidByodSurface } from './android/byod/surface';
 import { createAndroidSigninSurface } from './android/signin/surface';
 import { createLegacyAgentSurface } from './legacyAgent/surface';
+import { createNoticePublicSurface } from './privacy/notice/surface';
 import { jobs } from './jobs';
 import { httpMetricsMiddleware } from './ops/http';
 import { readiness } from './ops/ready';
@@ -94,6 +95,9 @@ export function createApp() {
   // I5): right after helmet, before cors, the parsers, the cookies, the session, the API limiter and
   // deviceKeySession: its own parsers, limits and limiters, no session, no cookie; it sets its own CSP on its
   // pages. Reached through the edge proxy (mdm.<domain>) only.
+  // The public page of the employee notice (/t/<key>/notice; P0-13 T6, D6) first: it serves the Android notice too,
+  // while the Apple surface answers nothing with APPLE_EDGE_MODE off. Its own limiter and CSP, no session, no cookie.
+  app.use('/t/:key/notice', createNoticePublicSurface());
   app.use('/t/:key', createAppleDeviceSurface());
   // The Android pages of the same surface (android-amapi §10.5, lot AN-A2): the notice and the code of a BYOD
   // invitation (/a/<key>/byod), the sign-in URL (/a/<key>/signin…), each router with its own parsers, limiters, CSP

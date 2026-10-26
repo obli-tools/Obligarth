@@ -19,6 +19,7 @@ import {
   Monitor,
   Laptop,
   ShieldCheck,
+  Lock,
   ScrollText,
   Contact,
   QrCode,
@@ -268,6 +269,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   //   - audit.read / approvals.review / devices.manage → Security (the
   //     journal; the approvals; the guarded actions)
   const hasSecurityCap = tenantCaps.has('audit.read') || tenantCaps.has('approvals.review') || tenantCaps.has('devices.manage');
+  //   - settings / audit.read / mdm.privacy.manage → Privacy (profiles, retention, notice of the employees)
+  const hasPrivacyCap = tenantCaps.has('settings') || tenantCaps.has('audit.read') || tenantCaps.has('mdm.privacy.manage');
   const { toggleSidebarFloating, toggleSidebarCollapsed } = useUiStore();
   // Effective (device-aware) mode — see useEffectiveSidebar(). The drawer is
   // always the full, expanded sidebar.
@@ -509,6 +512,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const adminNavItems: NavItem[] = [
     // Users / Teams / Permissions / Restrictions — admin only.
     ...(admin ? [{ label: t('nav.users'), path: '/admin/users', icon: <Users size={18} /> } as NavItem] : []),
+    // Privacy (P0-13 T7) — the privacy profiles, the retention and the notice of the employees (order of the section:
+    // coordination C8).
+    ...(admin || hasPrivacyCap ? [{ label: t('nav.privacy', 'Privacy'), path: '/privacy', icon: <Lock size={18} /> } as NavItem] : []),
     // Security — the journal (audit.read), the approvals (approvals.review)
     // and, for platform administrators, the vault and the journal settings.
     ...(admin || hasSecurityCap ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: admin ? pendingApprovalsCount : 0 } as NavItem] : []),

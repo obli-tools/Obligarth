@@ -23,7 +23,8 @@ import { RETENTION_CHANGE_REQUEST_TYPE, RetentionChangePayload } from './request
 //     requests: privacy/approvals.ts privacyReviewerPolicy), as the requester: mdm.privacy.manage read again, the values
 //     checked again, the retention unchanged since the request (else refused: file it again), then
 //     obligarth.retention_set, which checks the request itself and writes the prepared entry privacy.retention_changed
-//     (critical) in the same transaction;
+//     (critical) in the same transaction, then the hooks of a change (onRetentionChanged: the regeneration of the
+//     notice, P0-13 T5);
 //   - a decrease waiting is cancelled (D4) by a request of the same type asking the value in force (restored, see
 //     retentionChanges): a change of the retention as any other, examined by a second person (D3); no other way;
 //   - the DTO of GET /api/privacy/retention: the categories (value in force, value set, decrease waiting), the request
@@ -35,9 +36,15 @@ const BACKUP_RETENTION_DAYS_DEFAULT = 35;
 /** Days an applied event of the Android inbox is kept (android/maintenance.ts). */
 const ANDROID_INBOX_DAYS = 7;
 
+/** The rotation of the backups of the platform, in days (BACKUP_RETENTION_DAYS, 35 by default): shown read only, and
+ *  told to the employees by the notice (P0-13 T5). */
+export function backupRetentionDays(): number {
+  const backups = Number(process.env.BACKUP_RETENTION_DAYS);
+  return Number.isInteger(backups) && backups > 0 ? backups : BACKUP_RETENTION_DAYS_DEFAULT;
+}
+
 /** The retentions of the platform, not set per tenant (shown read only). */
 export function fixedRetentions(): RetentionFixedDto[] {
-  const backups = Number(process.env.BACKUP_RETENTION_DAYS);
   return [
     { key: 'enrollment_sessions', value: ENROLLMENT_SESSION_RETENTION_DAYS, unit: 'days' },
     { key: 'enrollment_tokens', value: ENROLLMENT_TOKEN_RETENTION_DAYS, unit: 'days' },
@@ -47,7 +54,7 @@ export function fixedRetentions(): RetentionFixedDto[] {
     { key: 'android_inbox', value: ANDROID_INBOX_DAYS, unit: 'days' },
     { key: 'notification_log', value: NOTIFICATION_LOG_RETENTION_DAYS, unit: 'days' },
     { key: 'live_alerts', value: LIVE_ALERT_RETENTION_DAYS, unit: 'days' },
-    { key: 'backups', value: Number.isInteger(backups) && backups > 0 ? backups : BACKUP_RETENTION_DAYS_DEFAULT, unit: 'days' },
+    { key: 'backups', value: backupRetentionDays(), unit: 'days' },
   ];
 }
 
@@ -107,6 +114,16 @@ async function lockRetention(trx: Knex.Transaction, tenantId: number): Promise<v
 
 // ── Execution of an approved change ────────────────────────────────────────
 
+/** What else a change of the retention starts, in its transaction (the regeneration of the notice, P0-13 T5: it tells
+ *  the durations in force). */
+export type RetentionChangedHook = (trx: Knex.Transaction, p: { tenantId: number; lowersOn: string | null }) => Promise<void>;
+const changedHooks: Array<{ name: string; run: RetentionChangedHook }> = [];
+
+export function onRetentionChanged(name: string, run: RetentionChangedHook): void {
+  if (changedHooks.some((h) => h.name === name)) throw new Error(`retention hook '${name}' registered twice`);
+  changedHooks.push({ name, run });
+}
+
 /** An approved change of the retention, executed as the requester (in the approval's tenant context). */
 export async function executeRetentionChange(x: ApprovalExecution): Promise<void> {
   const parsed = RetentionChangePayload.safeParse(x.payload ?? {});
@@ -140,6 +157,7 @@ export async function executeRetentionChange(x: ApprovalExecution): Promise<void
     }, ctx, { criticality: 'critical' });
     await trx.raw('SELECT policy_version FROM obligarth.retention_set(?::jsonb, ?, ?, ?)',
       [JSON.stringify(p.values), p.justification, x.approvalId!, body.text]);
+    for (const h of changedHooks) await h.run(trx, { tenantId: x.tenantId, lowersOn });
   });
   privacyMetrics.change('applied');
 }

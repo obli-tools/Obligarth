@@ -13,6 +13,7 @@ import { requireAnyTenantCapability, requireTenantCapability } from '../middlewa
 import { permissionService } from '../services/permission.service';
 import { restrictionService } from '../services/restriction.service';
 import { privacyReviewerSide } from './approvals';
+import { createNoticeRouter } from './notice/routes';
 import { profileImpact } from './impact';
 import { PrivacyProfileRulesSchema, checkProfileRules, currentProfile, effectiveProfileRules } from './profiles';
 import { PROFILE_CHANGE_REQUEST_TYPE, RETENTION_CHANGE_REQUEST_TYPE, type ProfileChange, type RetentionChange } from './requests';
@@ -36,6 +37,8 @@ import { pendingActive, retentionPolicyDto, retentionRequestWaiting, retentionRo
 //                                      profiles; an increase applies at the approval, a decrease 7 days later (D4); 202.
 //                                      A decrease waiting is cancelled by such a request asking the value in force
 //                                      (restored): a change of the retention as any other, approved (D3, D4)
+//   …/notice-settings, …/notices           (P0-13 T6, USR-01) the settings and the versions of the notice of the
+//                                      employees: privacy/notice/routes.ts, mounted here
 // Reading: settings, audit.read (the DPO, the auditor) or mdm.privacy.manage; requesting: mdm.privacy.manage. Errors:
 // 400 invalidRequest, justificationRequired, invalidPrivacyRules, privacyRuleImposed (details.keys), retentionOutOfRange
 // (details.keys, details.ranges); 404 for an unknown ownership; 409 privacyProfileUnchanged, privacyProfileChangePending
@@ -341,6 +344,9 @@ export function createPrivacyRouter(): Router {
     }, await audit.fromRequest(req, tenantId));
     res.status(202).json({ data: { approvalId, status: 'pending_approval', reviewerSide } });
   }));
+
+  // ── Notice of the employees (P0-13 T6, USR-01) ──────────────────────────────
+  router.use(createNoticeRouter());
 
   return router;
 }

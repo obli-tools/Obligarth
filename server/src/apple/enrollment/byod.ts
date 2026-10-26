@@ -175,7 +175,8 @@ export async function byodAuthenticate(t: TenantFacts, a: { account: string; cod
       access_token_hash: access.hash, access_token_expires_at: new Date(now.getTime() + ACCESS_TOKEN_TTL_MS),
       notice_version_id: notice.versionId, acknowledged_at: now, locale: a.locale, expires_at: new Date(now.getTime() + BYOD_SESSION_TTL_MS),
     });
-    const ackId = await enrollmentNotice().recordAcknowledgement(trx, t.tenantId, { sessionId, versionId: notice.versionId, locale: a.locale, at: now });
+    const ackId = await enrollmentNotice().recordAcknowledgement(trx, t.tenantId,
+      { sessionId, versionId: notice.versionId, locale: a.locale, at: now, endUserId: inv.end_user_id });
     await trx('enrollment_sessions').where({ tenant_id: t.tenantId, id: sessionId }).update({ notice_ack_id: ackId });
     return { kind: 'ok', sessionId, accessToken: access.value };
   }));

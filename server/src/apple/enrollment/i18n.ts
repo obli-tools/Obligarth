@@ -34,6 +34,9 @@ export interface SurfaceTexts {
   notReadyBody: string;
   signingTitle: string;
   signingBody: string;
+  /** The notice of the tenant is not complete outside the laboratory (P0-13 T5, D7). */
+  noticeIncompleteTitle: string;
+  noticeIncompleteBody: string;
   expiredTitle: string;
   expiredBody: string;
   tooMany: string;
@@ -82,6 +85,8 @@ const EN: SurfaceTexts = {
   notReadyBody: 'The device enrollment service of {org} is not ready yet. Contact your administrator.',
   signingTitle: 'Enrollment unavailable',
   signingBody: 'The enrollment profile cannot be signed at the moment. Contact your administrator.',
+  noticeIncompleteTitle: 'Enrollment unavailable',
+  noticeIncompleteBody: 'Enrollment is not open yet at {org}: the employee notice is not complete. Contact your administrator.',
   expiredTitle: 'Enrollment expired',
   expiredBody: 'This enrollment has expired. Open your enrollment link again.',
   tooMany: 'Too many attempts. Wait a minute, then try again.',
@@ -189,6 +194,8 @@ const FR: SurfaceTexts = {
   notReadyBody: "Le service d'inscription des appareils de {org} n'est pas encore prêt. Contactez votre administrateur.",
   signingTitle: 'Inscription indisponible',
   signingBody: "Le profil d'inscription ne peut pas être signé pour le moment. Contactez votre administrateur.",
+  noticeIncompleteTitle: 'Inscription indisponible',
+  noticeIncompleteBody: "L'inscription des appareils n'est pas encore ouverte chez {org} : la notice d'information des salariés n'est pas complète. Contactez votre administrateur.",
   expiredTitle: 'Inscription expirée',
   expiredBody: "Cette inscription a expiré. Ouvrez de nouveau votre lien d'inscription.",
   tooMany: 'Trop de tentatives. Attendez une minute, puis réessayez.',

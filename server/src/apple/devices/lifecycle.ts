@@ -14,6 +14,7 @@ import { closeEpisode, markEpisodeEnrolled, openEpisode } from '../../mdm/regist
 import { renewRecordForNewCycle } from '../../mdm/registry/renewal';
 import { applyCollectionRules } from '../../mdm/inventory/ingestors';
 import { enrollmentReleaseJob } from '../../mdm/jobs';
+import { linkNoticeAcknowledgement } from '../../privacy/notice/link';
 import { afterCommit, cancelOpenTargetsOfDevice } from '../commands/targets';
 import { realtime } from '../realtime';
 import { privacyRulesFor, type PrivacyRules } from './privacy';
@@ -435,6 +436,9 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     .update({ state: 'authenticated', state_at: f.occurredAt, failure_code: null, updated_at: new Date() });
   await trx('enrollment_sessions').where({ tenant_id: tenantId, id: session.sessionId })
     .update({ device_id: deviceId, cert_sha256: trx.raw('COALESCE(cert_sha256, ?)', [f.certSha256]), updated_at: new Date() });
+  // The acknowledgement of the notice takes the device (and the end user of the session): it outlives the session
+  // (P0-13 T5, USR-01).
+  await linkNoticeAcknowledgement(trx, tenantId, 'enrollment_sessions', session.sessionId);
   // The device of Apple Business of the serial number: by the verified serial number only (an ADE enrollment),
   // never by the message's nor for a personal device (§7.3 step 6, review of lot B2).
   if (claim.verified && claim.serial && session.ownership !== 'personal') {

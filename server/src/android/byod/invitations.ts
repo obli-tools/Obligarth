@@ -370,7 +370,8 @@ export async function acknowledgeInvitation(t: TenantFacts, a: { code: unknown; 
     if (inv.state === 'issuing' && inv.issuing_at && now.getTime() - new Date(inv.issuing_at).getTime() < ISSUING_STALE_MS) {
       return { kind: 'done', out: { kind: 'busy' } };
     }
-    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId, { sessionId: inv.id, versionId: notice.versionId, locale: a.locale, at: now });
+    const ackId = await androidNotice().recordAcknowledgement(trx, t.tenantId,
+      { sessionId: inv.id, versionId: notice.versionId, locale: a.locale, at: now, channel: 'android_byod_invitation', endUserId: inv.end_user_id });
     const ack = { notice_version_id: notice.versionId, notice_ack_id: ackId, acknowledged_at: now, ack_locale: a.locale, updated_at: now };
     // Every passage acknowledges the notice and leaves its own audit entry (F1R-6); the invitation keeps the FIRST
     // acknowledgement that led to its token, never overwritten by a later passage (the proof of the consent).

@@ -15,6 +15,7 @@ import {
 import { legacyAgentRetentionRules } from '../legacyAgent/retention';
 import type { ManagementChannel } from '../guard/types';
 import { registerPrivacyProfileChanges } from '../privacy';
+import { noticeRetentionRules, registerNotice, requestNoticeRegeneration } from '../privacy/notice';
 import { installPrivacyProfiles } from '../privacy/profiles';
 import { privacyMetrics } from '../privacy/metrics';
 import { registerMetricsCollector } from '../ops/metrics';
@@ -60,7 +61,12 @@ import { logger } from '../utils/logger';
 // failures in a row of privacy.retention-tenant raise the alert
 // privacy.retention_failing of the master tenant (key privacy:retention:<id>,
 // one per tenant, instead of jobs:failing). Counters: privacy/metrics.ts, the
-// collector 'privacy' of ops/metrics.ts.
+// collector 'privacy' of ops/metrics.ts. It installs the generated notice of
+// the employees as well (privacy/notice, P0-13 T5, USR-01: the providers of
+// the enrollments, privacy.notice-regenerate); the retention of a tenant
+// purges the acknowledgements of the notice (notice_ack_months) and queues
+// the regeneration of its notices at the end of each run (a decrease reaching
+// its date changes the durations they tell).
 // =============================================================================
 
 /** Rows per slice (motif M8). */
@@ -237,7 +243,7 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
   await step('lost_mode_locations.purge_at', async () => {
     output.lost_mode_locations_realigned = await drain(ctx, (trx) => realignLostModePurgeDates(trx, tenantId, SLICE_ROWS));
   });
-  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules, ...legacyAgentRetentionRules];
+  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules, ...legacyAgentRetentionRules, ...noticeRetentionRules];
   for (const rule of rules) {
     await step(rule.name, async () => {
       const n = await drain(ctx, (trx) => rule.purge(trx, tenantId, now, SLICE_ROWS));
@@ -262,6 +268,8 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
       logger.warn({ tenantId, reason: devices.skipped }, 'privacy.retention: device records postponed');
     }
   });
+  // The notices tell the durations in force: generated again (a decrease of the retention reaching its date, P0-13 T5).
+  await step('notice.regenerate', async () => { await requestNoticeRegeneration(null, tenantId); });
   if (failed.length) throw new JobError('partial_failure', `${failed.length} retention rule(s) failed: ${failed.join(', ')}`);
   return { output };
 }
@@ -291,6 +299,9 @@ export function registerPrivacyModule(): void {
   // Their changes (P0-13 T3) and the retention's (T4): the approval request types and their examination, the audit
   // actions, the restrictions privacy.profile_change and privacy.retention_change, the job privacy.apply-profile.
   registerPrivacyProfileChanges();
+  // The generated notice of the employees (P0-13 T5, USR-01): its providers replace the default notices of the
+  // enrollments; its audit action, the job privacy.notice-regenerate and its triggers.
+  registerNotice();
 
   // The counters of the module (rows purged per rule, failures, changes), no tenant label.
   registerMetricsCollector('privacy', () => privacyMetrics.families());
@@ -301,7 +312,7 @@ export function registerPrivacyModule(): void {
   tenantJob = registerJob({
     name: 'privacy.retention-tenant',
     scope: 'tenant',
-    description: 'Retention of one tenant, its durations: departed end users, status history, locations, settled commands (MDM queue, bridge agent), timeline, device records (after apple-edge)',
+    description: 'Retention of one tenant, its durations: departed end users, status history, locations, settled commands (MDM queue, bridge agent), timeline, notice acknowledgements, device records (after apple-edge)',
     payload: TenantPayload,
     policy: 'exclusive',
     retry: { limit: 2, delaySeconds: 300, backoff: true, maxDelaySeconds: 3_600 },
