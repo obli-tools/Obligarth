@@ -1126,6 +1126,7 @@
       "anonymous": "Anonymous mode: the map and its links are hidden.",
       "personal": "Never located: this is a personal device.",
       "capabilityMissing": "Your team does not hold the lost mode capability on this device: its positions are not shown.",
+      "locationDisabledByPrivacy": "The privacy profile of this device's ownership does not allow locating it: no position is shown.",
       "coordinates": "Coordinates",
       "accuracy": "Accuracy",
       "altitude": "Altitude",
@@ -1140,7 +1141,8 @@
       "previewFailed": "The map could not be loaded (network or security policy). Use the OpenStreetMap link.",
       "attribution": "© OpenStreetMap contributors",
       "history": "Earlier positions",
-      "retention": "Positions are kept {{count}} days, in lost mode only.",
+      "retention_one": "Positions are kept {{count}} day, in lost mode only.",
+      "retention_other": "Positions are kept {{count}} days, in lost mode only.",
       "source": {
         "apple_command": "Answer to « Locate »",
         "android_lost_mode": "Sent by the device in lost mode"
@@ -1696,6 +1698,11 @@
       "outbox_dead_letter_redriven": "Outbox dead letter redriven",
       "outbox_dead_letter_viewed": "Outbox dead letter viewed",
       "platform_global_view_opened": "Global view opened",
+      "privacy_data_scrubbed": "Data no longer collected cleaned",
+      "privacy_profile_change_requested": "Change of a privacy profile requested",
+      "privacy_profile_changed": "Privacy profile changed",
+      "privacy_retention_change_requested": "Change of the retention requested",
+      "privacy_retention_changed": "Retention changed",
       "restrictions_updated": "Restrictions matrix changed",
       "sso_sync_deactivated": "Account deactivated by Obligate",
       "sso_sync_deleted": "Account deleted by Obligate",
@@ -1824,7 +1831,8 @@
       "apns": "Push (APNs)",
       "integration": "Apple integrations",
       "mdm": "MDM commands",
-      "enrollment": "Enrollment"
+      "enrollment": "Enrollment",
+      "privacy": "Privacy"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -1848,7 +1856,8 @@
       "mdm_policies_manage": "Policies · Edit, assign and publish",
       "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations",
       "mdm_integrations_manage": "Apple integrations · Push certificate, ADE servers, Apps and Books",
-      "mdm_apps_manage": "Apps · Catalog and assignments"
+      "mdm_apps_manage": "Apps · Catalog and assignments",
+      "mdm_privacy_manage": "Privacy · Profiles, notice and retention"
     }
   },
   "notificationCenter": {
@@ -1954,6 +1963,12 @@
     "empty": "No approvals.",
     "emptyPayload": "No parameters",
     "emptyPending": "No pending approvals.",
+    "errors": {
+      "privacyApproverSideChanged": "The tenant has a client approver now: cancel this request and file it again, the client approver will review it.",
+      "privacyClientSide": "Only a designated client approver of the tenant reviews this request.",
+      "privacyPlatformSide": "Only another platform administrator reviews this request (the tenant had no client approver when it was filed).",
+      "privacyFallbackHeld": "The client lost its client approver recently: another platform administrator may review this request only after {{until}}."
+    },
     "executionFailedToast": "Approved, but the action could not be executed: {{error}}",
     "expiredOn": "Expired on {{date}}",
     "hideDetails": "Hide details",
@@ -2554,6 +2569,7 @@
         "noUnlockToken": "No unlock token",
         "alreadyOpen": "Already requested",
         "identityUnavailable": "Identity not known yet",
+        "locationDisabledByPrivacy": "Location disabled by the privacy profile",
         "frozen": "Tenant frozen",
         "lostModeOff": "Lost mode is off",
         "lostModeOn": "Lost mode is already on"
@@ -3334,7 +3350,7 @@
     "devices": "Devices",
     "depart": "Mark as departed",
     "departed": "Marked as departed",
-    "confirmDepart": "Mark {{name}} as departed? Their devices stay assigned for 90 days, then the record is erased.",
+    "confirmDepart": "Mark {{name}} as departed? Their devices stay assigned for the retention the tenant set for departed end users (Privacy, 90 days by default), then the record is erased.",
     "importTooLarge": "The file is larger than 1 MiB.",
     "importReport": "Import report",
     "variablesHint": "These values fill the variables of the policies ({{variables}}…) on the devices assigned to this person.",
@@ -3818,7 +3834,16 @@
     "crossTenantBatch": "One request acts on one tenant only.",
     "tenantFrozen": "The commands of this tenant are frozen.",
     "commandRefused": "The command cannot be sent to this device.",
+    "locationDisabledByPrivacy": "The privacy profile of this device's ownership does not allow locating it.",
+    "invalidPrivacyRules": "The privacy rules are not valid.",
+    "justificationRequired": "A justification of 10 characters at least is required.",
+    "privacyProfileChangePending": "A change of this privacy profile already waits for its approval.",
+    "privacyProfileUnchanged": "The privacy profile already has these rules.",
+    "privacyRetentionChangePending": "A change of the retention already waits for its approval.",
+    "privacyRuleImposed": "An imposed rule of this ownership cannot change.",
     "rateLimited": "Too many requests: try again in a minute.",
+    "retentionOutOfRange": "A retention is outside its range.",
+    "retentionUnchanged": "The retention already has these values.",
     "deviceUnderManagement": "A device under management leaves management before its record is deleted.",
     "ownershipChangeNotAllowed": "The ownership changes between corporate and corporate, personally enabled, only, on a managed device in device mode; any other change is a new enrollment.",
     "endUserExists": "An end user already carries this e-mail, this Managed Apple Account or this directory identifier.",

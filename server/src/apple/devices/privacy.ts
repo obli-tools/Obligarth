@@ -11,7 +11,10 @@ import type { CollectedField, NanoEnrollType, Ownership } from '@obligarth/share
 // answers of the API, never null (EX-19).
 // The default rules are those of conception §10.3, by ownership; they are
 // reserved to the laboratory (integration §10.7): the privacy specification
-// (CNF-02) replaces the resolver with the tenants' privacy profiles.
+// (CNF-02) replaces the resolver with the tenants' privacy profiles
+// (privacy/profiles.ts, installed by registerPrivacyModule; P0-13 T1), which
+// compose the same lists below and fall back to these rules for a tenant
+// without a profile (equivalence tested by test:privacy).
 // =============================================================================
 
 export interface PrivacyRules {
@@ -23,11 +26,14 @@ export interface PrivacyRules {
   deviceInformationQueries: string[];
   /** DDM status items the device may report (a status item absent here is not kept). */
   statusItems: string[];
+  /** The default days of the record after its unenrollment; the tenant's retention applies (P0-13 T4: unenroll.ts). */
   retentionDaysAfterUnenroll: number;
   /** Requested by the data model (§5.2): */
   certificates: 'all' | 'managed_only';      // CertificateList ManagedOnly; personal and COPE: 'managed_only'
   storePhoneNumber: boolean;                 // PhoneNumber, ICCID, EID; corporate only by default
   storeNetwork: boolean;                     // carrier, roaming, Wi-Fi and Bluetooth MAC; personal: false
+  /** Location of the device in lost mode (REQ-03; P0-13): never for a personal device. */
+  lostModeLocation: boolean;
 }
 
 export interface PrivacyRulesResolver {
@@ -36,20 +42,20 @@ export interface PrivacyRulesResolver {
 }
 
 /** DeviceInformation keys asked of every device (no personal data). */
-const BASE_QUERIES = [
+export const BASE_QUERIES = [
   'OSVersion', 'BuildVersion', 'ProductName', 'Model', 'ModelName', 'ModelNumber', 'DeviceCapacity',
   'AvailableDeviceCapacity', 'IsSupervised', 'IsMDMLostModeEnabled', 'IsActivationLockEnabled',
   'IsDeviceLocatorServiceEnabled', 'IsCloudBackupEnabled', 'AwaitingConfiguration', 'BatteryLevel',
 ];
-const SERIAL_QUERIES = ['SerialNumber'];
-const UDID_QUERIES = ['UDID'];
-const HARDWARE_ID_QUERIES = ['IMEI', 'MEID'];
-const DEVICE_NAME_QUERIES = ['DeviceName'];
-const PHONE_QUERIES = ['PhoneNumber', 'ICCID', 'EID', 'ServiceSubscriptions'];
-const NETWORK_QUERIES = ['CurrentCarrierNetwork', 'SubscriberCarrierNetwork', 'IsRoaming', 'WiFiMAC', 'BluetoothMAC'];
+export const SERIAL_QUERIES = ['SerialNumber'];
+export const UDID_QUERIES = ['UDID'];
+export const HARDWARE_ID_QUERIES = ['IMEI', 'MEID'];
+export const DEVICE_NAME_QUERIES = ['DeviceName'];
+export const PHONE_QUERIES = ['PhoneNumber', 'ICCID', 'EID', 'ServiceSubscriptions'];
+export const NETWORK_QUERIES = ['CurrentCarrierNetwork', 'SubscriberCarrierNetwork', 'IsRoaming', 'WiFiMAC', 'BluetoothMAC'];
 
 /** DDM status items kept for every device (management, OS, compliance inputs). */
-const BASE_STATUS_ITEMS = [
+export const BASE_STATUS_ITEMS = [
   // management.push-token and mdm.push-magic never reach the brain (removed at the relay, apple-edge §5.7)
   'management.client-capabilities', 'management.declarations',
   'device.model.family', 'device.model.identifier', 'device.model.marketing-name',
@@ -61,8 +67,8 @@ const BASE_STATUS_ITEMS = [
   'softwareupdate.failure-reason', 'softwareupdate.beta-enrollment',
   'app.managed.list', 'security.certificate.list',
 ];
-const SERIAL_STATUS_ITEMS = ['device.identifier.serial-number'];
-const UDID_STATUS_ITEMS = ['device.identifier.udid'];
+export const SERIAL_STATUS_ITEMS = ['device.identifier.serial-number'];
+export const UDID_STATUS_ITEMS = ['device.identifier.udid'];
 
 /** The default rules of an ownership (conception §10.3; integration §10.7 and modele §5.2 tables). */
 export function defaultPrivacyRules(ownership: Ownership | null, enrollmentType: NanoEnrollType): PrivacyRules {
@@ -99,6 +105,7 @@ export function defaultPrivacyRules(ownership: Ownership | null, enrollmentType:
     certificates: corporate ? 'all' : 'managed_only',
     storePhoneNumber,
     storeNetwork,
+    lostModeLocation: !personal,
   };
 }
 

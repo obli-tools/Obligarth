@@ -17,6 +17,7 @@ import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventCont
 import { DeviceSchema } from '../inbox/schemas';
 import { evaluateAndroidDevices } from './compliance';
 import { filterInventory } from './privacy';
+import { androidPrivacyRulesFor } from '../../privacy/profiles';
 import { byodApps } from '../byod/policy';
 import { policyArtifactHash, syncPolicyArtifact } from '../policies/channel';
 import { appsMerge } from '../../mdm/inventory/appMerge';
@@ -85,7 +86,10 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
     return 'stale';
   }
   const ownership = String(row.ownership);
-  const inv = filterInventory(d as Record<string, unknown>, ownership);
+  // The tenant's privacy profile of the ownership (P0-13, CNF-02): network, IMEI, applications; the rules of before
+  // without a version of it.
+  const privacy = await androidPrivacyRulesFor(trx, tenantId, ownership);
+  const inv = filterInventory(d as Record<string, unknown>, ownership, privacy);
   const nonCompliance = normaliseNonCompliance(d.nonComplianceDetails);
   const posture = reducePosture((d as Record<string, unknown>).securityPosture);
   const applied = d.appliedPolicyVersion !== undefined && Number.isFinite(Number(d.appliedPolicyVersion)) ? Number(d.appliedPolicyVersion) : null;
@@ -137,9 +141,10 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   // Apps: the set of the report (source amapi_report); Google reports the work profile only (AMAPI-R20). A personal
   // device keeps the apps of the tenant's catalog only (lot AN-F1, criterion 6): never a personal app, whatever the
   // report carries. A COPE device (work profile on a company device) too (lot AN-F2, section 10.5: « apps
-  // personnelles jamais inventoriées »): its personal profile is the employee's.
+  // personnelles jamais inventoriées »): its personal profile is the employee's. A company device too when the
+  // tenant's profile limits the applications to the managed ones (P0-13, installedApps managed_only).
   let apps = inv.apps;
-  if ((ownership === 'personal' || ownership === 'corporate_personal') && apps.length) {
+  if ((ownership === 'personal' || ownership === 'corporate_personal' || privacy.installedApps === 'managed_only') && apps.length) {
     const catalog = new Set(await trx('apps').where({ tenant_id: tenantId, platform_family: 'android' }).whereNull('archived_at')
       .whereIn('identifier', apps.map((a) => a.identifier)).pluck('identifier') as string[]);
     apps = byodApps(apps, catalog);

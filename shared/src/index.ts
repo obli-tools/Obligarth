@@ -9,3 +9,4 @@ export * from './guard';
 export * from './mdm';
 export * from './android';
 export * from './ops';
+export * from './privacy';

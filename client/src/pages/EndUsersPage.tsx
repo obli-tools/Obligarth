@@ -63,7 +63,7 @@ export function EndUsersPage() {
   const depart = async (u: EndUser) => {
     const ok = await confirm({
       message: t('endUsers.confirmDepart', { name: anonymize(nameOf(u)) })
-        || `Mark ${nameOf(u)} as departed? Their devices stay assigned for 90 days, then the record is erased.`,
+        || `Mark ${nameOf(u)} as departed? Their devices stay assigned for the retention the tenant set for departed end users (Privacy, 90 days by default), then the record is erased.`,
       danger: true,
     });
     if (!ok) return;

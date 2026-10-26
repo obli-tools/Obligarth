@@ -1,15 +1,19 @@
 import type { Knex } from 'knex';
-import { LOST_MODE_LOCATION_DAYS } from '../../mdm/inventory/retention';
+import { lostModeLocationAllowed } from '../../privacy/profiles';
+import { lostModePurgeAt } from '../../privacy/retention';
 import { locationOf } from './location';
 import { registerCommandResultIngestor, type ResultIngestContext } from './results';
 
 // =============================================================================
 // Ingestion of the results of the lost-mode commands (docs: integration-apple-edge
 // §7.6, SEC-05), inline in the event's savepoint (one row each):
-//   DeviceLocation    the position the device answered, kept LOST_MODE_LOCATION_DAYS
-//                     days in lost_mode_locations with the id of its command; never
+//   DeviceLocation    the position the device answered, kept the lost_mode_location_days
+//                     of the tenant (P0-13 T4, CNF-04; 30 by default) in lost_mode_locations with the id of its command; never
 //                     for a personal device (read first: the table's trigger
-//                     lost_mode_locations_guard would raise and fail the savepoint)
+//                     lost_mode_locations_guard would raise and fail the savepoint),
+//                     nor when the tenant's privacy profile of the ownership refuses
+//                     the location (P0-13, CNF-02: an answer to a request sent
+//                     before the profile changed)
 //   EnableLostMode    acknowledged: lost_mode_state 'on'
 //   DisableLostMode   acknowledged: lost_mode_state 'off'
 // The state follows the acknowledgement only when it is not older than the last
@@ -27,10 +31,11 @@ async function ownershipOf(trx: Knex.Transaction, tenantId: number, deviceId: nu
   return d?.ownership ?? null;
 }
 
-/** DeviceLocation acknowledged: one row of lost_mode_locations (company devices only). */
+/** DeviceLocation acknowledged: one row of lost_mode_locations (company devices whose profile allows it only). */
 async function ingestDeviceLocation(c: ResultIngestContext): Promise<void> {
   const ownership = await ownershipOf(c.trx, c.tenantId, c.deviceId);
   if (ownership === null || ownership === 'personal') return;
+  if (!(await lostModeLocationAllowed(c.trx, c.tenantId, ownership))) return;
   const p = locationOf(c.result ?? {}, c.occurredAt);
   if (!p) return;
   // The command of the answer (mdm_commands.id: the target was found by it); null if it is not there any more.
@@ -41,7 +46,7 @@ async function ingestDeviceLocation(c: ResultIngestContext): Promise<void> {
     tenant_id: c.tenantId, device_id: c.deviceId, latitude: p.latitude, longitude: p.longitude,
     horizontal_accuracy: p.horizontalAccuracy, vertical_accuracy: p.verticalAccuracy, altitude: p.altitude, speed: p.speed,
     course: p.course, observed_at: p.observedAt, command_id: commandId,
-    purge_at: new Date(Date.now() + LOST_MODE_LOCATION_DAYS * 86_400_000),
+    purge_at: lostModePurgeAt(c.trx, c.tenantId),
   });
 }
 

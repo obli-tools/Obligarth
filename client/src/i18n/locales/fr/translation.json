@@ -1126,6 +1126,7 @@
       "anonymous": "Mode anonyme : la carte et ses liens sont masqués.",
       "personal": "Jamais de localisation : c'est un appareil personnel.",
       "capabilityMissing": "Votre équipe ne détient pas la capacité mode perdu sur cet appareil : ses positions ne sont pas affichées.",
+      "locationDisabledByPrivacy": "Le profil de confidentialité de la propriété de cet appareil n'autorise pas sa localisation : aucune position n'est affichée.",
       "coordinates": "Coordonnées",
       "accuracy": "Précision",
       "altitude": "Altitude",
@@ -1140,7 +1141,8 @@
       "previewFailed": "La carte n'a pas pu être chargée (réseau ou politique de sécurité). Utilisez le lien OpenStreetMap.",
       "attribution": "© les contributeurs d'OpenStreetMap",
       "history": "Positions précédentes",
-      "retention": "Les positions sont conservées {{count}} jours, uniquement en mode perdu.",
+      "retention_one": "Les positions sont conservées {{count}} jour, uniquement en mode perdu.",
+      "retention_other": "Les positions sont conservées {{count}} jours, uniquement en mode perdu.",
       "source": {
         "apple_command": "Réponse à « Localiser »",
         "android_lost_mode": "Envoyée par l'appareil en mode perdu"
@@ -1696,6 +1698,11 @@
       "outbox_dead_letter_redriven": "Lettre morte de l'outbox rejouée",
       "outbox_dead_letter_viewed": "Lettre morte de l'outbox consultée",
       "platform_global_view_opened": "Vue globale ouverte",
+      "privacy_data_scrubbed": "Données qui ne sont plus collectées nettoyées",
+      "privacy_profile_change_requested": "Modification d'un profil de confidentialité demandée",
+      "privacy_profile_changed": "Profil de confidentialité modifié",
+      "privacy_retention_change_requested": "Modification de la rétention demandée",
+      "privacy_retention_changed": "Rétention modifiée",
       "restrictions_updated": "Matrice des restrictions modifiée",
       "sso_sync_deactivated": "Compte désactivé par Obligate",
       "sso_sync_deleted": "Compte supprimé par Obligate",
@@ -1824,7 +1831,8 @@
       "apns": "Notifications push (APNs)",
       "integration": "Intégrations Apple",
       "mdm": "Commandes MDM",
-      "enrollment": "Enrôlement"
+      "enrollment": "Enrôlement",
+      "privacy": "Confidentialité"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -1848,7 +1856,8 @@
       "mdm_policies_manage": "Politiques · Modifier, affecter et publier",
       "mdm_enrollment_manage": "Inscription · Profils, liens et invitations",
       "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE, Apps and Books",
-      "mdm_apps_manage": "Apps · Catalogue et affectations"
+      "mdm_apps_manage": "Apps · Catalogue et affectations",
+      "mdm_privacy_manage": "Confidentialité · Profils, notice et rétention"
     }
   },
   "notificationCenter": {
@@ -1954,6 +1963,12 @@
     "empty": "Aucune approbation.",
     "emptyPayload": "Aucun paramètre",
     "emptyPending": "Aucune approbation en attente.",
+    "errors": {
+      "privacyApproverSideChanged": "Le tenant a désormais un approbateur client : annulez cette demande puis déposez-la à nouveau, l'approbateur client l'examinera.",
+      "privacyClientSide": "Seul un approbateur client désigné du tenant examine cette demande.",
+      "privacyPlatformSide": "Seul un autre administrateur de plateforme examine cette demande (le tenant n'avait pas d'approbateur client à son dépôt).",
+      "privacyFallbackHeld": "Le client a perdu récemment son approbateur client : un autre administrateur de plateforme ne pourra examiner cette demande qu'après le {{until}}."
+    },
     "executionFailedToast": "Approuvée, mais l'action n'a pas pu être exécutée : {{error}}",
     "expiredOn": "Expirée le {{date}}",
     "hideDetails": "Masquer le détail",
@@ -2554,6 +2569,7 @@
         "noUnlockToken": "Aucun jeton de déverrouillage",
         "alreadyOpen": "Déjà demandée",
         "identityUnavailable": "Identité pas encore connue",
+        "locationDisabledByPrivacy": "Localisation désactivée par le profil de confidentialité",
         "frozen": "Tenant gelé",
         "lostModeOff": "Le mode perdu est désactivé",
         "lostModeOn": "Le mode perdu est déjà activé"
@@ -3334,7 +3350,7 @@
     "devices": "Appareils",
     "depart": "Marquer comme parti",
     "departed": "Marqué comme parti",
-    "confirmDepart": "Marquer {{name}} comme parti ? Ses appareils lui restent affectés 90 jours, puis la fiche est effacée.",
+    "confirmDepart": "Marquer {{name}} comme parti ? Ses appareils lui restent affectés pendant la durée de conservation fixée par le tenant pour les utilisateurs partis (Confidentialité, 90 jours par défaut), puis la fiche est effacée.",
     "importTooLarge": "Le fichier dépasse 1 Mio.",
     "importReport": "Rapport d'import",
     "variablesHint": "Ces valeurs renseignent les variables des politiques ({{variables}}…) sur les appareils affectés à cette personne.",
@@ -3818,7 +3834,16 @@
     "crossTenantBatch": "Une demande n'agit que sur un seul tenant.",
     "tenantFrozen": "Les commandes de ce tenant sont gelées.",
     "commandRefused": "La commande ne peut pas être envoyée à cet appareil.",
+    "locationDisabledByPrivacy": "Le profil de confidentialité de la propriété de cet appareil n'autorise pas sa localisation.",
+    "invalidPrivacyRules": "Les règles de confidentialité ne sont pas valides.",
+    "justificationRequired": "Une justification d'au moins 10 caractères est exigée.",
+    "privacyProfileChangePending": "Une modification de ce profil de confidentialité attend déjà son approbation.",
+    "privacyProfileUnchanged": "Le profil de confidentialité a déjà ces règles.",
+    "privacyRetentionChangePending": "Une modification de la rétention attend déjà son approbation.",
+    "privacyRuleImposed": "Une règle imposée de cette propriété ne peut pas changer.",
     "rateLimited": "Trop de demandes : réessayez dans une minute.",
+    "retentionOutOfRange": "Une durée de conservation sort de sa plage.",
+    "retentionUnchanged": "La rétention a déjà ces valeurs.",
     "deviceUnderManagement": "Un appareil sous gestion sort de gestion avant la suppression de sa fiche.",
     "ownershipChangeNotAllowed": "La propriété ne change qu'entre « entreprise » et « entreprise, usage personnel permis », sur un appareil géré en mode appareil ; tout autre changement est un nouvel enrôlement.",
     "endUserExists": "Un utilisateur final porte déjà cette adresse, ce compte Apple géré ou cet identifiant d'annuaire.",

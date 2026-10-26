@@ -5,6 +5,7 @@ import { audit } from '../audit';
 import { db } from '../db';
 import { asNone, asTenant } from '../db/context';
 import { raiseInTx } from '../apple/alerts/service';
+import { legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { agentConfigFor } from './agentConfig';
 import { instanceSettings } from './config';
@@ -121,6 +122,9 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       const d = b.device;
       const serial = serialOf(d.samsungSerial) ?? serialOf(d.serial);
       const imeis = [...new Set(d.imeis ?? [])];
+      // P0-13 (CNF-02, D14): the IMEIs are kept only when the tenant's corporate privacy profile collects the hardware
+      // identifiers (they still check the conflicts below, never stored otherwise); the serial number always (PB13).
+      const keepImei = (await legacyAgentPrivacyRulesFor(trx, tenantId)).imei;
       // PB13: a serial or an IMEI never takes the record of a device still under management.
       let conflict = false;
       if (serial) {
@@ -157,8 +161,10 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
         admin_active: b.capabilities.adminActive, knox_state: b.capabilities.knox.state,
         knox_info: JSON.stringify({ version: clean(b.capabilities.knox.version, 64), mdmApiLevel: clean(b.capabilities.knox.mdmApiLevel, 64), error: null }),
         api_level: d.apiLevel ?? null, security_patch: d.securityPatch ?? null, android_id: d.androidId ? d.androidId.toLowerCase() : null,
-        claimed_serial: serialOf(d.serial), samsung_serial: serialOf(d.samsungSerial), imeis,
-        hints: b.hints ? JSON.stringify({ deviceName: clean(b.hints.deviceName, 255), serial: clean(b.hints.serial, 64), imei: clean(b.hints.imei, 32) }) : null,
+        claimed_serial: serialOf(d.serial), samsung_serial: serialOf(d.samsungSerial), imeis: keepImei ? imeis : [],
+        hints: b.hints ? JSON.stringify({
+          deviceName: clean(b.hints.deviceName, 255), serial: clean(b.hints.serial, 64), imei: keepImei ? clean(b.hints.imei, 32) : null,
+        }) : null,
         identity_conflict: conflict, last_poll_at: now, enrolled_at: now,
       });
       const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, tenantId);

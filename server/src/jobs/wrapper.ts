@@ -3,7 +3,7 @@ import { db } from '../db';
 import { asTenant, runWithDbContext, type DbActor, type DbContext } from '../db/context';
 import { withTenantTransaction } from '../db/tenantContext';
 import { logger } from '../utils/logger';
-import { jobAlerts } from './alerts';
+import { jobAlerts, raiseJobAlert } from './alerts';
 import type { BossJobResult, Job } from './boss';
 import { JobError, PermanentJobError, safeErr, sanitizeError } from './errors';
 import { jobMetrics } from './metrics';
@@ -148,7 +148,15 @@ async function runOne(def: RegisteredJob, job: Job<unknown>, actor: DbActor, dea
     ctx.log[willRetry ? 'warn' : 'error']({ err: safeErr(err), code: s.code, attempt, durationMs }, 'job attempt failed');
     if (def.trackStatus !== 'none') {
       const failures = await jobStatus.failed(def.name, statusKey, s.code, durationMs).catch((e) => { logStatusError(e); return 0; });
-      if (failures === def.alertAfterFailures) await jobAlerts.failing(actor, def.name, failures, s.code);
+      if (failures === def.alertAfterFailures) {
+        let custom: ReturnType<NonNullable<RegisteredJob['failureAlert']>> | null = null;
+        try {
+          custom = def.failureAlert ? def.failureAlert({ tenantId, failures, code: s.code }) : null;
+        } catch (e) {
+          logger.warn({ err: safeErr(e), job: def.name }, 'job failure alert not built: the generic one is raised');
+        }
+        await (custom ? raiseJobAlert(actor, custom) : jobAlerts.failing(actor, def.name, failures, s.code));
+      }
     }
     jobMetrics.run(def.name, willRetry ? 'retry' : 'failed', durationMs);
     return { id: job.id, status: s.retryable ? 'failed' : 'deadletter', output: { code: s.code, message: s.message, attempt } };

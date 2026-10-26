@@ -7,6 +7,7 @@ import { ddmMetrics } from '../ddm/metrics';
 import { edgeHealth } from '../edge/health';
 import { usesDefaultNotice } from '../enrollment/notice';
 import { usesDefaultPrivacyRules } from '../devices/privacy';
+import { tenantHasPrivacyProfile } from '../../privacy/profiles';
 
 // =============================================================================
 // What the Integrations tab shows (docs: integration-apple-edge §11.4, §11.5,
@@ -115,7 +116,9 @@ export async function readiness(q: Knex, tenantId: number): Promise<ReadinessIte
       : { key: 'signing.identity', state: 'ready' });
   }
   out.push(usesDefaultNotice() ? { key: 'notice.custom', state: 'warning', reason: 'default_notice' } : { key: 'notice.custom', state: 'ready' });
-  out.push(usesDefaultPrivacyRules() ? { key: 'privacy.profile', state: 'warning', reason: 'default_rules' } : { key: 'privacy.profile', state: 'ready' });
+  // The tenant's own privacy profile (P0-13, CNF-02): ready once it published one, the default rules otherwise.
+  out.push(usesDefaultPrivacyRules() || !(await tenantHasPrivacyProfile(q, tenantId))
+    ? { key: 'privacy.profile', state: 'warning', reason: 'default_rules' } : { key: 'privacy.profile', state: 'ready' });
 
   const ddmDevices = await count(q('apple_devices as a').join('devices as d', function on() { this.on('d.id', 'a.device_id').andOn('d.tenant_id', 'a.tenant_id'); })
     .where({ 'a.tenant_id': tenantId, 'a.ddm_enabled': true }).whereNot('d.enrollment_state', 'unenrolled'));

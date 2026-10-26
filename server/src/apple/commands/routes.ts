@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import type {
-  DeviceCapability, MdmCommandView, MdmDeviceAction, MdmEnqueueResult, MdmRefusalCode, MdmTargetState, MdmTargetView,
+  DeviceCapability, MdmCommandView, MdmDeviceAction, MdmEnqueueResult, MdmRefusalCode, MdmTargetState, MdmTargetView, NanoEnrollType,
 } from '@obligarth/shared';
 import { MDM_COMMAND_ORIGINS, MDM_TARGET_STATES } from '@obligarth/shared';
 import { audit } from '../../audit';
@@ -22,6 +22,7 @@ import { config } from '../../config';
 import { edgeActorOf } from '../actors';
 import { resolveInTx } from '../alerts/service';
 import { deviceTimeline } from '../devices/events';
+import { privacyRulesFor } from '../devices/privacy';
 import { appleEdge } from '../edge/instance';
 import { rethrowForConsole } from '../edge/appError';
 import { mdmCommands, refusalOf, type EnqueueOutcome } from './bus';
@@ -85,12 +86,13 @@ function body<S extends z.ZodTypeAny>(schema: S, req: Request): z.infer<S> {
 const REFUSAL_CODES: Record<MdmRefusalCode, string> = {
   not_apple: 'notApple', not_enrolled: 'notEnrolled', awaiting_configuration_only: 'awaitingConfigurationOnly', ownership: 'ownership',
   not_supervised: 'notSupervised', no_unlock_token: 'noUnlockToken', already_open: 'alreadyOpen', identity_unavailable: 'identityUnavailable',
+  location_disabled: 'locationDisabledByPrivacy',
 };
 
 /** The answer for a request whose every device was set aside. */
 function refusedError(code: MdmRefusalCode): AppError {
   const c = REFUSAL_CODES[code] ?? 'commandRefused';
-  return new AppError(code === 'already_open' ? 409 : 422, `The command cannot be sent to this device (${code})`, c);
+  return new AppError(code === 'already_open' || code === 'location_disabled' ? 409 : 422, `The command cannot be sent to this device (${code})`, c);
 }
 
 /** The console's enqueue key from the Idempotency-Key header (console:<user>:<value>). */
@@ -109,6 +111,7 @@ interface DeviceFacts {
   supervised: boolean;
   has_unlock_token: boolean;
   apple: number | null;
+  nano_enroll_type: NanoEnrollType | null;
   lost_mode_state: 'off' | 'enabling' | 'on' | 'disabling';
 }
 
@@ -117,11 +120,25 @@ async function deviceFacts(tenantId: number, ids: number[]): Promise<Map<number,
     .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId).whereRaw('d.id = ANY (?::int[])', [ids])
     .select('d.id', 'd.management_channel', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'd.lost_mode_state', 'a.has_unlock_token',
-      'a.device_id as apple') as DeviceFacts[];
+      'a.device_id as apple', 'a.nano_enroll_type') as DeviceFacts[];
   return new Map(rows.map((r) => [Number(r.id), { ...r, id: Number(r.id), has_unlock_token: r.has_unlock_token === true }]));
 }
 
 const prerequisite = (spec: CommandSpec<any>, d: DeviceFacts | undefined): MdmRefusalCode | null => refusalOf(spec, d && d.apple !== null ? d : undefined);
+
+/** P0-13 (CNF-02): may the device be located (DeviceLocation), by the tenant's privacy profile of its ownership? Told
+ *  before anything is asked of the user; the bus refuses it too (location_disabled), whatever the origin. */
+async function locationAllowed(tenantId: number, d: DeviceFacts | undefined): Promise<boolean> {
+  if (!d || d.apple === null || !d.nano_enroll_type) return true;   // not an Apple record: prerequisite() says why
+  return (await privacyRulesFor(db, tenantId, d.ownership, d.nano_enroll_type)).lostModeLocation;
+}
+
+/** prerequisite(), then the privacy profile for a DeviceLocation. */
+async function refusalFor(tenantId: number, spec: CommandSpec<any>, d: DeviceFacts | undefined): Promise<MdmRefusalCode | null> {
+  const refusal = prerequisite(spec, d);
+  if (refusal || spec.requestType !== 'DeviceLocation') return refusal;
+  return (await locationAllowed(tenantId, d)) ? null : 'location_disabled';
+}
 
 /** Why the menu greys out a lost-mode command given the recorded state of the lost mode (null: nothing to say). */
 function lostModeRefusal(requestType: string, state: DeviceFacts['lost_mode_state'] | undefined): 'lostModeOff' | 'lostModeOn' | null {
@@ -283,7 +300,7 @@ router.get('/devices/:id/actions', async (req, res, next) => {
     for (const spec of commandSpecList()) {
       if (spec.capability === null) continue;
       const hasCapability = canWrite && (isAdmin || await permissionService.canUseCapability(req.session.userId!, id, false, spec.capability));
-      const refusal = prerequisite(spec, facts);
+      const refusal = await refusalFor(tenantId, spec, facts);
       const otherwise = !hasCapability ? 'capabilityMissing' : refusal ? REFUSAL_CODES[refusal] : isFrozen ? 'frozen' : null;
       // The menu only (the bus still accepts them: the recorded state may lag behind the device): the sound, the
       // location and the disabling need the lost mode on; enabling it again while it is on or coming is pointless.
@@ -312,7 +329,7 @@ router.post('/devices/:id/commands', enqueueLimiter, async (req, res, next) => {
     const key = idempotencyKey(req);
     if (await frozen(tenantId)) throw new AppError(423, 'The commands of this tenant are frozen', 'tenantFrozen');
     // What the device cannot take is told before anything is asked of the user (a step-up, a second approver).
-    const refusal = prerequisite(spec, (await deviceFacts(tenantId, [id])).get(id));
+    const refusal = await refusalFor(tenantId, spec, (await deviceFacts(tenantId, [id])).get(id));
     if (refusal) throw refusedError(refusal);
     if (spec.restrictionKey) {
       const ok = await applyRestriction(res, {
@@ -350,6 +367,13 @@ router.post('/commands/bulk', bulkLimiter, async (req, res, next) => {
     requireReason(spec, b.reason);
     const key = idempotencyKey(req);
     if (await frozen(tenantId)) throw new AppError(423, 'The commands of this tenant are frozen', 'tenantFrozen');
+    // P0-13 (CNF-02): no device of the request may be located: told before a step-up or an approval is asked (the bus
+    // sets aside each device whose profile refuses it).
+    if (spec.requestType === 'DeviceLocation') {
+      let anyAllowed = false;
+      for (const d of facts.values()) if (await locationAllowed(tenantId, d)) { anyAllowed = true; break; }
+      if (!anyAllowed) throw refusedError('location_disabled');
+    }
     if (spec.restrictionKey) {
       const ok = await applyRestriction(res, {
         req, actionKey: spec.restrictionKey, deviceIds: ids, approvalRequestType: 'apple_action',

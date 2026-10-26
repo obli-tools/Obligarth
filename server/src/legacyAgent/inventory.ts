@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import { audit } from '../audit';
 import { raiseInTx } from '../apple/alerts/service';
 import { appsMerge } from '../mdm/inventory/appMerge';
+import { legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { managedPackages } from './commands';
 import { ICONS_MIN_VERSION_CODE, leaseIcons } from './icons';
@@ -21,7 +22,11 @@ import { errorReply, type AgentIdentity, type Exchange, type Reply } from './sur
 // serial number never takes the record of another managed device, nor
 // replaces the one a record already carries: identity_conflict and an alert.
 // Neither the SSID, the MAC address nor the operator are kept (no personal
-// data beyond the company device, §8.7).
+// data beyond the company device, §8.7). The tenant's corporate privacy
+// profile (P0-13, CNF-02, D14) decides the IMEIs (kept only when it collects
+// the hardware identifiers) and the apps (the managed ones only when it
+// limits them: those a successful app.install put there); the serial number
+// stays, the identity of the device (PB13).
 // =============================================================================
 
 const clean = (v: string | null | undefined, max: number): string | null => {
@@ -79,7 +84,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       ...(serial.set ? { serial_number: serial.set } : {}),
       last_checkin_at: now, updated_at: now,
     });
-    const imeis = [...new Set(d.imeis ?? [])];
+    const privacy = await legacyAgentPrivacyRulesFor(trx, who.tenantId);
+    const imeis = privacy.imei ? [...new Set(d.imeis ?? [])] : [];
     await trx('legacy_agent_devices').where({ tenant_id: who.tenantId, device_id: who.deviceId }).update({
       api_level: d.apiLevel ?? null, security_patch: d.securityPatch ?? null, android_id: d.androidId ? d.androidId.toLowerCase() : null,
       claimed_serial: serialOf(d.serial), samsung_serial: serialOf(d.samsungSerial), imeis,
@@ -99,8 +105,9 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
     // The apps: replaced as a whole (the absent ones leave), managed when a successful app.install put them there. The
     // system flag is a column of its own (is_system; management_status is a status of the management, never 'system').
     const managed = await managedPackages(trx, who.tenantId, who.deviceId);
+    const apps = privacy.installedApps === 'managed_only' ? b.apps.filter((a) => managed.has(a.package)) : b.apps;
     const seen = new Map<string, (typeof b.apps)[number]>();
-    for (const a of b.apps) seen.set(a.package, a);
+    for (const a of apps) seen.set(a.package, a);
     const ids = [...seen.keys()];
     await trx('device_apps').where({ tenant_id: who.tenantId, device_id: who.deviceId, source: 'agent_report' })
       .modify((q) => { if (ids.length > 0) q.whereNotIn('identifier', ids); }).delete();
@@ -117,7 +124,7 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
           'installed_at', 'app_updated_at', 'source', 'last_seen_at']));
     }
     // The icons the server asks this device for (agent 1.0.2 and later; never a lease an older agent would waste).
-    const iconsWanted = Number(sat.agent_version_code) >= ICONS_MIN_VERSION_CODE ? await leaseIcons(trx, who, b.apps, now) : [];
+    const iconsWanted = Number(sat.agent_version_code) >= ICONS_MIN_VERSION_CODE ? await leaseIcons(trx, who, apps, now) : [];
 
     await writeStatusItems(trx, who.tenantId, who.deviceId, now, {
       'agent.battery.level': b.battery?.level ?? null,

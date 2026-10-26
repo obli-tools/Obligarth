@@ -41,6 +41,32 @@ function formatCountdown(expiresAt: string, t: TFunction): string {
 }
 
 /**
+ * The refusals of the examination of a privacy request (P0-13: privacy_profile_change, privacy_retention_change).
+ * Their sides are not the guard's (a client approver of the tenant, else another platform administrator), so the
+ * guard's texts would say something else: their own messages, the server's sentence otherwise. null: not one of them.
+ */
+function privacyReviewError(t: TFunction, a: PendingApproval, err: any): string | null {
+ if (a.requestType !== 'privacy_profile_change' && a.requestType !== 'privacy_retention_change') return null;
+ const data = err?.response?.data;
+ const until = data?.details?.until ? new Date(String(data.details.until)).toLocaleString() : '';
+ switch (data?.code) {
+ // 409: filed on the platform side, the tenant has a client approver now: nobody may approve it any more.
+ case 'approverSideRequired':
+ if (err?.response?.status === 409) {
+ return t('approvals.errors.privacyApproverSideChanged') || data?.error
+ || 'The tenant has a client approver now: cancel this request and file it again, the client approver will review it.';
+ }
+ return a.payload?.reviewerSide === 'client'
+ ? t('approvals.errors.privacyClientSide') || 'Only a designated client approver of the tenant reviews this request.'
+ : t('approvals.errors.privacyPlatformSide') || 'Only another platform administrator reviews this request (the tenant had no client approver when it was filed).';
+ case 'approverFallbackHeld':
+ return t('approvals.errors.privacyFallbackHeld', { until }) || data?.error
+ || 'The client lost its client approver recently: another platform administrator may review this request only later.';
+ default: return null;
+ }
+}
+
+/**
  * The request description (what the destructive action will do). Desktop
  * (≥ lg, mouse): one truncated line as before. Narrow / touch: up to 3
  * lines, plus a "Show more" toggle when it is still cut — the reviewer must
@@ -282,7 +308,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  }
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -304,7 +330,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  toast(t('approvals.deniedToast', 'Denied'));
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }

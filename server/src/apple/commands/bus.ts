@@ -371,9 +371,13 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
   const supersede: Array<{ deviceId: number; identifier: string }> = [];
   for (const d of kept) {
     const params = perDeviceParams.get(d.id) ?? baseParams;
+    const privacy = await rulesOf(d);
+    // P0-13 (CNF-02): the location of a device whose ownership's privacy profile refuses it (whatever the origin: the
+    // console, an approval executed later, a policy).
+    if (spec.requestType === 'DeviceLocation' && !privacy.lostModeLocation) { refused.push({ deviceId: d.id, code: 'location_disabled' }); continue; }
     const ctx: CommandDeviceContext = {
       deviceId: d.id, enrollmentId: d.enrollment_id, enrollmentType: d.nano_enroll_type, ownership: d.ownership, supervised: d.supervised,
-      platform: d.platform, osVersion: d.os_version, privacy: await rulesOf(d), identityCertPem: d.identity_cert_pem ?? null,
+      platform: d.platform, osVersion: d.os_version, privacy, identityCertPem: d.identity_cert_pem ?? null,
     };
     let command: PlistDict;
     let stored = params;

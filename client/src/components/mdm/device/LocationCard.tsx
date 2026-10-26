@@ -170,6 +170,9 @@ export function LocationCard({ device, locate, id, className, reveal, onRevealed
   const unavailableText = (code: DeviceLocations['unavailable']): string => {
     if (code === 'unenrolled') return t('deviceSummary.location.unenrolled') || 'Out of management: no position is shown.';
     if (code === 'lostModeOff') return t('deviceSummary.location.lostModeOff') || 'Positions exist only while the lost mode is on.';
+    if (code === 'locationDisabledByPrivacy') {
+      return t('deviceSummary.location.locationDisabledByPrivacy') || "The privacy profile of this device's ownership does not allow locating it: no position is shown.";
+    }
     return t('deviceSummary.location.capabilityMissing') || 'Your team does not hold the lost mode capability on this device: its positions are not shown.';
   };
   /** Coordinates as shown: masked in anonymous mode (the copy button keeps the real value, as for the serial number). */
@@ -277,10 +280,14 @@ export function LocationCard({ device, locate, id, className, reveal, onRevealed
 
       <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border pt-3">
         {!locate.hidden && <QuickActionButton action={locate} />}
-        {!locate.available && locate.reasonLabel && <span className="min-w-0 flex-1 text-[11px] text-text-muted">{locate.reasonLabel}</span>}
+        {/* The reason of the action (Android: "sends its position by itself") never contradicts a refusal of the privacy
+            profile, which the body already tells. */}
+        {!locate.available && locate.reasonLabel && data?.unavailable !== 'locationDisabledByPrivacy'
+          && <span className="min-w-0 flex-1 text-[11px] text-text-muted">{locate.reasonLabel}</span>}
         {data && (
           <span className="w-full text-[11px] text-text-muted">
-            {t('deviceSummary.location.retention', { count: data.retentionDays }) || `Positions are kept ${data.retentionDays} days, in lost mode only.`}
+            {t('deviceSummary.location.retention', { count: data.retentionDays })
+              || `Positions are kept ${data.retentionDays} ${data.retentionDays === 1 ? 'day' : 'days'}, in lost mode only.`}
           </span>
         )}
       </div>

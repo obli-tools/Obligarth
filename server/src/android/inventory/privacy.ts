@@ -10,6 +10,8 @@ export interface AndroidPrivacyRules {
   imei: boolean;
 }
 
+/** The rules of before P0-13, by ownership: the fallback of a tenant without a version of the ownership's privacy
+ *  profile (privacy/profiles.ts androidPrivacyRulesFor, which the ingestion and the compilation call). */
 export const DEFAULT_PRIVACY: Readonly<Record<'corporate' | 'corporate_personal' | 'personal', AndroidPrivacyRules>> = {
   corporate: { networkInfo: true, imei: false },
   corporate_personal: { networkInfo: false, imei: false },

@@ -1,23 +1,23 @@
 // Handler of the USAGE_LOGS notifications (amapi.usage_logs, sections 8.1, 11.2; lot AN-F2; criterion 6): the events of
 // the lost mode only (the usage logs of the policy are not collected otherwise in v1).
-//   - LOST_MODE_LOCATION: the position of a company device in lost mode (fully managed 11+, COPE 13+), kept 30 days
-//     (lost_mode_locations, purge_at); never for a personal device (the device is ignored as a whole; the table refuses
-//     it too, lost_mode_locations_guard), never for a device whose lost mode is off (a late event);
+//   - LOST_MODE_LOCATION: the position of a company device in lost mode (fully managed 11+, COPE 13+), kept the
+//     lost_mode_location_days of the tenant (P0-13 T4, CNF-04; 30 by default: lost_mode_locations, purge_at); never for a personal device (the device is ignored as a whole; the table refuses
+//     it too, lost_mode_locations_guard), never for a device whose lost mode is off (a late event), never when the
+//     tenant's privacy profile of the ownership refuses the location (P0-13, CNF-02: lostModeLocation);
 //   - STOP_LOST_MODE_USER_ATTEMPT with ATTEMPT_SUCCEEDED: the user left the lost mode on the device: lost mode off, and
 //     the time of the exit kept (android_lost_mode_exits): Google refuses START_LOST_MODE for 12 hours after it
 //     (USER_EXIT_LOST_MODE_RECENTLY), the bus refuses it before any call; an entry lost_mode_user_exit in the timeline.
 // No network call (G-A3); identifiers only in the logs (G-A4): never a coordinate.
 import type { z } from 'zod';
 import { deviceEvents } from '../../apple/devices/events';
-import { LOST_MODE_LOCATION_DAYS } from '../../mdm/inventory/retention';
+import { lostModeLocationAllowed } from '../../privacy/profiles';
+import { lostModePurgeAt } from '../../privacy/retention';
 import { registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { UsageLogsSchema } from '../inbox/schemas';
 
 type Logs = z.infer<typeof UsageLogsSchema>;
 type Ctx = AndroidEventContext<Logs>;
 
-/** Positions are kept 30 days (lost_mode_locations_purge_cap allows 62): the data model's constant, shared with Apple. */
-export { LOST_MODE_LOCATION_DAYS };
 /** Events read per notification (a batch of usage logs may hold thousands of events of other kinds). */
 const MAX_EVENTS = 500;
 const MAX_POSITIONS = 50;
@@ -77,8 +77,8 @@ export async function onUsageLogs(ctx: Ctx): Promise<'applied' | 'ignored'> {
       await deviceEvents.add(trx, tenantId, deviceId, 'lost_mode_user_exit', userExitAt, null, { cooldownHours: 12 });
     }
   }
-  if (positions.length && (state === 'on' || state === 'enabling')) {
-    const purge = new Date(Date.now() + LOST_MODE_LOCATION_DAYS * 86_400_000);
+  if (positions.length && (state === 'on' || state === 'enabling') && await lostModeLocationAllowed(trx, tenantId, row.ownership)) {
+    const purge = lostModePurgeAt(trx, tenantId);
     await trx('lost_mode_locations').insert(positions.map((x) => ({
       tenant_id: tenantId, device_id: deviceId, latitude: x.latitude, longitude: x.longitude, observed_at: x.observedAt, purge_at: purge,
     })));

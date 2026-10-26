@@ -40,6 +40,9 @@ export const TENANT_CAPABILITIES = [
   'mdm.integrations.manage',
   // Manage the catalog of apps and their assignments (modele-donnees-mdm §8, §10.7, lot C4); reading needs none.
   'mdm.apps.manage',
+  // Request the changes of the privacy profiles and of the retention (each one approved by another person), write the
+  // settings of the notice (P0-13: CNF-02, CNF-04, USR-01); reading them needs settings, audit.read or this one.
+  'mdm.privacy.manage',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -60,6 +63,7 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'mdm.enrollment.manage': 'Enrollment · Profiles, links and invitations',
   'mdm.integrations.manage': 'Apple integrations · Push certificate, ADE servers, Apps and Books',
   'mdm.apps.manage':       'Apps · Catalog and assignments',
+  'mdm.privacy.manage':    'Privacy · Profiles, notice and retention',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

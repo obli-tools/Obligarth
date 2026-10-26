@@ -40,7 +40,7 @@ import { androidGateway } from '../gateway';
 import { AndroidError } from '../gateway/errors';
 import { parseOwnedName } from '../gateway/names';
 import type { AndroidGateway } from '../gateway/types';
-import { DEFAULT_PRIVACY } from '../inventory/privacy';
+import { androidPrivacyRulesFor } from '../../privacy/profiles';
 import { kioskAppInCatalog, readAndroidProfile, snapshotOf } from '../enrollment/profiles';
 import {
   endKioskExitForWipePolicy, kioskLockPendingUnderFreeze, markKioskLockRestored, markKioskWipeSettingsApplied, runningKioskExit,
@@ -205,6 +205,8 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
       const desired = await deviceSource(trx, tenantId, deviceId);
       // Lot AN-D1 (review AN-C1b, R8): a device the operator disabled (mdm.android_disable) is never reactivated by a push.
       const operatorDisabled = !!(await trx('android_device_controls').where({ tenant_id: tenantId, device_id: deviceId }).first('device_id'));
+      // P0-13 (CNF-02): what the device reports (statusReportingSettings) follows the tenant's privacy profile of its ownership.
+      const privacy = await androidPrivacyRulesFor(trx, tenantId, row.ownership);
       // Lot AN-G1: the kiosk of a dedicated device.
       let kiosk: { app: string | null; appInCatalog: boolean; exit: boolean } | undefined;
       if (row.usage === 'kiosk') {
@@ -212,7 +214,7 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
         const app = profile?.settings.deviceUsage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
         kiosk = { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false, exit: !!(await runningKioskExit(trx, tenantId, deviceId)) };
       }
-      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled, kiosk };
+      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled, kiosk, networkInfo: privacy.networkInfo };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, row, desired } = prep;
@@ -223,7 +225,7 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
     try {
       compiled = compileAndroid(desired.settings, facts, {
         purpose: 'device', variables: desired.variables,
-        privacy: { networkInfo: DEFAULT_PRIVACY[row.ownership as 'corporate' | 'corporate_personal' | 'personal']?.networkInfo ?? false },
+        privacy: { networkInfo: prep.networkInfo },
         guards: { adminDomain: prep.adminDomain, minFailedPasswordsForWipe: FAILED_PASSWORDS_FOR_WIPE.defaultFloor }, ...(prep.kiosk ? { kiosk: prep.kiosk } : {}),
       });
     } catch (err) {
@@ -350,12 +352,13 @@ export async function kioskExitPolicyRefusal(trx: Knex.Transaction, tenantId: nu
   const desired = await deviceSource(trx, tenantId, deviceId);
   const profile = row.enrollment_profile_id ? await readAndroidProfile(trx, String(row.enrollment_profile_id), tenantId) : null;
   const app = profile?.settings.deviceUsage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
+  const privacy = await androidPrivacyRulesFor(trx, tenantId, row.ownership);
   try {
     const compiled = compileAndroid(desired.settings, {
       platform: 'android', mode: row.management_mode, ownership: row.ownership, apiLevel: row.api_level, uuid: String(row.uuid), usage: row.usage,
     }, {
       purpose: 'device', variables: desired.variables,
-      privacy: { networkInfo: DEFAULT_PRIVACY[row.ownership as 'corporate' | 'corporate_personal' | 'personal']?.networkInfo ?? false },
+      privacy: { networkInfo: privacy.networkInfo },
       kiosk: { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false, exit: false },
     });
     if (compiled.problems.length || !compiled.kioskLock) return 'policy_error';
@@ -380,7 +383,9 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
       const current = await trx('android_enrollment_policies').where({ profile_id: profile.id }).first('compiled_hash', 'state');
       const app = snap.usage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
       const kiosk = { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false };
-      return { kind: 'ok' as const, e, profile, snap, desired, kiosk, current: current as { compiled_hash: string | null; state: string } | undefined };
+      // P0-13 (CNF-02): the status reporting of the profile's ownership follows the tenant's privacy profile.
+      const privacy = await androidPrivacyRulesFor(trx, tenantId, snap.ownership);
+      return { kind: 'ok' as const, e, profile, snap, desired, kiosk, networkInfo: privacy.networkInfo, current: current as { compiled_hash: string | null; state: string } | undefined };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, profile, snap, desired } = prep;
@@ -391,7 +396,7 @@ export async function pushEnrollmentPolicy(tenantId: number, profileId: string, 
     try {
       compiled = compileAndroid(desired.settings, {
         platform: 'android', mode: snap.mode, ownership: snap.ownership, apiLevel: null, uuid: profile.id, usage: snap.usage,
-      }, { purpose: 'enrollment', profileUuid: profile.id, variables: desired.variables, privacy: { networkInfo: DEFAULT_PRIVACY[snap.ownership].networkInfo },
+      }, { purpose: 'enrollment', profileUuid: profile.id, variables: desired.variables, privacy: { networkInfo: prep.networkInfo },
         kiosk: prep.kiosk });
     } catch (err) {
       await record({ state: 'error', last_error: err instanceof AndroidCompileError ? err.code : 'invalid_value' });
