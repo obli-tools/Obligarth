@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { AppWindow, Archive, Plus, RefreshCw, Search, ShoppingBag } from 'lucide-react';
+import { AppWindow, Archive, LayoutGrid, List, Plus, RefreshCw, Search, ShoppingBag, Smartphone, Target } from 'lucide-react';
 import { SocketEvents, type AppCatalogEntry, type AppDetail, type VppAssetView } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
 import { integrationsApi } from '@/api/integrations.api';
@@ -64,6 +64,25 @@ export function AppsPage() {
   useEffect(() => registerSocketListener(SocketEvents.POLICY_CHANGED, () => load()), [load]);
   useEffect(() => registerSocketListener(SocketEvents.INTEGRATION_CHANGED, () => load()), [load]);
 
+  const [family, setFamily] = useState<'all' | 'apple' | 'android'>('all');
+  const [view, setView] = useState<'grid' | 'list'>(() => {
+    try { return localStorage.getItem(VIEW_KEY) === 'list' ? 'list' : 'grid'; } catch { return 'grid'; }
+  });
+  const changeView = (v: 'grid' | 'list') => {
+    setView(v);
+    try { localStorage.setItem(VIEW_KEY, v); } catch { /* per-viewer convenience only */ }
+  };
+  const counts = useMemo(() => ({
+    all: apps?.length ?? 0,
+    apple: apps?.filter((a) => a.platformFamily === 'apple').length ?? 0,
+    android: apps?.filter((a) => a.platformFamily === 'android').length ?? 0,
+  }), [apps]);
+  const shown = useMemo(() => (apps ?? []).filter((a) => family === 'all' || a.platformFamily === family), [apps, family]);
+  // An Android app opens on its own page (managed Google Play); reading it there needs mdm.apps.manage.
+  const open = (a: AppCatalogEntry) => {
+    if (a.platformFamily === 'android') { if (canManage) navigate(`/apps/android?app=${a.uuid}`); } else select(a.id);
+  };
+
   return (
     <PageContainer className="space-y-5">
       <div>
@@ -92,12 +111,54 @@ export function AppsPage() {
           </span>
         )}
       </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div role="tablist" className="inline-flex rounded-lg bg-bg-tertiary p-0.5 text-xs">
+          {(['all', 'apple', 'android'] as const).map((f) => (
+            <button key={f} type="button" role="tab" aria-selected={family === f} onClick={() => setFamily(f)}
+              className={`rounded-md px-3 py-1.5 font-medium transition-colors coarse:min-h-10 ${family === f ? 'bg-bg-secondary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}>
+              {f === 'all' ? (t('apps.filterAll') || 'All') : f === 'apple' ? (t('apps.filterApple') || 'Apple') : (t('apps.filterAndroid') || 'Android')}
+              <span className="ml-1.5 tabular-nums text-text-muted">{counts[f]}</span>
+            </button>
+          ))}
+        </div>
+        <div className="ml-auto inline-flex rounded-lg bg-bg-tertiary p-0.5">
+          {(['grid', 'list'] as const).map((v) => (
+            <button key={v} type="button" aria-pressed={view === v} onClick={() => changeView(v)}
+              aria-label={v === 'grid' ? (t('apps.viewGrid') || 'Grid') : (t('apps.viewList') || 'List')}
+              title={v === 'grid' ? (t('apps.viewGrid') || 'Grid') : (t('apps.viewList') || 'List')}
+              className={`rounded-md p-1.5 coarse:min-h-10 coarse:min-w-10 ${view === v ? 'bg-bg-secondary text-text-primary shadow-sm' : 'text-text-muted hover:text-text-primary'}`}>
+              {v === 'grid' ? <LayoutGrid className="w-4 h-4" /> : <List className="w-4 h-4" />}
+            </button>
+          ))}
+        </div>
+      </div>
       {error && <p className="text-sm text-red-400">{error}</p>}
       {apps === null ? <p className="text-sm text-text-muted italic">{t('common.loading') || 'Loading…'}</p>
         : apps.length === 0 ? (
           <div className="p-10 text-center bg-bg-secondary rounded-xl text-text-muted">
             <p className="font-medium text-text-primary mb-1">{t('apps.empty') || 'No app yet'}</p>
             <p className="text-sm">{t('apps.emptyHint') || 'Connect a content token of Apps and Books in the Integrations tab, then add the apps whose licences the tenant holds.'}</p>
+          </div>
+        ) : shown.length === 0 ? (
+          <p className="p-6 text-center text-sm text-text-muted">{t('apps.noneForFilter') || 'No app for this platform.'}</p>
+        ) : view === 'grid' ? (
+          <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(170px,1fr))]">
+            {shown.map((a) => (
+              <button key={a.id} type="button" onClick={() => open(a)}
+                className={`group relative flex flex-col items-center rounded-2xl bg-bg-secondary px-3 pt-5 pb-3 text-center transition hover:-translate-y-0.5 hover:bg-bg-tertiary hover:shadow-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${a.archivedAt ? 'opacity-60' : ''}`}>
+                <AppIcon app={a} size="lg" />
+                <span className="mt-3 line-clamp-2 min-h-[2.5rem] text-sm font-semibold leading-5 text-text-primary">{a.name}</span>
+                <span className="w-full truncate text-xs text-text-muted">{a.publisher || a.identifier}</span>
+                <span className="mt-3 flex w-full items-center justify-between gap-1 border-t border-border/50 pt-2 text-[11px] text-text-muted">
+                  <FamilyTag family={a.platformFamily} />
+                  <LicenceTag app={a} />
+                  <span className="inline-flex items-center gap-0.5 tabular-nums" title={t('apps.assignments') || 'Assignments'}>
+                    <Target className="w-3 h-3" />{a.assignments}
+                  </span>
+                </span>
+                {a.archivedAt && <span className="absolute right-2 top-2"><StateBadge tone="gray" label={t('apps.archived') || 'Archived'} /></span>}
+              </button>
+            ))}
           </div>
         ) : (
           <div className="overflow-x-auto rounded-xl bg-bg-secondary">
@@ -112,14 +173,18 @@ export function AppsPage() {
                 </tr>
               </thead>
               <tbody>
-                {apps.map((a) => (
-                  <tr key={a.id} className="border-t border-border/50 hover:bg-bg-tertiary cursor-pointer"
-                    onClick={() => (a.platformFamily === 'android' ? (canManage ? navigate(`/apps/android?app=${a.uuid}`) : undefined) : select(a.id))}>
-                    <td className="px-4 py-2.5">
-                      <span className="font-medium text-text-primary">{a.name}</span>
-                      {a.platformFamily === 'android' && <span className="ml-2"><StateBadge tone="green" label={t('androidApps.badge') || 'Android'} /></span>}
-                      {a.archivedAt && <span className="ml-2"><StateBadge tone="gray" label={t('apps.archived') || 'Archived'} /></span>}
-                      {a.publisher && <span className="block text-xs text-text-muted">{a.publisher}</span>}
+                {shown.map((a) => (
+                  <tr key={a.id} className="border-t border-border/50 hover:bg-bg-tertiary cursor-pointer" onClick={() => open(a)}>
+                    <td className="px-4 py-2">
+                      <span className="flex items-center gap-3">
+                        <AppIcon app={a} size="sm" />
+                        <span className="min-w-0">
+                          <span className="font-medium text-text-primary">{a.name}</span>
+                          {a.platformFamily === 'android' && <span className="ml-2"><StateBadge tone="green" label={t('androidApps.badge') || 'Android'} /></span>}
+                          {a.archivedAt && <span className="ml-2"><StateBadge tone="gray" label={t('apps.archived') || 'Archived'} /></span>}
+                          {a.publisher && <span className="block text-xs text-text-muted">{a.publisher}</span>}
+                        </span>
+                      </span>
                     </td>
                     <td className="px-3 py-2.5 font-mono text-xs text-text-secondary">{a.identifier}</td>
                     <td className="px-3 py-2.5 text-text-secondary">
@@ -139,6 +204,59 @@ export function AppsPage() {
         {selected !== null && <AppDetailPanel id={selected} canManage={canManage} onChanged={load} onArchived={() => { select(null); load(); }} />}
       </Drawer>
     </PageContainer>
+  );
+}
+
+const VIEW_KEY = 'obligarth.apps.view';
+
+// Tile behind an app without an icon (or whose icon fails to load): its initials on a colour taken from its identifier,
+// stable from one visit to the next.
+function initialsOf(name: string): string {
+  const words = name.trim().split(/[\s._-]+/).filter(Boolean);
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? '?').slice(0, 2);
+  return letters.toUpperCase();
+}
+
+function hueOf(key: string): number {
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 360;
+  return h;
+}
+
+function AppIcon({ app, size }: { app: Pick<AppCatalogEntry, 'name' | 'identifier' | 'iconUrl'>; size: 'sm' | 'lg' | 'xl' }) {
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [app.iconUrl]);
+  const box = size === 'sm' ? 'h-9 w-9 rounded-lg text-xs' : size === 'lg' ? 'h-16 w-16 rounded-2xl text-lg' : 'h-20 w-20 rounded-[1.4rem] text-2xl';
+  if (app.iconUrl && !failed) {
+    return <img src={app.iconUrl} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed(true)}
+      className={`${box} shrink-0 bg-white object-cover shadow-md ring-1 ring-black/5`} />;
+  }
+  const hue = hueOf(app.identifier || app.name);
+  return (
+    <span aria-hidden className={`${box} inline-flex shrink-0 items-center justify-center font-bold text-white shadow-md`}
+      style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 55%), hsl(${(hue + 40) % 360} 65% 42%))` }}>
+      {initialsOf(app.name)}
+    </span>
+  );
+}
+
+function FamilyTag({ family }: { family: AppCatalogEntry['platformFamily'] }) {
+  const { t } = useTranslation();
+  return (
+    <span className={`inline-flex items-center gap-0.5 font-medium ${family === 'android' ? 'text-green-500' : 'text-sky-500'}`}>
+      <Smartphone className="w-3 h-3" />{family === 'android' ? (t('apps.filterAndroid') || 'Android') : (t('apps.filterApple') || 'Apple')}
+    </span>
+  );
+}
+
+function LicenceTag({ app }: { app: AppCatalogEntry }) {
+  const { t } = useTranslation();
+  if (app.platformFamily === 'android') return <span />;
+  if (!app.licenses) return <span className="text-amber-500">{t('apps.noLicence') || 'No licence'}</span>;
+  return (
+    <span className="tabular-nums" title={t('apps.licenceCounts', { available: app.licenses.available, total: app.licenses.total }) || undefined}>
+      {app.licenses.available}/{app.licenses.total}
+    </span>
   );
 }
 
@@ -222,10 +340,13 @@ function AppDetailPanel({ id, canManage, onChanged, onArchived }: { id: number; 
   if (!app) return <p className="text-sm text-text-muted italic">{t('common.loading') || 'Loading…'}</p>;
   return (
     <div className="space-y-4 text-sm">
-      <div>
-        <p className="text-lg font-semibold text-text-primary">{app.name}</p>
-        <p className="font-mono text-xs text-text-muted">{app.identifier} · {app.storeId}</p>
-        {app.publisher && <p className="text-xs text-text-muted">{app.publisher}</p>}
+      <div className="flex items-center gap-4">
+        <AppIcon app={app} size="xl" />
+        <div className="min-w-0">
+          <p className="text-lg font-semibold text-text-primary">{app.name}</p>
+          {app.publisher && <p className="text-xs text-text-muted">{app.publisher}</p>}
+          <p className="font-mono text-xs text-text-muted break-all">{app.identifier} · {app.storeId}</p>
+        </div>
       </div>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
         <div><dt className="text-text-muted">{t('apps.kind') || 'Kind'}</dt><dd>{trCode(`apps.kinds.${app.kind}`, app.kind)}</dd></div>
