@@ -26,6 +26,7 @@ import { raiseAndroidTenantAlert } from '../alerts';
 import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { DeviceSchema } from '../inbox/schemas';
 import { filterInventory } from '../inventory/privacy';
+import { androidPrivacyRulesFor } from '../../privacy/profiles';
 import {
   checkAgainstSnapshot, decisionCap, enrollmentTimeOf, LONG_TOKEN_HOURLY_CAP, needsApproval, rejectAllowed, SPIKE_PER_HOUR, tokenIdOf,
   tokenValidAt, type ProfileSnapshot, type SnapshotMismatch,
@@ -194,7 +195,8 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
     }
   }
   const ownership = snapshot.ownership;
-  const inv = filterInventory(d as Record<string, unknown>, ownership);
+  // The tenant's privacy profile of the ownership (P0-13, CNF-02): the rules of before without a version of it.
+  const inv = filterInventory(d as Record<string, unknown>, ownership, await androidPrivacyRulesFor(trx, tenantId, ownership));
   const profile = await readAndroidProfile(trx, snapshot.profileId, tenantId);
   const pending = forced || needsApproval(requires, inv.serialNumber, profile?.settings.approvedSerials ?? []);
 

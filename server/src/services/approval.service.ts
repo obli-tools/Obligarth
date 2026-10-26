@@ -78,7 +78,11 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   // A change of push topic or the deletion of an ADE server (integration-apple-edge §11.1, §11.2, lot C3).
   | 'apple_integration'
   // A command or a revocation of the Android bridge agent the tenant's matrix holds at 'restricted' (agent-pont-android §5.4).
-  | 'legacy_agent_action';
+  | 'legacy_agent_action'
+  // A new version of a privacy profile of the tenant (P0-13 T3, CNF-02, D3): always a second person (privacy/approvals.ts).
+  | 'privacy_profile_change'
+  // A change of the retention of the tenant (P0-13 T4, CNF-04, D3, D4): always a second person (privacy/retentionPolicy.ts).
+  | 'privacy_retention_change';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */

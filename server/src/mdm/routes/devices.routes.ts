@@ -18,7 +18,8 @@ import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership } from '../registry/ownership';
 import { changeDevicesGroup } from '../policies/deviceMove';
 import { deviceAppIcon, deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
-import { LOST_MODE_LOCATION_DAYS } from '../inventory/retention';
+import { retentionDays } from '../../privacy/retention';
+import { lostModeLocationAllowed } from '../../privacy/profiles';
 import { deviceConfiguration } from '../policies/configuration';
 import { requestDeviceResolution } from '../policies/triggers';
 
@@ -382,8 +383,9 @@ const LocationsQuery = z.object({
 
 // GET /api/mdm/devices/:id/locations?limit=20 — the last lost-mode positions (SEC-05: "only during the lost mode"):
 // only while the lost mode is on (or changing) on a device under management, never for a personal device (the table
-// is not even read), and only for whoever may use the lost mode on the device (mdm:lost_mode, write scope); otherwise
-// an empty answer that says why. A read is journaled in the device's tenant (audit-durci §3.4, P2): the critical
+// is not even read), never when the tenant's privacy profile of the device's ownership refuses the location (P0-13,
+// CNF-02: the table is not read either), and only for whoever may use the lost mode on the device (mdm:lost_mode,
+// write scope); otherwise an empty answer that says why. A read is journaled in the device's tenant (audit-durci §3.4, P2): the critical
 // intent before the read — no coordinate leaves when it cannot be written (503 auditUnavailable) — then the count.
 router.get('/devices/:id/locations', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
   try {
@@ -391,14 +393,19 @@ router.get('/devices/:id/locations', globalViewScope('console.devices'), resolve
     if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid query', 'invalidRequest');
     const limit = parsed.data.limit ?? 20;
     const { id, tenantId } = req.mdmDevice!;
+    // The tenant's retention of the positions (P0-13 T4, CNF-04): shown, and a position received or observed longer ago
+    // than the value in force is due (the purge removes it at its next run: never shown meanwhile); one kept longer by
+    // an increase shows at once (its purge_at follows at the next run: realignLostModePurgeDates).
+    const keptDays = await retentionDays(db, tenantId, 'lost_mode_location_days');
     const empty = (unavailable: NonNullable<DeviceLocations['unavailable']>): DeviceLocations =>
-      ({ available: false, unavailable, points: [], retentionDays: LOST_MODE_LOCATION_DAYS });
+      ({ available: false, unavailable, points: [], retentionDays: keptDays });
     res.setHeader('Cache-Control', 'no-store');
     const d = await db('devices').where({ tenant_id: tenantId, id }).first('ownership', 'enrollment_state', 'lost_mode_state') as
       { ownership: string; enrollment_state: string; lost_mode_state: string } | undefined;
     if (!d) throw new AppError(404, 'Device not found');
     if (d.ownership === 'personal') { res.json({ data: empty('personal') }); return; }
     if (d.enrollment_state === 'unenrolled') { res.json({ data: empty('unenrolled') }); return; }
+    if (!(await lostModeLocationAllowed(db, tenantId, d.ownership))) { res.json({ data: empty('locationDisabledByPrivacy') }); return; }
     if (d.lost_mode_state === 'off') { res.json({ data: empty('lostModeOff') }); return; }
     const isAdmin = req.session.role === 'admin';
     const userId = req.session.userId!;
@@ -407,7 +414,9 @@ router.get('/devices/:id/locations', globalViewScope('console.devices'), resolve
     if (!allowed) { res.json({ data: empty('capabilityMissing') }); return; }
     const num = (v: unknown): number | null => (v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v));
     const read = async (): Promise<DeviceLocationPoint[]> => {
-      const rows = await db('lost_mode_locations').where({ tenant_id: tenantId, device_id: id }).where('purge_at', '>', db.fn.now())
+      const cutoff = new Date(Date.now() - keptDays * 86_400_000);
+      const rows = await db('lost_mode_locations').where({ tenant_id: tenantId, device_id: id }).where('received_at', '>', cutoff)
+        .where('observed_at', '>', cutoff)
         .orderBy('observed_at', 'desc').orderBy('id', 'desc').limit(limit)
         .select('latitude', 'longitude', 'horizontal_accuracy', 'altitude', 'speed', 'course', 'observed_at', 'command_id') as
         Array<Record<string, unknown>>;
@@ -422,7 +431,7 @@ router.get('/devices/:id/locations', globalViewScope('console.devices'), resolve
     const points = await asTargetTenant(req, tenantId, async () => audit.withIntent({
       tenantId, action: 'lost_mode.location_viewed', target: { type: 'device', id: String(id), device: id },
     }, await audit.fromRequest(req, tenantId), read, { resultDetails: (p) => ({ count: p.length }) }));
-    res.json({ data: { available: true, unavailable: null, points, retentionDays: LOST_MODE_LOCATION_DAYS } satisfies DeviceLocations });
+    res.json({ data: { available: true, unavailable: null, points, retentionDays: keptDays } satisfies DeviceLocations });
   } catch (err) { next(err); }
 });
 

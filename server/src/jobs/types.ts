@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import type { Logger } from 'pino';
 import type { z } from 'zod';
 import type { DbActor } from '../db/context';
+import type { JobAlert } from './alerts';
 import type { JobsMode } from './config';
 
 export type { JobsMode };
@@ -68,6 +69,9 @@ export interface JobDefinition<S extends z.ZodTypeAny> {
   trackStatus?: 'queue' | 'tenant' | 'none';
   /** Consecutive failures that raise an alert (scheduled jobs). Default 3. */
   alertAfterFailures?: number;
+  /** The alert raised at alertAfterFailures instead of jobs:failing:<queue> (a pure function; with trackStatus
+   *  'tenant', the tenant of the run: one stable key per tenant, e.g. privacy:retention:<id>). */
+  failureAlert?: (f: { tenantId: number | null; failures: number; code: string }) => JobAlert;
   /** An administrator may trigger a run from the admin API. Default: true with a schedule. */
   manualRun?: boolean;
   /** Field names that look secret but were reviewed as harmless (registry rule 6). */
@@ -172,6 +176,7 @@ export interface RegisteredJob {
   readonly redrivable: boolean;
   readonly trackStatus: 'queue' | 'tenant' | 'none';
   readonly alertAfterFailures: number;
+  readonly failureAlert: ((f: { tenantId: number | null; failures: number; code: string }) => JobAlert) | null;
   readonly manualRun: boolean;
   readonly warningQueueSize: number;
   readonly handler: (ctx: JobContext<any>) => Promise<JobResult | void>;

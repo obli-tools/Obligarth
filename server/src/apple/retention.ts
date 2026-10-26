@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import { db } from '../db';
 import type { MdmRetentionRule } from '../mdm/inventory/retention';
+import { monthsBefore, retentionCutoff } from '../privacy/retention';
 import { logger } from '../utils/logger';
 import { isAppleEdgeError } from './edge/errors';
 import { appleEdge } from './edge/instance';
@@ -9,10 +10,12 @@ import { appleEdge } from './edge/instance';
 // Retention of the Apple integration (docs: integration-apple-edge §4.9, §13.3;
 // modele-donnees-mdm §5.5, §6.1, DM19), handed to the generic retention
 // (CNF-04, modules/privacy.ts), tenant by tenant, in slices (motif M8):
-//   - appleRetentionRules: the commands of the queue and their targets (6
-//     months after their end, 30 days for the origin 'inventory': DM19), the
-//     timeline of the devices (6 months), the devices removed from Apple
-//     Business (90 days);
+//   - appleRetentionRules: the commands of the queue and their targets
+//     (technical_log_months of the tenant after their end, 6 by default; 30
+//     days for the origin 'inventory', fixed: DM19), the timeline of the
+//     devices (technical_log_months), the devices removed from Apple Business
+//     (90 days, fixed); the months are the tenant's (P0-13 T4, CNF-04:
+//     privacy/retention.ts, read at each slice);
 //   - purgeEnrollmentSessionsSlice, purgeEnrollmentTokensSlice: the job
 //     enrollment.purge-expired (sessions 30 days after their end, tokens 90
 //     days after their expiry or their revocation);
@@ -23,12 +26,8 @@ import { appleEdge } from './edge/instance';
 // the tenant's context. Never logs an enrollment id.
 // =============================================================================
 
-/** Months the commands of the queue are kept after their end (integration §4.9). */
-export const COMMAND_RETENTION_MONTHS = 6;
-/** Days the commands of the origin 'inventory' are kept after their end (modele DM19). */
+/** Days the commands of the origin 'inventory' are kept after their end (modele DM19; fixed, not a tenant's setting). */
 export const INVENTORY_COMMAND_RETENTION_DAYS = 30;
-/** Months of the timeline of a device (apple_device_events, integration §4.9). */
-export const DEVICE_EVENT_RETENTION_MONTHS = 6;
 /** Days a device removed from Apple Business stays listed (apple_ade_devices.removed_at). */
 export const ADE_REMOVED_RETENTION_DAYS = 90;
 /** Days an enrollment session is kept after it ended, or after the expiry of an abandoned one. */
@@ -44,17 +43,8 @@ const SESSION_FINAL_STATES = ['enrolled', 'failed', 'expired'];
 
 const daysBefore = (now: Date, n: number): Date => new Date(now.getTime() - n * 86_400_000);
 
-/** `now` minus `months` calendar months (UTC), the day clamped to the length of the month reached
- *  (31 August minus 6 months is the last day of February, never a day of March). */
-export function monthsBefore(now: Date, months: number): Date {
-  const d = new Date(now.getTime());
-  const day = d.getUTCDate();
-  d.setUTCDate(1);
-  d.setUTCMonth(d.getUTCMonth() - months);
-  const lastDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
-  d.setUTCDate(Math.min(day, lastDay));
-  return d;
-}
+/** `now` minus `months` calendar months (UTC), the day clamped to the end of the month (privacy/retention.ts). */
+export { monthsBefore };
 
 // ── The commands of the queue ───────────────────────────────────────────────
 
@@ -78,18 +68,19 @@ async function endedCommands(trx: Knex.Transaction, tenantId: number, now: Date,
 }
 
 /**
- * mdm_commands and their targets (cascade), integration §4.9 and modele §6.1: a command is purged 6 months
- * after its end (30 days for the origin 'inventory', DM19: the bulk of the volume, of no use to the audit).
+ * mdm_commands and their targets (cascade), integration §4.9 and modele §6.1: a command is purged
+ * technical_log_months of the tenant after its end (6 by default; 30 days for the origin 'inventory', DM19: the
+ * bulk of the volume, of no use to the audit). Every platform (the Android commands are in the same queue).
  * Never a command still waiting for its submission ('pending', 'held') or with a target in flight.
  */
 const commandRetentionRule: MdmRetentionRule = {
   name: 'mdm_commands',
-  description: `Commands of the queue ended ${COMMAND_RETENTION_MONTHS} months ago (${INVENTORY_COMMAND_RETENTION_DAYS} days for the inventory), every target final`,
+  description: `Commands of the queue ended technical_log_months ago (${INVENTORY_COMMAND_RETENTION_DAYS} days for the inventory), every target final`,
   async purge(trx, tenantId, now, limit) {
     let removed = 0;
     for (const [cutoff, inventory] of [
       [daysBefore(now, INVENTORY_COMMAND_RETENTION_DAYS), true],
-      [monthsBefore(now, COMMAND_RETENTION_MONTHS), false],
+      [await retentionCutoff(trx, tenantId, 'technical_log_months', now), false],
     ] as Array<[Date, boolean]>) {
       if (removed >= limit) break;
       const ids = await endedCommands(trx, tenantId, now, cutoff, inventory, limit - removed);
@@ -103,9 +94,9 @@ export const appleRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
   commandRetentionRule,
   {
     name: 'apple_device_events',
-    description: `Timeline of the devices older than ${DEVICE_EVENT_RETENTION_MONTHS} months`,
+    description: 'Timeline of the devices older than the months of the tenant (technical_log_months)',
     async purge(trx, tenantId, now, limit) {
-      const cutoff = monthsBefore(now, DEVICE_EVENT_RETENTION_MONTHS);
+      const cutoff = await retentionCutoff(trx, tenantId, 'technical_log_months', now);
       const ids = await trx('apple_device_events').where({ tenant_id: tenantId }).where('occurred_at', '<', cutoff)
         .orderBy('occurred_at', 'asc').limit(limit).pluck('id') as string[];
       return ids.length ? trx('apple_device_events').where({ tenant_id: tenantId }).whereIn('id', ids).del() : 0;

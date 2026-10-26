@@ -33,9 +33,9 @@ import type { JobContext, JobResult } from './types';
 const empty = z.object({}).strict();
 
 /** Live alerts and resolved ones are kept 90 days once read or resolved. */
-const LIVE_ALERT_RETENTION_DAYS = 90;
+export const LIVE_ALERT_RETENTION_DAYS = 90;
 /** notification_log rows (one per send) are kept 30 days. */
-const NOTIFICATION_LOG_RETENTION_DAYS = 30;
+export const NOTIFICATION_LOG_RETENTION_DAYS = 30;
 /** Rows per slice of the purges below (file-durable motif M8). */
 const PURGE_SLICE_ROWS = 500;
 /** job_status rows of a queue no longer registered: 30 days. */

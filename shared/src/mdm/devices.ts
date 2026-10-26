@@ -222,8 +222,9 @@ export interface DeviceLocationPoint {
 export interface DeviceLocations {
   available: boolean;
   /** personal: never located; unenrolled: out of management; lostModeOff: positions exist only during the lost mode
-   *  (SEC-05); capabilityMissing: the user may not use the lost mode on the device. */
-  unavailable: 'personal' | 'unenrolled' | 'lostModeOff' | 'capabilityMissing' | null;
+   *  (SEC-05); capabilityMissing: the user may not use the lost mode on the device; locationDisabledByPrivacy: the
+   *  tenant's privacy profile of the device's ownership refuses its location (P0-13, CNF-02). */
+  unavailable: 'personal' | 'unenrolled' | 'lostModeOff' | 'capabilityMissing' | 'locationDisabledByPrivacy' | null;
   points: DeviceLocationPoint[];
   /** Days a position is kept. */
   retentionDays: number;

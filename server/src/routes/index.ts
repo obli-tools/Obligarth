@@ -38,6 +38,7 @@ import { createJobsAdminRouter } from '../jobs/admin.routes';
 import { createOutboxAdminRouter } from '../jobs/outbox/admin.routes';
 import { createVaultAdminRouter } from '../vault/admin.routes';
 import { createOpsAdminRouter } from '../ops/routes';
+import { createPrivacyRouter } from '../privacy';
 import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
@@ -168,6 +169,9 @@ tenantRouter.use('/admin/vault', createVaultAdminRouter());
 // The observability of the instance: readiness in detail, metrics listener, backlog of the commands (master tenant,
 // platform administrators; ops/routes.ts, P0-13 T8).
 tenantRouter.use('/admin/ops', createOpsAdminRouter());
+// The privacy profiles of the tenant (P0-13 T3, CNF-02): read with settings, audit.read or mdm.privacy.manage; a change
+// is always an approval request (privacy/routes.ts).
+tenantRouter.use('/privacy', createPrivacyRouter());
 // The Android bridge agent (agent-pont-android §7): the console of the tenant, the platform's (versions of the agent,
 // instance key, settings; master tenant, platform administrators).
 tenantRouter.use('/legacy-agent', createLegacyAgentRouter());

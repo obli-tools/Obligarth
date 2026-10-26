@@ -8,8 +8,16 @@ import {
 } from '../apple/retention';
 import { JobError, registerJob, type JobContext, type JobHandle, type JobResult } from '../jobs';
 import { safeErr } from '../jobs/errors';
-import { channelsDueForPurge, deleteDueDeviceRecords, devicesDueForPurge, mdmRetentionRules, type MdmRetentionRule } from '../mdm/inventory/retention';
+import {
+  channelsDueForPurge, deleteDueDeviceRecords, devicesDueForPurge, mdmRetentionRules, realignLostModePurgeDates, realignRetentionDates,
+  type MdmRetentionRule,
+} from '../mdm/inventory/retention';
+import { legacyAgentRetentionRules } from '../legacyAgent/retention';
 import type { ManagementChannel } from '../guard/types';
+import { registerPrivacyProfileChanges } from '../privacy';
+import { installPrivacyProfiles } from '../privacy/profiles';
+import { privacyMetrics } from '../privacy/metrics';
+import { registerMetricsCollector } from '../ops/metrics';
 import { logger } from '../utils/logger';
 
 // =============================================================================
@@ -19,9 +27,14 @@ import { logger } from '../utils/logger';
 //     per tenant (exclusive, key t:<id>: a tenant whose previous run is not
 //     over is not queued twice);
 //   - privacy.retention-tenant: the rules of the data model (departed end
-//     users, DDM status history, lost-mode locations) and of the integration
-//     (commands of the queue, timeline, devices removed from Apple Business),
-//     then the records of the devices out of management, in slices (motif M8:
+//     users, DDM status history, lost-mode locations), of the integration
+//     (commands of the queue, timeline, devices removed from Apple Business)
+//     and of the bridge agent (its commands), with the durations of the
+//     tenant (P0-13 T4, CNF-04: privacy/retention.ts, the defaults when it set
+//     none); the dates of purge of the positions in lost mode (before the
+//     rules: realignLostModePurgeDates) and of the records out of management
+//     (realignRetentionDates) follow a change of the tenant's retention; then the
+//     records of the devices out of management, in slices (motif M8:
 //     each slice its own tenant transaction, abort checked between two,
 //     idempotent: a new run starts again from the database). A rule that
 //     fails does not stop the others; the run fails afterwards.
@@ -40,7 +53,14 @@ import { logger } from '../utils/logger';
 //     (integration §4.9).
 // Schedules in UTC, off the hour, between 02:00 and 05:00, five minutes from
 // the others (file-durable §6.2). index.ts calls registerPrivacyModule()
-// before anything starts.
+// before anything starts; it also installs the tenants' privacy profiles as
+// the resolver of the collection rules (privacy/profiles.ts, P0-13 T1) and
+// registers their changes and the retention's (privacy/index.ts, P0-13 T3
+// and T4: approvals, audit, restrictions, job privacy.apply-profile). Two
+// failures in a row of privacy.retention-tenant raise the alert
+// privacy.retention_failing of the master tenant (key privacy:retention:<id>,
+// one per tenant, instead of jobs:failing). Counters: privacy/metrics.ts, the
+// collector 'privacy' of ops/metrics.ts.
 // =============================================================================
 
 /** Rows per slice (motif M8). */
@@ -208,15 +228,30 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
     } catch (err) {
       if (ctx.signal.aborted) throw err;
       failed.push(name);
+      privacyMetrics.ruleFailed(name);
       ctx.log.warn({ err: safeErr(err), rule: name }, 'privacy.retention: rule failed, the others go on');
     }
   };
-  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules];
+  // The dates of purge of the positions in lost mode, after a change of lost_mode_location_days (an increase as a
+  // decrease), before the rules: a position kept longer by an increase is not purged by its former date.
+  await step('lost_mode_locations.purge_at', async () => {
+    output.lost_mode_locations_realigned = await drain(ctx, (trx) => realignLostModePurgeDates(trx, tenantId, SLICE_ROWS));
+  });
+  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules, ...legacyAgentRetentionRules];
   for (const rule of rules) {
     await step(rule.name, async () => {
-      output[outputKey(rule.name)] = await drain(ctx, (trx) => rule.purge(trx, tenantId, now, SLICE_ROWS));
+      const n = await drain(ctx, (trx) => rule.purge(trx, tenantId, now, SLICE_ROWS));
+      output[outputKey(rule.name)] = n;
+      privacyMetrics.purged(rule.name, n);
     });
   }
+  // The dates of purge of the records out of management, after a change of the tenant's retention (before the records
+  // due are listed: they are purged by the value in force).
+  await step('devices.retention_until', async () => {
+    const n = await drain(ctx, (trx) => realignRetentionDates(trx, tenantId, SLICE_ROWS));
+    output.devices_realigned = n;
+    privacyMetrics.realigned(n);
+  });
   await step('devices.records', async () => {
     const devices = await purgeDeviceRecords(ctx, tenantId, now);
     output.devices_records = devices.deleted;
@@ -250,13 +285,23 @@ export function registerPrivacyModule(): void {
   if (registered) return;
   registered = true;
 
+  // The tenants' privacy profiles replace the laboratory rules of every Apple consumer (P0-13 T1, CNF-02), before any
+  // service runs; a tenant without a profile keeps the rules of before.
+  installPrivacyProfiles();
+  // Their changes (P0-13 T3) and the retention's (T4): the approval request types and their examination, the audit
+  // actions, the restrictions privacy.profile_change and privacy.retention_change, the job privacy.apply-profile.
+  registerPrivacyProfileChanges();
+
+  // The counters of the module (rows purged per rule, failures, changes), no tenant label.
+  registerMetricsCollector('privacy', () => privacyMetrics.families());
+
   // The purger of the Apple channel (the other channels register theirs: legacy_agent, amapi; lot AN-P).
   registerDevicePurger('apple_mdm', appleDevicePurger);
 
   tenantJob = registerJob({
     name: 'privacy.retention-tenant',
     scope: 'tenant',
-    description: 'Retention of one tenant: departed end users, status history, locations, settled commands, timeline, device records (after apple-edge)',
+    description: 'Retention of one tenant, its durations: departed end users, status history, locations, settled commands (MDM queue, bridge agent), timeline, device records (after apple-edge)',
     payload: TenantPayload,
     policy: 'exclusive',
     retry: { limit: 2, delaySeconds: 300, backoff: true, maxDelaySeconds: 3_600 },
@@ -267,6 +312,14 @@ export function registerPrivacyModule(): void {
     pollSeconds: 60,
     deadLetter: false,                                 // the next daily run starts again
     trackStatus: 'tenant',
+    // privacy.retention_failing (P0-13 T4): from the second failure in a row of a tenant, one alert per tenant.
+    alertAfterFailures: 2,
+    failureAlert: ({ tenantId, failures, code }) => ({
+      stableKey: `privacy:retention:${tenantId ?? 0}`,
+      severity: 'warning',
+      title: 'Retention failing (privacy.retention_failing)',
+      message: `The retention of tenant ${tenantId ?? '?'} failed ${failures} times in a row (last error: ${code}): data past their retention are kept until it succeeds.`,
+    }),
     handler: retentionTenant,
   });
 

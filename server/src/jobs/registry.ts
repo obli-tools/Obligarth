@@ -220,6 +220,8 @@ export function resolveDefinition(def: JobDefinition<z.ZodTypeAny>): RegisteredJ
   if (!isInt(alertAfterFailures) || alertAfterFailures < 1 || alertAfterFailures > 100) {
     fail('alertAfterFailures must be an integer from 1 to 100');
   }
+  if (def.failureAlert !== undefined && typeof def.failureAlert !== 'function') fail('failureAlert must be a function');
+  if (def.failureAlert && trackStatus === 'none') fail('failureAlert needs trackStatus "queue" or "tenant"');
 
   return Object.freeze({
     name,
@@ -249,6 +251,7 @@ export function resolveDefinition(def: JobDefinition<z.ZodTypeAny>): RegisteredJ
     redrivable,
     trackStatus,
     alertAfterFailures,
+    failureAlert: def.failureAlert ?? null,
     manualRun: def.manualRun ?? scheduled,
     warningQueueSize: scheduled ? 10 : 1_000,
     handler: def.handler as RegisteredJob['handler'],

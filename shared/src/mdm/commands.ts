@@ -17,9 +17,10 @@ export type MdmCommandOrigin = typeof MDM_COMMAND_ORIGINS[number];
 export const MDM_SUBMIT_STATES = ['pending', 'submitted', 'held', 'failed', 'cancelled'] as const;
 export type MdmSubmitState = typeof MDM_SUBMIT_STATES[number];
 
-/** Why the bus sets a device aside (the request goes on for the others). */
+/** Why the bus sets a device aside (the request goes on for the others). location_disabled: the tenant's privacy
+ *  profile of the device's ownership refuses its location (P0-13, CNF-02: DeviceLocation). */
 export const MDM_REFUSAL_CODES = ['not_apple', 'not_enrolled', 'awaiting_configuration_only', 'ownership', 'not_supervised',
-  'no_unlock_token', 'already_open', 'identity_unavailable'] as const;
+  'no_unlock_token', 'already_open', 'identity_unavailable', 'location_disabled'] as const;
 export type MdmRefusalCode = typeof MDM_REFUSAL_CODES[number];
 
 /** The request types a guarded action alone may enqueue (the command routes answer 409 guardedActionRequired). */
