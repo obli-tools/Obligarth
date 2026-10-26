@@ -17,6 +17,8 @@ import { useConfirm } from '@/components/common/ConfirmDialog';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { AssignmentsPanel } from '@/components/mdm/Assignments';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
+import { AppIcon } from '@/components/apps/AppIcon';
+import { deliveryLabel, deliveryTone } from '@/components/apps/delivery';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
 
 // The catalog of apps (modele-donnees-mdm §8, lot C4): the apps of the tenant (App Store and Custom Apps of Apple
@@ -209,37 +211,6 @@ export function AppsPage() {
 
 const VIEW_KEY = 'obligarth.apps.view';
 
-// Tile behind an app without an icon (or whose icon fails to load): its initials on a colour taken from its identifier,
-// stable from one visit to the next.
-function initialsOf(name: string): string {
-  const words = name.trim().split(/[\s._-]+/).filter(Boolean);
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] ?? '?').slice(0, 2);
-  return letters.toUpperCase();
-}
-
-function hueOf(key: string): number {
-  let h = 0;
-  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) % 360;
-  return h;
-}
-
-function AppIcon({ app, size }: { app: Pick<AppCatalogEntry, 'name' | 'identifier' | 'iconUrl'>; size: 'sm' | 'lg' | 'xl' }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [app.iconUrl]);
-  const box = size === 'sm' ? 'h-9 w-9 rounded-lg text-xs' : size === 'lg' ? 'h-16 w-16 rounded-2xl text-lg' : 'h-20 w-20 rounded-[1.4rem] text-2xl';
-  if (app.iconUrl && !failed) {
-    return <img src={app.iconUrl} alt="" referrerPolicy="no-referrer" loading="lazy" onError={() => setFailed(true)}
-      className={`${box} shrink-0 bg-white object-cover shadow-md ring-1 ring-black/5`} />;
-  }
-  const hue = hueOf(app.identifier || app.name);
-  return (
-    <span aria-hidden className={`${box} inline-flex shrink-0 items-center justify-center font-bold text-white shadow-md`}
-      style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 55%), hsl(${(hue + 40) % 360} 65% 42%))` }}>
-      {initialsOf(app.name)}
-    </span>
-  );
-}
-
 function FamilyTag({ family }: { family: AppCatalogEntry['platformFamily'] }) {
   const { t } = useTranslation();
   return (
@@ -322,10 +293,6 @@ function AddAppModal({ onClose, onCreated }: { onClose: () => void; onCreated: (
   );
 }
 
-const DELIVERY_TONE: Record<string, 'green' | 'gray' | 'amber' | 'red' | 'blue'> = {
-  applied: 'green', pending: 'blue', delivering: 'blue', error: 'red', not_applicable: 'amber', removing: 'gray',
-};
-
 function AppDetailPanel({ id, canManage, onChanged, onArchived }: { id: number; canManage: boolean; onChanged: () => void; onArchived: () => void }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
@@ -366,7 +333,7 @@ function AppDetailPanel({ id, canManage, onChanged, onArchived }: { id: number; 
         )}
         {delivery.length > 0 && (
           <div className="flex flex-wrap gap-1.5 pt-1">
-            {delivery.map(([state, n]) => <StateBadge key={state} tone={DELIVERY_TONE[state] ?? 'gray'} label={`${trCode(`apps.delivery.${state}`, state)} · ${n}`} />)}
+            {delivery.map(([state, n]) => <StateBadge key={state} tone={deliveryTone(state)} label={`${deliveryLabel(state)} · ${n}`} />)}
           </div>
         )}
       </section>

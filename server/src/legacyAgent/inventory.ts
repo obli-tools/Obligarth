@@ -1,8 +1,10 @@
 import type { Knex } from 'knex';
 import { audit } from '../audit';
 import { raiseInTx } from '../apple/alerts/service';
+import { appsMerge } from '../mdm/inventory/appMerge';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { managedPackages } from './commands';
+import { ICONS_MIN_VERSION_CODE, leaseIcons } from './icons';
 import { InventoryBody } from './schemas';
 import { withAgentTransaction } from './session';
 import { writeStatusItems } from './status';
@@ -12,7 +14,10 @@ import { errorReply, type AgentIdentity, type Exchange, type Reply } from './sur
 // POST /agent/v1/inventory (docs: agent-pont-android §4.6, PB13, RC-7): the
 // projection of a full inventory onto the record (devices), the satellite,
 // the apps (device_apps, source 'agent_report': the absent ones are deleted;
-// managed = installed by a successful app.install) and the status items. A
+// managed = installed by a successful app.install; is_system, launchable,
+// installer, the install and update times) and the status items; then the
+// leases of the icons the server wants from this device (iconsWanted, agent
+// 1.0.2 and later: legacyAgent/icons.ts). A
 // serial number never takes the record of another managed device, nor
 // replaces the one a record already carries: identity_conflict and an alert.
 // Neither the SSID, the MAC address nor the operator are kept (no personal
@@ -23,6 +28,13 @@ const clean = (v: string | null | undefined, max: number): string | null => {
   if (typeof v !== 'string') return null;
   const s = v.replace(/[\u0000-\u001f\u007f]/g, '').trim();
   return s ? s.slice(0, max) : null;
+};
+
+/** A time of the device (Unix seconds): null before 2008 (Android did not exist) or more than a day ahead. */
+const appTime = (v: number | null | undefined, now: Date): Date | null => {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return null;
+  const ms = v * 1000;
+  return ms < Date.UTC(2008, 0, 1) || ms > now.getTime() + 86_400_000 ? null : new Date(ms);
 };
 
 const SERIAL_JUNK = new Set(['', 'unknown', '0', 'null', 'none', '0123456789abcdef', '0123456789ABCDEF']);
@@ -84,7 +96,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       await raiseInTx(trx, who.tenantId, 'legacy_agent.identity_conflict', { discriminant: who.deviceId, navigateTo: `/legacy-agent?device=${who.deviceId}` });
     }
 
-    // The apps: replaced as a whole (the absent ones leave), managed when a successful app.install put them there.
+    // The apps: replaced as a whole (the absent ones leave), managed when a successful app.install put them there. The
+    // system flag is a column of its own (is_system; management_status is a status of the management, never 'system').
     const managed = await managedPackages(trx, who.tenantId, who.deviceId);
     const seen = new Map<string, (typeof b.apps)[number]>();
     for (const a of b.apps) seen.set(a.package, a);
@@ -94,12 +107,17 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
     const rows = [...seen.values()].map((a) => ({
       tenant_id: who.tenantId, device_id: who.deviceId, identifier: a.package, name: clean(a.label, 255), version: clean(a.versionName, 64),
       short_version: a.versionCode === null || a.versionCode === undefined ? null : String(a.versionCode), managed: managed.has(a.package),
-      management_status: a.system ? 'system' : null, source: 'agent_report', first_seen_at: now, last_seen_at: now,
+      management_status: null, is_system: a.system ?? null, launchable: a.launchable ?? null, installer: clean(a.installer, 255),
+      installed_at: appTime(a.firstInstallAt, now), app_updated_at: appTime(a.lastUpdateAt, now),
+      source: 'agent_report', first_seen_at: now, last_seen_at: now,
     }));
     for (let i = 0; i < rows.length; i += 500) {
       await trx('device_apps').insert(rows.slice(i, i + 500)).onConflict(['tenant_id', 'device_id', 'identifier'])
-        .merge(['name', 'version', 'short_version', 'managed', 'management_status', 'source', 'last_seen_at']);
+        .merge(appsMerge(trx, ['name', 'version', 'short_version', 'managed', 'management_status', 'is_system', 'launchable', 'installer',
+          'installed_at', 'app_updated_at', 'source', 'last_seen_at']));
     }
+    // The icons the server asks this device for (agent 1.0.2 and later; never a lease an older agent would waste).
+    const iconsWanted = Number(sat.agent_version_code) >= ICONS_MIN_VERSION_CODE ? await leaseIcons(trx, who, b.apps, now) : [];
 
     await writeStatusItems(trx, who.tenantId, who.deviceId, now, {
       'agent.battery.level': b.battery?.level ?? null,
@@ -112,6 +130,7 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       'agent.security.patch': d.securityPatch ?? null,
       'agent.install.unknown-sources': b.install?.unknownSources ?? null,
     });
-    return { status: 200, body: { accepted: true } };
+    // iconsWanted is always present (empty included): the agent 1.0.2 learns from it that this server knows the icons.
+    return { status: 200, body: { accepted: true, iconsWanted } };
   });
 }

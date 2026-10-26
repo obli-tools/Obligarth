@@ -1,5 +1,6 @@
 import type { Knex } from 'knex';
 import { canonicalJson } from '../../audit/canonical';
+import { versionChangedMerge } from '../../mdm/inventory/appMerge';
 import { certificateFacts, ingestStatusItems } from '../../mdm/inventory/ingestors';
 import { requestDeviceResolution } from '../../mdm/policies/triggers';
 import { normalizeSerial, platformFromProductName } from '../../mdm/registry/authenticateRules';
@@ -165,6 +166,9 @@ async function applyManagedApps(trx: Knex.Transaction, tenantId: number, deviceI
       name: trx.raw('COALESCE(excluded.name, device_apps.name)'),
       version: trx.raw('COALESCE(excluded.version, device_apps.version)'),
       short_version: trx.raw('COALESCE(excluded.short_version, device_apps.short_version)'),
+      version_changed_at: versionChangedMerge(trx, {
+        version: 'COALESCE(excluded.version, device_apps.version)', shortVersion: 'COALESCE(excluded.short_version, device_apps.short_version)',
+      }),
     });
   }
 }

@@ -9,6 +9,7 @@ import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy'
 import { requestArtifactReconcile, requestComplianceEvaluation } from '../apple/requests';
 import { requestDeviceResolution } from '../policies/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
+import { appsMerge } from './appMerge';
 
 // =============================================================================
 // The inventory contract (docs: modele-donnees-mdm §5.2 to §5.4, §10.4): the
@@ -299,7 +300,7 @@ export async function ingestInstalledApplicationList(trx: Knex.Transaction, tena
     };
     await trx('device_apps').insert({ ...row, source: 'installed_list', first_seen_at: occurredAt })
       .onConflict(['tenant_id', 'device_id', 'identifier'])
-      .merge(['name', 'version', 'short_version', 'bundle_size', 'dynamic_size', 'is_validated', 'app_id', 'last_seen_at']);
+      .merge(appsMerge(trx, ['name', 'version', 'short_version', 'bundle_size', 'dynamic_size', 'is_validated', 'app_id', 'last_seen_at']));
   }
   // The rows of this source absent from the complete list leave the inventory.
   const keep = items.map((i) => i.identifier);

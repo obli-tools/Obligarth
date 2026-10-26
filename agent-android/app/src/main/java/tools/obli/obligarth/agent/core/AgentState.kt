@@ -86,6 +86,17 @@ class AgentState(private val store: KeyValueStore) {
     var notBefore: Long get() = s(K_NOT_BEFORE)?.toLongOrNull() ?: 0; set(v) = set(K_NOT_BEFORE to v.toString())
     var backoffStep: Int get() = s(K_BACKOFF)?.toIntOrNull() ?: 0; set(v) = set(K_BACKOFF to v.toString())
 
+    // ---- App icons (1.0.2): what the server asked for (iconsWanted), what it is known to accept ----
+
+    /** The server answered an inventory with iconsWanted: it knows launchable and /icons. */
+    var serverAppsV2: Boolean get() = s(K_SERVER_APPS_V2)?.toBoolean() ?: false; set(v) = set(K_SERVER_APPS_V2 to v.toString())
+    /** No /icons before this local time (a 404: the server lost the route), seconds. */
+    var iconsBlockedUntil: Long get() = s(K_ICONS_BLOCKED)?.toLongOrNull() ?: 0; set(v) = set(K_ICONS_BLOCKED to v.toString())
+    /** The icons to send: [{package, versionCode}], deduplicated by package, [Icons.MAX_QUEUE] at most. */
+    var iconsWanted: List<IconWanted>
+        get() = jsonList(K_ICONS_WANTED).mapNotNull { IconWanted.fromJson(it) }
+        set(v) = set(K_ICONS_WANTED to Json.write(v.map { it.toJson() }))
+
     // ---- Outbox (results), events, journal, install queue ----
 
     var outbox: List<CommandResult>
@@ -160,11 +171,14 @@ class AgentState(private val store: KeyValueStore) {
         const val K_JOURNAL = "journal"
         const val K_INSTALL_QUEUE = "installQueue"
         const val K_AWAITING = "awaitingUser"
+        const val K_SERVER_APPS_V2 = "serverAppsV2"
+        const val K_ICONS_BLOCKED = "iconsBlockedUntil"
+        const val K_ICONS_WANTED = "iconsWanted"
 
         private val ALL_IDENTITY_KEYS = listOf(
             K_CONFIG, K_AGENT_ID, K_DEVICE_UUID, K_SEQ, K_CLOCK, K_SERVER_KEYS, K_POLL, K_INV_SECONDS, K_KEEPALIVE,
             K_CONFIG_VERSION, K_MIN_VERSION, K_KNOX_KEY, K_LAST_INV, K_INV_REQ, K_AUTH_FAIL, K_NOT_BEFORE, K_BACKOFF,
-            K_OUTBOX, K_EVENTS, K_JOURNAL, K_INSTALL_QUEUE, K_AWAITING,
+            K_OUTBOX, K_EVENTS, K_JOURNAL, K_INSTALL_QUEUE, K_AWAITING, K_SERVER_APPS_V2, K_ICONS_BLOCKED, K_ICONS_WANTED,
         )
 
         private fun configFromStored(m: Map<String, Any?>): AgentConfig? {

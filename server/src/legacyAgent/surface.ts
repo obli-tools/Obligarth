@@ -10,6 +10,7 @@ import { logger } from '../utils/logger';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { apkDir } from './config';
 import { handleEnroll } from './enroll';
+import { handleIcons } from './icons';
 import { handleInventory } from './inventory';
 import { BucketLimiter, ConcurrencyLimiter, WindowLimiter } from './limits';
 import { handlePackage, type PackageReply } from './packages';
@@ -26,11 +27,12 @@ import { withAgentTransaction } from './session';
 // Reached through the edge proxy (mdm.<domain>, client/edge-proxy/mdm.conf).
 //   POST /agent/v1/enroll               token + proof of possession of the key
 //   POST /agent/v1/poll                 state, results, events → commands
-//   POST /agent/v1/inventory            full inventory
+//   POST /agent/v1/inventory            full inventory → iconsWanted
+//   POST /agent/v1/icons                the icons asked for (PNG or none)
 //   GET  /agent/v1/packages/<sha256>    an APK of an open command of the device
-// Every request of /poll, /inventory and /packages is signed by the agent's
+// Every request of /poll, /inventory, /icons and /packages is signed by the agent's
 // key (OBL-AGENT-1) and numbered (seq strictly increasing, written in the
-// transaction of its processing); every answer of the four routes, errors
+// transaction of its processing); every answer of the five routes, errors
 // included, is signed by the instance key (OBL-SERVER-2), except 401
 // badSignature and unknownAgent. Cache-Control: no-store. The log line:
 // route template, status, duration, tenant; never the address, never a body.
@@ -40,6 +42,8 @@ import { withAgentTransaction } from './session';
 
 export const MAX_BODY = 256 * 1024;
 export const MAX_INVENTORY_BODY = 2 * 1024 * 1024;
+/** 16 icons of 32 KiB at most, in base64, with their JSON. */
+export const MAX_ICONS_BODY = 512 * 1024;
 /** Beyond the limit the body is still hashed (a signed 413), up to this size; then the connection is cut. */
 const HASH_CAP = 16 * 1024 * 1024;
 export const CLOCK_WINDOW_SECONDS = 300;
@@ -177,6 +181,7 @@ export const surfaceLimits = {
   enrollPerToken: new WindowLimiter(200, 3_600_000),
   pollPerAgent: new BucketLimiter(3, 20_000),
   inventoryPerAgent: new WindowLimiter(1, 60_000),
+  iconsPerAgent: new WindowLimiter(6, 60_000),
   downloadsPerTenant: new ConcurrencyLimiter(4),
 };
 
@@ -270,6 +275,17 @@ export function createLegacyAgentSurface(): Router {
       const wait = surfaceLimits.inventoryPerAgent.hit(who.agentId);
       if (wait) return limited(wait);
       return handleInventory(who, ex, body);
+    })(req, res);
+  });
+
+  router.post('/icons', (req, res) => {
+    void post('POST /agent/v1/icons', MAX_ICONS_BODY, false, async (ex, body) => {
+      const who = await authenticated(ex);
+      if (isReply(who)) return who;
+      locals(res).tenantId = who.tenantId;
+      const wait = surfaceLimits.iconsPerAgent.hit(who.agentId);
+      if (wait) return limited(wait);
+      return handleIcons(who, ex, body);
     })(req, res);
   });
 

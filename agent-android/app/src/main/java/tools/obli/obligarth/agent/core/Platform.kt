@@ -64,6 +64,18 @@ interface DeviceFacts {
     fun inventory(withSystemApps: Boolean): Map<String, Any?>
     /** Agent identity: package, versionCode, versionName, signerSha256. */
     fun agent(): Map<String, Any?>
+    /**
+     * The launcher icon of an installed package rendered as a square PNG of about [sizePx] pixels (iconsWanted of the
+     * server, §4.6): [IconRender.NoIcon] when the package declares none, null when it cannot be rendered (absent,
+     * too large, out of memory). The default renders nothing (fakes written before 1.0.2).
+     */
+    fun icon(packageName: String, sizePx: Int): IconRender? = null
+}
+
+/** The rendering of an app icon. */
+sealed class IconRender {
+    class Png(val bytes: ByteArray) : IconRender()
+    object NoIcon : IconRender()
 }
 
 sealed class InstallOutcome {

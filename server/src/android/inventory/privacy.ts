@@ -38,6 +38,9 @@ export interface AndroidAppRow {
   version: string | null;
   shortVersion: string | null;
   state: string | null;
+  /** applicationSource SYSTEM_APP_FACTORY_VERSION or SYSTEM_APP_UPDATED_VERSION; null when Google does not say. */
+  isSystem: boolean | null;
+  installer: string | null;
 }
 
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() !== '' ? v.trim().slice(0, max) : null);
@@ -45,6 +48,8 @@ const obj = (v: unknown): Record<string, unknown> => (v && typeof v === 'object'
 const PACKAGE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/;
 const PATCH_LEVEL = /^\d{4}-\d{2}-\d{2}$/;
 const MAX_APPS = 2_000;
+const SYSTEM_SOURCES = new Set(['SYSTEM_APP_FACTORY_VERSION', 'SYSTEM_APP_UPDATED_VERSION']);
+const packageOf = (v: unknown): string | null => { const p = str(v, 255); return p && PACKAGE.test(p) ? p : null; };
 
 /** The inventory of a Device for its ownership and the tenant's rules. */
 export function filterInventory(device: Record<string, unknown>, ownership: string, rules?: AndroidPrivacyRules): FilteredInventory {
@@ -100,6 +105,8 @@ export function filterInventory(device: Record<string, unknown>, ownership: stri
       identifier: pkg, name: str(o.displayName, 255), version: str(o.versionName, 64),
       shortVersion: o.versionCode !== undefined && Number.isFinite(Number(o.versionCode)) ? String(Math.trunc(Number(o.versionCode))).slice(0, 64) : null,
       state: str(o.state, 32),
+      isSystem: SYSTEM_SOURCES.has(String(o.applicationSource ?? '')) ? true : str(o.applicationSource, 64) ? false : null,
+      installer: packageOf(o.installerPackageName),
     });
   }
   return {

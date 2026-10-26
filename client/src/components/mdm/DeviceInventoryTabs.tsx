@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Lock, ShieldCheck } from 'lucide-react';
-import type { CollectedField, DeviceAppView, DeviceCertificateView, DeviceProfileView } from '@obligarth/shared';
+import { Lock } from 'lucide-react';
+import type { CollectedField, DeviceCertificateView, DeviceProfileView } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
-import { formatBytes, formatDate, formatDateTime } from '@/components/mdm/PlatformIcon';
+import { formatDate, formatDateTime } from '@/components/mdm/PlatformIcon';
 import { apiErrorMessage } from '@/utils/apiError';
 
 // The inventory of a device (modele-donnees-mdm §5): applications, configuration profiles, certificates. What the
@@ -57,60 +57,8 @@ function Shell({ rows, error, empty, note, lastAt, search, onSearch, children }:
 const th = 'font-medium px-3 py-2 text-left';
 const td = 'px-3 py-2 align-top';
 
-export function DeviceAppsTab({ deviceId, collected, lastAt }: { deviceId: number; collected: CollectedField[]; lastAt?: string | null }) {
-  const { t } = useTranslation();
-  const { rows, error } = useInventory<DeviceAppView>(() => mdmApi.apps(deviceId), [deviceId]);
-  const [q, setQ] = useState('');
-  const shown = useMemo(() => {
-    const needle = q.trim().toLowerCase();
-    return (rows ?? []).filter((a) => !needle || a.identifier.toLowerCase().includes(needle) || (a.name ?? '').toLowerCase().includes(needle));
-  }, [rows, q]);
-  return (
-    <Shell
-      rows={rows === null ? null : shown}
-      error={error}
-      lastAt={lastAt}
-      search={q}
-      onSearch={setQ}
-      empty={t('mdm.inventory.noApps') || 'No application reported.'}
-      note={collected.includes('allApps') ? undefined
-        : (t('mdm.inventory.managedAppsOnly') || 'Managed applications only: the other applications of this device are not collected (privacy rules of its ownership).')}
-    >
-      <table className="w-full text-xs">
-        <thead className="text-text-muted">
-          <tr>
-            <th className={th}>{t('mdm.inventory.app') || 'Application'}</th>
-            <th className={th}>{t('mdm.inventory.version') || 'Version'}</th>
-            <th className={th}>{t('mdm.inventory.management') || 'Management'}</th>
-            <th className={th}>{t('mdm.inventory.size') || 'Size'}</th>
-            <th className={th}>{t('mdm.inventory.lastSeen') || 'Last seen'}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((a) => (
-            <tr key={a.identifier} className="border-t border-border/50">
-              <td className={td}>
-                <span className="text-text-primary">{a.name || a.identifier}</span>
-                {a.name && <span className="block font-mono text-[11px] text-text-muted break-all">{a.identifier}</span>}
-              </td>
-              <td className={`${td} text-text-secondary`}>{a.shortVersion || a.version || '—'}</td>
-              <td className={td}>
-                {a.managed ? (
-                  <span className="inline-flex items-center gap-1 text-accent">
-                    <ShieldCheck className="w-3.5 h-3.5" />
-                    {a.managementStatus || (t('mdm.inventory.managed') || 'Managed')}
-                  </span>
-                ) : <span className="text-text-muted">{t('mdm.inventory.unmanaged') || 'Not managed'}</span>}
-              </td>
-              <td className={`${td} text-text-secondary`}>{formatBytes(a.bundleSize)}</td>
-              <td className={`${td} text-text-secondary`}>{formatDate(a.lastSeenAt)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Shell>
-  );
-}
+// The applications tab lives in its own file (a grid of icons, with its detail drawer).
+export { DeviceAppsTab } from './DeviceAppsTab';
 
 export function DeviceProfilesTab({ deviceId, lastAt }: { deviceId: number; lastAt?: string | null }) {
   const { t } = useTranslation();

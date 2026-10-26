@@ -1,8 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  COMPLIANCE_STATES, CONFIG_STATES, ENROLLMENT_STATES, OWNERSHIPS, PLATFORMS, type DeviceLocationPoint, type DeviceLocations,
-  type DeviceSummary,
+  COMPLIANCE_STATES, CONFIG_STATES, ENROLLMENT_STATES, OWNERSHIPS, PLATFORMS, type DeviceAppsMeta, type DeviceLocationPoint,
+  type DeviceLocations, type DeviceSummary,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { audit } from '../../audit';
@@ -17,7 +17,7 @@ import { listEpisodes } from '../registry/episodes';
 import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership } from '../registry/ownership';
 import { changeDevicesGroup } from '../policies/deviceMove';
-import { deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
+import { deviceAppIcon, deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
 import { LOST_MODE_LOCATION_DAYS } from '../inventory/retention';
 import { deviceConfiguration } from '../policies/configuration';
 import { requestDeviceResolution } from '../policies/triggers';
@@ -428,7 +428,33 @@ router.get('/devices/:id/locations', globalViewScope('console.devices'), resolve
 
 // GET /api/mdm/devices/:id/apps, /profiles, /certificates — the inventory.
 router.get('/devices/:id/apps', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
-  try { res.json({ data: await deviceApps(req.mdmDevice!.tenantId, req.mdmDevice!.id) }); } catch (err) { next(err); }
+  try {
+    const { apps, collectedAt } = await deviceApps(req.mdmDevice!.tenantId, req.mdmDevice!.id);
+    res.json({ data: apps, meta: { collectedAt } satisfies DeviceAppsMeta });
+  } catch (err) { next(err); }
+});
+// GET /api/mdm/devices/:id/app-icons/:sha256 — the icon a device of the tenant sent for an app of THIS device (a
+// canonical PNG re-encoded by the server, mdm/inventory/pngIcon.ts): image/png whatever the bytes, nosniff, a
+// sandboxed CSP, immutable by its hash. No extension in the URL (the static regex of the nginx of the client must
+// not take it). Anything else, a malformed hash included: 404.
+router.get('/devices/:id/app-icons/:sha256', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
+  try {
+    const sha = String(req.params.sha256 ?? '');
+    const bytes = /^[0-9a-f]{64}$/.test(sha) ? await deviceAppIcon(req.mdmDevice!.tenantId, req.mdmDevice!.id, sha) : null;
+    if (!bytes) throw new AppError(404, 'Icon not found');
+    const etag = `"${sha}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; sandbox");
+    res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+    const match = String(req.headers['if-none-match'] ?? '').split(',').map((s) => s.trim().replace(/^W\//, ''));
+    if (match.includes(etag)) { res.status(304).end(); return; }
+    res.status(200);
+    res.setHeader('Content-Type', 'image/png');
+    res.setHeader('Content-Length', String(bytes.length));
+    res.end(bytes);
+  } catch (err) { next(err); }
 });
 router.get('/devices/:id/profiles', globalViewScope('console.devices'), resolveDevice(false), async (req, res, next) => {
   try { res.json({ data: await deviceProfiles(req.mdmDevice!.tenantId, req.mdmDevice!.id) }); } catch (err) { next(err); }

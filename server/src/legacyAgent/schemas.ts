@@ -88,8 +88,26 @@ export const InventoryBody = z.object({
   apps: z.array(z.object({
     package: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$/).max(255),
     label: nstr(255), versionName: nstr(64), versionCode: nint(0, Number.MAX_SAFE_INTEGER),
-    system: z.boolean().optional(), installer: nstr(255),
+    system: z.boolean().optional(), launchable: z.boolean().optional(), installer: nstr(255),
     firstInstallAt: nint(0, Number.MAX_SAFE_INTEGER), lastUpdateAt: nint(0, Number.MAX_SAFE_INTEGER),
   }).strict()).max(2000),
 }).strict();
 export type InventoryBody = z.infer<typeof InventoryBody>;
+
+/** The base64 (standard alphabet, padded) of a PNG of 32 KiB at most: 43 692 characters. */
+const PNG_B64 = z.string().max(43_692).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/);
+
+/** POST /agent/v1/icons: the icons the server asked for (iconsWanted), 16 per request; exactly one of png (the
+ *  rendered icon), none (the app has no icon) or failed (the agent cannot render it: the lease ends, this device is
+ *  not asked again for a while). */
+export const IconsBody = z.object({
+  icons: z.array(z.object({
+    package: z.string().regex(/^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$/).max(255),
+    versionCode: int(0, Number.MAX_SAFE_INTEGER),
+    png: PNG_B64.optional(),
+    none: z.literal(true).optional(),
+    failed: z.literal(true).optional(),
+  }).strict().refine((i) => [i.png, i.none, i.failed].filter((v) => v !== undefined).length === 1, 'png, none or failed, exactly one'))
+    .min(1).max(16),
+}).strict();
+export type IconsBody = z.infer<typeof IconsBody>;

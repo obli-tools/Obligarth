@@ -252,6 +252,14 @@ class AgentEngine(
                 }
             }
         }
+        // The icons the server asked for (1.0.2): never a back-off nor an authentication failure of their own.
+        if (state.serverAppsV2 && state.iconsWanted.isNotEmpty() && iconsAllowed()) {
+            try {
+                sendIcons(clock() + Icons.SEND_SECONDS)
+            } catch (e: IOException) {
+                log.warn("icons: ${e.message}")
+            }
+        }
         val next = if (received > 0) FOLLOW_UP_S else jitter(state.pollSeconds.toLong(), 0.10)
         return CycleReport(next, received, state.installQueue.isNotEmpty())
     }
@@ -466,11 +474,21 @@ class AgentEngine(
         repeat(2) {
             val body = LinkedHashMap<String, Any?>()
             body["collectedAt"] = now
-            body.putAll(facts.inventory(withSystem))
+            // launchable only to a server known to take it (an older one refuses an unknown key).
+            val inventory = facts.inventory(withSystem)
+            body.putAll(if (state.serverAppsV2) inventory else Icons.withoutLaunchable(inventory))
             val reply = client.call("POST", "/agent/v1/inventory", Json.bytes(body))
             if (reply.status == 200 && reply.signed) {
                 state.lastInventoryAt = clock()
                 state.inventoryRequested = false
+                Icons.parseWanted(reply.json)?.let { wanted ->
+                    if (!state.serverAppsV2) {
+                        // Learnt now: the next cycle sends the inventory again, with launchable.
+                        state.serverAppsV2 = true
+                        state.inventoryRequested = true
+                    }
+                    if (wanted.isNotEmpty()) state.iconsWanted = Icons.merge(state.iconsWanted, wanted)
+                }
                 // inventory.refresh commands waiting for this inventory.
                 for (e in state.journal) if (e.state == "running" && e.type == CommandType.INVENTORY_REFRESH.wire) {
                     finish(e.id, CommandResult(e.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, emptyMap(), now))
@@ -482,9 +500,73 @@ class AgentEngine(
                 return@repeat
             }
             log.warn("inventory refused: ${reply.status} ${reply.code}")
+            // A server that refuses the body may no longer know launchable (moved back to an older version): asked again.
+            if (reply.status == 400 && reply.signed && state.serverAppsV2) state.serverAppsV2 = false
             return false
         }
         return false
+    }
+
+    // ------------------------------------------------------------------
+    // Icons (1.0.2, §4.6): rendered one at a time, sent by batches
+    // ------------------------------------------------------------------
+
+    private fun iconsAllowed(): Boolean {
+        val local = clock()
+        // A block never exceeds its week: beyond that, the local clock was moved back since it was set.
+        if (state.iconsBlockedUntil - local > Icons.BLOCK_SECONDS) state.iconsBlockedUntil = 0
+        return local >= state.iconsBlockedUntil
+    }
+
+    /**
+     * Sends the queue until empty or [deadlineLocal] (local seconds). 200 signed: the batch leaves the queue (accepted
+     * or rejected alike); 404, signed or not (a server without the route): the queue is emptied and the icons wait a
+     * week; 429: until the next cycle; 413: half the batch; anything else: the queue is kept. Never the back-off nor
+     * authFailingSince of the interrogation. An icon that cannot be rendered is sent as failed: the server ends its
+     * lease and asks another device.
+     */
+    fun sendIcons(deadlineLocal: Long) {
+        var maxPerRequest = Icons.MAX_PER_REQUEST
+        while (clock() < deadlineLocal) {
+            val queue = state.iconsWanted
+            if (queue.isEmpty()) return
+            val batch = ArrayList<Map<String, Any?>>()
+            val sentPackages = HashSet<String>()
+            var size = Icons.EMPTY_BODY_BYTES
+            for (w in queue) {
+                if (batch.size >= maxPerRequest || clock() >= deadlineLocal) break
+                val render = try { facts.icon(w.packageName, Icons.SIZE_PX) } catch (e: Throwable) { null }
+                val entry = Icons.entry(w, render)
+                val n = Icons.sizeOf(entry)
+                if (!Icons.fits(batch.size, size, n, maxPerRequest)) break
+                batch += entry
+                sentPackages += w.packageName
+                size += n
+            }
+            if (batch.isEmpty()) return
+            val reply = client.call("POST", "/agent/v1/icons", Json.bytes(linkedMapOf("icons" to batch)))
+            when {
+                reply.status == 200 && reply.signed -> state.iconsWanted = state.iconsWanted.filter { it.packageName !in sentPackages }
+                reply.status == 404 -> {
+                    log.warn("icons: the server has no /icons, paused for a week")
+                    state.iconsWanted = emptyList()
+                    state.iconsBlockedUntil = clock() + Icons.BLOCK_SECONDS
+                    return
+                }
+                reply.status == 429 -> return
+                reply.status == 413 -> {
+                    if (batch.size == 1) {
+                        state.iconsWanted = state.iconsWanted.filter { it.packageName !in sentPackages }
+                    } else {
+                        maxPerRequest = (batch.size / 2).coerceAtLeast(1)
+                    }
+                }
+                else -> {
+                    log.warn("icons refused: ${reply.status} ${reply.code}")
+                    return
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
