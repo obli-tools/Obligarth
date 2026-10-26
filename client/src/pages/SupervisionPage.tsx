@@ -10,9 +10,10 @@ import { SegmentedTabs } from '@/components/common/SegmentedTabs';
 
 type Tab = 'reports';
 
-// Every tab is gated by the unified `supervision:read` capability.
-const TAB_CAPABILITY: Record<Tab, TenantCapability> = {
- reports: 'supervision:read',
+// A tab opens with any of its capabilities: the reports with `supervision:read`
+// (reading) or `reports` (reading and writing), as the server checks them.
+const TAB_CAPABILITIES: Record<Tab, TenantCapability[]> = {
+ reports: ['supervision:read', 'reports'],
 };
 
 export function SupervisionPage() {
@@ -29,7 +30,7 @@ export function SupervisionPage() {
  const all: Array<{ id: Tab; label: string; icon: React.ReactNode }> = [
  { id: 'reports', label: t('supervision.tabReports'), icon: <FileBarChart2 size={16} /> },
  ];
- return admin ? all : all.filter((tab) => tenantCaps.has(TAB_CAPABILITY[tab.id]));
+ return admin ? all : all.filter((tab) => TAB_CAPABILITIES[tab.id].some((cap) => tenantCaps.has(cap)));
  }, [t, admin, tenantCaps]);
 
  const [tab, setTab] = useState<Tab>(tabs[0]?.id ?? 'reports');

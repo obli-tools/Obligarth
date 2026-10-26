@@ -254,12 +254,12 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   // user's role in the active tenant. We use them to surface admin-tenant
   // pages to non-admin users who have been granted a specific page-gate
   // capability:
-  //   - supervision:read         → Supervision (Reports)
+  //   - supervision:read / reports → Supervision (Reports)
   //   - users.manage / devices.manage → End users (the people devices are assigned to)
   // Admins implicitly have all capabilities (the sidebar ORs role and
   // cap so the menu still appears for admins regardless of cap state).
   const tenantCaps = new Set(permissions?.tenantCapabilities ?? []);
-  const hasSupervisionCap = tenantCaps.has('supervision:read');
+  const hasSupervisionCap = tenantCaps.has('supervision:read') || tenantCaps.has('reports');
   const hasEndUsersCap = tenantCaps.has('users.manage') || tenantCaps.has('devices.manage');
   //   - mdm.enrollment.manage → Device enrollment (profiles, links, invitations)
   const hasEnrollmentCap = tenantCaps.has('mdm.enrollment.manage');
@@ -513,7 +513,7 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // and, for platform administrators, the vault and the journal settings.
     ...(admin || hasSecurityCap ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: admin ? pendingApprovalsCount : 0 } as NavItem] : []),
     // Supervision — reports. Visible if platform admin OR the user holds the
-    // `supervision:read` tenant capability.
+    // `supervision:read` or `reports` tenant capability.
     ...(admin || hasSupervisionCap
       ? [{ label: t('nav.supervision'), path: '/admin/supervision', icon: <Laptop size={18} /> } as NavItem]
       : []),

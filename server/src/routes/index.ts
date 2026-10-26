@@ -37,6 +37,7 @@ import { createJobsAdmin } from '../jobs/admin';
 import { createJobsAdminRouter } from '../jobs/admin.routes';
 import { createOutboxAdminRouter } from '../jobs/outbox/admin.routes';
 import { createVaultAdminRouter } from '../vault/admin.routes';
+import { createOpsAdminRouter } from '../ops/routes';
 import { createAuditAdminRouter } from '../audit/admin.routes';
 import { createGuardRouter } from '../guard/routes';
 import { createAppleEdgeAdminRouter } from '../apple/admin.routes';
@@ -164,6 +165,9 @@ tenantRouter.use('/apple', createAppleDdmRouter());
 // The vault of secrets: state, escrow events, key rotations (master tenant,
 // platform administrators; vault/admin.routes.ts).
 tenantRouter.use('/admin/vault', createVaultAdminRouter());
+// The observability of the instance: readiness in detail, metrics listener, backlog of the commands (master tenant,
+// platform administrators; ops/routes.ts, P0-13 T8).
+tenantRouter.use('/admin/ops', createOpsAdminRouter());
 // The Android bridge agent (agent-pont-android §7): the console of the tenant, the platform's (versions of the agent,
 // instance key, settings; master tenant, platform administrators).
 tenantRouter.use('/legacy-agent', createLegacyAgentRouter());

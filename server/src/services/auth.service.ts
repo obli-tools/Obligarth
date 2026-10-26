@@ -146,24 +146,15 @@ export const authService = {
       }
     }
 
+    // Never linked by name (P0 coordination S3, from P0-10 T2): a local account that happens to bear the same
+    // username, with or without a password (an og_ account of another identity, an account whose password was never
+    // set, later a service account), is never handed to a foreign identity. Only a link already recorded in
+    // sso_foreign_users counts (above), as in the Obligate sign-in (provisionObligateUser).
     const anyCollision = await db('users')
       .where({ username: info.username })
-      .first() as (UserRow & { password_hash: string | null }) | undefined;
+      .first('id') as { id: number } | undefined;
 
     if (anyCollision) {
-      if (!anyCollision.password_hash) {
-        await db('sso_foreign_users')
-          .insert({ foreign_source: foreignSource, foreign_user_id: foreignId, local_user_id: anyCollision.id })
-          .onConflict(['foreign_source', 'foreign_user_id'])
-          .merge({ local_user_id: anyCollision.id });
-        await db('users').where({ id: anyCollision.id }).update({
-          email: info.email ?? anyCollision.email,
-          foreign_source_url: foreignSourceUrl,
-          updated_at: new Date(),
-        });
-        const updated = await db<UserRow>('users').where({ id: anyCollision.id }).first() as UserRow;
-        return { user: rowToUser(updated), isFirstLogin: false };
-      }
       throw new AccountLinkRequiredError(info.username);
     }
 

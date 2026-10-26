@@ -1458,6 +1458,7 @@
     "editReport": "Edit Report",
     "empty": "No reports yet",
     "emptyHint": "Create reports to generate fleet insights and export data.",
+    "emptyReadOnly": "No report has been created for this tenant.",
     "enabledForScheduled": "Enabled (for scheduled runs)",
     "format": "Format",
     "generate": "Generate",
@@ -1472,6 +1473,14 @@
     "nameRequired": "Report name is required",
     "newReport": "New Report",
     "noOutputs": "No outputs yet. Click Generate to create the first output.",
+    "noOutputsReadOnly": "No outputs yet.",
+    "outputErrors": {
+      "cancelled": "Cancelled by a user",
+      "generationFailed": "Generation failed",
+      "interrupted": "Generation interrupted (server restart or timeout)",
+      "requesterUnavailable": "The account that asked for it is no longer available"
+    },
+    "outputUnavailable": "This file is no longer available. Generate the report again.",
     "rows": "{{count}} rows",
     "runNow": "Generate now",
     "runRecurring": "Recurring (cron)",
@@ -3973,7 +3982,11 @@
     "invalidSetting": "Invalid setting of the profile.",
     "tenantHasAndroidEnterprise": "This tenant still has an Android enterprise: unlink it first.",
     "androidAppReadOnly": "The name, author and icon of an Android app come from Google.",
-    "androidByodNoticeUnavailable": "The notice is not available."
+    "androidByodNoticeUnavailable": "The notice is not available.",
+    "invalidCron": "Invalid schedule: five valid cron fields are expected (minute 0-59, hour 0-23, day 1-31, month 1-12, weekday 0-7).",
+    "invalidOptions": "These options do not apply to this type of report.",
+    "invalidScope": "The chosen group or device is not available.",
+    "invalidTimezone": "Unknown time zone: choose an IANA name such as Europe/Paris or UTC."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",

@@ -3,16 +3,19 @@ import type { Report, ReportOutput } from '@obligarth/shared';
 
 interface ApiResponse<T> { data?: T; error?: string; }
 
+/** What the console writes of a report (the server refuses any other field). */
+export type ReportInput = Pick<Report, 'name' | 'description' | 'type' | 'format' | 'scopeType' | 'scopeId' | 'sections' | 'filters' | 'scheduleCron' | 'timezone' | 'isEnabled'>;
+
 export const reportApi = {
   async list(): Promise<Report[]> {
     const res = await apiClient.get<ApiResponse<Report[]>>('/reports');
     return res.data.data ?? [];
   },
-  async create(data: Omit<Report, 'id' | 'createdAt' | 'updatedAt' | 'lastGeneratedAt' | 'createdBy'>): Promise<Report> {
+  async create(data: ReportInput): Promise<Report> {
     const res = await apiClient.post<ApiResponse<Report>>('/reports', data);
     return res.data.data!;
   },
-  async update(id: number, data: Partial<Report>): Promise<Report> {
+  async update(id: number, data: Partial<ReportInput>): Promise<Report> {
     const res = await apiClient.patch<ApiResponse<Report>>(`/reports/${id}`, data);
     return res.data.data!;
   },

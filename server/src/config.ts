@@ -3,6 +3,7 @@ import path from 'node:path';
 import { readJobsConfig } from './jobs/config';
 import { readOutboxConfig } from './jobs/outbox/config';
 import { appleStartupErrors, defaultNoticeAllowed, readAppleConfig } from './apple/config';
+import { opsStartupErrors, readOpsConfig } from './ops/config';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
 // at start when invalid (startupConfigErrors), in every environment.
@@ -12,6 +13,9 @@ const outboxEnv = readOutboxConfig(process.env);
 // The apple-edge integration (APPLE_*, MDM_PUBLIC_BASE: integration-apple-edge
 // annex A): same rule; its secret files are read at start (startupConfigErrors).
 const appleEnv = readAppleConfig(process.env);
+// The observability (METRICS_*, P0-13 T8): internal listener of the metrics and its optional token (decision D11);
+// same rule, the token file read at start.
+const opsEnv = readOpsConfig(process.env, parseInt(process.env.PORT || '3001', 10));
 
 function publicUrlFromEnv(): string {
   const appUrl = (process.env.APP_URL || '').trim();
@@ -142,6 +146,8 @@ export const config = {
   /** The apple-edge integration: mode, internal API, secret files, public
    *  base of the device surface, thresholds. See apple/config.ts. */
   apple: appleEnv.config,
+  /** The observability: internal listener of the metrics (port, interface, token file). See ops/config.ts. */
+  ops: opsEnv.config,
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
   appName: process.env.APP_NAME || 'Obligarth',
@@ -269,6 +275,7 @@ export function startupConfigErrors(): string[] {
   errors.push(...jobsEnv.errors);
   errors.push(...outboxEnv.errors);
   errors.push(...appleEnv.errors, ...appleStartupErrors(config.apple));
+  errors.push(...opsEnv.errors, ...opsStartupErrors(config.ops));
   // The employee notice and the privacy rules of the enrollment are the laboratory's defaults until USR-01 and
   // CNF-02 replace them (integration-apple-edge §10.7): refused in production unless explicitly allowed.
   if (config.apple.mode === 'on' && !defaultNoticeAllowed(config.apple, config.nodeEnv)) {

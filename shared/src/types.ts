@@ -454,15 +454,26 @@ export interface Report {
   updatedAt: string;
 }
 
+/** The fixed failure messages of a report output, by stable code. */
+export type ReportOutputErrorCode = 'requesterUnavailable' | 'generationFailed' | 'cancelled' | 'interrupted';
+
 export interface ReportOutput {
   id: number;
   reportId: number;
   tenantId: number;
   status: ReportStatus;
-  filePath: string | null;
+  /** The name the file downloads under (`<report name>-<YYYY-MM-DD>.<ext>`), null until it is ready. The path on
+   *  the server is never sent. */
+  fileName: string | null;
+  /** The user whose visible devices the output holds (null: before P0-12, or an account deleted since). */
+  requestedBy: number | null;
+  /** Is its file there to download (ready, file kept): every reader of the tenant's reports downloads it. */
+  downloadable: boolean;
   fileSizeBytes: number | null;
   rowCount: number | null;
   errorMessage: string | null;
+  /** The stable code of a fixed failure message of the server (the console translates it), null otherwise. */
+  errorCode: ReportOutputErrorCode | null;
   expiresAt: string | null;
   generatedAt: string | null;
   createdAt: string;
