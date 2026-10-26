@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { SocketEvents } from '@obligarth/shared';
-import { config } from '../../config';
 import { db } from '../../db';
 import { forEachTenant } from '../../db/tenantContext';
 import { defaultRuntime, JobError, registerJob, type JobContext, type JobResult } from '../../jobs';
@@ -100,8 +99,12 @@ export function registerComplianceJobs(): void {
     description: 'Hourly: evaluate the compliance of every managed device (the reasons that come with time)',
     payload: empty,
     policy: 'exclusive',
-    // APPLE_EDGE_MODE=off: no device is managed, the hourly job is not scheduled (file-durable L3).
-    ...(config.apple.mode === 'on' ? { schedule: { cron: '27 * * * *' } } : {}),
+    // Always scheduled (P0 coordination S3, from P0-4 T7): the reasons that come with time (stale, no_contact,
+    // policy_not_applied) concern every channel, Apple (APPLE_EDGE_MODE=on), Android (ANDROID_MODE not off) and the
+    // bridge agent, which has no mode and is always served (/agent/v1): it was scheduled with APPLE_EDGE_MODE=on only,
+    // so an Android-only instance never evaluated them. Without any managed device a run reads the tenants and
+    // stops (file-durable L3: one job an hour).
+    schedule: { cron: '27 * * * *' },
     deadLetter: false,                               // the next hourly run does the work again
     retry: { limit: 2, delaySeconds: 60, backoff: true, maxDelaySeconds: 600 },
     timeoutSeconds: 600,

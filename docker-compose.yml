@@ -295,6 +295,11 @@ services:
       # Background jobs: all (default) | api | paused (database restore,
       # incident: jobs kept queued, none run) — see .env.example
       JOBS_MODE: ${JOBS_MODE:-all}
+      # Metrics (Prometheus) on an internal listener of the server, published by
+      # no service and relayed by no proxy; optional bearer token in a file of
+      # secrets/server — see .env.example
+      METRICS_PORT: ${METRICS_PORT:-9464}
+      METRICS_TOKEN_FILE: ${METRICS_TOKEN_FILE:-}
       # Hardened audit journal: hourly seal, optional RFC 3161 time stamping,
       # SIEM exporter, clock check; spool in /custom/audit-spool — see .env.example
       AUDIT_SEAL_CRON: "${AUDIT_SEAL_CRON:-12 * * * *}"

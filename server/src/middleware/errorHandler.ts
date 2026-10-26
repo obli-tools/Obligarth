@@ -4,6 +4,7 @@ import {
   DbContextDeniedError, DbContextMismatchError, DbContextMissingError, countRlsDenied, currentDbContext,
 } from '../db/context';
 import { VaultError } from '../vault/errors';
+import { httpMetrics } from '../ops/http';
 
 export class AppError extends Error {
   constructor(
@@ -64,6 +65,7 @@ export function errorHandler(
   _next: NextFunction,
 ): void {
   if (err instanceof AppError) {
+    httpMetrics.error('app');
     // A critical action refused because its audit entry could not be written
     // (audit-durci §5.4): the client may retry later.
     if (err.code === 'auditUnavailable' && !res.headersSent) res.setHeader('Retry-After', '30');
@@ -78,6 +80,7 @@ export function errorHandler(
   }
 
   if (err instanceof DbContextDeniedError) {
+    httpMetrics.error('db_context_denied');
     logger.warn({ err, ...contextForLog(req) }, 'database context denied');
     res.status(404).json({ success: false, error: 'Not found' });
     return;
@@ -86,6 +89,7 @@ export function errorHandler(
   if (isRlsDenial(err)) {
     const table = tableOf(err as PgError);
     countRlsDenied(table);
+    httpMetrics.error('rls_denied');
     // A global view the database refuses to open (the actor is no longer an
     // active platform administrator): 403, nothing about any tenant's rows.
     if (table === 'platform_access_grants') {
@@ -101,6 +105,7 @@ export function errorHandler(
   if (isCrossTenantReference(err)) {
     const table = tableOf(err as PgError);
     countRlsDenied(table);
+    httpMetrics.error('cross_tenant_reference');
     logger.warn({ err, table, constraint: (err as PgError).constraint, ...contextForLog(req) }, 'reference to another tenant refused');
     res.status(404).json({ success: false, error: 'Not found' });
     return;
@@ -111,6 +116,7 @@ export function errorHandler(
   // coordinates, and raised the alert when it hints at tampering or at an
   // isolation defect). A tenant being deleted refuses new secrets (409).
   if (err instanceof VaultError) {
+    httpMetrics.error('vault');
     if (err.code === 'tenant_retiring') {
       res.status(409).json({ success: false, error: 'This tenant is being deleted: its secrets can no longer be changed', code: 'tenantRetiring' });
       return;
@@ -121,11 +127,13 @@ export function errorHandler(
   }
 
   if (err instanceof DbContextMissingError || err instanceof DbContextMismatchError) {
+    httpMetrics.error('db_context');
     logger.error({ err, ...contextForLog(req) }, err.message);
     res.status(500).json({ success: false, error: 'Internal server error' });
     return;
   }
 
+  httpMetrics.error('unhandled');
   logger.error(err, 'Unhandled error');
   res.status(500).json({
     success: false,

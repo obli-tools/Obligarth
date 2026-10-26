@@ -16,6 +16,8 @@ export const JOB_MODULES: readonly string[] = [
   'android',
   // The Android bridge agent (agent-pont-android §6).
   'legacy-agent',
+  // The observability of the instance (P0-13 T8: ops.watch).
+  'ops',
 ];
 
 /** The shared dead letter queue (no worker). */

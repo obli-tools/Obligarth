@@ -32,6 +32,7 @@ import { registerLegacyAgentModule } from './modules/legacyAgent';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
 import { registerAndroidModule } from './modules/android';
+import { registerOpsModule } from './modules/ops';
 import { AuditClockError, auditClockCheck } from './audit/clock';
 import { ensureSealKey } from './audit/sealKeys';
 
@@ -107,6 +108,9 @@ async function main() {
   // Android (android-amapi §3.4, lot AN-A2): after the Apple and privacy modules. Without I/O; its queues, handlers,
   // start check of the Google identity and pull loop only when ANDROID_MODE is not off (AN39).
   registerAndroidModule();
+  // Observability (P0-13 T8): metrics registry and its internal listener (METRICS_PORT), readiness checks of
+  // GET /health/ready, the job ops.watch. Last: its collectors read the snapshots of the modules above.
+  registerOpsModule();
 
   // Development only: the server migrates its own database (server-migrate
   // in production). Refused outside development by startupConfigErrors.

@@ -29,6 +29,8 @@ import { createAndroidByodSurface } from './android/byod/surface';
 import { createAndroidSigninSurface } from './android/signin/surface';
 import { createLegacyAgentSurface } from './legacyAgent/surface';
 import { jobs } from './jobs';
+import { httpMetricsMiddleware } from './ops/http';
+import { readiness } from './ops/ready';
 import { logger } from './utils/logger';
 
 const PgSession = connectPgSimple(session);
@@ -53,6 +55,10 @@ export function createApp() {
   // TRUSTED_PROXIES — a walk a client can steer when it reaches the client
   // container from a trusted range, so it must never key a rate limit.
   app.set('trust proxy', 1);
+
+  // HTTP metrics (P0-13 T8, ops/http.ts): every response counted by the pattern of the route that answered, never
+  // its path; first of the chain, so that the device surfaces and the refusals of the middlewares count too.
+  app.use(httpMetricsMiddleware);
 
   // DDM relay of apple-edge (POST /internal/apple-edge/ddm, HMAC-signed both ways), before the whole chain of
   // the console: its own raw body parser (the signature covers the bytes), no session, no cookie, no limiter of
@@ -215,6 +221,12 @@ export function createApp() {
   // the durable jobs run, 503 when the scheduler or the workers stopped, or
   // in JOBS_MODE=paused. Watched from outside the instance (Obliview).
   app.get('/health/jobs', jobs.healthHandler());
+
+  // Readiness of the instance (public, no detail; P0-13 T8, ops/ready.ts): 200 when the database, its schema, the
+  // vault and apple-edge (when on) are ready, 503 otherwise; cached 10 s. The detail is GET /api/admin/ops/status
+  // (platform administrators). Watched from outside the instance (Obliview). The metrics themselves are served
+  // on an internal listener of their own (METRICS_PORT), never here.
+  app.get('/health/ready', readiness.handler());
 
   // Serve static client build in production. The server image ships no
   // client build (nginx of the client image serves it): an unknown path then

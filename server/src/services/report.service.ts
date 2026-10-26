@@ -2,7 +2,7 @@ import { db } from '../db';
 import path from 'path';
 import fs from 'fs/promises';
 import { z } from 'zod';
-import type { Report, ReportOutput, ReportSection } from '@obligarth/shared';
+import type { Report, ReportOutput, ReportOutputErrorCode, ReportSection } from '@obligarth/shared';
 import { config } from '../config';
 import { forEachTenant } from '../db/tenantContext';
 import { JobError, SCHEDULED_POLL_SECONDS, registerJob, sanitizeError, type JobContext, type JobHandle, type JobResult } from '../jobs';
@@ -12,6 +12,18 @@ import { launchChromium } from '../utils/chromium';
 import { contactState } from '@obligarth/shared';
 import { privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
 import { staleAfterDays } from '../mdm/settings';
+import { asIdentity } from '../db/context';
+import { permissionService } from './permission.service';
+import type { ReportCreateInput, ReportUpdateInput } from '../reports/validate';
+import { outputFileName } from '../reports/fileName';
+import { csvSafeText } from '../reports/csv';
+
+/** The devices an output holds: every device of its scope ('all'), or these. */
+type VisibleDevices = number[] | 'all';
+
+/** One array binding, not one placeholder per device (a member reaching
+ *  thousands of devices: 65 535 bindings at most in the protocol). */
+const pgIntArray = (ids: readonly number[]): string => `{${ids.map(Number).filter((n) => Number.isSafeInteger(n)).join(',')}}`;
 
 /** A ready output is kept 7 days, an output in error 30 days. */
 const OUTPUT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -19,6 +31,17 @@ const ERROR_OUTPUT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Cutoff of the sweep of outputs stuck in 'generating' (minutes). */
 const STALE_GENERATING_MINUTES = 60;
 const PURGE_BATCH = 500;
+
+/** The fixed messages an output fails with (never an exception's), by the
+ *  stable code the console translates. */
+const OUTPUT_ERRORS: Record<ReportOutputErrorCode, string> = {
+  requesterUnavailable: 'Requester no longer available',
+  generationFailed: 'Generation failed',
+  cancelled: 'Cancelled by user',
+  interrupted: 'Generation interrupted (server restart or timeout)',
+};
+const OUTPUT_ERROR_CODE = new Map<string, ReportOutputErrorCode>(
+  (Object.entries(OUTPUT_ERRORS) as Array<[ReportOutputErrorCode, string]>).map(([code, message]) => [message, code]));
 
 class ReportService {
   // Persist under the mounted CUSTOM_DIR volume (/custom), NOT process.cwd()
@@ -37,16 +60,23 @@ class ReportService {
     };
   }
 
-  rowToOutput(row: any): ReportOutput {
+  /** An output; `reportName` names its file. Never the path on the server.
+   *  Every reader of the tenant's reports (`reports` or `supervision:read`,
+   *  P0-12 §3) downloads a ready output. */
+  rowToOutput(row: any, reportName: unknown): ReportOutput {
+    const requestedBy = row.requested_by != null ? Number(row.requested_by) : null;
     return {
       id: row.id,
       reportId: row.report_id,
       tenantId: row.tenant_id,
       status: row.status,
-      filePath: row.file_path ?? null,
+      fileName: row.status === 'ready' ? outputFileName(reportName, row.generated_at, row.file_path) : null,
+      requestedBy,
+      downloadable: row.status === 'ready' && !!row.file_path,
       fileSizeBytes: row.file_size_bytes != null ? Number(row.file_size_bytes) : null,
       rowCount: row.row_count ?? null,
       errorMessage: row.error_message ?? null,
+      errorCode: row.status === 'error' ? OUTPUT_ERROR_CODE.get(row.error_message) ?? null : null,
       expiresAt: row.expires_at ?? null,
       generatedAt: row.generated_at ?? null,
       createdAt: row.created_at,
@@ -58,12 +88,19 @@ class ReportService {
     return !!(await db('reports').where({ id: reportId, tenant_id: tenantId }).first('id'));
   }
 
+  /** The report of tenantId, or null. */
+  async getReport(reportId: number, tenantId: number): Promise<Report | null> {
+    const row = await db('reports').where({ id: reportId, tenant_id: tenantId }).first();
+    return row ? this.rowToReport(row) : null;
+  }
+
   async getReports(tenantId: number) {
     const rows = await db('reports').where({ tenant_id: tenantId }).orderBy('name');
     return rows.map(this.rowToReport.bind(this));
   }
 
-  async updateReport(reportId: number, tenantId: number, data: Partial<Report>) {
+  /** A change validated by reports/validate.ts (parseReportUpdate). */
+  async updateReport(reportId: number, tenantId: number, data: ReportUpdateInput) {
     const updates: Record<string, unknown> = { updated_at: new Date() };
     if (data.name !== undefined)        updates.name = data.name;
     if (data.description !== undefined) updates.description = data.description;
@@ -80,67 +117,98 @@ class ReportService {
     return row ? this.rowToReport(row) : null;
   }
 
-  async createReport(tenantId: number, data: Partial<Report> & { name: string; createdBy?: number }) {
+  /** A definition validated by reports/validate.ts (parseReportCreate). */
+  async createReport(tenantId: number, data: ReportCreateInput & { createdBy?: number }) {
     const [row] = await db('reports').insert({
-      tenant_id: tenantId, name: data.name, description: data.description,
+      tenant_id: tenantId, name: data.name, description: data.description ?? null,
       type: data.type || 'fleet', format: data.format || 'pdf',
-      scope_type: data.scopeType || 'tenant', scope_id: data.scopeId,
+      scope_type: data.scopeType || 'tenant', scope_id: data.scopeId ?? null,
       sections: JSON.stringify(data.sections || ['hardware','software']),
       filters: JSON.stringify(data.filters || {}),
-      schedule_cron: data.scheduleCron, timezone: data.timezone || 'UTC',
+      schedule_cron: data.scheduleCron ?? null, timezone: data.timezone || 'UTC',
       is_enabled: data.isEnabled !== false, created_by: data.createdBy,
     }).returning('*');
     return this.rowToReport(row);
   }
 
   /**
-   * Files a generation: the output row ('generating') and its durable job
-   * (reports.generate) in ONE transaction — the job exists if and only if
-   * the row does, and survives a restart. In the request's tenant context.
+   * Files a generation: the output row ('generating', its requester) and its
+   * durable job (reports.generate) in ONE transaction — the job exists if and
+   * only if the row does, and survives a restart. In the request's tenant
+   * context. The output will hold the devices `requestedBy` sees.
    */
-  async generateReport(reportId: number, tenantId: number): Promise<ReportOutput> {
-    const report = await db('reports').where({ id: reportId, tenant_id: tenantId }).first('id');
+  async generateReport(reportId: number, tenantId: number, requestedBy: number): Promise<ReportOutput> {
+    const report = await db('reports').where({ id: reportId, tenant_id: tenantId }).first('id', 'name');
     if (!report) throw new Error('Report not found');
     const job = reportJobs.generate;
     if (!job) throw new JobError('jobs_not_registered', 'report jobs not registered (registerReportsModule)', false);
 
     const output = await db.transaction(async (trx) => {
       const [row] = await trx('report_outputs').insert({
-        report_id: reportId, tenant_id: tenantId, status: 'generating',
+        report_id: reportId, tenant_id: tenantId, status: 'generating', requested_by: requestedBy,
       }).returning('*');
       await job.sendInTx(trx, { tenantId, reportId, outputId: Number(row.id) },
         { singletonKey: `output:${row.id}`, tenantId, priority: 10 });
       return row;
     });
-    return this.rowToOutput(output);
+    return this.rowToOutput(output, report.name);
+  }
+
+  /**
+   * The devices an output's requester sees, read when it is generated: every
+   * device for an active platform administrator, the devices of their teams
+   * for another user (permissionService.getVisibleDeviceIds). null: no
+   * requester, or a deleted or deactivated account — the output is not
+   * generated (fail closed). The account is read in the identity context (a
+   * platform administrator need not be a member of the tenant); the teams in
+   * the tenant's.
+   */
+  private async visibleDevicesOf(ctx: JobContext<unknown>, requestedBy: number | null): Promise<VisibleDevices | null> {
+    if (requestedBy === null || !Number.isSafeInteger(requestedBy) || requestedBy <= 0) return null;
+    const user = await asIdentity(ctx.dbActor, () => db('users').where({ id: requestedBy }).first('role', 'is_active')) as
+      { role: string; is_active: boolean } | undefined;
+    if (!user || !user.is_active) return null;
+    if (user.role === 'admin') return 'all';
+    return ctx.inTenant(() => permissionService.getVisibleDeviceIds(requestedBy, false));
   }
 
   /**
    * The job reports.generate: reloads the output and the report by (id,
    * tenant) — skipped when gone or no longer 'generating' (cancelled) —,
-   * produces the file (no transaction held: the renderer can take minutes),
-   * then marks the output 'ready' only if it is still 'generating' (a cancel
-   * in between wins: the file is removed). Its last failed attempt marks the
-   * output 'error' with a fixed message (never the exception's).
+   * reads the devices its requester sees (none: the output fails, never a
+   * wider read), produces the file (no transaction held: the renderer can
+   * take minutes), then marks the output 'ready' with its row count only if
+   * it is still 'generating' (a cancel in between wins: the file is removed).
+   * Its last failed attempt marks the output 'error' with a fixed message
+   * (never the exception's).
    */
   async runGeneration(ctx: JobContext<{ tenantId: number; reportId: number; outputId: number }>): Promise<JobResult> {
     const { tenantId, reportId, outputId } = ctx.payload;
     const { output, report } = await ctx.inTenant(async () => ({
-      output: await db('report_outputs').where({ id: outputId, tenant_id: tenantId }).first('id', 'report_id', 'status') as
-        { id: number; report_id: number; status: string } | undefined,
+      output: await db('report_outputs').where({ id: outputId, tenant_id: tenantId }).first('id', 'report_id', 'status', 'requested_by') as
+        { id: number; report_id: number; status: string; requested_by: number | null } | undefined,
       report: await db('reports').where({ id: reportId, tenant_id: tenantId }).first(),
     }));
     if (!output || !report || Number(output.report_id) !== reportId) return { output: { skipped: 'resource_gone' } };
     if (output.status !== 'generating') return { output: { skipped: 'not_generating' } };
 
-    let file: { filePath: string; size: number };
+    // The read of the visible devices fails like the rendering: its last attempt (or an error not worth a retry)
+    // marks the output 'error', never left 'generating' until the sweep.
+    let file: { filePath: string; size: number; rowCount: number };
     try {
-      file = await ctx.inTenant(() => this.produceFile(report, () => ctx.throwIfAborted()));
+      const visible = await this.visibleDevicesOf(ctx, output.requested_by != null ? Number(output.requested_by) : null);
+      if (visible === null) {
+        await ctx.inTenant(() => db('report_outputs')
+          .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
+          .update({ status: 'error', error_message: OUTPUT_ERRORS.requesterUnavailable }));
+        return { output: { skipped: 'no_requester' } };
+      }
+      file = await ctx.inTenant(() => this.produceFile(report, visible, () => ctx.throwIfAborted()));
     } catch (err) {
       if (ctx.isLastAttempt || !sanitizeError(err).retryable) {
         await ctx.inTenant(() => db('report_outputs')
           .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
-          .update({ status: 'error', error_message: 'Generation failed' }));
+          .update({ status: 'error', error_message: OUTPUT_ERRORS.generationFailed }));
       }
       throw err;
     }
@@ -150,6 +218,7 @@ class ReportService {
       .update({
         status: 'ready', file_path: file.filePath,
         file_size_bytes: file.size,
+        row_count: file.rowCount,
         generated_at: new Date(),
         expires_at: new Date(Date.now() + OUTPUT_TTL_MS),
       }));
@@ -162,12 +231,14 @@ class ReportService {
     return { output: { outputId, bytes: file.size } };
   }
 
-  /** Renders `report` into a new file of the reports folder; throws on any
-   *  failure. In the report's tenant context. */
-  private async produceFile(report: any, checkpoint: () => void): Promise<{ filePath: string; size: number }> {
+  /** Renders `report`, on the devices of `visible`, into a new file of the
+   *  reports folder; throws on any failure. Its row count is the number of
+   *  devices it lists. In the report's tenant context. */
+  private async produceFile(report: any, visible: VisibleDevices, checkpoint: () => void): Promise<{ filePath: string; size: number; rowCount: number }> {
     await fs.mkdir(this.outputDir, { recursive: true });
 
-    const data = await this.collectData(report);
+    const data = await this.collectData(report, visible);
+    const rowCount = Array.isArray(data.devices) ? data.devices.length : 0;
     checkpoint();
     const tenantRow = await db('tenants').where({ id: report.tenant_id }).first();
     const tenantName = tenantRow?.name || `Tenant #${report.tenant_id}`;
@@ -188,7 +259,7 @@ class ReportService {
 
     await fs.writeFile(filePath, content);
     const stat = await fs.stat(filePath);
-    return { filePath, size: stat.size };
+    return { filePath, size: stat.size, rowCount };
   }
 
   // Map the logical report format to the on-disk extension. Matters because
@@ -316,9 +387,10 @@ class ReportService {
    * The rows of a report (modele-donnees-mdm §11.1): the devices of the report's scope in its tenant, with
    * the columns of the MDM registry (platform, OS, model, ownership, states, last contact, end user, serial
    * number when the privacy rules of the device's ownership collect it); the hardware and network sections
-   * from the inventory the MDM keeps; the applications the rules collect. In the report's tenant context.
+   * from the inventory the MDM keeps; the applications the rules collect. Only the devices of `visible` (those the
+   * output's requester sees). In the report's tenant context.
    */
-  private async collectData(report: any) {
+  private async collectData(report: any, visible: VisibleDevices) {
     const sections: Record<string, any> = {};
     const sectionsList: ReportSection[] = report.sections || [];
     const tenantId = Number(report.tenant_id);
@@ -327,6 +399,10 @@ class ReportService {
       .leftJoin('end_users as u', function joinEndUser() { this.on('u.id', '=', 'd.end_user_id').andOn('u.tenant_id', '=', 'd.tenant_id'); })
       .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
       .where('d.tenant_id', tenantId);
+    if (visible !== 'all') {
+      if (visible.length === 0) q.whereRaw('false');
+      else q.whereRaw('d.id = ANY(?::integer[])', [pgIntArray(visible)]);
+    }
     if (report.scope_type === 'device' && report.scope_id) {
       q.where('d.id', report.scope_id);
     } else if (report.scope_type === 'group' && report.scope_id) {
@@ -426,8 +502,12 @@ class ReportService {
   // hardwareDetail arrays) becomes ONE quoted field — its
   // internal commas no longer split the row. (JSON.stringify alone left array/
   // object cells unquoted at the CSV level, corrupting column alignment.)
+  // A text that a spreadsheet would read as a formula (= + - @, a tab or a
+  // carriage return first: device, end-user or app names come from the
+  // devices) is prefixed with an apostrophe (OWASP, CSV injection); numbers
+  // stay numbers.
   private csvField(v: any): string {
-    return `"${this.cellValue(v).replace(/"/g, '""')}"`;
+    return `"${csvSafeText(v, this.cellValue(v)).replace(/"/g, '""')}"`;
   }
 
   private toCSV(data: Record<string, any>): string {
@@ -446,11 +526,37 @@ class ReportService {
   }
 
   async getOutputs(reportId: number, tenantId: number) {
+    const report = await db('reports').where({ id: reportId, tenant_id: tenantId }).first('name');
     const rows = await db('report_outputs')
       .where({ report_id: reportId, tenant_id: tenantId })
       .orderBy('created_at', 'desc')
       .limit(20);
-    return rows.map((r) => this.rowToOutput(r));
+    return rows.map((r) => this.rowToOutput(r, report?.name));
+  }
+
+  /**
+   * The file of a ready output of tenantId, and the name it downloads under.
+   * null: no such ready output, or its file is gone or outside the reports
+   * folder (never served).
+   */
+  async outputForDownload(outputId: number, tenantId: number):
+    Promise<{ reportId: number; filePath: string; fileName: string } | null> {
+    const row = await db('report_outputs as o')
+      .join('reports as r', function joinReport() { this.on('r.id', '=', 'o.report_id').andOn('r.tenant_id', '=', 'o.tenant_id'); })
+      .where({ 'o.id': outputId, 'o.tenant_id': tenantId })
+      .first('o.report_id', 'o.status', 'o.file_path', 'o.generated_at', 'r.name as report_name');
+    if (!row || row.status !== 'ready' || !row.file_path) return null;
+    const file = path.resolve(String(row.file_path));
+    if (!file.startsWith(path.resolve(this.outputDir) + path.sep)) {
+      logger.warn({ outputId, tenantId }, 'report output file outside the reports folder: not served');
+      return null;
+    }
+    try {
+      if (!(await fs.stat(file)).isFile()) return null;
+    } catch {
+      return null;
+    }
+    return { reportId: Number(row.report_id), filePath: file, fileName: outputFileName(row.report_name, row.generated_at, row.file_path)! };
   }
 
   // Manually cancel an output stuck in 'generating'. `report_status` has no
@@ -463,9 +569,11 @@ class ReportService {
   async cancelOutput(outputId: number, tenantId: number): Promise<ReportOutput | null> {
     const [row] = await db('report_outputs')
       .where({ id: outputId, tenant_id: tenantId, status: 'generating' })
-      .update({ status: 'error', error_message: 'Cancelled by user' })
+      .update({ status: 'error', error_message: OUTPUT_ERRORS.cancelled })
       .returning('*');
-    return row ? this.rowToOutput(row) : null;
+    if (!row) return null;
+    const report = await db('reports').where({ id: row.report_id, tenant_id: tenantId }).first('name');
+    return this.rowToOutput(row, report?.name);
   }
 
   // The job reports.sweep-stale (at start, then every 15 min), tenant by
@@ -480,7 +588,7 @@ class ReportService {
       .where({ tenant_id: tenantId })
       .where('status', 'generating')
       .where('created_at', '<', cutoff)
-      .update({ status: 'error', error_message: 'Generation interrupted (server restart or timeout)' });
+      .update({ status: 'error', error_message: OUTPUT_ERRORS.interrupted });
     if (n > 0) logger.info(`[reports] Swept ${n} stale 'generating' report output(s)`);
     return n;
   }
@@ -529,14 +637,38 @@ class ReportService {
     return removed;
   }
 
-  /** Deletes a report of tenantId and its output files; false when there is
-   *  no such report. */
-  async deleteReport(id: number, tenantId: number): Promise<boolean> {
-    const outputs = await db('report_outputs').where({ report_id: id, tenant_id: tenantId });
-    for (const o of outputs) {
-      if (o.file_path) fs.unlink(o.file_path).catch(() => {});
+  /**
+   * Deletes a report of tenantId, then its output files; false when there is
+   * no such report. The rows go first (the report and, by cascade, its
+   * outputs, in one transaction): a failure leaves the report whole, never
+   * rows naming removed files. The files go after, awaited, only inside the
+   * reports folder; a missing file is ignored, a file that cannot be removed
+   * is logged (never the path) and left.
+   */
+  async deleteReport(id: number, tenantId: number): Promise<{ deleted: boolean; outputs: number }> {
+    const { deleted, files } = await db.transaction(async (trx) => {
+      const rows = await trx('report_outputs').where({ report_id: id, tenant_id: tenantId }).select('id', 'file_path') as
+        Array<{ id: number; file_path: string | null }>;
+      const n = await trx('reports').where({ id, tenant_id: tenantId }).delete();
+      return { deleted: n > 0, files: n > 0 ? rows : [] };
+    });
+    if (!deleted) return { deleted: false, outputs: 0 };
+    const root = path.resolve(this.outputDir);
+    for (const o of files) {
+      if (!o.file_path) continue;
+      const file = path.resolve(String(o.file_path));
+      if (!file.startsWith(root + path.sep)) {
+        logger.warn({ outputId: o.id, tenantId }, 'report output file outside the reports folder: left in place');
+        continue;
+      }
+      try {
+        await fs.unlink(file);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException)?.code;
+        if (code !== 'ENOENT') logger.warn({ outputId: o.id, tenantId, code }, 'report output file not removed');
+      }
     }
-    return (await db('reports').where({ id, tenant_id: tenantId }).delete()) > 0;
+    return { deleted: true, outputs: files.length };
   }
 }
 

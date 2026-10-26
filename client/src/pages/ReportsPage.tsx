@@ -14,6 +14,8 @@ import { useConfirm } from '@/components/common/ConfirmDialog';
 import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 import { downloadUrl } from '@/utils/download';
 import { DeviceFilterSelect } from '@/components/devices/DeviceFilterSelect';
+import { useAuthStore } from '@/store/authStore';
+import { apiErrorMessage, trCode } from '@/utils/apiError';
 
 const REPORT_TYPE_LABELS: Record<ReportType, string> = {
  fleet: 'Fleet Overview',
@@ -40,13 +42,13 @@ const REPORT_TYPES: ReportType[] = ['fleet', 'software', 'custom'];
 const REPORT_FORMATS: ReportFormat[] = ['pdf', 'csv', 'excel', 'html', 'json'];
 const REPORT_SECTIONS: ReportSection[] = ['hardware', 'network', 'inventory_detail', 'software'];
 
-// Cron presets offered by the report schedule picker.
+// Cron presets offered by the report schedule picker (none under an hour: the
+// planning refuses them, P0-12 D1).
 const COMMON_CRONS = [
  { id: 'hourly', label: 'Every hour', value: '0 * * * *' },
  { id: 'daily2am', label: 'Every day at 2am', value: '0 2 * * *' },
  { id: 'monday9am', label: 'Every Monday at 9am', value: '0 9 * * 1' },
  { id: 'sundayMidnight', label: 'Every Sunday at midnight', value: '0 0 * * 0' },
- { id: 'every15min', label: 'Every 15 minutes', value: '*/15 * * * *' },
 ];
 
 interface ReportFormData {
@@ -110,10 +112,9 @@ function formatDate(val: string | null): string {
  return new Date(val).toLocaleString();
 }
 
-/** The server streams the file under its on-disk name (res.download). */
+/** The server streams the file under this name (`<report name>-<YYYY-MM-DD>.<ext>`). */
 function outputFilename(output: ReportOutput): string | undefined {
- const base = output.filePath?.split(/[\\/]/).pop();
- return base || undefined;
+ return output.fileName || undefined;
 }
 
 export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
@@ -131,6 +132,10 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  const { t } = useTranslation();
  const confirm = useConfirm();
  const coarse = useIsCoarsePointer();
+ // Writing (create, edit, delete, generate, cancel) needs the `reports`
+ // capability; `supervision:read` only reads, as the server checks it.
+ const { isAdmin, permissions } = useAuthStore();
+ const canWrite = isAdmin() || (permissions?.tenantCapabilities ?? []).includes('reports');
 
  // A type stored before the RMM types were removed (compliance, scripts,
  // updates) shows as its raw value.
@@ -152,12 +157,14 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  // Devices for the "Specific device" scope selector (approved only).
  useEffect(() => { listManagedDevices().then(setDevices).catch(() => setDevices([])); }, []);
 
- const loadOutputs = async (reportId: number) => {
+ // The outputs read now (null when they could not be read).
+ const loadOutputs = async (reportId: number): Promise<ReportOutput[] | null> => {
  try {
  const outputs = await reportApi.listOutputs(reportId);
  setOutputsByReport(prev => ({ ...prev, [reportId]: outputs }));
+ return outputs;
  } catch {
- // ignore
+ return null;
  }
  };
 
@@ -229,14 +236,13 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  timezone: form.timezone,
  isEnabled: form.isEnabled,
  filters: {},
- tenantId: 0,
  };
  let savedReport: Report | undefined;
  if (editingReport) {
  savedReport = await reportApi.update(editingReport.id, payload);
  toast.success(t('reports.updated', 'Report updated'));
  } else {
- savedReport = await reportApi.create(payload as any);
+ savedReport = await reportApi.create(payload);
  toast.success(t('reports.created', 'Report created'));
  }
  // Fire an immediate generation when the user chose 'now'. Errors here
@@ -250,8 +256,9 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  setShowForm(false);
  setEditingReport(null);
  await load();
- } catch {
- toast.error(t('reports.saveFailed', 'Failed to save report'));
+ } catch (err) {
+ // A refusal of the server (invalid cron, time zone, scope…) is told by its code.
+ toast.error(apiErrorMessage(err, t('reports.saveFailed') || 'Failed to save report'));
  } finally {
  setIsSaving(false);
  }
@@ -288,10 +295,24 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  // Authenticated same-origin route: the shared helper hands it to the
  // Android DownloadManager (with the session cookie) or uses an
  // <a download> in a browser — window.open was a no-op in the WebView.
+ // Neither path reads the HTTP answer: the outputs are read again first, so
+ // a file expired (purged) since the list was shown is told, never saved as
+ // an error body under the report's file name.
  const handleDownload = async (output: ReportOutput) => {
+ if (!output.downloadable) return;
+ const fresh = await loadOutputs(output.reportId);
+ if (fresh && !fresh.some((o) => o.id === output.id && o.downloadable)) {
+ toast.error(t('reports.outputUnavailable') || 'This file is no longer available. Generate the report again.');
+ return;
+ }
  const ok = await downloadUrl(reportApi.getDownloadUrl(output.id), outputFilename(output));
  if (!ok) toast.error(t('common.error') || 'Something went wrong');
  };
+
+ // A fixed failure of the server is translated by its code; any other message as the server wrote it.
+ const outputError = (output: ReportOutput): string => (output.errorCode
+ ? trCode(`reports.outputErrors.${output.errorCode}`, output.errorMessage ?? '')
+ : output.errorMessage ?? '');
 
  const handleCancel = async (reportId: number, outputId: number) => {
  try {
@@ -314,7 +335,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
 
  const filteredReports = filterType ? reports.filter(r => r.type === filterType) : reports;
 
- const newReportButton = (extra?: string) => (
+ const newReportButton = (extra?: string) => canWrite && (
  <button
  onClick={handleOpenCreate}
  className={cn('flex items-center gap-2 px-4 py-2 bg-accent text-white rounded-lg hover:bg-accent/80 text-sm transition-colors', extra)}
@@ -359,7 +380,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  )}
 
  {/* Report form */}
- {showForm && (
+ {showForm && canWrite && (
  <div className="bg-bg-secondary rounded-xl p-4 sm:p-6 space-y-5">
  <div className="flex flex-wrap items-center justify-between gap-2">
  <h2 className="text-lg font-semibold text-text-primary">{editingReport ? t('reports.editReport', 'Edit Report') : t('reports.newReport', 'New Report')}</h2>
@@ -385,6 +406,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  <label className="text-xs font-medium text-text-muted uppercase">{t('reports.nameLabel', 'Name')} *</label>
  <input
  value={form.name}
+ maxLength={300}
  onChange={(e) => setForm({ ...form, name: e.target.value })}
  className="w-full px-3 py-2 text-sm bg-bg-tertiary rounded-lg text-text-primary focus:outline-none focus:border-accent"
  />
@@ -523,6 +545,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  <label className="text-xs font-medium text-text-muted uppercase">{t('common.description', 'Description')}</label>
  <input
  value={form.description}
+ maxLength={2000}
  onChange={(e) => setForm({ ...form, description: e.target.value })}
  className="w-full px-3 py-2 text-sm bg-bg-tertiary rounded-lg text-text-primary focus:outline-none focus:border-accent"
  />
@@ -585,7 +608,9 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  <div className="p-6 sm:p-12 text-center text-text-muted bg-bg-secondary rounded-xl">
  <FileText className="w-10 h-10 mx-auto mb-3 opacity-50" />
  <p className="font-medium text-text-primary mb-1">{t('reports.empty', 'No reports yet')}</p>
- <p className="text-sm">{t('reports.emptyHint', 'Create reports to generate fleet insights and export data.')}</p>
+ <p className="text-sm">{canWrite
+ ? t('reports.emptyHint', 'Create reports to generate fleet insights and export data.')
+ : t('reports.emptyReadOnly', 'No report has been created for this tenant.')}</p>
  {newReportButton('mt-4 inline-flex')}
  </div>
  ) : (
@@ -623,7 +648,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  </p>
  </div>
  <div className="flex items-center gap-2 shrink-0 max-sm:w-full max-sm:justify-end">
- <button
+ {canWrite && <button
  onClick={() => handleGenerate(report)}
  disabled={generatingId === report.id}
  className="flex items-center gap-1.5 px-3 py-1.5 text-sm bg-accent/10 text-accent border border-accent/30 rounded-lg hover:bg-accent/20 disabled:opacity-50 transition-colors coarse:min-h-10 max-sm:mr-auto"
@@ -635,7 +660,7 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  <Play className="w-3.5 h-3.5" />
  )}
  {t('reports.generate', 'Generate')}
- </button>
+ </button>}
  <IconButton
  label={t('reports.viewOutputs', 'View outputs')}
  icon={expanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -643,18 +668,18 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  onClick={() => handleToggleExpand(report.id)}
  className="hover:bg-bg-tertiary"
  />
- <IconButton
+ {canWrite && <IconButton
  label={t('common.edit', 'Edit')}
  icon={<Edit className="w-4 h-4" />}
  onClick={() => handleOpenEdit(report)}
  className="hover:bg-bg-tertiary"
- />
- <IconButton
+ />}
+ {canWrite && <IconButton
  label={t('common.delete', 'Delete')}
  icon={<Trash2 className="w-4 h-4" />}
  variant="danger"
  onClick={() => handleDelete(report.id)}
- />
+ />}
  </div>
  </div>
 
@@ -662,7 +687,9 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  <div className=" bg-bg-tertiary/50">
  {outputs.length === 0 ? (
  <div className="px-4 py-6 text-center text-text-muted">
- <p className="text-sm">{t('reports.noOutputs', 'No outputs yet. Click Generate to create the first output.')}</p>
+ <p className="text-sm">{canWrite
+ ? t('reports.noOutputs', 'No outputs yet. Click Generate to create the first output.')
+ : t('reports.noOutputsReadOnly', 'No outputs yet.')}</p>
  </div>
  ) : (
  <div className="divide-y divide-border">
@@ -684,16 +711,17 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  {output.rowCount !== null && <span className="ml-1">· {t('reports.rows', { count: output.rowCount, defaultValue: '{{count}} rows' })}</span>}
  </span>
  <div className="flex justify-end gap-2 items-center min-w-0 max-md:w-full max-md:justify-start">
- {output.status === 'ready' && output.filePath && (
+ {output.status === 'ready' && output.downloadable && (
  <button
  onClick={() => handleDownload(output)}
+ title={output.fileName ?? undefined}
  className="flex items-center gap-1.5 px-2.5 py-1 text-xs bg-green-500/20 text-green-400 border border-green-500/30 rounded hover:bg-green-500/30 transition-colors coarse:min-h-10 max-md:flex-1 max-md:justify-center"
  >
  <Download className="w-3 h-3" />
  {t('common.download', 'Download')}
  </button>
  )}
- {output.status === 'generating' && (
+ {output.status === 'generating' && canWrite && (
  <button
  onClick={() => handleCancel(report.id, output.id)}
  title={t('reports.cancel') || 'Cancel generation'}
@@ -705,8 +733,8 @@ export function ReportsPage({ embedded }: { embedded?: boolean } = {}) {
  )}
  {output.status === 'error' && output.errorMessage && (
  // Full error text below md / on touch (it was only in title=).
- <span className="text-xs text-red-400 truncate max-w-xs max-md:max-w-none max-md:whitespace-normal max-md:break-words coarse:whitespace-normal coarse:break-words" title={output.errorMessage}>
- {output.errorMessage}
+ <span className="text-xs text-red-400 truncate max-w-xs max-md:max-w-none max-md:whitespace-normal max-md:break-words coarse:whitespace-normal coarse:break-words" title={outputError(output)}>
+ {outputError(output)}
  </span>
  )}
  </div>

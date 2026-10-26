@@ -101,8 +101,8 @@ export default function App() {
  <Route path="/admin/security" element={<SecurityPage />} />
  </Route>
 
- {/* Supervision — admin OR users with `supervision:read`. */}
- <Route element={<ProtectedRoute requiredCapabilities={['supervision:read']} />}>
+ {/* Supervision — admin OR users with `supervision:read` or `reports`. */}
+ <Route element={<ProtectedRoute requiredCapabilities={['supervision:read', 'reports']} />}>
  <Route path="/admin/supervision" element={<SupervisionPage />} />
  </Route>
 

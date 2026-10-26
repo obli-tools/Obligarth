@@ -8,3 +8,4 @@ export * from './audit';
 export * from './guard';
 export * from './mdm';
 export * from './android';
+export * from './ops';

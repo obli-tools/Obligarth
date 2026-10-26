@@ -1458,6 +1458,7 @@
     "editReport": "Modifier le rapport",
     "empty": "Aucun rapport pour le moment",
     "emptyHint": "Créez des rapports pour obtenir des indicateurs sur le parc et exporter des données.",
+    "emptyReadOnly": "Aucun rapport n'a été créé pour ce tenant.",
     "enabledForScheduled": "Activé (pour les exécutions planifiées)",
     "format": "Format",
     "generate": "Générer",
@@ -1472,6 +1473,14 @@
     "nameRequired": "Le nom du rapport est obligatoire",
     "newReport": "Nouveau rapport",
     "noOutputs": "Aucun fichier généré pour le moment. Cliquez sur Générer pour créer le premier.",
+    "noOutputsReadOnly": "Aucun fichier généré pour le moment.",
+    "outputErrors": {
+      "cancelled": "Annulée par un utilisateur",
+      "generationFailed": "La génération a échoué",
+      "interrupted": "Génération interrompue (redémarrage du serveur ou délai dépassé)",
+      "requesterUnavailable": "Le compte qui l'a demandée n'est plus disponible"
+    },
+    "outputUnavailable": "Ce fichier n'est plus disponible. Générez à nouveau le rapport.",
     "rows": "{{count}} lignes",
     "runNow": "Générer maintenant",
     "runRecurring": "Récurrent (cron)",
@@ -3973,7 +3982,11 @@
     "invalidSetting": "Réglage du profil invalide.",
     "tenantHasAndroidEnterprise": "Ce tenant a encore une entreprise Android : déliez-la d'abord.",
     "androidAppReadOnly": "Le nom, l'auteur et l'icône d'une app Android viennent de Google.",
-    "androidByodNoticeUnavailable": "La notice n'est pas disponible."
+    "androidByodNoticeUnavailable": "La notice n'est pas disponible.",
+    "invalidCron": "Planification invalide : cinq champs cron valides sont attendus (minute 0-59, heure 0-23, jour 1-31, mois 1-12, jour de la semaine 0-7).",
+    "invalidOptions": "Ces options ne s'appliquent pas à ce type de rapport.",
+    "invalidScope": "Le groupe ou l'appareil choisi n'est pas disponible.",
+    "invalidTimezone": "Fuseau horaire inconnu : choisissez un nom IANA comme Europe/Paris ou UTC."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
