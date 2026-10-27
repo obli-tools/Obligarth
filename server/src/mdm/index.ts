@@ -33,6 +33,7 @@ import deviceRoutes from './routes/devices.routes';
 import endUserRoutes from './routes/endUsers.routes';
 import policyRoutes from './routes/policies.routes';
 import appRoutes from './routes/apps.routes';
+import deviceViewRoutes from './routes/deviceViews.routes';
 import { onOperationFinal, onTokenSynced } from '../apple/integrations/vpp.service';
 import { onManagedAppsIngested } from './inventory/ingestors';
 import { appleArtifactProvider, registerAppLicenseGate } from './apple/artifacts';
@@ -161,9 +162,14 @@ export function registerMdmModule(): void {
     { name: 'app.created', criticality: 'standard', label: 'App added to the catalog' },
     { name: 'app.updated', criticality: 'standard', label: 'App of the catalog updated' },
     { name: 'app.archived', criticality: 'standard', label: 'App of the catalog archived' },
+    // Saved views of the device list (P0-5 T2, D6): the shared ones only, never a private view.
+    { name: 'device_view.shared_created', criticality: 'standard', label: 'Shared device view created' },
+    { name: 'device_view.shared_updated', criticality: 'standard', label: 'Shared device view changed' },
+    { name: 'device_view.shared_deleted', criticality: 'standard', label: 'Shared device view deleted' },
   ]);
   registerAuditResourceName('policy', 'policies');
   registerAuditResourceName('app', 'apps');
+  registerAuditResourceName('device_view', 'device_views');
 
   // ── Restrictions (§10.7, DM4): the ownership change, a second approver by default; never below a step-up.
   //    The publication of a policy or a change of assignments (§7.12, DM23): a step-up at least (its floor, no
@@ -190,6 +196,7 @@ export function registerMdmModule(): void {
 export function createMdmRouter(): Router {
   const router = Router();
   router.use('/end-users', endUserRoutes);
+  router.use('/device-views', deviceViewRoutes);
   router.use('/', policyRoutes);
   router.use('/', appRoutes);
   router.use('/', deviceRoutes);

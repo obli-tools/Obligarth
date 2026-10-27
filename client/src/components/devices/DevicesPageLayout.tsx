@@ -10,9 +10,14 @@ interface DevicesPageLayoutProps {
   initialFilters?: InitialDeviceFilters;
   initialGroupId?: number | null;
   onGroupChange?: (groupId: number | null) => void;
+  /** The saved view of the link (?view=<uuid>), and its changes: see DeviceTable. */
+  initialViewUuid?: string | null;
+  onViewChange?: (uuid: string | null) => void;
 }
 
-export function DevicesPageLayout({ initialFilters, initialGroupId = null, onGroupChange }: DevicesPageLayoutProps) {
+export function DevicesPageLayout({
+  initialFilters, initialGroupId = null, onGroupChange, initialViewUuid = null, onViewChange,
+}: DevicesPageLayoutProps) {
   const { t } = useTranslation();
   const [groupId, setGroupId] = useState<number | null>(initialGroupId);
   // Below lg (phones, tablets) the groups column would eat most of the
@@ -74,6 +79,8 @@ export function DevicesPageLayout({ initialFilters, initialGroupId = null, onGro
           groupId={groupId}
           onGroupChange={handleGroupChange}
           onOpenGroups={inlineGroups ? undefined : () => setGroupsOpen(true)}
+          initialViewUuid={initialViewUuid}
+          onViewChange={onViewChange}
         />
       </div>
       {!inlineGroups && (

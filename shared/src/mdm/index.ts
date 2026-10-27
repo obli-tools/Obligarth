@@ -24,3 +24,7 @@ export * from './integrations';
 export * from './apps';
 // Android bridge agent (agent-pont-android §4, §7): contract vocabulary and views of the console.
 export * from './legacyAgent';
+// Rule language of the inventory (P0-5 §2): dynamic groups, assignment filters, saved views.
+export * from './rules';
+// Saved views of the device list (P0-5 §4.1, §5).
+export * from './deviceViews';

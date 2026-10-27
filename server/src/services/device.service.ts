@@ -2,15 +2,15 @@ import type { Knex } from 'knex';
 import { Server as SocketIOServer } from 'socket.io';
 import { db } from '../db';
 import { logger } from '../utils/logger';
-import { AppError } from '../middleware/errorHandler';
 import { JobError, safeErr } from '../jobs/errors';
 import {
-  MDM_STALE_AFTER_DAYS_DEFAULT, SocketEvents, contactState, isMasterTenant, versionNum,
-  type AppleDeviceDetail, type CollectedField, type ComplianceReason, type ContactState, type DeviceDetail, type DeviceFacets,
+  MDM_STALE_AFTER_DAYS_DEFAULT, SocketEvents, contactState, isMasterTenant,
+  type AppleDeviceDetail, type ComplianceReason, type ContactState, type DeviceDetail, type DeviceFacets,
   type DeviceSummary, type MdmFleetPoint, type MdmFleetSummary, type NanoEnrollType, type Ownership,
 } from '@obligarth/shared';
-import { collectedFields, privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
-import { androidPrivacyRulesFor, legacyAgentPrivacyRulesFor } from '../privacy/profiles';
+import { privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
+import { recordPrivacy } from '../privacy/collected';
+import { applyDeviceListFilters, staleDaysSql, type DeviceListFilters } from './deviceListFilters';
 import { staleAfterDaysOf } from '../mdm/settings';
 import type { TenantView } from './deviceScope.service';
 
@@ -55,35 +55,8 @@ const asObject = (v: unknown): Record<string, unknown> => {
 /** A list of ids as one PostgreSQL array literal ('{1,2,3}'): a single binding whatever the number of ids. */
 const pgIntArray = (ids: readonly number[]): string => `{${ids.map(Number).filter((n) => Number.isSafeInteger(n)).join(',')}}`;
 
-/** Filters of GET /api/mdm/devices (§10.6). */
-export interface DeviceListFilters {
-  platform?: string[];
-  ownership?: string[];
-  enrollmentState?: string[];
-  contact?: ContactState[];
-  compliance?: string[];
-  config?: string[];
-  /** Devices whose OS version is below this one ('17.5'). */
-  osBelow?: string;
-  supervised?: boolean;
-  groupId?: number;
-  includeSubgroups?: boolean;
-  ungrouped?: boolean;
-  tags?: string[];
-  endUserId?: number;
-  /** Only the devices whose lost mode is not off (enabling, on, disabling). */
-  lostMode?: boolean;
-  /** Free text: label, names, serial number, model, end user. */
-  q?: string;
-  /** Global view only: a subset of tenants. */
-  tenantIds?: number[];
-  sortBy?: string;
-  sortOrder?: 'asc' | 'desc';
-  page?: number;
-  pageSize?: number;
-  /** Non-administrators: the devices their teams see (permissionService.getVisibleDeviceIds). */
-  visibleIds?: number[] | 'all';
-}
+/** Filters of GET /api/mdm/devices (§10.6): the registry of services/deviceListFilters.ts (P0-5 T2). */
+export type { DeviceListFilters };
 
 /** Columns of a summary row (devices, its group, tenant and end user, the satellite's type). */
 const SUMMARY_COLUMNS = [
@@ -129,47 +102,9 @@ const textOrNull = (v: unknown, max = 200): string | null => (typeof v === 'stri
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const later = (a: unknown, b: unknown): boolean => !!a && (!b || new Date(a as string).getTime() > new Date(b as string).getTime());
 
-/** The order of the fields in DeviceDetail.privacy (that of collectedFields). */
-const COLLECTED_ORDER: readonly CollectedField[] = ['serialNumber', 'hardwareIds', 'deviceName', 'phoneNumber', 'network', 'allApps', 'allCertificates'];
-const inOrder = (set: ReadonlySet<CollectedField>): CollectedField[] => COLLECTED_ORDER.filter((f) => set.has(f));
-
-/** What a channel never reads, whatever the tenant's profile: Android Enterprise neither the device name, the phone
- *  number (v1) nor the certificates (android/inventory/privacy.ts); the bridge agent neither the phone number nor the
- *  certificates (legacyAgent/inventory.ts). Apple reads every field its rules ask for. */
-const NOT_READ_BY_CHANNEL: Readonly<Record<string, readonly CollectedField[]>> = {
-  amapi: ['deviceName', 'phoneNumber', 'allCertificates'],
-  legacy_agent: ['phoneNumber', 'allCertificates'],
-};
-
-/**
- * DeviceDetail.privacy of a record, by its channel (what the notice and the record announce must be what is kept):
- *   - Apple: what the rules of its ownership collect (collectedFields of the resolved Apple rules);
- *   - Android Enterprise: the rules of the ingestion (androidPrivacyRulesFor): the serial number of a company device,
- *     the IMEI (hardware identifiers) and the network information where they allow them, the applications;
- *   - bridge agent (corporate only): the serial number always (PB13), the device name and the connection it reports,
- *     the IMEI and the full list of applications by the corporate profile (D14, legacyAgentPrivacyRulesFor).
- * notReadByChannel: NOT_READ_BY_CHANNEL, never in collected.
- */
-async function privacyOf(channel: string, tenantId: number, ownership: string | null, apple: PrivacyRules): Promise<DeviceDetail['privacy']> {
-  const notRead = NOT_READ_BY_CHANNEL[channel] ?? [];
-  const set = new Set<CollectedField>();
-  if (channel === 'amapi') {
-    const a = await androidPrivacyRulesFor(db, tenantId, ownership);
-    if (ownership === 'corporate' || ownership === 'corporate_personal') set.add('serialNumber');
-    if (a.imei) set.add('hardwareIds');
-    if (a.networkInfo) set.add('network');
-    if (a.installedApps === 'all') set.add('allApps');
-  } else if (channel === 'legacy_agent') {
-    const l = await legacyAgentPrivacyRulesFor(db, tenantId);
-    for (const f of ['serialNumber', 'deviceName', 'network'] as const) set.add(f);
-    if (l.imei) set.add('hardwareIds');
-    if (l.installedApps === 'all') set.add('allApps');
-  } else {
-    for (const f of collectedFields(apple)) set.add(f);
-  }
-  for (const f of notRead) set.delete(f);
-  return { collected: inOrder(set), notReadByChannel: inOrder(new Set(notRead)) };
-}
+/** DeviceDetail.privacy of a record, by its channel: privacy/collected.ts (shared with the rule language, P0-5). */
+const privacyOf = (channel: string, tenantId: number, ownership: string | null, apple: PrivacyRules): Promise<DeviceDetail['privacy']> =>
+  recordPrivacy(db, channel, tenantId, ownership, apple);
 
 /** Sortable columns: a whitelist, never the caller's text. */
 const SORT_COLUMNS: Record<string, string> = {
@@ -267,14 +202,11 @@ class DeviceService {
 
   /** SQL of a tenant's stale threshold in days (a CASE over the tenants of the query). */
   private staleDaysSql(thresholds: Map<number, number>): { sql: string; bindings: number[] } {
-    const pairs = [...thresholds.entries()].filter(([, d]) => d !== MDM_STALE_AFTER_DAYS_DEFAULT);
-    if (pairs.length === 0) return { sql: '?::int', bindings: [MDM_STALE_AFTER_DAYS_DEFAULT] };
-    return {
-      sql: `(CASE devices.tenant_id ${pairs.map(() => 'WHEN ?::int THEN ?::int').join(' ')} ELSE ?::int END)`,
-      bindings: [...pairs.flat(), MDM_STALE_AFTER_DAYS_DEFAULT],
-    };
+    return staleDaysSql(thresholds);
   }
 
+  /** The tenants of the list and the team scopes, then the filters of the registry (services/deviceListFilters.ts):
+   *  the scope always applies, whatever filter a lot registers. */
   private async applyFilters(q: Knex.QueryBuilder, tenantId: number, f: DeviceListFilters, view: TenantView | undefined,
     thresholds: Map<number, number>): Promise<void> {
     const scope = await this.listTenantIds(tenantId, view, f.tenantIds);
@@ -285,66 +217,7 @@ class DeviceService {
       // send as many bindings (65 535 at most in the protocol), and the statement would cost its own parsing.
       else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(f.visibleIds)]);
     }
-    const inList = (col: string, values: string[] | undefined) => {
-      if (Array.isArray(values) && values.length > 0) q.whereIn(col, values);
-    };
-    inList('devices.platform', f.platform);
-    inList('devices.ownership', f.ownership);
-    inList('devices.enrollment_state', f.enrollmentState);
-    inList('devices.compliance_state', f.compliance);
-    inList('devices.config_state', f.config);
-    if (typeof f.supervised === 'boolean') q.where('devices.supervised', f.supervised);
-    if (f.osBelow) {
-      const below = versionNum(f.osBelow);
-      if (below === null) throw new AppError(400, 'Invalid OS version', 'invalidRequest');
-      q.where('devices.os_version_num', '<', below);
-    }
-    if (f.ungrouped) {
-      q.whereNull('devices.group_id');
-    } else if (f.groupId) {
-      if (f.includeSubgroups) {
-        q.whereIn('devices.group_id', db('device_group_closure').where('ancestor_id', f.groupId).select('descendant_id'));
-      } else {
-        q.where('devices.group_id', f.groupId);
-      }
-    }
-    if (Array.isArray(f.tags) && f.tags.length > 0) {
-      // jsonb ?| text[]: the operator's '?' escaped for Knex.
-      q.whereRaw('devices.tags \\?| ?::text[]', [f.tags]);
-    }
-    if (f.endUserId) q.where('devices.end_user_id', f.endUserId);
-    if (f.lostMode === true) q.whereNot('devices.lost_mode_state', 'off');
-    if (Array.isArray(f.contact) && f.contact.length > 0) {
-      const days = this.staleDaysSql(thresholds);
-      q.where(function contact() {
-        for (const c of f.contact!) {
-          if (c === 'never') this.orWhereNull('devices.last_checkin_at');
-          else if (c === 'recent') this.orWhereRaw("devices.last_checkin_at >= now() - interval '24 hours'");
-          else if (c === 'quiet') {
-            this.orWhereRaw(`devices.last_checkin_at < now() - interval '24 hours'
-              AND devices.last_checkin_at >= now() - make_interval(days => ${days.sql})`, days.bindings);
-          } else if (c === 'stale') {
-            this.orWhereRaw(`devices.last_checkin_at < now() - make_interval(days => ${days.sql})`, days.bindings);
-          }
-        }
-      });
-    }
-    if (f.q && f.q.trim()) {
-      const pat = `%${f.q.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
-      q.where(function search() {
-        this.whereILike('devices.label', pat)
-          .orWhereILike('devices.display_name', pat)
-          .orWhereILike('devices.device_name', pat)
-          .orWhereILike('devices.serial_number', pat)
-          .orWhereILike('devices.model', pat)
-          .orWhereILike('devices.model_name', pat)
-          .orWhereILike('end_users.display_name', pat)
-          .orWhereILike('end_users.email', pat)
-          .orWhereILike('end_users.external_id', pat)
-          .orWhereRaw('devices.uuid::text ILIKE ?', [pat])
-          .orWhereRaw('devices.tags::text ILIKE ?', [pat]);
-      });
-    }
+    await applyDeviceListFilters(q, f, { tenantId, scope, thresholds, now: new Date() });
   }
 
   /** The inventory list (GET /api/mdm/devices), paginated. */
