@@ -14,9 +14,9 @@ function missingDatabaseUrl(): never {
 
 // Schema and roles (rls-tenant §3): every table of the server lives in the
 // schema `obligarth`, owned by `obligarth_owner`; the server runs as
-// `obligarth` (no superuser, no BYPASSRLS, owner of nothing) and never runs
-// a migration (R3): the server-migrate service does (src/db/migrate.ts),
-// with an administration DSN the server never sees.
+// `obligarth` (no superuser, no BYPASSRLS, owner of nothing). The
+// migrations (src/db/migrate.ts) run at start, before it, with the
+// administration DSN, which the server forgets once they are done.
 
 /** The migrations of this image, as Knex loads them. */
 export const MIGRATIONS: Knex.MigratorConfig = {
@@ -64,7 +64,7 @@ export const runtimeConfig: Knex.Config = {
 };
 
 /**
- * The migrations' pool (server-migrate, src/db/migrate.ts): the
+ * The migrations' pool (src/db/migrate.ts): the
  * administration DSN, one connection, every object created by the owner
  * role (SET ROLE obligarth_owner when the connection opens).
  */

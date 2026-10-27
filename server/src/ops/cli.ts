@@ -6,7 +6,7 @@
 //   restore-reconcile [--siem-heads <file.json>] [--full-vault]
 //       after a restore, the server in JOBS_MODE=paused (refused otherwise: exit 4, this command's JOBS_MODE and a
 //       server seen running its jobs against the database alike: jobs.heartbeat less than
-//       JOBS_HEALTH_MAX_HEARTBEAT_AGE_S old, what GET /health/jobs reads), once server-migrate has run: the
+//       JOBS_HEALTH_MAX_HEARTBEAT_AGE_S old, what GET /health/jobs reads), once the migrations have run: the
 //       recovery in one command (ops/restore.ts), each step with its JSON report, stopping at the first that fails:
 //       context probe, guard restore-reconcile (guarded actions paused, approval requests expired), audit
 //       restore-reconcile (--siem-heads: the last heads the SIEM received; a chain already resumed by this restore,

@@ -511,11 +511,11 @@ async function checkPgbossSchema(connectionString: string): Promise<void> {
              (SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'pgboss') AS owner`);
     const r = rows[0] as { me: string; superuser: boolean; owner: string | null };
     if (r.owner === null) {
-      throw new JobsStartError('schema pgboss missing: run server-migrate (its bootstrap creates it, owned by the runtime role)');
+      throw new JobsStartError('schema pgboss missing: the migrations create it (the server runs them at start with DATABASE_ADMIN_URL)');
     }
     if (r.owner !== r.me && !r.superuser) {
-      throw new JobsStartError(`schema pgboss is owned by ${r.owner}, not by the runtime role ${r.me}: run server-migrate, ` +
-        `which moves it (and every object in it) to the runtime role`);
+      throw new JobsStartError(`schema pgboss is owned by ${r.owner}, not by the runtime role ${r.me}: run the migrations (the server runs them at start with DATABASE_ADMIN_URL), ` +
+        `which move it (and every object in it) to the runtime role`);
     }
     const installed = await client.query(`SELECT to_regclass('pgboss.version') IS NOT NULL AS installed`);
     if (installed.rows[0]?.installed) {

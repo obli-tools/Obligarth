@@ -64,9 +64,7 @@ services:
           chown "$$owner" "$$dir"
           chmod 500 "$$dir"
         }
-        give server-migrate 0:0 rls_context_key db_backup_password
-        give server 0:0 rls_context_key server_kek apple_edge_api_token apple_edge_ddm_hmac
-        give apple-edge-migrate 65532:65532 apple_edge_db_password
+        give server 0:0 rls_context_key server_kek apple_edge_api_token apple_edge_ddm_hmac db_backup_password
         give apple-edge 65532:65532 apple_edge_db_password edge_kek apple_edge_api_token apple_edge_ddm_hmac
         # The backup services (root, without capabilities): the database's password; the secrets copied with each base
         # backup (never server_kek, edge_kek nor backup_passphrase); the key of the offsite copy.
@@ -84,11 +82,11 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: obligarth
-      # Administrator of the instance (rls-tenant §3.1), used by server-migrate
-      # only. The server connects as the runtime role obligarth, created by
-      # server-migrate: no superuser, owner of nothing, under row level
+      # Administrator of the instance (rls-tenant §3.1), used by the migrations
+      # only (the server's and apple-edge's, at start). The server works as the
+      # runtime role obligarth, created by its migrations: no superuser, owner of nothing, under row level
       # security. POSTGRES_* only act on a new volume: a volume created before
-      # (POSTGRES_USER=obligarth) is refused by server-migrate, recreate it
+      # (POSTGRES_USER=obligarth) is refused by the migrations, recreate it
       # (docker compose down -v) — no Obligarth database is kept from before.
       POSTGRES_USER: obligarth_admin
       POSTGRES_PASSWORD: ${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}
@@ -107,7 +105,7 @@ services:
     # the network backup only, BACKUP_NETWORK_SUBNET: never from the network
     # backend of apple-edge) to pg_hba.conf of the volume, in place of a former
     # line of its own, or, on a new volume, has the initialisation add it.
-    # Nothing else changes; the role has no password until server-migrate sets
+    # Nothing else changes; the role has no password until the migrations set
     # it (secret db_backup_password).
     entrypoint:
       - /bin/sh
@@ -182,8 +180,8 @@ services:
       - "max_slot_wal_keep_size=${BACKUP_MAX_SLOT_WAL_KEEP_SIZE:-20GB}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # Expose on LAN so you can run migrations from your PC / pgAdmin.
-    # Remove this if you don't need external access.
+    # No published port: the database is reachable from the stack's own
+    # networks only (the server and apple-edge migrate it at start).
     #ports:
     #  - "5432:5432"
     # default: the server and its migrations; backend: apple-edge; backup: the
@@ -199,70 +197,6 @@ services:
       retries: 10
       start_period: 60s
 
-  # One-shot: roles, schemas, then the migrations, with the administration
-  # account the server never sees (rls-tenant §3.3, R3). The server starts
-  # only once it has completed successfully; an upgrade runs it first (take a
-  # backup before: the migrations have no way back).
-  server-migrate:
-    image: meejay/obligarth-server:${OBLIGARTH_VERSION:-latest}
-    command: ["node", "dist/src/db/migrate.js"]
-    restart: "no"
-    depends_on:
-      secrets-init:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-    environment:
-      NODE_ENV: production
-      DATABASE_ADMIN_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
-      # Password given to the runtime role obligarth: the one of DATABASE_URL.
-      DB_APP_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
-      # Signed database context (rls-tenant §4.6, R12): the key the database
-      # checks the server's contexts with, registered by server-migrate.
-      RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
-      # Password given to the role of the backups obligarth_backup (profile backup).
-      DB_BACKUP_PASSWORD_FILE: /run/secrets/db_backup_password
-    volumes:
-      - ${SECRETS_DIR:-./secrets}/server-migrate:/run/secrets:ro
-    # The image's health check is the server's: nothing listens here.
-    healthcheck:
-      disable: true
-
-  # One-shot: the roles (apple_edge_owner, apple_edge_app, the reader of its
-  # outbox granted to the server's role obligarth), the schemas nanomdm,
-  # nanodep and apple_edge and their migrations, with the administration
-  # account. After server-migrate, which creates the role obligarth.
-  apple-edge-migrate:
-    image: meejay/obligarth-apple-edge:${OBLIGARTH_VERSION:-latest}
-    command: ["migrate", "up"]
-    restart: "no"
-    depends_on:
-      secrets-init:
-        condition: service_completed_successfully
-      postgres:
-        condition: service_healthy
-      server-migrate:
-        condition: service_completed_successfully
-    environment:
-      EDGE_ADMIN_DATABASE_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth?sslmode=disable
-      # Password given to the role apple_edge_app (the one apple-edge uses).
-      EDGE_APP_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
-      # The owner role of the brain: the runtime role reads the outbox through its guarded functions only.
-      EDGE_OUTBOX_READER_GRANTEE: obligarth_owner
-    volumes:
-      - ${SECRETS_DIR:-./secrets}/apple-edge-migrate:/run/secrets:ro
-    networks:
-      - backend
-    read_only: true
-    cap_drop:
-      - ALL
-    security_opt:
-      - "no-new-privileges:true"
-    # The image's health check is the service's: nothing listens here.
-    healthcheck:
-      disable: true
-    logging: *logging
-
   # Apple MDM engine (NanoMDM embedded, one CA and one push certificate per
   # tenant): the device listener (9000) behind the edge-proxy, the internal API
   # (9100) for the server only. Neither port is published. The image runs as
@@ -276,13 +210,20 @@ services:
     depends_on:
       secrets-init:
         condition: service_completed_successfully
-      apple-edge-migrate:
-        condition: service_completed_successfully
+      server:
+        condition: service_healthy
     environment:
       # Public URL of the device surface: final for every enrolled device — see .env.example
       MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
       EDGE_DATABASE_URL: postgres://apple_edge_app@postgres:5432/obligarth?sslmode=disable
       EDGE_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
+      # apple-edge migrates its schemas at start (nanomdm, nanodep, apple_edge
+      # and their roles), after the server, whose migrations create the role
+      # obligarth: the administration account, the password it gives
+      # apple_edge_app, the reader of its outbox.
+      EDGE_ADMIN_DATABASE_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth?sslmode=disable
+      EDGE_APP_DB_PASSWORD_FILE: /run/secrets/apple_edge_db_password
+      EDGE_OUTBOX_READER_GRANTEE: obligarth_owner
       # Key-encryption key of apple-edge (one per service: never server_kek).
       EDGE_KEK_FILE: /run/secrets/edge_kek
       # Bearer token of the internal API, shared with the server.
@@ -336,15 +277,23 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      server-migrate:
-        condition: service_completed_successfully
     environment:
       NODE_ENV: production
       PORT: 3001
-      # Runtime role (rls-tenant §3.1): no superuser, owner of nothing; the
-      # server never migrates (server-migrate does).
+      # Runtime role (rls-tenant §3.1): no superuser, owner of nothing.
       DATABASE_URL: postgres://obligarth:${DB_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
-      # Signed database context (R12), same key as server-migrate's.
+      # The server migrates the database at start, as the rest of the suite:
+      # roles, schemas, migrations with the administration account (the
+      # database is reachable from the stack's networks only), then it works
+      # as the runtime role above. Its password and the one of the backups'
+      # role (profile backup) are set by these migrations.
+      DATABASE_ADMIN_URL: postgres://obligarth_admin:${DB_ADMIN_PASSWORD:?set it in .env (install.sh generates one)}@postgres:5432/obligarth
+      DB_APP_PASSWORD: ${DB_PASSWORD:?set it in .env (install.sh generates one)}
+      DB_BACKUP_PASSWORD_FILE: /run/secrets/db_backup_password
+      # false: the migrations run by hand only — see .env.example
+      MIGRATE_ON_BOOT: ${MIGRATE_ON_BOOT:-true}
+      # Signed database context (R12): the key the database checks the
+      # server's contexts with, registered by the migrations.
       RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
       # Vault of secrets: the key-encryption key (KEK) is the Docker secret
       # server_kek, never an environment variable — see .env.example
@@ -543,8 +492,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      server-migrate:
-        condition: service_completed_successfully
+      server:
+        condition: service_healthy
     environment:
       PGHOST: postgres
       PGPORT: "5432"
@@ -669,8 +618,8 @@ services:
         condition: service_completed_successfully
       postgres:
         condition: service_healthy
-      server-migrate:
-        condition: service_completed_successfully
+      server:
+        condition: service_healthy
     environment:
       PGHOST: postgres
       PGPORT: "5432"

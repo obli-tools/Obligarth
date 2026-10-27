@@ -118,13 +118,13 @@ export const config = {
    *  The runtime role `obligarth`: no superuser, no BYPASSRLS, owner of
    *  nothing (db/bootGuard.ts refuses to start otherwise). */
   databaseUrl: process.env.DATABASE_URL || (explicitDevelopment ? DEV_DATABASE_URL : ''),
-  /** Administration DSN (obligarth_admin): read by server-migrate
-   *  (db/migrate.ts) only, and by the server itself with MIGRATE_ON_BOOT in
-   *  development. Never given to the `server` service in production. */
+  /** Administration DSN (obligarth_admin): the migrations only (db/migrate.ts),
+   *  run by the server at start; the server then works as the runtime role. */
   databaseAdminUrl: process.env.DATABASE_ADMIN_URL || '',
-  /** Development only (NODE_ENV=development and DATABASE_ADMIN_URL): the
-   *  server runs the migrations itself at start, as server-migrate would. */
-  migrateOnBoot: process.env.MIGRATE_ON_BOOT === 'true',
+  /** The server migrates its database at start, as the rest of the suite does:
+   *  whenever DATABASE_ADMIN_URL is set, unless MIGRATE_ON_BOOT=false (the
+   *  migrations then run by hand: node dist/src/db/migrate.js). */
+  migrateOnBoot: !!process.env.DATABASE_ADMIN_URL && process.env.MIGRATE_ON_BOOT !== 'false',
   /** 'strict' | 'audit' | 'invalid' (refused at start): see above. */
   dbContextMode: dbContextModeFromEnv(),
   dbContextAssert: dbContextAssertFromEnv(),
@@ -291,16 +291,12 @@ export function startupConfigErrors(): string[] {
   // profiles (CNF-02, P0-13 T1) and the generated notice (USR-01, P0-13 T5) are installed by registerPrivacyModule in
   // every process. APPLE_ALLOW_DEFAULT_NOTICE is still read (existing .env files) but has no effect since P0-13, and is
   // refused outside the stage lab (above); an incomplete notice is refused at the enrollment outside the stage lab (D7).
-  if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
-    errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
-      'outside development, the migrations run in the server-migrate service.');
+  const migrateOnBoot = process.env.MIGRATE_ON_BOOT;
+  if (migrateOnBoot !== undefined && migrateOnBoot !== '' && migrateOnBoot !== 'true' && migrateOnBoot !== 'false') {
+    errors.push(`MIGRATE_ON_BOOT must be true or false (empty: true), not "${migrateOnBoot}".`);
   }
   if (explicitDevelopment) return errors;
   if (!config.databaseUrl) errors.push(DATABASE_URL_MISSING);
-  if (config.databaseAdminUrl) {
-    errors.push('DATABASE_ADMIN_URL is set: the server never holds the administration credentials outside ' +
-      'development (only the server-migrate service does). Remove it from the server\'s environment.');
-  }
   const secretError = sessionSecretError();
   if (secretError) errors.push(secretError);
   if (config.defaultAdminPassword && isWeakAdminPassword(config.defaultAdminPassword)) {

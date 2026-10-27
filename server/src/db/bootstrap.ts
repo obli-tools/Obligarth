@@ -1,5 +1,5 @@
 // =============================================================================
-// Bootstrap of server-migrate (rls-tenant §3.3, annex A.1)
+// Bootstrap of the migrations (rls-tenant §3.3, annex A.1)
 // =============================================================================
 //
 // Run by src/db/migrate.ts with the administration DSN, BEFORE the Knex
@@ -60,7 +60,7 @@ END $$;
  * obligarth.ops_backup_reports, nothing else: no other attribute, no
  * membership, no privilege on any other table, sequence or function of the
  * brain, nor on the schemas obligarth_private, pgboss and apple_edge or their
- * objects (revoked at every run; server-migrate --check also reports any
+ * objects (revoked at every run; migrate --check also reports any
  * such grant, column and schema privileges included, and a membership of it
  * or in it). Run after BOOTSTRAP_SQL (the schema exists);
  * the grants on the table of the reports are given once its migration
@@ -68,7 +68,7 @@ END $$;
  * Its password is set separately (DB_BACKUP_PASSWORD_FILE), like the runtime
  * role's. An administrator that is not a superuser may be refused the
  * REPLICATION attribute (PostgreSQL 16: CREATEROLE grants it only to a holder
- * of it): server-migrate then warns, the database has no backup role and
+ * of it): the migrations then warn, the database has no backup role and
  * its own backups are the operator's.
  */
 export const BOOTSTRAP_BACKUP_ROLE_SQL = String.raw`
@@ -88,7 +88,7 @@ REVOKE ALL ON ALL FUNCTIONS IN SCHEMA obligarth FROM obligarth_backup;
 REVOKE CREATE ON SCHEMA obligarth FROM obligarth_backup;
 -- The other schemas of the database (the brain's private one, pg-boss, apple-edge's, when they exist): nothing,
 -- whatever was granted by hand. apple-edge's objects may belong to a role this administrator cannot speak for: a
--- refusal there is left to server-migrate --check, which reports any grant that stays.
+-- refusal there is left to migrate --check, which reports any grant that stays.
 DO $$
 DECLARE
   s text;
@@ -154,7 +154,7 @@ END $$;
  * PostgreSQL documents them) and those of all the data (every table of every
  * schema: obligarth_private, apple-edge's). The caller appends the membership
  * condition (pg_has_role … 'SET' or 'USAGE') and the ORDER BY. Checked by the
- * boot guard and by server-migrate --check, as rule 14 of
+ * boot guard and by migrate --check, as rule 14 of
  * obligarth.rls_audit() does from the RLS migration C on.
  */
 export const PRIVILEGED_ROLES_SQL = String.raw`
@@ -180,7 +180,7 @@ export const READER_REACHES_SQL = String.raw`EXISTS (SELECT 1 FROM pg_catalog.pg
  * migration C is not applied yet). Plain DML on the tables of the schema —
  * read only for the reader role, never on the Knex tracking tables, insert
  * only on the grants journal, never an update of the audit journal — and the
- * sequences of those tables. Applied by server-migrate after the migrations,
+ * sequences of those tables. Applied by the migrations after the migrations,
  * only while no table of the schema has the RLS enabled: from migration C
  * on, obligarth_private.rls_apply grants per class (and revokes these first).
  * Idempotent.
