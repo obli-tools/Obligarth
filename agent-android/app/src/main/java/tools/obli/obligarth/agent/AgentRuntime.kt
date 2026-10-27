@@ -7,7 +7,6 @@ import tools.obli.obligarth.agent.core.AgentEngine
 import tools.obli.obligarth.agent.core.AgentState
 import tools.obli.obligarth.agent.core.CycleReport
 import tools.obli.obligarth.agent.core.Phase
-import tools.obli.obligarth.agent.core.Sha256
 import tools.obli.obligarth.agent.core.TrustPolicy
 import tools.obli.obligarth.agent.core.UrlConnectionTransport
 import java.io.File
@@ -75,7 +74,8 @@ class AgentRuntime private constructor(context: Context) {
         if (state.phase == Phase.ENROLLED && state.keepAlive) KeepAliveService.start(app) else if (!state.keepAlive) KeepAliveService.stop(app)
         if (!knox.present || !facts.adminActive()) return
         val licence = state.serverKnoxLicenseKey ?: state.config?.knoxLicenseKey
-        if (licence != null && knox.activatedKeySha() != Sha256.hex(licence)) {
+        // A new key, or the current one refused (or never answered) a while ago and still not licensed.
+        if (licence != null && knox.activationDue(licence)) {
             if (knox.activateLicense(licence)) log.info("Knox licence activation requested")
         }
         if (knox.state() == "licensed" && knox.adminRemovable()) {

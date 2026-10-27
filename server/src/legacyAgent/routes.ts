@@ -470,9 +470,14 @@ router.post('/tokens', requireTenantCapability('mdm.enrollment.manage'), tokenLi
   const configJson = JSON.stringify(conf);
   const encoded = Buffer.from(configJson, 'utf8').toString('base64url');
   const pkg = LEGACY_AGENT_PACKAGE;
+  // The configuration rides on both lines: an app never launched is in the stopped state and may miss the
+  // broadcast, whereas the activity started by the second line always runs and imports it too
+  // (SetupActivity.importFromIntent). A second import of the same configuration is idempotent, and refused once
+  // enrolled. base64url ([A-Za-z0-9_-]) needs no escaping in an intent URI nor between the double quotes.
+  const extra = `S.config=${encoded}`;
   const script = [
-    `sendintent -b "intent:#Intent;action=${pkg}.action.CONFIGURE;package=${pkg};S.config=${encoded};end"`,
-    `sendintent -a "intent:#Intent;action=${pkg}.action.ACTIVATE_ADMIN;package=${pkg};end"`,
+    `sendintent -b "intent:#Intent;action=${pkg}.action.CONFIGURE;package=${pkg};${extra};end"`,
+    `sendintent -a "intent:#Intent;action=${pkg}.action.ACTIVATE_ADMIN;package=${pkg};${extra};end"`,
   ].join('\n');
   const out: LegacyAgentTokenCreated = { ...tokenView(row), token, config: encoded, configJson, script };
   res.setHeader('Cache-Control', 'no-store');

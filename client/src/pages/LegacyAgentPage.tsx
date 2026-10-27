@@ -303,7 +303,7 @@ function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
             {row('IMEI', d.imeis.join(', ') || '—')}
             {row(t('legacyAgent.detail.androidId') || 'Android ID', d.androidId ?? '—')}
             {row(t('legacyAgent.detail.keyStorage') || 'Key storage', d.keyStorage)}
-            {row(t('legacyAgent.cols.knox') || 'Knox', `${d.knoxState}${d.knoxInfo?.version ? ` (${String(d.knoxInfo.version)})` : ''}`)}
+            {row(t('legacyAgent.cols.knox') || 'Knox', `${t(`legacyAgent.knox.${d.knoxState}`) || d.knoxState}${d.knoxInfo?.version ? ` (${String(d.knoxInfo.version)})` : ''}`)}
             {row(t('legacyAgent.detail.clock') || 'Clock offset', d.clockOffsetSeconds === null ? '—' : `${d.clockOffsetSeconds} s`)}
             {row(t('legacyAgent.cols.lastPoll') || 'Last interrogation', fmt(d.lastPollAt))}
             {row(t('legacyAgent.detail.lastInventory') || 'Last inventory', fmt(d.lastInventoryAt))}

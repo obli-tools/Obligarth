@@ -19,7 +19,7 @@ export interface ComplianceReason {
   detail?: Record<string, string | number | boolean | null>;
 }
 
-/** What the privacy rules of the device's ownership collect (DeviceDetail.privacy.collected). */
+/** What the privacy rules of the device's ownership collect (DeviceDetail.privacy.collected, notReadByChannel). */
 export type CollectedField = 'serialNumber' | 'hardwareIds' | 'deviceName' | 'phoneNumber' | 'network'
   | 'allApps' | 'allCertificates';
 
@@ -94,7 +94,9 @@ export interface DeviceDetail extends DeviceSummary {
   /** Last known battery: Apple DeviceInformation (BatteryLevel) or the bridge agent's status; absent without one. */
   battery?: { level: number; charging: boolean | null; observedAt: string | null; source: 'apple' | 'agent' };
   apple?: AppleDeviceDetail;
-  privacy: { collected: CollectedField[] };
+  /** collected: what the device's channel keeps under the privacy rules of its ownership; notReadByChannel: what its
+   *  channel never reads, whatever the tenant's profile (not a rule of the ownership; never in collected). */
+  privacy: { collected: CollectedField[]; notReadByChannel: CollectedField[] };
 }
 
 /** One enrollment cycle of a device (device_enrollments). */

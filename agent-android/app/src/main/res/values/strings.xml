@@ -29,6 +29,10 @@
     <string name="label_agent">Agent</string>
     <string name="label_admin">Administration enabled</string>
     <string name="label_knox">Knox</string>
+    <string name="knox_state_absent">Absent</string>
+    <string name="knox_state_present">Present</string>
+    <string name="knox_state_licensed">Licensed</string>
+    <string name="knox_state_license_error">Licence error</string>
     <string name="label_phone">Phone identifiers</string>
     <string name="label_last_poll">Last contact</string>
     <string name="label_last_status">Last status</string>

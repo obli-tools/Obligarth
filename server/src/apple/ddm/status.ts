@@ -166,9 +166,8 @@ async function applyManagedApps(trx: Knex.Transaction, tenantId: number, deviceI
       name: trx.raw('COALESCE(excluded.name, device_apps.name)'),
       version: trx.raw('COALESCE(excluded.version, device_apps.version)'),
       short_version: trx.raw('COALESCE(excluded.short_version, device_apps.short_version)'),
-      version_changed_at: versionChangedMerge(trx, {
-        version: 'COALESCE(excluded.version, device_apps.version)', shortVersion: 'COALESCE(excluded.short_version, device_apps.short_version)',
-      }),
+      // The same COALESCE as version and short_version above (keepStored).
+      version_changed_at: versionChangedMerge(trx, true),
     });
   }
 }

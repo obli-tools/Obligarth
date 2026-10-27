@@ -1000,6 +1000,7 @@
     "ownership": "Propriété",
     "collected": "Collecté sur cet appareil",
     "collectedHint": "Ce qui est barré n'est jamais collecté pour cette propriété : la donnée est absente, pas vide.",
+    "collectedChannelHint": "Jamais lu par ce mode de gestion, quel que soit le profil de confidentialité : {{fields}}.",
     "endUser": "Utilisateur final",
     "model": "Modèle",
     "serial": "Numéro de série",
