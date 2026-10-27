@@ -4628,6 +4628,13 @@
       "configJson": "Fichier de configuration (obligarth-agent.json)",
       "token": "Jeton"
     },
+    "adminMode": {
+      "title": "Administrateur de l'appareil et verrouillage MobiControl",
+      "intro": "Le verrouillage (Lockdown) MobiControl empêche le bouton ACTIVER de l'écran Android d'activer l'administrateur : les scripts d'enrôlement et d'activation le suspendent d'abord par _adminmode on.",
+      "activateScript": "Script d'activation (appareil déjà enrôlé, administrateur inactif)",
+      "adminOffScript": "Script de retour (_adminmode off)",
+      "note": "Envoyez _adminmode off à part, une fois l'administration activée (l'onglet Appareils montre Admin actif pour chaque appareil). Jusque-là, le téléphone est en mode administrateur, hors verrouillage."
+    },
     "serverKey": {
       "title": "Clé de l'instance (à épingler dans l'APK)",
       "missing": "La clé de l'instance manque au coffre : restaurez la clé sous séquestre.",

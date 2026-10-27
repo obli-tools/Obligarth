@@ -4,7 +4,8 @@ import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_TOKEN_BOUNDS,
+  LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE,
+  LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
   type DeviceCapability, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
   type LegacyAgentTokenView,
@@ -469,17 +470,14 @@ router.post('/tokens', requireTenantCapability('mdm.enrollment.manage'), tokenLi
   const conf = { v: 1, server: config.apple.mdmPublicBase ?? '', token, serverKeySha256: key.sha256, knoxLicenseKey: null, hints: { deviceName: null, serial: null, imei: null } };
   const configJson = JSON.stringify(conf);
   const encoded = Buffer.from(configJson, 'utf8').toString('base64url');
-  const pkg = LEGACY_AGENT_PACKAGE;
-  // The configuration rides on both lines: an app never launched is in the stopped state and may miss the
-  // broadcast, whereas the activity started by the second line always runs and imports it too
-  // (SetupActivity.importFromIntent). A second import of the same configuration is idempotent, and refused once
-  // enrolled. base64url ([A-Za-z0-9_-]) needs no escaping in an intent URI nor between the double quotes.
-  const extra = `S.config=${encoded}`;
-  const script = [
-    `sendintent -b "intent:#Intent;action=${pkg}.action.CONFIGURE;package=${pkg};${extra};end"`,
-    `sendintent -a "intent:#Intent;action=${pkg}.action.ACTIVATE_ADMIN;package=${pkg};${extra};end"`,
-  ].join('\n');
-  const out: LegacyAgentTokenCreated = { ...tokenView(row), token, config: encoded, configJson, script };
+  // `_adminmode on` first (lot ADM): the Lockdown of MobiControl keeps the ACTIVATE button from activating the
+  // administrator. The configuration rides on both sendintent lines (legacyAgentEnrollmentScript). The activation
+  // script of a device already enrolled and the return line (`_adminmode off`, sent on its own once the
+  // administrator is active) hold no secret and come along.
+  const out: LegacyAgentTokenCreated = {
+    ...tokenView(row), token, config: encoded, configJson, script: legacyAgentEnrollmentScript(encoded),
+    activateScript: LEGACY_AGENT_ACTIVATE_SCRIPT, adminOffScript: LEGACY_AGENT_ADMIN_OFF_SCRIPT,
+  };
   res.setHeader('Cache-Control', 'no-store');
   res.status(201).json({ success: true, data: out });
 }));

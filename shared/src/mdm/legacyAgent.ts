@@ -57,6 +57,39 @@ export type LegacyAgentKeyStorage = typeof LEGACY_AGENT_KEY_STORAGES[number];
 /** Package name of the agent (§4.4): an app.install / app.uninstall of it is refused. */
 export const LEGACY_AGENT_PACKAGE = 'tools.obli.obligarth.agent';
 
+/** MobiControl lines of the device administrator (lot ADM, seen on a real device on 27/10): the Lockdown of
+ *  MobiControl keeps the ACTIVATE button of the Android screen from activating the administrator. `_adminmode on`
+ *  suspends the Lockdown (the phone is out of it until `_adminmode off`; the launcher of the client and the profile
+ *  stay intact), `_adminmode off` restores it and is sent on its own, once the console shows the administrator
+ *  active. */
+export const LEGACY_AGENT_MOBICONTROL_ADMIN_MODE_ON = '_adminmode on';
+export const LEGACY_AGENT_MOBICONTROL_ADMIN_MODE_OFF = '_adminmode off';
+
+/** The enrollment script of a token (§4.9): the Lockdown suspended, then the configuration on both lines. An app
+ *  never launched is in the stopped state and may miss the broadcast, whereas the activity started by the last line
+ *  always runs and imports it too (SetupActivity.importFromIntent). A second import of the same configuration is
+ *  idempotent, and refused once enrolled. base64url ([A-Za-z0-9_-]) needs no escaping in an intent URI nor between
+ *  the double quotes. */
+export function legacyAgentEnrollmentScript(encodedConfig: string): string {
+  const pkg = LEGACY_AGENT_PACKAGE;
+  const extra = `S.config=${encodedConfig}`;
+  return [
+    LEGACY_AGENT_MOBICONTROL_ADMIN_MODE_ON,
+    `sendintent -b "intent:#Intent;action=${pkg}.action.CONFIGURE;package=${pkg};${extra};end"`,
+    `sendintent -a "intent:#Intent;action=${pkg}.action.ACTIVATE_ADMIN;package=${pkg};${extra};end"`,
+  ].join('\n');
+}
+
+/** The activation script of a device already enrolled whose administrator is off: the Lockdown suspended, then the
+ *  agent's screen (its launcher activity), whose ACTIVATE button now works. No token, no configuration. */
+export const LEGACY_AGENT_ACTIVATE_SCRIPT = [
+  LEGACY_AGENT_MOBICONTROL_ADMIN_MODE_ON,
+  `sendintent -a "intent:#Intent;action=android.intent.action.MAIN;category=android.intent.category.LAUNCHER;component=${LEGACY_AGENT_PACKAGE}/.SetupActivity;end"`,
+].join('\n');
+
+/** The return script: the Lockdown restored, sent on its own once the administrator is active. */
+export const LEGACY_AGENT_ADMIN_OFF_SCRIPT = LEGACY_AGENT_MOBICONTROL_ADMIN_MODE_OFF;
+
 /** Prefix of an enrollment token: OLE1.<publicId 22>.<secret 43> (§4.4). */
 export const LEGACY_AGENT_TOKEN_RE = /^OLE1\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 
@@ -169,12 +202,16 @@ export interface LegacyAgentTokenView {
   state: 'active' | 'expired' | 'revoked' | 'used_up';
 }
 
-/** The creation answer: the token's value, the encoded configuration and the MobiControl script, shown once. */
+/** The creation answer: the token's value, the encoded configuration and the MobiControl script, shown once; with
+ *  the two scripts that hold no secret (lot ADM): the activation of a device already enrolled, and the return
+ *  (`_adminmode off`) sent on its own once the administrator is active. */
 export interface LegacyAgentTokenCreated extends LegacyAgentTokenView {
   token: string;
   config: string;
   configJson: string;
   script: string;
+  activateScript: string;
+  adminOffScript: string;
 }
 
 export interface LegacyAgentPackageView {

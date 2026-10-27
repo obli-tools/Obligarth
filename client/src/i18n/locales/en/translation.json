@@ -4628,6 +4628,13 @@
       "configJson": "Configuration file (obligarth-agent.json)",
       "token": "Token"
     },
+    "adminMode": {
+      "title": "Device administrator and MobiControl Lockdown",
+      "intro": "The MobiControl Lockdown keeps the ACTIVATE button of the Android screen from activating the administrator: the enrollment and activation scripts first suspend it with _adminmode on.",
+      "activateScript": "Activation script (device already enrolled, administrator off)",
+      "adminOffScript": "Return script (_adminmode off)",
+      "note": "Send _adminmode off on its own, once the administrator is active (the Devices tab shows Admin active for each device). Until then the phone is in administrator mode, out of the Lockdown."
+    },
     "serverKey": {
       "title": "Instance key (to pin in the APK)",
       "missing": "The instance key is missing from the vault: restore the escrowed key.",

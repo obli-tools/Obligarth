@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { Ban, Copy, Download, KeyRound, Lock, MessageSquare, Package, Plus, RefreshCw, RotateCw, Search, ShieldOff, Trash2, Upload, XCircle } from 'lucide-react';
 import {
-  isMasterTenant, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
+  isMasterTenant, LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
   type DeviceGroup, type LegacyAgentCommandView, type LegacyAgentConsoleType, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentInstanceSettings, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentServerKeyView,
   type LegacyAgentTokenCreated, type LegacyAgentTokenView,
@@ -23,7 +23,8 @@ import { apiErrorMessage } from '@/utils/apiError';
 
 // The Android bridge agent (agent-pont-android §7): the devices of the tenant (state of the agent, of the device
 // administrator and of Knox, last interrogation, identity conflicts; actions on a selection), the enrollment tokens
-// (the value, the encoded configuration and the MobiControl script shown once), the client APKs, the tenant's Knox
+// (the value, the encoded configuration and the MobiControl script shown once; the activation script of a device
+// already enrolled and the `_adminmode off` return line, lot ADM), the client APKs, the tenant's Knox
 // licence; for a platform administrator on the master tenant, the versions of the agent, the instance key (to
 // compile in SERVER_KEY_PINS, exported once for the escrow) and the instance settings (automatic update of the fleet
 // included; the version embedded in the server image is shown with its image, lot AGENT-RU). Lock and erase go
@@ -345,6 +346,30 @@ function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
 
 // ── Tokens ───────────────────────────────────────────────────────────────────
 
+/** A script or a value to copy into MobiControl. */
+function ScriptBlock({ title, value, rows }: { title: string; value: string; rows: number }) {
+  const { t } = useTranslation();
+  return (
+    <div>
+      <div className="flex items-center justify-between"><span className="font-semibold">{title}</span>
+        <Button variant="ghost" onClick={() => void copy(value, t('legacyAgent.copied') || 'Copied')}><Copy size={14} /></Button></div>
+      <textarea readOnly className={`${fieldCls} font-mono text-xs`} rows={rows} value={value} />
+    </div>
+  );
+}
+
+/** Lot ADM: the MobiControl Lockdown keeps the ACTIVATE button from working, `_adminmode on` suspends it and
+ *  `_adminmode off` goes on its own, once the Devices tab shows the administrator active. */
+function AdminModeNote() {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-1 text-xs text-text-muted">
+      <p>{t('legacyAgent.adminMode.intro') || 'The MobiControl Lockdown keeps the ACTIVATE button of the Android screen from activating the administrator: the enrollment and activation scripts first suspend it with _adminmode on.'}</p>
+      <p className="text-amber-600">{t('legacyAgent.adminMode.note') || 'Send _adminmode off on its own, once the administrator is active (the Devices tab shows Admin active for each device). Until then the phone is in administrator mode, out of the Lockdown.'}</p>
+    </div>
+  );
+}
+
 function TokensTab() {
   const { t } = useTranslation();
   const confirm = useConfirm();
@@ -403,6 +428,12 @@ function TokensTab() {
           ))}
         </tbody>
       </table>
+      <div className="space-y-2 rounded border border-border p-3 text-sm">
+        <h3 className="flex items-center gap-1 font-semibold"><ShieldOff size={14} /> {t('legacyAgent.adminMode.title') || 'Device administrator and MobiControl Lockdown'}</h3>
+        <AdminModeNote />
+        <ScriptBlock title={t('legacyAgent.adminMode.activateScript') || 'Activation script (device already enrolled, administrator off)'} value={LEGACY_AGENT_ACTIVATE_SCRIPT} rows={2} />
+        <ScriptBlock title={t('legacyAgent.adminMode.adminOffScript') || 'Return script (_adminmode off)'} value={LEGACY_AGENT_ADMIN_OFF_SCRIPT} rows={1} />
+      </div>
       <div className="rounded border border-border p-3 text-sm">
         <h3 className="mb-1 flex items-center gap-1 font-semibold"><KeyRound size={14} /> {t('legacyAgent.knox.title') || 'Knox licence'}</h3>
         <p className="text-xs text-text-muted">{knoxSet ? (t('legacyAgent.knox.set') || 'A licence key is set (sealed; never shown again).') : (t('legacyAgent.knox.unset') || 'No licence key: the agents work without Knox (no silent installation, no restart).')}</p>
@@ -416,18 +447,14 @@ function TokensTab() {
         <Modal open onClose={() => setCreated(null)} size="xl" title={t('legacyAgent.tokens.createdTitle') || 'Token created: copy it now'}>
           <div className="space-y-3 text-sm">
             <p className="text-amber-600">{t('legacyAgent.tokens.onceWarning') || 'The token, the configuration and the script are shown only once.'}</p>
+            <ScriptBlock title={t('legacyAgent.tokens.script') || 'MobiControl script (after installation)'} value={created.script} rows={3} />
+            <AdminModeNote />
+            <ScriptBlock title={t('legacyAgent.adminMode.adminOffScript') || 'Return script (_adminmode off)'} value={created.adminOffScript} rows={1} />
             {[
-              [t('legacyAgent.tokens.script') || 'MobiControl script (after installation)', created.script],
               [t('legacyAgent.tokens.config') || 'Encoded configuration (extra "config")', created.config],
               [t('legacyAgent.tokens.configJson') || 'Configuration file (obligarth-agent.json)', created.configJson],
               [t('legacyAgent.tokens.token') || 'Token', created.token],
-            ].map(([title, value]) => (
-              <div key={title}>
-                <div className="flex items-center justify-between"><span className="font-semibold">{title}</span>
-                  <Button variant="ghost" onClick={() => void copy(value, t('legacyAgent.copied') || 'Copied')}><Copy size={14} /></Button></div>
-                <textarea readOnly className={`${fieldCls} font-mono text-xs`} rows={title === created.token ? 1 : 3} value={value} />
-              </div>
-            ))}
+            ].map(([title, value]) => <ScriptBlock key={title} title={title} value={value} rows={value === created.token ? 1 : 3} />)}
           </div>
         </Modal>
       )}
