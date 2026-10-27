@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.os.SystemClock
 import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
@@ -33,7 +32,6 @@ import java.util.Date
  */
 class SetupActivity : Activity() {
     private lateinit var statusView: TextView
-    private var adminRequestedAt = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -133,39 +131,21 @@ class SetupActivity : Activity() {
             Toast.makeText(this, R.string.admin_already_active, Toast.LENGTH_SHORT).show()
             return
         }
-        // For a result, as documented: some Samsung builds close the screen at once when
-        // started without a caller, whereas the same screen opened from Settings works.
-        adminRequestedAt = SystemClock.elapsedRealtime()
-        try {
-            startActivityForResult(
-                Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-                    .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, rt.facts.adminComponent())
-                    .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, getString(R.string.admin_explanation)),
-                REQUEST_ADMIN,
-            )
-        } catch (e: Exception) {
-            rt.log.warn("administrator screen: ${e.javaClass.simpleName}: ${e.message}")
-            openAdminSettings()
-        }
+        openAdminSettings()
     }
 
-    @Suppress("OVERRIDE_DEPRECATION", "DEPRECATION")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_ADMIN) return
-        val rt = AgentRuntime.get(this)
-        if (rt.facts.adminActive()) return
-        val shownFor = SystemClock.elapsedRealtime() - adminRequestedAt
-        rt.log.info("administrator screen closed without activation after $shownFor ms (result $resultCode)")
-        // Closed before anyone could read it: the system refused to show it, fall back to the
-        // list of administrators in Settings (one more tap, but it opens on these devices).
-        if (shownFor < ADMIN_SCREEN_REFUSED_MS) openAdminSettings()
-    }
-
+    /**
+     * The list of administrators of the Settings first: the screen that opens under the
+     * MobiControl lockdown, where the direct activation screen (ACTION_ADD_DEVICE_ADMIN)
+     * is closed at once. One more tap ("Obligarth Agent", then ACTIVATE), but it opens.
+     */
     private fun openAdminSettings() {
         val rt = AgentRuntime.get(this)
         val candidates = listOf(
             Intent().setComponent(ComponentName("com.android.settings", "com.android.settings.DeviceAdminSettings")),
+            Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, rt.facts.adminComponent())
+                .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, getString(R.string.admin_explanation)),
             Intent(Settings.ACTION_SECURITY_SETTINGS),
         )
         for (i in candidates) {
@@ -226,8 +206,6 @@ class SetupActivity : Activity() {
 
     companion object {
         const val ACTION_ACTIVATE_ADMIN = "tools.obli.obligarth.agent.action.ACTIVATE_ADMIN"
-        private const val REQUEST_ADMIN = 2
-        private const val ADMIN_SCREEN_REFUSED_MS = 1_500L
     }
 }
 
