@@ -620,7 +620,7 @@ const KIND_FALLBACK: Record<string, string> = {
   apns_certificate: 'Push certificate', ade_token: 'ADE server token', vpp_token: 'Content token', device_ca: 'Device CA',
   mdm_tls_certificate: 'TLS certificate', vendor_certificate: 'MDM Vendor certificate', mdm_domain: 'Domain name',
   profile_signing_identity: 'Profile signing identity', vault_escrow_test: 'Escrow test', vault_kek_rotation: 'Key rotation',
-  vault_old_shares: 'Old escrow shares', vault_dek_destruction: 'Data key destruction',
+  vault_old_shares: 'Old escrow shares', vault_dek_destruction: 'Data key destruction', backup_restore_drill: 'Restore drill',
 };
 
 function DeadlinesCard({ state }: { state: IntegrationCardState }) {

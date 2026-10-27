@@ -12,6 +12,8 @@ const THRESHOLDS: Record<string, readonly number[]> = {
   vault_kek_rotation: [60, 30],
   vault_old_shares: [7, 0],
   vault_dek_destruction: [7, 1],
+  /** Half-yearly restore drill of the backups (P0-13 T9, FND-09): J-30, 14, 7, then due. */
+  backup_restore_drill: [30, 14, 7, 0],
 };
 /** Days added to a KEK rotation before the old escrow shares are due for destruction: the backups' retention
  *  [proposal: 30 days, FND-09 has not fixed it] and 7 days (coffre-secrets §11.5). */

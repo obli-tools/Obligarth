@@ -29,7 +29,7 @@ export const scopeLabel = (key: PrivacyRuleKey, s: PrivacyCollectionScope): stri
 
 /** Under a tab the reader cannot change: the capability needed, by its translated name (as the roles screen shows it). */
 export const readOnlyNotice = (t: TFunction): string => {
-  const capability = t('capabilities.tenant.mdm_privacy_manage') || 'Privacy · Profiles, notice and retention';
+  const capability = t('permissionSets.capabilities.mdm_privacy_manage') || 'Privacy · Profiles, notice and retention';
   return t('privacy.readOnly', { capability }) || `You can read these settings; changing them needs the capability "${capability}".`;
 };
 

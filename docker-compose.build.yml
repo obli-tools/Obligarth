@@ -41,7 +41,17 @@ services:
           { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32; echo; } > apple_edge_db_password
           created="$$created apple_edge_db_password"
         fi
-        chmod 600 rls_context_key server_kek edge_kek apple_edge_ddm_hmac apple_edge_api_token apple_edge_db_password
+        # Backups (profile backup): the password of the role obligarth_backup, and the key of the encrypted offsite
+        # copy (restic), distinct from the KEKs: escrow it with them.
+        if [ ! -s db_backup_password ]; then
+          { tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32; echo; } > db_backup_password
+          created="$$created db_backup_password"
+        fi
+        if [ ! -s backup_passphrase ]; then
+          { head -c 32 /dev/urandom | base64 | tr -d '\n'; echo; } > backup_passphrase
+          created="$$created backup_passphrase"
+        fi
+        chmod 600 rls_context_key server_kek edge_kek apple_edge_ddm_hmac apple_edge_api_token apple_edge_db_password db_backup_password backup_passphrase
         give() {
           dir="$$1"; owner="$$2"; shift 2
           mkdir -p "$$dir"
@@ -54,13 +64,19 @@ services:
           chown "$$owner" "$$dir"
           chmod 500 "$$dir"
         }
-        give server-migrate 0:0 rls_context_key
+        give server-migrate 0:0 rls_context_key db_backup_password
         give server 0:0 rls_context_key server_kek apple_edge_api_token apple_edge_ddm_hmac
         give apple-edge-migrate 65532:65532 apple_edge_db_password
         give apple-edge 65532:65532 apple_edge_db_password edge_kek apple_edge_api_token apple_edge_ddm_hmac
+        # The backup services (root, without capabilities): the database's password; the secrets copied with each base
+        # backup (never server_kek, edge_kek nor backup_passphrase); the key of the offsite copy.
+        give backup 0:0 db_backup_password
+        give backup-files 0:0 rls_context_key apple_edge_api_token apple_edge_ddm_hmac apple_edge_db_password db_backup_password
+        give backup-offsite 0:0 backup_passphrase
         if [ -n "$$created" ]; then
           echo "secrets-init: created$$created in the secrets directory (SECRETS_DIR, default ./secrets)."
           echo "secrets-init: escrow server_kek and edge_kek now: without them, no backup of the database can be restored."
+          echo "secrets-init: escrow backup_passphrase too: without it, the offsite copy of the backups cannot be read."
         fi
 
   postgres:
@@ -81,6 +97,35 @@ services:
     # shared_buffers≈25% / effective_cache_size≈75% of host RAM. Keep
     # max_connections above the server (knexfile.ts pool.max + sessions +
     # pg-boss), apple-edge (EDGE_DB_MAX_CONNS + 8 per replica) and headroom.
+    # Backups (profile backup, P0-13 T9): the image admits replication
+    # connections from its own loopback only. Before the image's entrypoint,
+    # this adds the line that admits the role obligarth_backup (password, from
+    # the network backup only, BACKUP_NETWORK_SUBNET: never from the network
+    # backend of apple-edge) to pg_hba.conf of the volume, in place of a former
+    # line of its own, or, on a new volume, has the initialisation add it.
+    # Nothing else changes; the role has no password until server-migrate sets
+    # it (secret db_backup_password).
+    entrypoint:
+      - /bin/sh
+      - -ec
+      - |
+        mark='# Obligarth backups: replication by the role obligarth_backup only'
+        line='host replication obligarth_backup ${BACKUP_NETWORK_SUBNET:-10.249.249.0/28} scram-sha-256'
+        hba="$${PGDATA:-/var/lib/postgresql/data}/pg_hba.conf"
+        if [ -s "$$hba" ]; then
+          if ! grep -qxF "$$line" "$$hba"; then
+            owner="$$(stat -c %u:%g "$$hba")"; mode="$$(stat -c %a "$$hba")"
+            grep -vxF "$$mark" "$$hba" | grep -v '^host replication obligarth_backup ' > "$$hba.obligarth" || true
+            printf '\n%s\n%s\n' "$$mark" "$$line" >> "$$hba.obligarth"
+            chown "$$owner" "$$hba.obligarth"; chmod "$$mode" "$$hba.obligarth"
+            mv -f "$$hba.obligarth" "$$hba"
+          fi
+        else
+          printf 'printf "\\n%%s\\n%%s\\n" "%s" "%s" >> "$$PGDATA/pg_hba.conf"\n' "$$mark" "$$line" \
+            > /docker-entrypoint-initdb.d/00-obligarth-backup-hba.sh
+        fi
+        exec docker-entrypoint.sh "$$@"
+      - docker-entrypoint.sh
     command:
       - "postgres"
       - "-c"
@@ -111,12 +156,29 @@ services:
       - "autovacuum_naptime=15s"
       - "-c"
       - "autovacuum_max_workers=4"
+      # Continuous backup (profile backup, P0-13 T9): pg_receivewal streams the
+      # WAL through the replication slot obligarth_backup. The values of the
+      # first three are PostgreSQL's defaults, written down because the backups
+      # rely on them; max_slot_wal_keep_size caps the WAL a slot nobody
+      # consumes keeps on the disk of the database (the slot is then lost,
+      # ops.wal_stale is already raised; backup-wal creates the slot again and
+      # has backup-base take a new base backup at once).
+      - "-c"
+      - "wal_level=replica"
+      - "-c"
+      - "max_wal_senders=10"
+      - "-c"
+      - "max_replication_slots=10"
+      - "-c"
+      - "max_slot_wal_keep_size=${BACKUP_MAX_SLOT_WAL_KEEP_SIZE:-20GB}"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    # default: the server and its migrations; backend: apple-edge.
+    # default: the server and its migrations; backend: apple-edge; backup: the
+    # backup services (the only network replication is admitted from).
     networks:
       - default
       - backend
+      - backup
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U obligarth_admin -d obligarth"]
       interval: 5s
@@ -147,6 +209,8 @@ services:
       # Signed database context (rls-tenant §4.6, R12): the key the database
       # checks the server's contexts with, registered by server-migrate.
       RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
+      # Password given to the role of the backups obligarth_backup (profile backup).
+      DB_BACKUP_PASSWORD_FILE: /run/secrets/db_backup_password
     volumes:
       - ${SECRETS_DIR:-./secrets}/server-migrate:/run/secrets:ro
     # The image's health check is the server's: nothing listens here.
@@ -290,6 +354,14 @@ services:
       # secrets/server — see .env.example
       METRICS_PORT: ${METRICS_PORT:-9464}
       METRICS_TOKEN_FILE: ${METRICS_TOKEN_FILE:-}
+      # Stage of the instance: lab (default) | pilot | production; outside lab the
+      # server refuses to start without the backups (BACKUP_EXPECTED=true) and, with
+      # APPLE_EDGE_MODE=on, the signed profiles — see .env.example
+      OBLIGARTH_STAGE: ${OBLIGARTH_STAGE:-lab}
+      # Backups (profile backup): true once they run, then watched (/health/ready,
+      # alerts); their rotation, told to the employees by the notice — see .env.example
+      BACKUP_EXPECTED: ${BACKUP_EXPECTED:-false}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
       # Hardened audit journal: hourly seal, optional RFC 3161 time stamping,
       # SIEM exporter, clock check; spool in /custom/audit-spool — see .env.example
       AUDIT_SEAL_CRON: "${AUDIT_SEAL_CRON:-12 * * * *}"
@@ -310,8 +382,8 @@ services:
       APPLE_EDGE_DDM_HMAC_KEY_FILE: /run/secrets/apple_edge_ddm_hmac
       MDM_PUBLIC_BASE: ${MDM_PUBLIC_BASE:?set it in .env to the public URL of the devices, https://mdm.<domain> (install.sh writes it)}
       OUTBOX_CONSUMER: ${OUTBOX_CONSUMER:-off}
-      # Enrollment: the default employee notice and privacy rules (laboratory, until
-      # USR-01 and CNF-02), unsigned enrollment profiles until the pilot — see .env.example
+      # Enrollment: APPLE_ALLOW_DEFAULT_NOTICE without effect since the generated notice
+      # (refused outside lab), unsigned enrollment profiles until the pilot — see .env.example
       APPLE_ALLOW_DEFAULT_NOTICE: ${APPLE_ALLOW_DEFAULT_NOTICE:-false}
       APPLE_REQUIRE_SIGNED_PROFILES: ${APPLE_REQUIRE_SIGNED_PROFILES:-false}
       APPLE_MDM_VENDOR_CERT_SHA256: ${APPLE_MDM_VENDOR_CERT_SHA256:-}
@@ -419,18 +491,854 @@ services:
     ports:
       - "${LISTEN_PORT:-3005}:80"
 
+  # ── Backups (profile backup, off by default; P0-13 T9, FND-09) ─────────────
+  # docker compose --profile backup up -d, then BACKUP_EXPECTED=true in .env
+  # (the server then watches them). Official images only, the scripts written
+  # here. Each service reports to the table ops_backup_reports of the database
+  # (role obligarth_backup, insert only): codes and counts, never a secret.
+  # Restore: procedure of the owners (P0-13 T10, profile restore-drill).
+
+  # The WAL, continuously (RPO 15 minutes; seconds while the host is up):
+  # pg_receivewal through the replication slot obligarth_backup, to the volume
+  # backup_wal (gzip); a report every 5 minutes (the slot active, the WAL
+  # behind it, the local WAL kept, the free space), and the reports
+  # backup-offsite and the drill leave in the volume backup_reports (theirs
+  # only: offsite and prune, a drill that failed; anything else is removed).
+  # A slot lost (beyond BACKUP_MAX_SLOT_WAL_KEEP_SIZE, or dropped) is created
+  # again: the WAL kept before it is moved aside (gap-<time>, restorable up to
+  # the gap from the base backups taken before it), a report wal slot_lost,
+  # and a base backup asked of backup-base at once.
+  backup-wal:
+    image: postgres:16.10-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: obligarth_backup
+      PGDATABASE: obligarth
+      PGAPPNAME: obligarth-backup-wal
+      PGCONNECT_TIMEOUT: "10"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        printf '%s:%s:*:%s:%s\n' "$$PGHOST" "$$PGPORT" "$$PGUSER" "$$(cat /run/secrets/db_backup_password)" > /tmp/pgpass
+        export PGPASSFILE=/tmp/pgpass
+        report() {
+          printf '%s\n' "INSERT INTO obligarth.ops_backup_reports (kind, started_at, finished_at, ok, bytes, disk_free_bytes, detail) VALUES (:'kind', to_timestamp(:'started'::double precision), to_timestamp(:'finished'::double precision), :'ok'::boolean, NULLIF(:'bytes', '')::bigint, NULLIF(:'free', '')::bigint, :'detail'::jsonb);" |
+            psql -X -q -v ON_ERROR_STOP=1 -v kind="$$1" -v started="$$2" -v finished="$$3" -v ok="$$4" -v bytes="$$5" -v free="$$6" -v detail="$$7" > /dev/null
+        }
+        # The slot lost ($$1: slot_lost, slot_missing, wal_removed): the WAL here stops where it was lost, and
+        # pg_receivewal would resume from it, before what the database still keeps. The segments are moved aside
+        # (gap-<time>: restorable up to the gap with the base backups taken before it; backup-base removes them with
+        # those), the slot is created again from now on, and a base backup is asked of backup-base at once
+        # (.base-requested): nothing after the gap can be restored before it is done.
+        recover_slot() {
+          started="$$(date -u +%s)"; stamp="$$(date -u +%Y%m%dT%H%M%SZ)"; moved=0; created=true
+          pg_receivewal --drop-slot --slot=obligarth_backup 2> /dev/null || true
+          for f in /backup/wal/*; do
+            case "$${f##*/}" in
+              [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]*)
+                mkdir -p "/backup/wal/gap-$$stamp" && mv -f "$$f" "/backup/wal/gap-$$stamp/" && moved=$$((moved + 1)) ;;
+            esac
+          done
+          pg_receivewal --create-slot --if-not-exists --slot=obligarth_backup || created=false
+          : > /backup/wal/.base-requested
+          report wal "$$started" "$$(date -u +%s)" f "" "" \
+            "{\"code\":\"$$1\",\"gap\":\"gap-$$stamp\",\"files_moved\":$$moved,\"slot_created\":$$created,\"base_requested\":true}" \
+            || echo "backup-wal: report not written"
+          echo "backup-wal: replication slot $$1: created again, the WAL before it moved to gap-$$stamp, a base backup asked of backup-base"
+        }
+        until pg_receivewal --slot=obligarth_backup --create-slot --if-not-exists; do
+          echo "backup-wal: the database refuses the role obligarth_backup or is not ready; again in 30 s"
+          sleep 30
+        done
+        (
+          while :; do
+            state="$$(psql -X -A -t -c "SELECT wal_status FROM pg_replication_slots WHERE slot_name = 'obligarth_backup'" 2> /dev/null || echo unreadable)"
+            case "$$state" in
+              lost) recover_slot slot_lost ;;
+              '') recover_slot slot_missing ;;
+            esac
+            pg_receivewal -D /backup/wal --slot=obligarth_backup --compress=gzip --status-interval=10 2> /tmp/receivewal.err || true
+            cat /tmp/receivewal.err >&2 || true
+            if grep -q 'has already been removed' /tmp/receivewal.err 2> /dev/null; then recover_slot wal_removed; fi
+            echo "backup-wal: pg_receivewal stopped; restarted in 10 s"
+            sleep 10
+          done
+        ) &
+        sleep 30
+        while :; do
+          set -- $$(df -Pk /backup/wal | awk 'NR==2 { printf "%.0f %.0f", $$4 * 1024, $$2 * 1024 }')
+          free="$${1:-}"; total="$${2:-}"
+          kept="$$(du -sk /backup/wal | awk '{ printf "%.0f", $$1 * 1024 }')"
+          files="$$(ls /backup/wal | wc -l | tr -d ' ')"
+          printf '%s\n' "INSERT INTO obligarth.ops_backup_reports (kind, ok, bytes, disk_free_bytes, detail) SELECT 'wal', COALESCE(s.active AND s.wal_status IN ('reserved', 'extended'), false), NULLIF(:'kept', '')::bigint, NULLIF(:'free', '')::bigint, jsonb_build_object('slot', COALESCE(s.wal_status, 'missing'), 'active', COALESCE(s.active, false), 'behind_bytes', CASE WHEN s.restart_lsn IS NULL THEN NULL ELSE pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn)::bigint END, 'files', :'files'::integer, 'disk_total_bytes', NULLIF(:'total', '')::bigint) FROM (SELECT 1) x LEFT JOIN pg_replication_slots s ON s.slot_name = 'obligarth_backup';" |
+            psql -X -q -v ON_ERROR_STOP=1 -v kept="$$kept" -v free="$$free" -v total="$$total" -v files="$$files" > /dev/null \
+            || echo "backup-wal: report not written"
+          # The reports of backup-offsite and of a drill that failed (services of the network offsite and of the
+          # drill, which have no access to the database): only what they write is taken. A link, another kind, a
+          # drill reported successful (drill-report alone writes those, with its own access) or a field out of its
+          # form is removed, never written.
+          for f in /backup/reports/*.report; do
+            if [ -L "$$f" ]; then rm -f "$$f"; echo "backup-wal: $$f refused (a link)"; continue; fi
+            [ -f "$$f" ] || continue
+            k=""; s=""; e=""; o=""; b=""; d=""; j=""
+            { read -r k; read -r s; read -r e; read -r o; read -r b; read -r d; read -r j; } < "$$f" || true
+            valid=y
+            case "$$k:$$o" in offsite:[tf]|prune:[tf]|drill:f) ;; *) valid=n ;; esac
+            case "$$s" in ''|*[!0-9]*) valid=n ;; esac
+            case "$$e" in ''|*[!0-9]*) valid=n ;; esac
+            case "$$b" in *[!0-9]*) valid=n ;; esac
+            case "$$d" in *[!0-9]*) valid=n ;; esac
+            case "$$j" in '{'*'}') ;; *) valid=n ;; esac
+            [ "$${#j}" -le 3400 ] || valid=n
+            if [ "$$valid" = n ]; then rm -f "$$f"; echo "backup-wal: $$f refused (not a report of backup-offsite or of a drill)"; continue; fi
+            if report "$$k" "$$s" "$$e" "$$o" "$$b" "$$d" "$$j"; then rm -f "$$f"; else echo "backup-wal: report of backup-offsite kept for later"; fi
+          done
+          sleep 300
+        done
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/backup:/run/secrets:ro
+      - backup_wal:/backup/wal
+      - backup_reports:/backup/reports
+    networks:
+      - backup
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+      - /var/lib/postgresql/data
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
+  # The base backup, every day at BACKUP_BASE_TIME (UTC, 01:30 by default), at
+  # once when there is none: pg_basebackup (tar, gzip, the WAL left to
+  # backup-wal) to the volume backup_staging, with the secrets of the instance
+  # but the key-encryption keys (server_kek, edge_kek: escrowed, never with the
+  # database) and backup_passphrase, the custom directory and the certificate
+  # of the edge-proxy. The last two base backups are kept here, and the WAL
+  # from the older one on (pg_archivecleanup); a failure is retried every hour.
+  # Each base backup keeps the time it ended (END_TIME: a restore targets a
+  # time after it). backup-wal may ask for one at once (.base-requested, a
+  # lost replication slot): taken within a minute.
+  backup-base:
+    image: postgres:16.10-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      server-migrate:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: obligarth_backup
+      PGDATABASE: obligarth
+      PGAPPNAME: obligarth-backup-base
+      PGCONNECT_TIMEOUT: "10"
+      BACKUP_BASE_TIME: ${BACKUP_BASE_TIME:-01:30}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        case "$$BACKUP_BASE_TIME" in
+          [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
+          *) echo "backup-base: BACKUP_BASE_TIME must be HH:MM (UTC), not $$BACKUP_BASE_TIME"; exit 1 ;;
+        esac
+        printf '%s:%s:*:%s:%s\n' "$$PGHOST" "$$PGPORT" "$$PGUSER" "$$(cat /run/secrets/db_backup_password)" > /tmp/pgpass
+        export PGPASSFILE=/tmp/pgpass
+        report() {
+          printf '%s\n' "INSERT INTO obligarth.ops_backup_reports (kind, started_at, finished_at, ok, bytes, disk_free_bytes, detail) VALUES (:'kind', to_timestamp(:'started'::double precision), to_timestamp(:'finished'::double precision), :'ok'::boolean, NULLIF(:'bytes', '')::bigint, NULLIF(:'free', '')::bigint, :'detail'::jsonb);" |
+            psql -X -q -v ON_ERROR_STOP=1 -v kind="$$1" -v started="$$2" -v finished="$$3" -v ok="$$4" -v bytes="$$5" -v free="$$6" -v detail="$$7" > /dev/null \
+            || echo "backup-base: report not written"
+        }
+        # The base backups done (a directory being written ends with .tmp).
+        bases() { ls -1d /backup/staging/base/2*Z 2> /dev/null | sort; }
+        # Until the time given, or until backup-wal asks for a base backup.
+        wait_until() {
+          while [ "$$(date -u +%s)" -lt "$$1" ]; do
+            if [ -f /backup/wal/.base-requested ]; then return 0; fi
+            sleep 60
+          done
+        }
+        run_base() {
+          started="$$(date -u +%s)"; stamp="$$(date -u +%Y%m%dT%H%M%SZ)"; dir="/backup/staging/base/$$stamp"
+          # A request of backup-wal is answered by this run (a failure is retried every hour).
+          rm -f /backup/wal/.base-requested
+          mkdir -p /backup/staging/base
+          rm -rf /backup/staging/base/*.tmp
+          mkdir "$$dir.tmp"
+          code=ok
+          startwal="$$(psql -X -A -t -c 'SELECT pg_walfile_name(pg_current_wal_lsn())' 2> /dev/null || true)"
+          if ! pg_basebackup -D "$$dir.tmp/db" -Ft -z -X none --label="obligarth-$$stamp" --no-password; then
+            code=basebackup_failed
+          elif ! date -u +%Y%m%dT%H%M%SZ > "$$dir.tmp/END_TIME"; then
+            code=basebackup_failed
+          elif ! { mkdir "$$dir.tmp/secrets" && cp /source/secrets/* "$$dir.tmp/secrets/"; }; then
+            code=secrets_copy_failed
+          elif ! tar -czf "$$dir.tmp/custom.tar.gz" -C /source custom; then
+            code=custom_copy_failed
+          elif ! tar -czf "$$dir.tmp/mdm-tls.tar.gz" -C /source mdm-tls; then
+            code=proxy_copy_failed
+          fi
+          if [ "$$code" = ok ]; then
+            printf '%s\n' "$$startwal" > "$$dir.tmp/START_WAL"
+            mv "$$dir.tmp" "$$dir"
+            n="$$(bases | wc -l)"
+            if [ "$$n" -gt 2 ]; then bases | head -n "$$((n - 2))" | while read -r old; do rm -rf "$$old"; done; fi
+            keep="$$(cat "$$(bases | head -n 1)/START_WAL" 2> /dev/null || true)"
+            case "$$keep" in
+              [0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F][0-9A-F]*) pg_archivecleanup -x .gz /backup/wal "$$keep" || code=wal_cleanup_failed ;;
+            esac
+            # The WAL moved aside at a lost slot (gap-<time>), once no base backup kept is older than the gap.
+            oldest="$$(bases | head -n 1)"; oldest="$${oldest##*/}"
+            for g in /backup/wal/gap-2*Z; do
+              if [ -d "$$g" ] && [ -n "$$oldest" ] && [ "$${g##*/gap-}" \< "$$oldest" ]; then rm -rf "$$g"; fi
+            done
+          else
+            rm -rf "$$dir.tmp"
+          fi
+          finished="$$(date -u +%s)"
+          set -- $$(df -Pk /backup/staging | awk 'NR==2 { printf "%.0f %.0f", $$4 * 1024, $$2 * 1024 }')
+          size=""; [ -d "$$dir" ] && size="$$(du -sk "$$dir" | awk '{ printf "%.0f", $$1 * 1024 }')"
+          ok=f; case "$$code" in ok|wal_cleanup_failed) [ -d "$$dir" ] && ok=t ;; esac
+          report base "$$started" "$$finished" "$$ok" "$$size" "$${1:-}" \
+            "{\"code\":\"$$code\",\"bases_kept\":$$(bases | wc -l),\"seconds\":$$((finished - started)),\"disk_total_bytes\":$${2:-null}}"
+          [ "$$ok" = t ]
+        }
+        # A base backup interrupted (the container stopped while it ran) is no base backup.
+        rm -rf /backup/staging/base/*.tmp
+        if [ -z "$$(bases)" ]; then run_base || echo "backup-base: first base backup failed; again in an hour"; fi
+        while :; do
+          if [ -z "$$(bases)" ]; then wait_until "$$(( $$(date -u +%s) + 3600 ))"; run_base || true; continue; fi
+          h="$${BACKUP_BASE_TIME%%:*}"; m="$${BACKUP_BASE_TIME##*:}"; h="$${h#0}"; m="$${m#0}"
+          now="$$(date -u +%s)"; next=$$((now - now % 86400 + $${h:-0} * 3600 + $${m:-0} * 60))
+          [ "$$next" -gt "$$now" ] || next=$$((next + 86400))
+          wait_until "$$next"
+          until run_base; do sleep 3600; done
+        done
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/backup:/run/secrets:ro
+      - ${SECRETS_DIR:-./secrets}/backup-files:/source/secrets:ro
+      - ${CUSTOM_DIR:-./custom}:/source/custom:ro
+      - ${MDM_TLS_DIR:-mdm_tls}:/source/mdm-tls:ro
+      - backup_wal:/backup/wal
+      - backup_staging:/backup/staging
+    networks:
+      - backup
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+      - /var/lib/postgresql/data
+    cap_drop:
+      - ALL
+    # Reads the custom directory and the certificate, whoever owns their files.
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
+  # The encrypted copy offsite (decision D10: S3-compatible storage in the EU,
+  # chosen by the owners): restic, every 5 minutes, of the volumes backup_wal
+  # and backup_staging to RESTIC_REPOSITORY, key in the secret
+  # backup_passphrase (escrowed). Every night after BACKUP_PRUNE_TIME (UTC,
+  # 04:30 by default): rotation (every snapshot of the last 2 days, then the
+  # last one of each day for BACKUP_RETENTION_DAYS days, 35 by default; each
+  # holds the last two base backups and the WAL since the older one, so any
+  # point of the rotation can be restored), then a check reading a thirtieth
+  # of the data (the whole repository each month). Reports offsite and prune,
+  # through backup-wal. No database access, no other network.
+  backup-offsite:
+    image: restic/restic:0.17.3
+    profiles: ["backup"]
+    restart: unless-stopped
+    init: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    environment:
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_passphrase
+      RESTIC_CACHE_DIR: /cache
+      AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-35}
+      BACKUP_PRUNE_TIME: ${BACKUP_PRUNE_TIME:-04:30}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        case "$$BACKUP_PRUNE_TIME" in
+          [01][0-9]:[0-5][0-9]|2[0-3]:[0-5][0-9]) ;;
+          *) echo "backup-offsite: BACKUP_PRUNE_TIME must be HH:MM (UTC), not $$BACKUP_PRUNE_TIME"; exit 1 ;;
+        esac
+        days="$$BACKUP_RETENTION_DAYS"
+        case "$$days" in ''|*[!0-9]*|0) echo "backup-offsite: BACKUP_RETENTION_DAYS is not a number of days, 35 used"; days=35 ;; esac
+        spool() {
+          f="/backup/reports/$$(date -u +%s)-$$1-$$$$.tmp"
+          printf '%s\n' "$$@" > "$$f" && mv "$$f" "$${f%.tmp}.report"
+        }
+        mkdir -p /backup/reports
+        if [ -z "$$RESTIC_REPOSITORY" ]; then
+          echo "backup-offsite: RESTIC_REPOSITORY is not set in .env: no offsite copy"
+          while :; do now="$$(date -u +%s)"; spool offsite "$$now" "$$now" f "" "" '{"code":"not_configured"}'; sleep 3600; done
+        fi
+        until restic cat config > /dev/null 2>&1 || restic init > /dev/null 2>&1; do
+          now="$$(date -u +%s)"; spool offsite "$$now" "$$now" f "" "" '{"code":"repository_unavailable"}'
+          echo "backup-offsite: the repository can be neither opened nor created; again in 5 minutes"
+          sleep 300
+        done
+        num() { sed -n "s/.*\"$$1\":\([0-9][0-9]*\).*/\1/p" /tmp/out | tail -n 1; }
+        while :; do
+          restic unlock > /dev/null 2>&1 || true
+          started="$$(date -u +%s)"
+          if restic backup /backup/wal /backup/staging --exclude '*.tmp' --exclude '.base-requested' --tag obligarth --host obligarth-backup --json > /tmp/out 2> /tmp/err; then
+            ok=t; code=ok
+          else
+            ok=f; code=backup_failed
+          fi
+          finished="$$(date -u +%s)"
+          added="$$(num data_added)"; files="$$(num files_new)"
+          spool offsite "$$started" "$$finished" "$$ok" "$$(num total_bytes_processed)" "" \
+            "{\"code\":\"$$code\",\"data_added\":$${added:-null},\"files_new\":$${files:-null},\"seconds\":$$((finished - started))}"
+          today="$$(date -u +%Y-%m-%d)"
+          if [ "$$(date -u +%H:%M)" \> "$$BACKUP_PRUNE_TIME" ] && [ "$$(cat /cache/obligarth-last-prune 2> /dev/null || true)" != "$$today" ]; then
+            started="$$(date -u +%s)"
+            day="$$(date -u +%j | sed 's/^0*//')"; subset="$$(( $${day:-0} % 30 + 1 ))"
+            if ! restic forget --tag obligarth --host obligarth-backup --keep-within 2d --keep-within-daily "$${days}d" --prune > /dev/null 2> /tmp/err; then
+              ok=f; code=forget_failed
+            elif ! restic check --with-cache --read-data-subset="$$subset/30" > /dev/null 2> /tmp/err; then
+              ok=f; code=check_failed
+            else
+              ok=t; code=ok
+            fi
+            finished="$$(date -u +%s)"
+            printf '%s\n' "$$today" > /cache/obligarth-last-prune
+            spool prune "$$started" "$$finished" "$$ok" "" "" \
+              "{\"code\":\"$$code\",\"keep_days\":$$days,\"check_subset\":$$subset,\"seconds\":$$((finished - started))}"
+          fi
+          sleep 300
+        done
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/backup-offsite:/run/secrets:ro
+      - backup_wal:/backup/wal:ro
+      - backup_staging:/backup/staging:ro
+      - backup_reports:/backup/reports
+      - backup_restic_cache:/cache
+    networks:
+      - offsite
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
+  # ── Restore drill (profile restore-drill, P0-13 T10, FND-09) ───────────────
+  # Half-yearly (deadline backup_restore_drill), never on its own: the offsite
+  # copy restored into a throwaway database, the WAL replayed up to
+  # RESTORE_TARGET_TIME (the end of the copy when empty), the copy checked by
+  # the server's image (ops verify-restore), a report drill in the database
+  # of the instance. The copy is reachable from no other service and reaches
+  # nothing (network drill: no APNs, no Google, no Internet). Run it with
+  #   docker compose --profile restore-drill run --rm drill-report
+  # drill-report removes the restored copy once drill-db has stopped; then the
+  # containers and the empty volume:
+  #   docker compose --profile restore-drill rm -sf drill-fetch drill-edge-kek drill-db drill-verify
+  #   docker volume rm obligarth_drill_data
+  # A drill that fails before drill-report (the copy not fetched, the WAL not
+  # replayed) reports its failure itself (a report drill relayed by
+  # backup-wal). Procedure of the owners (sauvegarde-reprise): the same steps
+  # restore the instance on a new host.
+
+  # The snapshot RESTORE_SNAPSHOT of the offsite copy (latest by default):
+  # the WAL and the newest base backup that ended before RESTORE_TARGET_TIME
+  # (END_TIME; one without it: started before), or RESTORE_BASE, extracted
+  # into the volume drill_data with the recovery settings of drill-db. A
+  # failure removes what was extracted and reports a drill fetch_failed.
+  drill-fetch:
+    image: restic/restic:0.17.3
+    profiles: ["restore-drill"]
+    restart: "no"
+    init: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+    environment:
+      RESTIC_REPOSITORY: ${RESTIC_REPOSITORY:-}
+      RESTIC_PASSWORD_FILE: /run/secrets/backup_passphrase
+      AWS_ACCESS_KEY_ID: ${BACKUP_S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BACKUP_S3_SECRET_ACCESS_KEY:-}
+      AWS_DEFAULT_REGION: ${BACKUP_S3_REGION:-}
+      RESTORE_SNAPSHOT: ${RESTORE_SNAPSHOT:-latest}
+      RESTORE_TARGET_TIME: ${RESTORE_TARGET_TIME:-}
+      RESTORE_BASE: ${RESTORE_BASE:-}
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        # Only the results of a previous drill (out: codes and counts) may remain; a copy may not.
+        if [ -n "$$(ls -A /drill 2> /dev/null | grep -vx out || true)" ]; then
+          echo "drill-fetch: the volume drill_data is not empty (a previous drill): remove it first"
+          echo "  docker compose --profile restore-drill rm -sf drill-fetch drill-edge-kek drill-db drill-verify && docker volume rm obligarth_drill_data"
+          exit 1
+        fi
+        rm -rf /drill/out
+        mkdir -p /drill/out
+        started="$$(date -u +%s)"
+        printf '%s\n' "$$started" > /drill/out/fetch.started
+        spool() {
+          f="/backup/reports/$$(date -u +%s)-$$1-$$$$.tmp"
+          printf '%s\n' "$$@" > "$$f" && mv "$$f" "$${f%.tmp}.report"
+        }
+        # A failure: what was extracted is removed (a copy of the database, secrets), and the drill reports it
+        # (relayed by backup-wal: drill-report never runs).
+        fail() {
+          echo "drill-fetch: $$1"
+          printf '{"code":"%s"}\n' "$$2" > /drill/out/fetch.json
+          rm -rf /drill/restore /drill/pgdata /drill/restore-wal.sh
+          spool drill "$$started" "$$(date -u +%s)" f "" "" "{\"code\":\"fetch_failed\",\"fetch\":{\"code\":\"$$2\"}}" 2> /dev/null \
+            || echo "drill-fetch: the failure could not be reported (volume backup_reports)"
+          exit 1
+        }
+        [ -n "$$RESTIC_REPOSITORY" ] || fail "RESTIC_REPOSITORY is not set in .env: nothing to restore" not_configured
+        snap="$$RESTORE_SNAPSHOT"
+        case "$$snap" in
+          latest) ;;
+          ''|*[!0-9a-f]*) fail "RESTORE_SNAPSHOT must be latest or the id of a snapshot (restic snapshots), not $$snap" bad_snapshot ;;
+        esac
+        target="$$RESTORE_TARGET_TIME"
+        case "$$target" in
+          '') limit=99999999T999999Z ;;
+          2[0-9][0-9][0-9]-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z) limit="$$(printf '%s' "$$target" | tr -d ':-')" ;;
+          *) fail "RESTORE_TARGET_TIME must be YYYY-MM-DDTHH:MM:SSZ (UTC), not $$target" bad_target ;;
+        esac
+        case "$$RESTORE_BASE" in
+          ''|2[0-9][0-9][0-9][01][0-9][0-3][0-9]T[0-2][0-9][0-5][0-9][0-5][0-9]Z) ;;
+          *) fail "RESTORE_BASE must be the name of a base backup (YYYYMMDDTHHMMSSZ), not $$RESTORE_BASE" bad_base ;;
+        esac
+        restic ls --no-cache --host obligarth-backup --tag obligarth "$$snap" /backup/staging/base > /tmp/ls 2> /tmp/err \
+          || fail "the snapshot $$snap cannot be read (repository, key or snapshot): $$(head -c 300 /tmp/err)" repository_unavailable
+        bases="$$(grep -E '^/backup/staging/base/2[0-9]{7}T[0-9]{6}Z$$' /tmp/ls | sed 's|.*/||' | sort || true)"
+        base=""
+        if [ -n "$$RESTORE_BASE" ]; then
+          printf '%s\n' "$$bases" | grep -qxF "$$RESTORE_BASE" || fail "the base backup $$RESTORE_BASE is not in the snapshot $$snap" base_missing
+          base="$$RESTORE_BASE"
+        else
+          # The newest that ended before the target (PostgreSQL cannot stop a recovery before the end of its base
+          # backup); a base backup without END_TIME (taken before it was kept), the newest that started before.
+          for b in $$bases; do
+            [ "$$b" \< "$$limit" ] || continue
+            if [ -n "$$target" ]; then
+              end="$$(restic dump --no-cache --host obligarth-backup --tag obligarth "$$snap" "/backup/staging/base/$$b/END_TIME" 2> /dev/null | head -c 64 | tr -d '\r\n' || true)"
+              case "$$end" in
+                2[0-9][0-9][0-9][01][0-9][0-3][0-9]T[0-2][0-9][0-5][0-9][0-5][0-9]Z) [ "$$end" \< "$$limit" ] || continue ;;
+              esac
+            fi
+            base="$$b"
+          done
+          [ -n "$$base" ] || fail "no base backup of the snapshot $$snap ended before the target (an older snapshot: restic snapshots)" no_base_before_target
+        fi
+        mkdir -p /drill/restore /drill/pgdata
+        restic restore --no-cache --host obligarth-backup --tag obligarth "$$snap" --target /drill/restore \
+          --include /backup/wal --include "/backup/staging/base/$$base" > /dev/null 2> /tmp/err \
+          || fail "the restore of the snapshot $$snap failed: $$(head -c 300 /tmp/err)" restore_failed
+        dir="/drill/restore/backup/staging/base/$$base"
+        [ -s "$$dir/db/base.tar.gz" ] || fail "the base backup $$base holds no db/base.tar.gz" base_unreadable
+        tar -xzf "$$dir/db/base.tar.gz" -C /drill/pgdata || fail "the base backup $$base cannot be extracted" base_unreadable
+        [ -s /drill/pgdata/PG_VERSION ] || fail "the base backup $$base is not a data directory" base_unreadable
+        # restore_command: a segment as pg_receivewal left it (gzip), the last one partial (completed with zeros);
+        # the WAL moved aside at a lost slot (gap-<time>) too.
+        cat > /drill/restore-wal.sh <<'EOF'
+        w=/drill/restore/backup/wal
+        f="$$1"; p="$$2"
+        case "$$f" in ''|*[!0-9A-Za-z.]*) exit 1 ;; esac
+        for d in "$$w" "$$w"/gap-*; do
+          if [ -f "$$d/$$f" ] || [ -f "$$d/$$f.gz" ] || [ -f "$$d/$$f.gz.partial" ] || [ -f "$$d/$$f.partial" ]; then w="$$d"; break; fi
+        done
+        if [ -f "$$w/$$f" ]; then cp "$$w/$$f" "$$p.tmp"
+        elif [ -f "$$w/$$f.gz" ]; then gunzip -c "$$w/$$f.gz" > "$$p.tmp" || { rm -f "$$p.tmp"; exit 1; }
+        elif [ -f "$$w/$$f.gz.partial" ] || [ -f "$$w/$$f.partial" ]; then
+          if [ -f "$$w/$$f.gz.partial" ]; then gunzip -c "$$w/$$f.gz.partial" > "$$p.tmp" 2> /dev/null || true; else cp "$$w/$$f.partial" "$$p.tmp"; fi
+          dd if=/dev/null of="$$p.tmp" bs=1 seek=16777216 count=0 2> /dev/null || { rm -f "$$p.tmp"; exit 1; }
+        else exit 1
+        fi
+        mv -f "$$p.tmp" "$$p"
+        EOF
+        {
+          echo "# Restore drill of Obligarth (drill-fetch): the WAL of the offsite copy replayed"
+          echo "restore_command = '/bin/sh /drill/restore-wal.sh %f %p'"
+          echo "archive_mode = 'off'"
+          if [ -n "$$target" ]; then
+            echo "recovery_target_time = '$$(printf '%s' "$$target" | sed 's/T/ /; s/Z$$/+00/')'"
+            echo "recovery_target_action = 'promote'"
+          fi
+        } >> /drill/pgdata/postgresql.auto.conf
+        : > /drill/pgdata/recovery.signal
+        wal="$$(ls /drill/restore/backup/wal 2> /dev/null | wc -l | tr -d ' ')"
+        finished="$$(date -u +%s)"
+        printf '{"code":"ok","snapshot":"%s","base":"%s","target":%s,"wal_files":%s,"fetch_seconds":%s}\n' \
+          "$$snap" "$$base" "$$([ -n "$$target" ] && printf '"%s"' "$$target" || printf null)" "$${wal:-0}" "$$((finished - started))" > /drill/out/fetch.json
+        chown -R 70:70 /drill/pgdata /drill/restore /drill/restore-wal.sh
+        chmod 700 /drill/pgdata
+        echo "drill-fetch: base backup $$base of the snapshot $$snap restored, $${wal:-0} WAL files, target $${target:-end of the copy}"
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/backup-offsite:/run/secrets:ro
+      - drill_data:/drill
+      - backup_reports:/backup/reports
+    networks:
+      - offsite
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    # The files of the copy given to the user of the database (uid 70 of the
+    # image postgres:alpine).
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
+  # The restored copy: replays the WAL (restore_command), promotes itself at
+  # the target, then serves drill-verify; it stops once drill-report is done
+  # (or after 8 hours). Same major version as the database of the instance.
+  # A copy that stops before it was checked (the WAL not replayed up to the
+  # target, the 8 hours spent) reports a drill recovery_failed or
+  # recovery_timeout (relayed by backup-wal); stopped by docker compose stop
+  # (a reprise of the instance: the copy is moved), nothing.
+  drill-db:
+    image: postgres:16.10-alpine
+    profiles: ["restore-drill"]
+    restart: "no"
+    init: true
+    depends_on:
+      drill-fetch:
+        condition: service_completed_successfully
+    environment:
+      # The data directory exists: the image initialises nothing, the copy
+      # keeps the roles and passwords of the instance.
+      PGDATA: /drill/pgdata
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        docker-entrypoint.sh postgres -c max_connections=256 -c hot_standby=off -c archive_mode=off -c listen_addresses='*' &
+        pg=$$!
+        # docker compose stop, drill-report done, or 8 hours: a fast shutdown of the copy (SIGINT), never a kill.
+        why=""
+        stop() { [ -n "$$why" ] || why="$$1"; kill -INT "$$pg" 2> /dev/null || true; }
+        trap 'stop signal' INT TERM
+        end=$$(( $$(date -u +%s) + 28800 ))
+        while kill -0 "$$pg" 2> /dev/null; do
+          if [ -f /drill/out/done ]; then stop done; elif [ "$$(date -u +%s)" -ge "$$end" ]; then stop timeout; fi
+          sleep 5 & wait $$! || true
+        done
+        code=0
+        wait "$$pg" || code=$$?
+        if [ ! -f /drill/out/verify.code ] && { [ -z "$$why" ] || [ "$$why" = timeout ]; }; then
+          result=recovery_failed; [ "$$why" = timeout ] && result=recovery_timeout
+          started="$$(cat /drill/out/fetch.started 2> /dev/null || true)"
+          case "$$started" in ''|*[!0-9]*) started="$$(date -u +%s)" ;; esac
+          f="/backup/reports/$$(date -u +%s)-drill-$$$$.tmp"
+          if ( umask 077; printf '%s\n' drill "$$started" "$$(date -u +%s)" f "" "" "{\"code\":\"$$result\",\"postgres_exit\":$$code}" > "$$f" ) \
+            && mv "$$f" "$${f%.tmp}.report"; then
+            echo "drill-db: the copy stopped before it was checked ($$result): reported"
+          else
+            echo "drill-db: the copy stopped before it was checked ($$result): the failure could not be reported"
+          fi
+        fi
+        exit "$$code"
+    # The fast shutdown of a large copy (a checkpoint) takes longer than 10 s.
+    stop_grace_period: 120s
+    volumes:
+      - drill_data:/drill
+      - backup_reports:/backup/reports
+    networks:
+      - drill
+    # Healthy once the WAL is replayed and the copy promoted (RTO: 4 hours).
+    healthcheck:
+      test: ["CMD-SHELL", "[ \"$$(psql -X -A -t -U obligarth_admin -d obligarth -c 'SELECT NOT pg_is_in_recovery()' 2> /dev/null)\" = t ]"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 4h
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
+  # The kek_id of apple-edge's KEK (the first 16 hexadecimal characters of
+  # SHA-256 of the key, as apple-edge computes it), for drill-verify: computed
+  # here, apart, so that no process of the server's image ever holds edge_kek
+  # (one KEK per service). No network, no database, that one file only. The
+  # id in /drill/out/edge_kek_id when the drill's volume holds a drill, and on
+  # the output (a reprise in place: run --rm --no-deps drill-edge-kek). A key
+  # it cannot read, in a drill: a report drill edge_kek_unreadable (relayed
+  # by backup-wal).
+  drill-edge-kek:
+    image: postgres:16.10-alpine
+    profiles: ["restore-drill"]
+    restart: "no"
+    init: true
+    depends_on:
+      drill-fetch:
+        condition: service_completed_successfully
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        k="$$(tr -d ' \t\r\n' < /run/edge-secrets/edge_kek | tr '_-' '/+')"
+        while [ $$(( $${#k} % 4 )) -ne 0 ]; do k="$$k="; done
+        n="$$(printf '%s' "$$k" | base64 -d 2> /dev/null | wc -c | tr -d ' ')"
+        if [ "$$n" != 32 ]; then
+          echo "drill-edge-kek: edge_kek is not a base64-encoded 32-byte key"
+          # In a drill (its results directory): the failure reported (relayed by backup-wal), as drill-verify never runs.
+          if [ -d /drill/out ]; then
+            started="$$(cat /drill/out/fetch.started 2> /dev/null || true)"
+            case "$$started" in ''|*[!0-9]*) started="$$(date -u +%s)" ;; esac
+            f="/backup/reports/$$(date -u +%s)-drill-$$$$.tmp"
+            printf '%s\n' drill "$$started" "$$(date -u +%s)" f "" "" '{"code":"edge_kek_unreadable"}' > "$$f" && mv "$$f" "$${f%.tmp}.report" \
+              || echo "drill-edge-kek: the failure could not be reported (volume backup_reports)"
+          fi
+          exit 1
+        fi
+        id="$$(printf '%s' "$$k" | base64 -d | sha256sum | cut -c1-16)"
+        k=""
+        if [ -d /drill/out ]; then printf '%s\n' "$$id" > /drill/out/edge_kek_id; fi
+        printf '%s\n' "$$id"
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/apple-edge/edge_kek:/run/edge-secrets/edge_kek:ro
+      - drill_data:/drill
+      - backup_reports:/backup/reports
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    # Reads the copy of apple-edge's KEK, owned by its user.
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - "no-new-privileges:true"
+    ulimits:
+      core: 0
+    logging: *logging
+
+  # The copy checked by the server's image, its jobs paused, Apple and
+  # Android off (ops verify-restore: migrations, kek_id of both vaults,
+  # vault, journal, rows by tenant, last command). apple-edge's KEK is not
+  # given to it: its kek_id, from drill-edge-kek. Always ends with code 0
+  # once its result is written for drill-report.
+  drill-verify:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    profiles: ["restore-drill"]
+    restart: "no"
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      drill-db:
+        condition: service_healthy
+      drill-edge-kek:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://obligarth:${DB_PASSWORD:?set it in .env (install.sh generates one)}@drill-db:5432/obligarth
+      RLS_CONTEXT_KEY_FILE: /run/secrets/rls_context_key
+      SERVER_KEK_FILE: /run/secrets/server_kek
+      VAULT_ALLOW_UNESCROWED: ${VAULT_ALLOW_UNESCROWED:-false}
+      DB_CONTEXT_MODE: strict
+      JOBS_MODE: paused
+      APPLE_EDGE_MODE: "off"
+      OUTBOX_CONSUMER: "off"
+      ANDROID_MODE: "off"
+      METRICS_PORT: "off"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        code=0
+        node dist/src/ops/cli.js verify-restore --edge-password-file /run/edge-secrets/apple_edge_db_password \
+          --edge-kek-id "$$(cat /drill/out/edge_kek_id 2> /dev/null)" --summary-file /drill/out/verify.json || code=$$?
+        printf '%s\n' "$$code" > /drill/out/verify.code
+        echo "drill-verify: ops verify-restore ended with code $$code"
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/server:/run/secrets:ro
+      - ${SECRETS_DIR:-./secrets}/apple-edge/apple_edge_db_password:/run/edge-secrets/apple_edge_db_password:ro
+      - drill_data:/drill
+    networks:
+      - drill
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    # Reads the copy of the password of apple-edge's role, owned by its user.
+    cap_add:
+      - DAC_READ_SEARCH
+    security_opt:
+      - "no-new-privileges:true"
+    # The image's health check is the server's: nothing listens here.
+    healthcheck:
+      disable: true
+    ulimits:
+      core: 0
+    logging: *logging
+
+  # The report drill in the database of the instance (role obligarth_backup):
+  # the outcome of the restore and of the verification, which moves the
+  # deadline backup_restore_drill; then drill-db stops, and the restored copy
+  # (the whole database, the secrets of a base backup, in clear) is removed
+  # from the volume drill_data: kept, it would outlive the rotation of the
+  # backups (BACKUP_RETENTION_DAYS) that the notice tells the employees.
+  drill-report:
+    image: postgres:16.10-alpine
+    profiles: ["restore-drill"]
+    restart: "no"
+    init: true
+    depends_on:
+      secrets-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      drill-verify:
+        condition: service_completed_successfully
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: obligarth_backup
+      PGDATABASE: obligarth
+      PGAPPNAME: obligarth-drill-report
+      PGCONNECT_TIMEOUT: "10"
+    entrypoint: ["/bin/sh", "-ec"]
+    command:
+      - |
+        umask 077
+        printf '%s:%s:*:%s:%s\n' "$$PGHOST" "$$PGPORT" "$$PGUSER" "$$(cat /run/secrets/db_backup_password)" > /tmp/pgpass
+        export PGPASSFILE=/tmp/pgpass
+        started="$$(cat /drill/out/fetch.started 2> /dev/null || date -u +%s)"
+        case "$$started" in ''|*[!0-9]*) started="$$(date -u +%s)" ;; esac
+        code="$$(cat /drill/out/verify.code 2> /dev/null || true)"
+        case "$$code" in
+          0) ok=t; result=ok ;;
+          2) ok=f; result=verify_failed ;;
+          *) ok=f; result=verify_error ;;
+        esac
+        case "$$code" in ''|*[!0-9]*) code=null ;; esac
+        # A file kept whole or not at all (the CHECK of the table: 4 KiB of jsonb text).
+        take() { if [ -f "$$1" ] && [ "$$(wc -c < "$$1" | tr -d ' ')" -le "$$2" ]; then cat "$$1"; fi; }
+        fetch="$$(take /drill/out/fetch.json 600)"
+        verify="$$(take /drill/out/verify.json 2600)"
+        case "$$fetch" in '{'*'}') ;; *) fetch=null ;; esac
+        case "$$verify" in '{'*'}') ;; *) verify=null ;; esac
+        finished="$$(date -u +%s)"
+        detail="{\"code\":\"$$result\",\"verify_exit\":$$code,\"seconds\":$$((finished - started)),\"fetch\":$$fetch,\"verify\":$$verify}"
+        if [ "$${#detail}" -gt 3400 ]; then
+          detail="{\"code\":\"$$result\",\"verify_exit\":$$code,\"seconds\":$$((finished - started)),\"fetch\":$$fetch,\"verify\":null}"
+        fi
+        : > /drill/out/done
+        printf '%s\n' "INSERT INTO obligarth.ops_backup_reports (kind, started_at, finished_at, ok, bytes, disk_free_bytes, detail) VALUES (:'kind', to_timestamp(:'started'::double precision), to_timestamp(:'finished'::double precision), :'ok'::boolean, NULLIF(:'bytes', '')::bigint, NULLIF(:'free', '')::bigint, :'detail'::jsonb);" |
+          psql -X -q -v ON_ERROR_STOP=1 -v kind=drill -v started="$$started" -v finished="$$finished" -v ok="$$ok" -v bytes="" -v free="" -v detail="$$detail" > /dev/null \
+          || { echo "drill-report: the report drill was not written; the restored copy is kept, remove it:"; \
+               echo "  docker compose --profile restore-drill rm -sf drill-fetch drill-edge-kek drill-db drill-verify && docker volume rm obligarth_drill_data"; exit 1; }
+        echo "drill-report: restore drill $$result (report drill written)"
+        # drill-db stops on done (its data directory released: postmaster.pid removed), 3 minutes at most.
+        n=0
+        while [ -f /drill/pgdata/postmaster.pid ] && [ "$$n" -lt 36 ]; do sleep 5; n=$$((n + 1)); done
+        if [ -f /drill/pgdata/postmaster.pid ]; then
+          echo "drill-report: drill-db has not stopped: remove the restored copy once it has:"
+          echo "  docker compose --profile restore-drill rm -sf drill-fetch drill-edge-kek drill-db drill-verify && docker volume rm obligarth_drill_data"
+          exit 1
+        fi
+        rm -rf /drill/pgdata /drill/restore /drill/restore-wal.sh /drill/out
+        echo "drill-report: the restored copy is removed; the containers and the empty volume:"
+        echo "  docker compose --profile restore-drill rm -sf drill-fetch drill-edge-kek drill-db drill-verify && docker volume rm obligarth_drill_data"
+        [ "$$ok" = t ]
+    volumes:
+      - ${SECRETS_DIR:-./secrets}/backup:/run/secrets:ro
+      - drill_data:/drill
+    networks:
+      - backup
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+      - /var/lib/postgresql/data
+    cap_drop:
+      - ALL
+    # Removes the restored copy, owned by the user of the database (uid 70).
+    cap_add:
+      - DAC_OVERRIDE
+    security_opt:
+      - "no-new-privileges:true"
+    logging: *logging
+
 volumes:
   postgres_data:
   mdm_tls:
+  # Backups (profile backup): the WAL streamed, the base backups and their
+  # copies, the reports waiting for the database, the cache of restic. On the
+  # host, next to the database: the offsite copy is what survives the host.
+  backup_wal:
+  backup_staging:
+  backup_reports:
+  backup_restic_cache:
+  # The restore drill (profile restore-drill): the copy restored and its
+  # database, removed by drill-report after each drill (then the empty volume:
+  # docker volume rm obligarth_drill_data).
+  drill_data:
 
 networks:
   default:
   edge:
   backend:
+  # The offsite copy of the backups (profile backup): reaches the S3 storage
+  # only, none of the services.
+  offsite:
+  # The restore drill (profile restore-drill): the restored copy and the server
+  # that checks it, reached by no other service and reaching nothing.
+  drill:
+    internal: true
+  # The database and the services of the backups (backup-wal, backup-base,
+  # drill-report): the only network the replication of the role
+  # obligarth_backup is admitted from (pg_hba.conf of the postgres service),
+  # its subnet fixed for that (BACKUP_NETWORK_SUBNET, a /28 that no other
+  # network of the host uses). Reaches nothing else.
+  backup:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BACKUP_NETWORK_SUBNET:-10.249.249.0/28}
 
 # Secrets (created by secrets-init in ./secrets, never overwritten, never in
 # .env): rls_context_key (signed database context), server_kek and edge_kek
 # (key-encryption keys of the two vaults, one per service: escrow both),
 # apple_edge_api_token (internal API, shared by the server and apple-edge),
 # apple_edge_ddm_hmac (DDM relay, shared), apple_edge_db_password (role
-# apple_edge_app).
+# apple_edge_app), db_backup_password (role obligarth_backup of the backups),
+# backup_passphrase (key of the offsite copy of the backups: escrow it).

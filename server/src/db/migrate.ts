@@ -5,7 +5,7 @@ import knex from 'knex';
 import pg from 'pg';
 import { migrationConfig } from '../../knexfile';
 import {
-  BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL, PRIVILEGED_ROLES_SQL, READER_REACHES_SQL,
+  BOOTSTRAP_BACKUP_ROLE_SQL, BOOTSTRAP_ROLES_SQL, BOOTSTRAP_SQL, PGBOSS_OWNERSHIP_SQL, PRE_RLS_GRANTS_SQL, PRIVILEGED_ROLES_SQL, READER_REACHES_SQL,
 } from './bootstrap';
 import { contextKeyId, loadContextKeyFile } from './context';
 import { missingMigrations, rlsMigrationApplied, shippedMigrations } from './migrationFiles';
@@ -24,7 +24,9 @@ import { logger } from '../utils/logger';
 //   2. bootstrap (annex A.1): roles, schemas, pgboss;
 //   3. the runtime role's password (DB_APP_PASSWORD / DB_APP_PASSWORD_FILE),
 //      sent as its SCRAM-SHA-256 verifier (the password itself never reaches
-//      the database, nor its statement log), never logged;
+//      the database, nor its statement log), never logged; the role of the
+//      backups (obligarth_backup, P0-13 T9) and its password
+//      (DB_BACKUP_PASSWORD_FILE) the same way, when given;
 //   4. Knex tracking tables found in `public` moved to `obligarth`;
 //   5. the Knex migrations, every connection as obligarth_owner;
 //   6. before the RLS migration (C): plain privileges of the runtime role;
@@ -41,6 +43,8 @@ export interface MigrateOptions {
   adminUrl: string;
   /** Password of the runtime role (required to migrate, unused by --check). */
   appPassword?: string | null;
+  /** Password of the role of the backups obligarth_backup (P0-13 T9; absent: left as it is). */
+  backupPassword?: string | null;
   /** Signed context (rls-tenant §4.6): current and previous key. */
   contextKey?: Buffer | null;
   previousContextKey?: Buffer | null;
@@ -53,6 +57,9 @@ export interface MigrateReport {
   contextKeys: string[];
   /** Keys of the signed context retired by this run (no longer configured). */
   retiredContextKeys: string[];
+  /** The role of the backups (P0-13 T9): created and its password set, created without a new password, or not
+   *  available on this database (an administrator refused the REPLICATION attribute). */
+  backupRole: 'ready' | 'no_password' | 'unavailable';
   warnings: string[];
 }
 
@@ -224,7 +231,9 @@ export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport
   if (!opts.appPassword) {
     throw new MigrateRefusal('DB_APP_PASSWORD (or DB_APP_PASSWORD_FILE) is not set: the password of the runtime role obligarth.');
   }
-  const report: MigrateReport = { applied: [], preRlsGrants: false, rlsActive: false, contextKeys: [], retiredContextKeys: [], warnings: [] };
+  const report: MigrateReport = {
+    applied: [], preRlsGrants: false, rlsActive: false, contextKeys: [], retiredContextKeys: [], backupRole: 'unavailable', warnings: [],
+  };
 
   // ── 1 to 4: bootstrap, as the administrator ───────────────────────────────
   await withAdmin(opts.adminUrl, async (q, client) => {
@@ -250,6 +259,25 @@ export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport
     // (review of lot A1; integration of lot A).
     const secret = String(opts.appPassword);
     await q(`ALTER ROLE obligarth PASSWORD ${client.escapeLiteral(scramVerifier(secret) ?? secret)}`);
+
+    // The role of the backups (P0-13 T9), after the schemas. Refused to an administrator that may not grant the
+    // REPLICATION attribute: a warning, never a failure of the migrations (the backups of an external database are
+    // its operator's). Its password the same way as the runtime role's, when given.
+    try {
+      await q(BOOTSTRAP_BACKUP_ROLE_SQL);
+      report.backupRole = 'no_password';
+    } catch (err) {
+      if (superuser) throw err;
+      const msg = `role obligarth_backup not created or not updated (${(err as Error).message}): the services of the ` +
+        'compose profile backup cannot run against this database';
+      report.warnings.push(msg);
+      logger.warn(msg);
+    }
+    if (report.backupRole === 'no_password' && opts.backupPassword) {
+      const backupSecret = String(opts.backupPassword);
+      await q(`ALTER ROLE obligarth_backup PASSWORD ${client.escapeLiteral(scramVerifier(backupSecret) ?? backupSecret)}`);
+      report.backupRole = 'ready';
+    }
 
     const pgboss = await q(`SELECT pg_get_userbyid(nspowner) AS owner FROM pg_namespace WHERE nspname = 'pgboss'`);
     if (pgboss.rowCount === 1 && pgboss.rows[0].owner !== 'obligarth') {
@@ -354,6 +382,33 @@ export async function checkDatabase(adminUrl: string, contextKey: Buffer | null 
         findings.push(`role obligarth can take on ${reach.rows.map((x) => String(x.rolname)).join(', ')} (membership): revoke it`);
       }
     }
+    // The role of the backups (P0-13 T9), when it exists: REPLICATION and LOGIN, no other attribute; nobody's member
+    // and member of nothing; the insert of the backup reports and the usage of the schema obligarth only: any other
+    // grant to it (a table, a column, a sequence or a function of obligarth, obligarth_private, pgboss or apple_edge,
+    // any privilege on a schema but the usage of obligarth) is a finding. What PUBLIC holds is not its own.
+    const backup = await q(`SELECT rolsuper, rolbypassrls, rolcreaterole, rolcreatedb, rolreplication, rolcanlogin,
+                                   EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.member = r.oid OR m.roleid = r.oid) AS member,
+                                   (SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                                     CROSS JOIN LATERAL aclexplode(c.relacl) a
+                                     WHERE n.nspname IN ('obligarth', 'obligarth_private', 'pgboss', 'apple_edge') AND a.grantee = r.oid
+                                       AND NOT (n.nspname = 'obligarth' AND c.relname = 'ops_backup_reports' AND a.privilege_type = 'INSERT')
+                                       AND NOT (n.nspname = 'obligarth' AND c.relname = 'ops_backup_reports_id_seq' AND a.privilege_type = 'USAGE'))
+                                   + (SELECT count(*)::int FROM pg_attribute t JOIN pg_class c ON c.oid = t.attrelid JOIN pg_namespace n ON n.oid = c.relnamespace
+                                       CROSS JOIN LATERAL aclexplode(t.attacl) a
+                                       WHERE n.nspname IN ('obligarth', 'obligarth_private', 'pgboss', 'apple_edge') AND a.grantee = r.oid)
+                                   + (SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+                                       CROSS JOIN LATERAL aclexplode(p.proacl) a
+                                       WHERE n.nspname IN ('obligarth', 'obligarth_private', 'pgboss', 'apple_edge') AND a.grantee = r.oid)
+                                   + (SELECT count(*)::int FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+                                       WHERE a.grantee = r.oid AND NOT (n.nspname = 'obligarth' AND a.privilege_type = 'USAGE')) AS extra
+                              FROM pg_roles r WHERE r.rolname = 'obligarth_backup'`);
+    const b = backup.rows[0];
+    if (b) {
+      if (b.rolsuper || b.rolbypassrls || b.rolcreaterole || b.rolcreatedb) findings.push('role obligarth_backup has a forbidden attribute');
+      if (!b.rolreplication || !b.rolcanlogin) findings.push('role obligarth_backup: LOGIN REPLICATION expected (run server-migrate)');
+      if (b.member) findings.push('role obligarth_backup is a member of a role, or has members: revoke them');
+      if (Number(b.extra) > 0) findings.push('role obligarth_backup holds privileges beyond the insert of the backup reports: revoke them');
+    }
     const schemas = await q(`SELECT nspname, pg_get_userbyid(nspowner) AS owner FROM pg_namespace
                               WHERE nspname IN ('obligarth', 'obligarth_private', 'pgboss')`);
     const owners = new Map(schemas.rows.map((r) => [r.nspname as string, r.owner as string]));
@@ -397,6 +452,17 @@ function readSecret(value: string | undefined, file: string | undefined): string
   return value ? value : null;
 }
 
+/** An optional secret (the password of the role of the backups): a file that cannot be read is a warning, the role
+ *  then keeps the password it has (none on a new database: the backup services cannot sign in). */
+function readOptionalSecret(name: string, value: string | undefined, file: string | undefined): string | null {
+  try {
+    return readSecret(value, file);
+  } catch (err) {
+    logger.warn(`${name}: ${file} cannot be read (${(err as NodeJS.ErrnoException).code ?? 'error'}): the password of the role obligarth_backup is left as it is`);
+    return null;
+  }
+}
+
 async function main(): Promise<void> {
   const check = process.argv.includes('--check');
   const adminUrl = process.env.DATABASE_ADMIN_URL || '';
@@ -410,12 +476,14 @@ async function main(): Promise<void> {
   const report = await runMigrations({
     adminUrl,
     appPassword: readSecret(process.env.DB_APP_PASSWORD, process.env.DB_APP_PASSWORD_FILE),
+    backupPassword: readOptionalSecret('DB_BACKUP_PASSWORD_FILE', process.env.DB_BACKUP_PASSWORD, process.env.DB_BACKUP_PASSWORD_FILE),
     contextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE),
     previousContextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_PREVIOUS_FILE, 'RLS_CONTEXT_KEY_PREVIOUS_FILE'),
   });
   logger.info({
     applied: report.applied.length, rlsActive: report.rlsActive, preRlsGrants: report.preRlsGrants,
-    contextKeys: report.contextKeys, retiredContextKeys: report.retiredContextKeys, warnings: report.warnings.length,
+    contextKeys: report.contextKeys, retiredContextKeys: report.retiredContextKeys, backupRole: report.backupRole,
+    warnings: report.warnings.length,
   }, 'server-migrate complete');
 }
 

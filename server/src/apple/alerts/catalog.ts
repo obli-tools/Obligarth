@@ -79,6 +79,7 @@ export const APPLE_ALERTS = {
   'deadline.vault_kek_rotation': { scope: 'master', severity: 'warning', title: 'Key rotation due', message: '{label}: due in {daysLeft} day(s) ({notAfter}).' },
   'deadline.vault_old_shares': { scope: 'master', severity: 'warning', title: 'Old escrow shares to destroy', message: '{label}: due in {daysLeft} day(s) ({notAfter}).' },
   'deadline.vault_dek_destruction': { scope: 'master', severity: 'warning', title: 'Data key destruction due', message: '{label}: due in {daysLeft} day(s) ({notAfter}).' },
+  'deadline.backup_restore_drill': { scope: 'master', severity: 'warning', title: 'Restore drill of the backups due', message: '{label}: due in {daysLeft} day(s) ({notAfter}).' },
   // ── Tenant registry (master tenant) ───────────────────────────────────────
   'tenant.provisioning_failed': { scope: 'master', severity: 'warning', title: 'Tenant not provisioned at the device service', message: 'The tenant {tenantName} could not be created at apple-edge: retried every hour.' },
   'tenant.edge_retired': { scope: 'master', severity: 'critical', title: 'Tenant retired at the device service', message: 'apple-edge holds the tenant {tenantName} as retired: its devices cannot be served. Create a new tenant.' },
@@ -98,7 +99,8 @@ export const APPLE_ALERTS = {
   'ddm.relay_auth_failed': { scope: 'master', severity: 'critical', title: 'DDM relay signatures refused', message: '{count} request(s) of the DDM relay failed their signature.' },
   'ddm.secret_in_declaration': { scope: 'master', severity: 'critical', title: 'Secret in a declaration', message: 'A declaration of {provider} carried a secret and was refused.' },
   'ddm.declaration_conflict': { scope: 'master', severity: 'critical', title: 'Declarations in conflict', message: 'Two declarations of {provider} share the identifier {identifier}: neither is served.' },
-  'signing.identity_missing': { scope: 'master', severity: 'warning', title: 'Enrollment profiles not signed', message: 'No profile signing identity is imported: enrollment profiles are served unsigned.' },
+  // A warning in lab; critical outside lab (P0-13 T11, D8: ops.watch and the enrollment raise it so, the instance is not ready).
+  'signing.identity_missing': { scope: 'master', severity: 'warning', title: 'Profile signing identity missing', message: 'apple-edge holds no usable profile signing identity (none imported, or expired): enrollment profiles are served unsigned, or refused when signed profiles are required. Import one with the command apple-edge signing-identity import.' },
 } as const satisfies Record<string, AppleAlertDef>;
 
 export type AppleAlertKind = keyof typeof APPLE_ALERTS;

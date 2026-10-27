@@ -7,6 +7,10 @@ import { readFileSync, statSync } from 'node:fs';
 //   METRICS_HOST        interface it listens on (0.0.0.0 by default: the container's networks; the port is
 //                       published by no service)
 //   METRICS_TOKEN_FILE  file holding the bearer token (32 to 512 printable characters); empty: no token asked
+//   BACKUP_EXPECTED     true: the backups of the compose profile backup run (P0-13 T9): GET /health/ready answers 503
+//                       while the last base backup is older than 26 h or the WAL stream than 15 min, and ops.watch
+//                       raises ops.backup_stale and ops.wal_stale; false (default): neither (the reports, when any,
+//                       are still shown and their free space watched)
 // Read once at start (config.ts), refused at start when invalid (startupConfigErrors).
 // =============================================================================
 
@@ -16,6 +20,10 @@ export interface OpsConfig {
     port: number | null;
     host: string;
     tokenFile: string;
+  };
+  backups: {
+    /** BACKUP_EXPECTED. */
+    expected: boolean;
   };
 }
 
@@ -41,7 +49,9 @@ export function readOpsConfig(env: NodeJS.ProcessEnv, appPort?: number): { confi
   const host = (env.METRICS_HOST ?? '').trim() || '0.0.0.0';
   if (!/^[0-9A-Za-z.:_-]{1,253}$/.test(host)) errors.push('METRICS_HOST must be an address or a host name (0.0.0.0 by default).');
   const tokenFile = (env.METRICS_TOKEN_FILE ?? '').trim();
-  return { config: { metrics: { port, host, tokenFile } }, errors };
+  const rawExpected = (env.BACKUP_EXPECTED ?? '').trim().toLowerCase();
+  if (!['', 'true', 'false'].includes(rawExpected)) errors.push('BACKUP_EXPECTED must be true or false (false by default).');
+  return { config: { metrics: { port, host, tokenFile }, backups: { expected: rawExpected === 'true' } }, errors };
 }
 
 /** The bearer token of the metrics (METRICS_TOKEN_FILE), or null when none is set. Throws with a message that never

@@ -449,6 +449,13 @@ export function createAppleIntegrationsRouter(): Router {
 
 // ── Administration (/api/admin/apple) ───────────────────────────────────────────
 
+/** The label of a deadline typed in, when none is given. */
+const MANUAL_DEADLINE_LABELS: Record<typeof MANUAL_DEADLINE_KINDS[number], string> = {
+  mdm_domain: 'Domain of the device service',
+  profile_signing_identity: 'Profile signing identity',
+  backup_restore_drill: 'Restore drill of the backups',
+};
+
 function masterPlatformAdmin(req: Request, _res: Response, next: NextFunction): void {
   if (!isMasterTenant(req.tenantId)) { next(new AppError(404, 'Not found')); return; }
   if (req.session?.role !== 'admin') { next(new AppError(403, 'Insufficient permissions')); return; }
@@ -477,7 +484,7 @@ export function createAppleAdminIntegrationsRouter(): Router {
         return;
       }
       await recordInstanceDeadline(trx, {
-        kind: k, subjectRef: 'manual', label: b.label ?? (k === 'mdm_domain' ? 'Domain of the device service' : 'Profile signing identity'),
+        kind: k, subjectRef: 'manual', label: b.label ?? MANUAL_DEADLINE_LABELS[k],
         notAfter: new Date(b.notAfter), source: 'manual', replace: true,
       });
     }));

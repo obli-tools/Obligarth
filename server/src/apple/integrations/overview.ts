@@ -10,7 +10,7 @@ import { usesDefaultNotice } from '../enrollment/notice';
 import { usesDefaultPrivacyRules } from '../devices/privacy';
 import { currentProfile } from '../../privacy/profiles';
 import { noticeSettingsOf } from '../../privacy/notice/provider';
-import { instanceStage } from '../../ops/stage';
+import { instanceStage, signingIdentityOf } from '../../ops/stage';
 
 // =============================================================================
 // What the Integrations tab shows (docs: integration-apple-edge §11.4, §11.5,
@@ -111,12 +111,21 @@ export async function readiness(q: Knex, tenantId: number): Promise<ReadinessIte
   if (vpp.length === 0) out.push({ key: 'vpp.token', state: 'not_applicable' });
   else out.push(vpp.some((v) => v.state === 'active') ? { key: 'vpp.token', state: 'ready' } : { key: 'vpp.token', state: 'error', reason: 'no_active_token' });
 
-  const signing = edgeHealth().signingIdentity;
-  if (!signing) out.push({ key: 'signing.identity', state: 'warning', reason: 'unsigned_profiles' });
-  else {
-    const days = Math.floor((Date.parse(signing.notAfter) - now) / DAY);
-    out.push(days <= 30 ? { key: 'signing.identity', state: 'warning', reason: 'expiring', params: { daysLeft: Math.max(0, days) } }
-      : { key: 'signing.identity', state: 'ready' });
+  // The profile signing identity (D12): missing or expired, a warning in lab and an error beyond (P0-13 T11, D8: the
+  // instance is then not ready), the profiles served unsigned or, when a signature is required, the enrollments
+  // refused; not heard from apple-edge since the start, unknown (a warning, as the console of the operations says).
+  const signing = signingIdentityOf(edgeHealth(), new Date(now));
+  const required = config.apple.requireSignedProfiles;
+  if (signing.state === 'ok') out.push({ key: 'signing.identity', state: 'ready' });
+  else if (signing.state === 'expiring') {
+    out.push({ key: 'signing.identity', state: 'warning', reason: 'expiring', params: { daysLeft: Math.max(0, signing.daysLeft ?? 0) } });
+  } else if (signing.state === 'unknown') {
+    out.push({ key: 'signing.identity', state: 'warning', reason: 'signing_unknown' });
+  } else {
+    const reason = signing.state === 'expired'
+      ? (required ? 'signing_expired_refused' : 'signing_expired_unsigned')
+      : (required ? 'signing_missing_refused' : 'unsigned_profiles');
+    out.push({ key: 'signing.identity', state: instanceStage() === 'lab' ? 'warning' : 'error', reason });
   }
   out.push(await noticeReadiness(q, tenantId));
   out.push(await privacyProfileReadiness(q, tenantId));

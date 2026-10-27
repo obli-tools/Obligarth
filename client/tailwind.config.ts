@@ -43,6 +43,8 @@ export default {
           'maintenance-bg':  'rgb(var(--c-status-maintenance-bg)  / <alpha-value>)',
           paused:            'rgb(var(--c-status-paused)          / <alpha-value>)',
           'paused-bg':       'rgb(var(--c-status-paused-bg)       / <alpha-value>)',
+          warning:           'rgb(var(--c-status-warning)         / <alpha-value>)',
+          critical:          'rgb(var(--c-status-critical)        / <alpha-value>)',
         },
         accent: {
           DEFAULT: 'rgb(var(--c-accent)       / <alpha-value>)',

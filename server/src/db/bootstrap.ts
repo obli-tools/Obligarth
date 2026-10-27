@@ -52,6 +52,68 @@ BEGIN
 END $$;
 `;
 
+/**
+ * The role of the backup services (P0-13 T9, FND-09; compose profile backup):
+ * pg_receivewal and pg_basebackup connect with it (REPLICATION; the line of
+ * pg_hba.conf that admits it is added by the postgres service of
+ * docker-compose.yml), and it inserts the reports of the backups in
+ * obligarth.ops_backup_reports, nothing else: no other attribute, no
+ * membership, no privilege on any other table, sequence or function of the
+ * brain, nor on the schemas obligarth_private, pgboss and apple_edge or their
+ * objects (revoked at every run; server-migrate --check also reports any
+ * such grant, column and schema privileges included, and a membership of it
+ * or in it). Run after BOOTSTRAP_SQL (the schema exists);
+ * the grants on the table of the reports are given once its migration
+ * (ops_backups) is applied, here at the next run and by the migration itself.
+ * Its password is set separately (DB_BACKUP_PASSWORD_FILE), like the runtime
+ * role's. An administrator that is not a superuser may be refused the
+ * REPLICATION attribute (PostgreSQL 16: CREATEROLE grants it only to a holder
+ * of it): server-migrate then warns, the database has no backup role and
+ * its own backups are the operator's.
+ */
+export const BOOTSTRAP_BACKUP_ROLE_SQL = String.raw`
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'obligarth_backup') THEN
+    CREATE ROLE obligarth_backup LOGIN REPLICATION NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT CONNECTION LIMIT 8;
+  END IF;
+END $$;
+ALTER ROLE obligarth_backup WITH LOGIN REPLICATION NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT CONNECTION LIMIT 8;
+ALTER ROLE obligarth_backup SET search_path = pg_catalog, pg_temp;
+ALTER ROLE obligarth_backup SET idle_in_transaction_session_timeout = '60s';
+GRANT USAGE ON SCHEMA obligarth TO obligarth_backup;
+REVOKE ALL ON ALL TABLES IN SCHEMA obligarth FROM obligarth_backup;
+REVOKE ALL ON ALL SEQUENCES IN SCHEMA obligarth FROM obligarth_backup;
+REVOKE ALL ON ALL FUNCTIONS IN SCHEMA obligarth FROM obligarth_backup;
+REVOKE CREATE ON SCHEMA obligarth FROM obligarth_backup;
+-- The other schemas of the database (the brain's private one, pg-boss, apple-edge's, when they exist): nothing,
+-- whatever was granted by hand. apple-edge's objects may belong to a role this administrator cannot speak for: a
+-- refusal there is left to server-migrate --check, which reports any grant that stays.
+DO $$
+DECLARE
+  s text;
+BEGIN
+  FOREACH s IN ARRAY ARRAY['obligarth_private', 'pgboss', 'apple_edge'] LOOP
+    CONTINUE WHEN to_regnamespace(s) IS NULL;
+    BEGIN
+      EXECUTE format('REVOKE ALL ON SCHEMA %I FROM obligarth_backup', s);
+      EXECUTE format('REVOKE ALL ON ALL TABLES IN SCHEMA %I FROM obligarth_backup', s);
+      EXECUTE format('REVOKE ALL ON ALL SEQUENCES IN SCHEMA %I FROM obligarth_backup', s);
+      EXECUTE format('REVOKE ALL ON ALL FUNCTIONS IN SCHEMA %I FROM obligarth_backup', s);
+    EXCEPTION WHEN insufficient_privilege THEN
+      RAISE WARNING 'obligarth_backup: the grants of the schema % could not be revoked by this administrator', s;
+    END;
+  END LOOP;
+END $$;
+DO $$
+BEGIN
+  IF to_regclass('obligarth.ops_backup_reports') IS NOT NULL THEN
+    GRANT INSERT ON obligarth.ops_backup_reports TO obligarth_backup;
+    GRANT USAGE ON SEQUENCE obligarth.ops_backup_reports_id_seq TO obligarth_backup;
+  END IF;
+END $$;
+`;
+
 /** Ownership of an existing pgboss schema (a database created before the
  *  runtime role existed) moved to the runtime role, with every object of it
  *  (file-durable §10.5). */
