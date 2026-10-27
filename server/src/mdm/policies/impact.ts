@@ -1,15 +1,16 @@
 import type { Knex } from 'knex';
 import {
   PUBLISH_APPROVAL_THRESHOLDS,
-  type ImpactApprovalReason, type PolicyContentV1, type PolicyImpact,
+  type AssignmentTargetScope, type ImpactApprovalReason, type PolicyContentV1, type PolicyImpact, type RuleNode,
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
+import type { DevicePatch } from '../registry/devicePatch';
 import { validateAndroidSection } from '../android/validate';
 import { androidKioskLockArtifact } from '../android/kiosk';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { fleetShareFloor } from '../settings';
 import { recentlyTouched } from './changeLedger';
-import { findConflicts } from './conflicts';
+import { findConflicts, hasSmartGroupTargets, newDeviceConflicts } from './conflicts';
 import { ancestryWithout, describeKeys, encodeSpread, entryName, impactDigest, movedAncestry } from './impactPure';
 import {
   contributionsOf, devicesOfTargets, loadDevices, loadGroupAncestors, loadPolicyState, loadResources,
@@ -25,11 +26,18 @@ import {
 // in memory, current state and proposed state, by the same pure function; the
 // comparison bears on (setting key, value hash, removed, availability), then
 // on the artifacts the settings make. Nothing is written. The thresholds of
-// DM23 say whether a second approver is required.
+// DM23 say whether a second approver is required. The conflicts are those of
+// the targets (findConflicts) and, where a dynamic group meets another target
+// on devices (P0-5 T6), those the change creates on the devices it reaches
+// (newDeviceConflicts).
 // A change is a version to publish, a batch of assignment changes, or a change
 // of the tree of groups (a group moved under another parent, a group deleted):
 // the policies are inherited along the ancestry of the groups, so the tree is
-// part of the configuration (review of lot B5b, MDM-B5b-C2).
+// part of the configuration (review of lot B5b, MDM-B5b-C2). Other modules
+// register the proposal of their own kinds (registerProposedKind): the
+// governed changes of the dynamic groups (P0-5 T7, mdm/groups/governance.ts:
+// a new rule, a deletion, the release of a held group, the facts of a device),
+// which reach the devices they name and change their dynamic groups.
 // The preview also has a digest of its content: what the change sets and
 // unsets, whatever the number of devices. An approval is given on that content
 // (DM10): at its execution the digest must be the one that was approved
@@ -55,10 +63,22 @@ export type ProposedChange =
   /** A group deleted: its assignments go with it, its devices leave it, its subgroups lose it as an ancestor. */
   | { kind: 'group_delete'; groupId: number }
   /** Devices moved into a group (null: out of any group): they inherit what the new group's ancestry carries (S12). */
-  | { kind: 'device_move'; deviceIds: number[]; groupId: number | null };
+  | { kind: 'device_move'; deviceIds: number[]; groupId: number | null }
+  // The governed changes of the dynamic groups (P0-5 T7, §4.4): proposals registered by mdm/groups/governance.ts.
+  /** A new rule for a dynamic group: its members become those the rule selects (current and proposed members reached). */
+  | { kind: 'smart_group_rule'; smartGroupId: number; rule: RuleNode; ruleSha256: string }
+  /** A dynamic group deleted: its assignments go with it, its members leave it. */
+  | { kind: 'smart_group_delete'; smartGroupId: number }
+  /** A held group released: the changes the mass guard kept waiting are applied (its stored rule on the tenant). */
+  | { kind: 'smart_group_release'; smartGroupId: number }
+  /** The facts of a device changed (its name, tags, custom fields, asset statuses: D11): the dynamic groups an
+   *  assignment targets that it enters or leaves, and its name (a variable of the policies). */
+  | { kind: 'device_facts'; deviceId: number; patch: DevicePatch };
 
 export type GroupTreeChange = Extract<ProposedChange, { kind: 'group_move' | 'group_delete' }>;
 export type DeviceMoveChange = Extract<ProposedChange, { kind: 'device_move' }>;
+export type SmartGroupChange = Extract<ProposedChange, { kind: 'smart_group_rule' | 'smart_group_delete' | 'smart_group_release' }>;
+export type DeviceFactsChange = Extract<ProposedChange, { kind: 'device_facts' }>;
 
 export interface ImpactOptions {
   catalog?: AppleCatalogView;
@@ -91,6 +111,18 @@ export interface ImpactResult {
   content: ContentEntry[];
   /** The devices with at least one removal (artifact, kiosk lock, app), by id (the cumulative threshold). */
   removalDeviceIds: number[];
+  /** A change of the members of a dynamic group (P0-5 T7): the entries and exits it makes. */
+  membership?: MembershipDelta;
+}
+
+/** The entries and exits of a dynamic group a change makes (device ids), and its members once written (their number,
+ *  and their ids: the counts of a caller scoped to some devices are taken from them, P0-5 D3). */
+export interface MembershipDelta {
+  smartGroupId: number;
+  added: number[];
+  removed: number[];
+  total: number;
+  members: number[];
 }
 
 const KIOSK_LOCK_TYPE = 'com.apple.app.lock';
@@ -98,15 +130,37 @@ const KIOSK_LOCK_TYPE = 'com.apple.app.lock';
 /** An Android ApplicationPolicy whose installType is BLOCKED (the app is uninstalled). */
 const isBlockedApp = (v: unknown): boolean => !!v && typeof v === 'object' && (v as { installType?: unknown }).installType === 'BLOCKED';
 
-type Target = { scope: 'tenant' | 'group' | 'device'; id: number | null };
+type Target = { scope: AssignmentTargetScope; id: number | null };
 
-interface Proposal {
+/** What a change proposes: the state once written, what it reaches, what it is about. */
+export interface Proposal {
   proposed: PolicyState;
   targets: Target[];
+  /** The devices the change reaches, when it names them rather than targets (the members of a dynamic group, current
+   *  and proposed: P0-5 T7); `targets` is then not read. */
+  deviceIds?: number[];
   /** The resources the change is about; null for a change of the tree, which is about none in particular. */
   focus: Set<string> | null;
-  /** The devices and the ancestry of their groups once the tree has changed. */
+  /** The devices and the ancestry of their groups once the tree has changed (or their dynamic groups, their name). */
   reshape?: (set: DeviceSet) => DeviceSet;
+  /** A change of the dynamic groups of devices (P0-5 T7): the conflicts it creates on them between targets that meet
+   *  (newDeviceConflicts, every resource), although it is about no resource in particular. */
+  deviceConflicts?: boolean;
+  /** The entries and exits of a dynamic group it makes. */
+  membership?: MembershipDelta;
+}
+
+/** Builds the proposal of a kind of change registered by another module (registerProposedKind). */
+export type ProposalBuilder = (q: Knex | Knex.Transaction, tenantId: number, state: PolicyState, change: ProposedChange,
+  catalog: AppleCatalogView) => Promise<Proposal>;
+
+/** The kinds of change whose proposal another module builds (the governed changes of the dynamic groups, P0-5 T7; the
+ *  coordination's brick « changement gouverné »: P0-4, P0-8, P0-11 register theirs). */
+const proposalBuilders = new Map<string, ProposalBuilder>();
+
+/** Registers the builder of the proposal of a kind of change (once, when its module loads). */
+export function registerProposedKind(kind: ProposedChange['kind'], build: ProposalBuilder): void {
+  proposalBuilders.set(kind, build);
 }
 
 /** The groups of the subtree of a group (itself at depth 0), from the closure; 404 when the tenant has no such group. */
@@ -172,6 +226,8 @@ async function proposedDeviceMove(q: Knex | Knex.Transaction, tenantId: number, 
 /** The proposed state of a change, the targets it reaches and the resources it changes. */
 async function proposedState(q: Knex | Knex.Transaction, tenantId: number, state: PolicyState, change: ProposedChange,
   catalog: AppleCatalogView): Promise<Proposal> {
+  const registered = proposalBuilders.get(change.kind);
+  if (registered) return registered(q, tenantId, state, change, catalog);
   if (change.kind === 'group_move' || change.kind === 'group_delete') return proposedTree(q, tenantId, state, change);
   if (change.kind === 'device_move') return proposedDeviceMove(q, tenantId, state, change);
   if (change.kind === 'version') {
@@ -191,6 +247,8 @@ async function proposedState(q: Knex | Knex.Transaction, tenantId: number, state
       .map((a) => ({ scope: a.targetScope, id: a.targetId }));
     return { proposed: { ...state, resources }, targets, focus: new Set([rk]) };
   }
+  // A registered kind whose module is not loaded: never computed as another one.
+  if (change.kind !== 'assignments') throw new Error(`impact: no proposal registered for the kind ${change.kind}`);
   let assignments = [...state.assignments];
   const targets: Target[] = [];
   const focus = new Set<string>();
@@ -254,8 +312,9 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
   opts: ImpactOptions = {}): Promise<ImpactResult> {
   const catalog = opts.catalog ?? appleCatalog();
   const state = await loadPolicyState(q, tenantId, catalog);
-  const { proposed, targets, focus, reshape } = await proposedState(q, tenantId, state, change, catalog);
-  const deviceIds = targets.length ? await devicesOfTargets(q, tenantId, targets) : [];
+  const proposal = await proposedState(q, tenantId, state, change, catalog);
+  const { proposed, targets, focus, reshape } = proposal;
+  const deviceIds = proposal.deviceIds ?? (targets.length ? await devicesOfTargets(q, tenantId, targets) : []);
   const current: DeviceSet = deviceIds.length ? await loadDevices(q, tenantId, deviceIds) : { devices: [] as ResolutionDevice[], groupAncestors: new Map() };
   const next = reshape ? reshape(current) : current;
   const { devices } = current;
@@ -364,8 +423,14 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     if (removal) { removalDevices++; removalDeviceIds.push(devices[i].id); }
   }
 
-  // A change of the tree sets no two values at one target: the conflicts are those of the assignments (section 7.7).
-  const conflicts = focus ? findConflicts(proposed.assignments, proposed.resources, { focus }) : [];
+  // A change of the tree sets no two values at one target: the conflicts are those of the assignments (section 7.7),
+  // of each target, and of the targets that meet on the devices reached (P0-5 T6). A change of the dynamic groups of
+  // devices (P0-5 T7) is about no resource, but brings targets together on devices: the conflicts it creates there.
+  const listed = focus ? findConflicts(proposed.assignments, proposed.resources, { focus }) : [];
+  const conflicts = focus || proposal.deviceConflicts ? [...listed, ...newDeviceConflicts(
+    { devices, groupAncestors: current.groupAncestors, assignments: state.assignments, resources: state.resources },
+    { devices: next.devices, groupAncestors: next.groupAncestors, assignments: proposed.assignments, resources: proposed.resources },
+    { ...(focus ? { focus } : {}), listed })] : [];
   const fleet = await q('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled').count({ n: '*' }).first() as { n: string | number };
   const fleetSize = Number(fleet?.n ?? 0);
   const T = PUBLISH_APPROVAL_THRESHOLDS;
@@ -414,15 +479,27 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     impact, touched, digest: impactDigest(content.keys()),
     content: [...content].map(([entry, c]) => ({ name: entryName(entry), settingKey: c.settingKey, devices: c.devices })),
     removalDeviceIds,
+    ...(proposal.membership ? { membership: proposal.membership } : {}),
   };
 }
 
-/** The conflicts a change would create (section 7.7), without resolving any device. */
+/** The conflicts a change would create (section 7.7), without resolving any device: those of each target, then, when
+ *  a dynamic group is targeted (P0-5 T6), those of the targets that meet on the devices the change reaches. */
 export async function conflictsOf(q: Knex | Knex.Transaction, tenantId: number, change: ProposedChange,
   catalog: AppleCatalogView = appleCatalog()): Promise<PolicyImpact['conflicts']> {
   const state = await loadPolicyState(q, tenantId, catalog);
-  const { proposed, focus } = await proposedState(q, tenantId, state, change, catalog);
-  return focus ? findConflicts(proposed.assignments, proposed.resources, { focus }) : [];
+  const { proposed, targets, focus, reshape } = await proposedState(q, tenantId, state, change, catalog);
+  if (!focus) return [];
+  const listed = findConflicts(proposed.assignments, proposed.resources, { focus });
+  if (!hasSmartGroupTargets(state.assignments) && !hasSmartGroupTargets(proposed.assignments)) return listed;
+  const deviceIds = targets.length ? await devicesOfTargets(q, tenantId, targets) : [];
+  if (!deviceIds.length) return listed;
+  const current = await loadDevices(q, tenantId, deviceIds);
+  const next = reshape ? reshape(current) : current;
+  return [...listed, ...newDeviceConflicts(
+    { ...current, assignments: state.assignments, resources: state.resources },
+    { ...next, assignments: proposed.assignments, resources: proposed.resources },
+    { focus, listed })];
 }
 
 /** Has an impact grown beyond the tolerance since it was approved (touched devices or removals, DM23)? */

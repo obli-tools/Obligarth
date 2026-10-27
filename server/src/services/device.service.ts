@@ -13,6 +13,7 @@ import { recordPrivacy } from '../privacy/collected';
 import { applyDeviceListFilters, staleDaysSql, type DeviceListFilters } from './deviceListFilters';
 import { staleAfterDaysOf } from '../mdm/settings';
 import type { TenantView } from './deviceScope.service';
+import { devicePatchColumns, type DevicePatch } from '../mdm/registry/devicePatch';
 
 // =============================================================================
 // The device registry of the MDM (docs: modele-donnees-mdm §4, §10.2, §11.1):
@@ -468,18 +469,7 @@ class DeviceService {
    * /api/mdm/devices/:id). The group, the end user and the ownership have their own routes. Returns the
    * record, or null when the device is out of reach.
    */
-  async updateDevice(id: number, tenantId: number, data: Partial<{
-    displayName: string | null;
-    description: string | null;
-    tags: string[];
-    customFields: Record<string, string>;
-    purchaseDate: string | null;
-    warrantyExpiry: string | null;
-    warrantyVendor: string | null;
-    warrantyStatus: string | null;
-    expectedLifetimeYears: number | null;
-    lifecycleStatus: string | null;
-  }>, view?: TenantView): Promise<DeviceDetail | null> {
+  async updateDevice(id: number, tenantId: number, data: DevicePatch, view?: TenantView): Promise<DeviceDetail | null> {
     const isMaster = isGlobalView(tenantId, view);
     const lookup = db('devices').where({ id });
     if (!isMaster) lookup.where({ tenant_id: tenantId });
@@ -487,20 +477,9 @@ class DeviceService {
     if (!current) return null;
     const deviceTenantId = Number(current.tenant_id);
 
-    const updates: Record<string, unknown> = { updated_at: new Date() };
-    if (data.displayName !== undefined) updates.display_name = data.displayName === null ? null : String(data.displayName).slice(0, 500);
-    if (data.description !== undefined) updates.description = data.description;
-    if (data.tags !== undefined) updates.tags = JSON.stringify(data.tags);
-    if (data.customFields !== undefined) updates.custom_fields = JSON.stringify(data.customFields);
-    if (data.purchaseDate !== undefined) updates.purchase_date = data.purchaseDate;
-    if (data.warrantyExpiry !== undefined) updates.warranty_expiry = data.warrantyExpiry;
-    if (data.warrantyVendor !== undefined) updates.warranty_vendor = data.warrantyVendor;
-    if (data.warrantyStatus !== undefined) updates.warranty_status = data.warrantyStatus;
-    if (data.expectedLifetimeYears !== undefined) updates.expected_lifetime_years = data.expectedLifetimeYears;
-    if (data.lifecycleStatus !== undefined) updates.lifecycle_status = data.lifecycleStatus;
-
-    // Written in the device's own tenant (the one resolved above).
-    await db('devices').where({ id, tenant_id: deviceTenantId }).update(updates);
+    // Written in the device's own tenant (the one resolved above). The columns: mdm/registry/devicePatch.ts (the
+    // governed change of the facts writes the same ones, P0-5 T7).
+    await db('devices').where({ id, tenant_id: deviceTenantId }).update(devicePatchColumns(data));
     this.emitChanged(deviceTenantId, [id], isMaster && deviceTenantId !== tenantId ? tenantId : null);
     return this.getDeviceById(id, deviceTenantId);
   }

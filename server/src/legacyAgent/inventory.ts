@@ -2,6 +2,7 @@ import type { Knex } from 'knex';
 import { audit } from '../audit';
 import { raiseInTx } from '../apple/alerts/service';
 import { appsMerge } from '../mdm/inventory/appMerge';
+import { requestGroupEvaluation } from '../mdm/groups/triggers';
 import { legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { managedPackages } from './commands';
@@ -137,6 +138,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       'agent.security.patch': d.securityPatch ?? null,
       'agent.install.unknown-sources': b.install?.unknownSources ?? null,
     });
+    // The dynamic groups: what the base marked of this inventory (facts, API level, patch, applications), P0-5 T5.
+    await requestGroupEvaluation(trx, who.tenantId, [who.deviceId]);
     // iconsWanted is always present (empty included): the agent 1.0.2 learns from it that this server knows the icons.
     return { status: 200, body: { accepted: true, iconsWanted } };
   });

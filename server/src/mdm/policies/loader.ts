@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import type { JsonValue, PolicyContentV1 } from '@obligarth/shared';
+import type { AssignmentTargetScope, JsonValue, PolicyContentV1 } from '@obligarth/shared';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { policyContributions, type Contribution } from './contributions';
 import {
@@ -13,7 +13,7 @@ import {
 // policies they name (their contributions computed once per version: a
 // published version is immutable), the apps, the devices (out of management
 // excluded) with the facts of their availability and variables, the ancestry
-// of their groups.
+// of their groups and the dynamic groups they are members of (P0-5 T6).
 // =============================================================================
 
 export interface PolicyState {
@@ -157,7 +157,7 @@ export function rowToAssignment(r: Record<string, unknown>): ResolutionAssignmen
     resourceType: r.resource_type as 'policy' | 'app',
     resourceId: Number(r.resource_id),
     resourceTenantId: Number(r.resource_tenant_id),
-    targetScope: r.target_scope as 'tenant' | 'group' | 'device',
+    targetScope: r.target_scope as AssignmentTargetScope,
     targetId: r.target_id === null || r.target_id === undefined ? null : Number(r.target_id),
     mode: r.mode as 'include' | 'exclude',
     priority: Number(r.priority),
@@ -199,8 +199,9 @@ export function declarationTypesOf(capabilities: unknown): string[] | null {
   return Array.isArray(list) ? list.filter((s): s is string => typeof s === 'string') : null;
 }
 
-/** The devices under management of a tenant (all, or `deviceIds`), with the facts of their resolution, and the
- *  ancestry of their groups. */
+/** The devices under management of a tenant (all, or `deviceIds`), with the facts of their resolution, the dynamic
+ *  groups they are members of (whatever the state of the group: the members of a held group or of one in error are
+ *  frozen, they stay what applies), and the ancestry of their groups. */
 export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, deviceIds: number[] | null): Promise<DeviceSet> {
   const query = q('devices as d')
     .leftJoin('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
@@ -210,7 +211,9 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
     .orderBy('d.id')
     .select('d.id', 'd.uuid', 'd.label', 'd.group_id', 'd.platform', 'd.management_channel', 'd.os_version', 'd.management_mode', 'd.supervised',
       'd.ownership', 'd.serial_number', 'd.model_name', 'a.udid', 'a.ddm_enabled', 'a.ddm_client_capabilities',
-      'u.id as end_user_id', 'u.email', 'u.display_name as end_user_name', 'u.managed_apple_account', 'u.external_id');
+      'u.id as end_user_id', 'u.email', 'u.display_name as end_user_name', 'u.managed_apple_account', 'u.external_id',
+      q.raw(`(SELECT array_agg(m.smart_group_id ORDER BY m.smart_group_id) FROM smart_group_members m
+               WHERE m.tenant_id = d.tenant_id AND m.device_id = d.id) AS smart_group_ids`));
   if (deviceIds) query.whereIn('d.id', deviceIds);
   const rows = await query as Array<Record<string, any>>;
   const devices: ResolutionDevice[] = rows.map((r) => ({
@@ -233,6 +236,7 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
       email: r.email ?? null, displayName: r.end_user_name ?? null, managedAppleAccount: r.managed_apple_account ?? null,
       externalId: r.external_id ?? null,
     },
+    smartGroupIds: Array.isArray(r.smart_group_ids) ? r.smart_group_ids.map(Number) : [],
   }));
   const groupIds = [...new Set(devices.map((d) => d.groupId).filter((g): g is number => g !== null))];
   const groupAncestors = await loadGroupAncestors(q, tenantId, groupIds);
@@ -254,14 +258,16 @@ export async function loadGroupAncestors(q: Knex | Knex.Transaction, tenantId: n
   return out;
 }
 
-/** The devices a target reaches: one device, a group and its subtree, the whole tenant (under management). */
+/** The devices a target reaches: one device, a group and its subtree, the members of a dynamic group, the whole tenant
+ *  (under management: a member out of management is never reached, whatever the incremental computation left). */
 export async function devicesOfTargets(q: Knex | Knex.Transaction, tenantId: number,
-  targets: Array<{ scope: 'tenant' | 'group' | 'device'; id: number | null }>): Promise<number[]> {
+  targets: Array<{ scope: AssignmentTargetScope; id: number | null }>): Promise<number[]> {
   if (targets.some((t) => t.scope === 'tenant')) {
     return (await q('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled').orderBy('id').pluck('id') as number[]).map(Number);
   }
   const groupIds = [...new Set(targets.filter((t) => t.scope === 'group' && t.id !== null).map((t) => t.id as number))];
   const deviceIds = [...new Set(targets.filter((t) => t.scope === 'device' && t.id !== null).map((t) => t.id as number))];
+  const smartGroupIds = [...new Set(targets.filter((t) => t.scope === 'smart_group' && t.id !== null).map((t) => t.id as number))];
   const ids = new Set<number>();
   if (groupIds.length) {
     const rows = await q('devices as d')
@@ -274,6 +280,13 @@ export async function devicesOfTargets(q: Knex | Knex.Transaction, tenantId: num
     const rows = await q('devices').where({ tenant_id: tenantId }).whereIn('id', deviceIds).whereNot('enrollment_state', 'unenrolled')
       .pluck('id') as number[];
     for (const r of rows) ids.add(Number(r));
+  }
+  if (smartGroupIds.length) {
+    const rows = await q('devices as d')
+      .join('smart_group_members as m', function joinMembers() { this.on('m.device_id', '=', 'd.id').andOn('m.tenant_id', '=', 'd.tenant_id'); })
+      .where('d.tenant_id', tenantId).whereIn('m.smart_group_id', smartGroupIds).whereNot('d.enrollment_state', 'unenrolled')
+      .distinct('d.id') as Array<{ id: number }>;
+    for (const r of rows) ids.add(Number(r.id));
   }
   return [...ids].sort((a, b) => a - b);
 }

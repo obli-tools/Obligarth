@@ -1,6 +1,6 @@
 import {
   ANDROID_MODES, APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
-  type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
+  type AssignmentTargetScope, type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
   type SettingKind, type SourceScope,
 } from '@obligarth/shared';
 import type { AppleCatalogView } from '../apple/catalog';
@@ -23,7 +23,9 @@ export function androidAppAssignmentContribution(packageName: string, options: R
 // device, the setting keys retained with their provenance, availability and
 // conflicts. One rule of inheritance:
 //   1. scopes of the device: the device (rank 0), each group of its group's
-//      ancestry from the nearest (rank 1 + depth), the tenant (rank 10 000);
+//      ancestry from the nearest (rank 1 + depth), each dynamic group it is a
+//      member of (rank 1, the rank of its own static group: P0-5 D1, their
+//      assignments carry an explicit priority), the tenant (rank 10 000);
 //   2. a resource excluded at any scope of the device does not contribute;
 //   3. each remaining inclusion brings the keys of the resource (the published
 //      version of a policy, an app);
@@ -36,7 +38,8 @@ export function androidAppAssignmentContribution(packageName: string, options: R
 // (section 7.11): both run it on what the loader read.
 // =============================================================================
 
-export const RANK = { device: 0, groupBase: 1, tenant: 10_000, library: 20_000 } as const;
+/** smartGroup: a dynamic group ranks as the static group the device is directly in (groupBase: P0-5 D1, coordination C13). */
+export const RANK = { device: 0, groupBase: 1, smartGroup: 1, tenant: 10_000, library: 20_000 } as const;
 
 export interface ResolutionDevice {
   id: number;
@@ -58,6 +61,9 @@ export interface ResolutionDevice {
   /** Declaration types of management.client-capabilities; null until reported. */
   declarationTypes: string[] | null;
   endUser: { email: string | null; displayName: string | null; managedAppleAccount: string | null; externalId: string | null } | null;
+  /** The dynamic groups the device is a member of (smart_group_members, P0-5 T6), by id; absent: none (a fictitious
+   *  device, an enrollment policy). */
+  smartGroupIds?: number[];
 }
 
 export interface ResolutionAssignment {
@@ -65,7 +71,7 @@ export interface ResolutionAssignment {
   resourceType: 'policy' | 'app';
   resourceId: number;
   resourceTenantId: number;
-  targetScope: 'tenant' | 'group' | 'device';
+  targetScope: AssignmentTargetScope;
   targetId: number | null;
   mode: 'include' | 'exclude';
   priority: number;
@@ -205,7 +211,8 @@ const facts = (d: ResolutionDevice) => ({
   declarationTypes: d.declarationTypes,
 });
 
-/** The scopes of a device, from the nearest. */
+/** The scopes of a device, from the nearest (its dynamic groups after its static ancestry, by id: the order of the scopes
+ *  decides nothing, the candidates are sorted by rank and priority). */
 export function scopesOf(d: ResolutionDevice, groupAncestors: ResolutionInput['groupAncestors']):
   Array<{ scope: SourceScope; scopeId: number | null; target: string; rank: number }> {
   const out: Array<{ scope: SourceScope; scopeId: number | null; target: string; rank: number }> = [
@@ -216,6 +223,9 @@ export function scopesOf(d: ResolutionDevice, groupAncestors: ResolutionInput['g
     for (const g of [...ancestors].sort((a, b) => a.depth - b.depth)) {
       out.push({ scope: 'group', scopeId: g.groupId, target: targetKey('group', g.groupId), rank: RANK.groupBase + g.depth });
     }
+  }
+  for (const id of d.smartGroupIds ?? []) {
+    out.push({ scope: 'smart_group', scopeId: id, target: targetKey('smart_group', id), rank: RANK.smartGroup });
   }
   out.push({ scope: 'tenant', scopeId: null, target: targetKey('tenant', null), rank: RANK.tenant });
   return out;

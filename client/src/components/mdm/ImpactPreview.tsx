@@ -8,7 +8,7 @@ import { mdmApi } from '@/api/mdm.api';
 import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { anonymize } from '@/utils/anonymize';
-import { apiErrorMessage, apiErrorStatus } from '@/utils/apiError';
+import { apiErrorMessage, apiErrorStatus, trCode } from '@/utils/apiError';
 
 // The preview of a change of the effective configuration (modele-donnees-mdm §7.11, PLT-18): shown before a
 // publication, a change of assignments, and the move or the deletion of a group. What it touches, what it adds,
@@ -62,10 +62,23 @@ export function ConflictList({ conflicts }: { conflicts: PolicyConflict[] }) {
             <span className="font-mono text-text-primary break-all">{settingKeyLabel(c.settingKey)}</span>
             {' — '}
             {c.resources.map((r) => r.name).join(', ')}
+            {/* Targets that meet on devices (a dynamic group and another target of the same rank): which, and on how many. */}
+            {c.targets && c.targets.length > 0 && (
+              <span className="text-text-muted">
+                {' · '}
+                {c.targets.map((x) => `${trCode(`mdm.assignments.scope.${x.scope}`, x.scope)}${x.id !== null ? ` #${x.id}` : ''}`).join(' + ')}
+              </span>
+            )}
+            {c.devices !== undefined && (
+              <span className="text-text-muted">
+                {' · '}
+                {t('mdm.impact.conflictDevices', { count: c.devices }) || `${c.devices} device(s)`}
+              </span>
+            )}
           </li>
         ))}
       </ul>
-      <p className="text-[11px] text-text-muted">{t('mdm.impact.conflictsHint') || 'Two resources set the same key on the same target with the same priority and different values: change a priority or a value.'}</p>
+      <p className="text-[11px] text-text-muted">{t('mdm.impact.conflictsHint') || 'Two resources set the same key on the same devices (one target, or targets of the same rank that meet) with the same priority and different values: change a priority or a value.'}</p>
     </div>
   );
 }

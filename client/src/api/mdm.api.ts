@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  Assignment, AssignmentChange, DeviceAppsMeta, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
+  Assignment, AssignmentChange, AssignmentTargetScope, DeviceAppsMeta, DeviceAppView, DeviceCertificateView, DeviceConfigurationView, DeviceDetail,
   DeviceFacets, DeviceLocations, DeviceProfileView, DeviceSummary, EndUser, EndUserImportReport, EnrollmentEpisode, GuardOutcome,
   ImpactDevicesPage, MdmFleetPoint, MdmFleetSummary, Policy, PolicyConflict, PolicyContentV1, PolicyImpact,
   PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome, AppCatalogEntry, AppDetail,
@@ -33,6 +33,8 @@ export interface DeviceListParams {
   groupId?: number;
   includeSubgroups?: boolean;
   ungrouped?: boolean;
+  /** The members of a dynamic group (P0-5 T4). */
+  smartGroupId?: number;
   tags?: string[];
   endUserId?: number;
   /** Only the devices whose lost mode is not off (sent as lostMode=true). */
@@ -133,9 +135,11 @@ export const mdmApi = {
     const res = await apiClient.get<ApiResponse<DeviceLocations>>(`/mdm/devices/${deviceId}/locations`, { params: limit ? { limit } : undefined });
     return res.data.data ?? { available: false, unavailable: null, points: [], retentionDays: 0 };
   },
-  async updateDevice(id: number, patch: DevicePatch): Promise<DeviceDetail> {
+  /** `null`: the change makes the device enter or leave a dynamic group an assignment targets and waits for a second
+   *  approver (202, P0-5 D11): nothing has changed yet. */
+  async updateDevice(id: number, patch: DevicePatch): Promise<DeviceDetail | null> {
     const res = await apiClient.patch<ApiResponse<DeviceDetail>>(`/mdm/devices/${id}`, patch);
-    return res.data.data!;
+    return res.status === 202 ? null : res.data.data!;
   },
   /** `null`: the move waits for a second approver (202), nothing has moved yet (modele-donnees-mdm S12). */
   async setGroup(id: number, groupId: number | null): Promise<{ changed: boolean } | null> {
@@ -278,7 +282,7 @@ export const mdmApi = {
   },
 
   // ── Assignments ────────────────────────────────────────────────────────────
-  async listAssignments(params: { resourceType?: 'policy' | 'app'; resourceId?: number; targetScope?: 'tenant' | 'group' | 'device'; targetId?: number }): Promise<Assignment[]> {
+  async listAssignments(params: { resourceType?: 'policy' | 'app'; resourceId?: number; targetScope?: AssignmentTargetScope; targetId?: number }): Promise<Assignment[]> {
     const res = await apiClient.get<ApiResponse<Assignment[]>>('/mdm/assignments', { params: query(params) });
     return res.data.data ?? [];
   },

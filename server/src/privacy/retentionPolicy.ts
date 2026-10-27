@@ -1,6 +1,6 @@
 import type { Knex } from 'knex';
 import {
-  RETENTION_CATEGORIES, RETENTION_LOWERING_DELAY_DAYS, isRetentionCategory, retentionChanges, retentionValueErrors,
+  RETENTION_CATEGORIES, RETENTION_LOWERING_DELAY_DAYS, SMART_GROUP_LIMITS, isRetentionCategory, retentionChanges, retentionValueErrors,
   type RetentionCategory, type RetentionCategoryDto, type RetentionFixedDto, type RetentionPendingRequestDto, type RetentionPolicyDto,
 } from '@obligarth/shared';
 import { audit } from '../audit';
@@ -55,6 +55,7 @@ export function fixedRetentions(): RetentionFixedDto[] {
     { key: 'notification_log', value: NOTIFICATION_LOG_RETENTION_DAYS, unit: 'days' },
     { key: 'live_alerts', value: LIVE_ALERT_RETENTION_DAYS, unit: 'days' },
     { key: 'backups', value: backupRetentionDays(), unit: 'days' },
+    { key: 'smart_group_memberships', value: SMART_GROUP_LIMITS.membershipLogDays, unit: 'days' },
   ];
 }
 

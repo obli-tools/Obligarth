@@ -25,6 +25,9 @@ import { retentionDays } from '../../privacy/retention';
 import { lostModeLocationAllowed } from '../../privacy/profiles';
 import { deviceConfiguration } from '../policies/configuration';
 import { requestDeviceResolution } from '../policies/triggers';
+import { requestGroupEvaluation } from '../groups/triggers';
+import { changeDeviceFacts } from '../groups/governance';
+import { DevicePatchBody } from '../registry/devicePatch';
 
 // =============================================================================
 // Console API of the device registry (docs: modele-donnees-mdm §10.6, §11.1):
@@ -103,28 +106,8 @@ async function visibleIdsOf(req: Request): Promise<number[] | 'all' | undefined>
   return permissionService.getVisibleDeviceIds(req.session.userId!, false);
 }
 
-/** An asset date (a DATE column): a calendar day YYYY-MM-DD that exists, years 1900 to 9999. Any other text went
- *  to PostgreSQL as is and was answered 500. */
-const assetDay = z.string().max(10).refine((v) => {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return false;
-  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  const at = new Date(Date.UTC(y, mo - 1, d));
-  return y >= 1900 && at.getUTCFullYear() === y && at.getUTCMonth() === mo - 1 && at.getUTCDate() === d;
-}, 'a calendar day YYYY-MM-DD');
-
-const PatchBody = z.object({
-  displayName: z.string().max(500).nullable().optional(),
-  description: z.string().max(10_000).nullable().optional(),
-  tags: z.array(z.string().max(100)).max(50).optional(),
-  customFields: z.record(z.string().max(100), z.string().max(1000)).optional(),
-  purchaseDate: assetDay.nullable().optional(),
-  warrantyExpiry: assetDay.nullable().optional(),
-  warrantyVendor: z.string().max(200).nullable().optional(),
-  warrantyStatus: z.enum(['active', 'expired', 'unknown']).nullable().optional(),
-  expectedLifetimeYears: z.number().int().min(0).max(100).nullable().optional(),
-  lifecycleStatus: z.enum(['active', 'aging', 'end_of_life', 'retired', 'unknown']).nullable().optional(),
-}).strict();
+/** The operator's fields of a record (mdm/registry/devicePatch.ts: the governed change of the facts parses it again). */
+const PatchBody = DevicePatchBody;
 
 const GroupBody = z.object({ groupId: z.number().int().positive().nullable() }).strict();
 const BatchGroupBody = z.object({
@@ -280,16 +263,27 @@ router.get('/devices/:id', globalViewScope('console.devices'), resolveDevice(fal
   } catch (err) { next(err); }
 });
 
-// PATCH /api/mdm/devices/:id — the operator's fields (name, description, tags, custom fields, asset).
+// PATCH /api/mdm/devices/:id[?dryRun=true] — the operator's fields (name, description, tags, custom fields, asset).
+// A change that makes the device enter or leave a dynamic group an assignment targets (P0-5 T7, D11) needs
+// devices.manage (403 deviceFactsGoverned) and goes through the governed preview (groups/governance.ts): ?dryRun=true
+// answers it, a step-up when the configuration of the device changes, a second approver beyond the thresholds (202).
 router.patch('/devices/:id', resolveDevice(true), async (req, res, next) => {
   try {
     const patch = body(PatchBody, req);
     const { id, tenantId } = req.mdmDevice!;
-    const view = { globalView: hasGlobalView(req) };
-    const device = await asTargetTenant(req, tenantId, () => deviceService.updateDevice(id, req.tenantId!, patch, view));
+    const out = await asTargetTenant(req, tenantId, () => changeDeviceFacts(req, tenantId, id, patch, isDryRun(req)));
+    if (out) {
+      if (out.headers) res.set(out.headers);
+      res.status(out.status).json(out.body);
+      return;
+    }
+    const device = await asTargetTenant(req, tenantId, () => deviceService.getDeviceById(id, tenantId));
     if (!device) throw new AppError(404, 'Device not found');
+    deviceService.emitChanged(tenantId, [id], hasGlobalView(req) && tenantId !== req.tenantId ? req.tenantId! : null);
     // The name of the device is a variable of the policies ({{device.name}}): what is rendered with it follows.
     if (patch.displayName !== undefined) await asTargetTenant(req, tenantId, () => requestDeviceResolution(null, tenantId, [id]));
+    // The dynamic groups: the name, the tags, the custom fields and the asset statuses the base marked (P0-5 T5).
+    await asTargetTenant(req, tenantId, () => requestGroupEvaluation(null, tenantId, [id]));
     // Filed in the device's tenant (from the global view: the client's log, rls-tenant EX-08): the fields
     // changed, never their values.
     await asTargetTenant(req, tenantId, async () => audit.append({

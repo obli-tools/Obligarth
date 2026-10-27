@@ -237,7 +237,9 @@ export function retentionChanges(inForce: Readonly<Record<RetentionCategory, num
 
 /** Retentions of the platform, not set per tenant (shown read only; D16 for the notification log and the alerts). */
 export type RetentionFixedKey = 'enrollment_sessions' | 'enrollment_tokens' | 'inventory_commands' | 'ade_removed_devices'
-  | 'notification_log' | 'live_alerts' | 'app_icons_orphaned' | 'android_inbox' | 'backups';
+  | 'notification_log' | 'live_alerts' | 'app_icons_orphaned' | 'android_inbox' | 'backups'
+  // P0-5 T4 (D7): the journal of the memberships of the dynamic groups
+  | 'smart_group_memberships';
 
 export interface RetentionFixedDto {
   key: RetentionFixedKey;

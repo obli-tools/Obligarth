@@ -12,7 +12,7 @@
 // Bounds (RULE_LIMITS): depth 4, 50 conditions, 16 KiB of JSON, 100 values per list, 200 characters per string.
 // Where a field is permitted (D2): every field in a view and in a dynamic group that no assignment targets; only the
 // fields marked targetable / filterable in a targeted dynamic group and in an assignment filter (neither derived,
-// temporal, group nor apps fields).
+// temporal, group nor apps fields, nor the name of the device, which its user can change).
 // =============================================================================
 
 import {
@@ -113,7 +113,9 @@ export const RULE_FIELDS: Readonly<Record<RuleFieldKey, RuleFieldDef>> = {
   os_version: fact('version', ORDER_OPS),
   model: fact('string', STRING_OPS),
   model_name: fact('string', STRING_OPS),
-  name: fact('string', STRING_OPS),
+  // The label of the device: the operator's name when given, else the name the device reports (its user renames it in
+  // its settings). Never a target nor a filter (D2): an end user would put their device in the scope of a configuration.
+  name: fact('string', STRING_OPS, { targetable: false, filterable: false }),
   serial_number: fact('string', STRING_OPS, { privacy: 'serialNumber' }),
   ownership: fact('enum', ENUM_OPS, { values: OWNERSHIPS }),
   management_mode: fact('enum', ENUM_OPS, { values: MANAGEMENT_MODES }),
@@ -385,13 +387,24 @@ export function ruleConditionsOf(n: RuleNode): RuleCondition[] {
   return out;
 }
 
-/** The fields a (valid) rule names, in catalog order (smart_groups.rule_fields). */
+/** The fields a (valid) rule names, in catalog order. */
 export function ruleFieldsOf(n: RuleNode): RuleFieldKey[] {
   const used = new Set(ruleConditionsOf(n).map((c) => c.field));
   return RULE_FIELD_KEYS.filter((k) => used.has(k));
 }
 
-/** The families of marking of a (valid) rule, in DIRTY_FAMILIES order. */
+/** The static groups a (valid) rule names (field group), ascending, without duplicates. */
+export function ruleGroupIdsOf(n: RuleNode): number[] {
+  const ids = new Set<number>();
+  for (const c of ruleConditionsOf(n)) {
+    if (c.field !== 'group') continue;
+    for (const v of Array.isArray(c.value) ? c.value : [c.value]) if (typeof v === 'number') ids.add(v);
+  }
+  return [...ids].sort((a, b) => a - b);
+}
+
+/** The families of marking of a (valid) rule, in DIRTY_FAMILIES order: smart_groups.rule_fields (the reasons the
+ *  marking gives a device are families: smartGroups.ts). */
 export function ruleFamiliesOf(n: RuleNode): DirtyFamily[] {
   const used = new Set(ruleFieldsOf(n).map((k) => RULE_FIELDS[k].family));
   return DIRTY_FAMILIES.filter((f) => used.has(f));

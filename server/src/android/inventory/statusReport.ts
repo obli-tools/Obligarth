@@ -23,6 +23,7 @@ import { policyArtifactHash, syncPolicyArtifact } from '../policies/channel';
 import { appsMerge } from '../../mdm/inventory/appMerge';
 import { rollupConfigState } from '../../mdm/policies/artifacts';
 import { requestDeviceResolution } from '../../mdm/policies/triggers';
+import { requestGroupEvaluation } from '../../mdm/groups/triggers';
 import { androidSenders } from '../enrollment/senders';
 
 type Device = z.infer<typeof DeviceSchema>;
@@ -177,6 +178,9 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
     if (row.policy_name && row.approval_state !== 'pending') await androidSenders.push(trx, { tenantId, deviceId });
   }
   const evaluation = await evaluateAndroidDevices(trx, tenantId, [deviceId]);
+  // The dynamic groups: what the base marked of this report (facts, API level, patch, applications, compliance) is
+  // computed again (P0-5 T5).
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   for (const id of evaluation.atRisk) ctx.afterCommit(() => raiseAndroidTenantAlert(tenantId, 'android.integrity_compromised', { deviceId: id }));
   return 'applied';
 }

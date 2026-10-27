@@ -3,6 +3,7 @@ import type { EndUser, EndUserImportReport } from '@obligarth/shared';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
 import { requestDeviceResolution, requestEndUserResolution } from '../policies/triggers';
+import { requestGroupEvaluation } from '../groups/triggers';
 
 // =============================================================================
 // End users: the employees of the client (docs: modele-donnees-mdm §4.8,
@@ -127,6 +128,7 @@ export const endUserService = {
         }).returning('*');
         if (!row) return null;
         await requestEndUserResolution(trx, tenantId, [id]);
+        await requestGroupEvaluation(trx, tenantId);
         return rowToEndUser(row);
       });
     } catch (err) {
@@ -139,6 +141,8 @@ export const endUserService = {
     const [row] = await db('end_users').where({ tenant_id: tenantId, id }).update({
       status: 'departed', departed_at: db.raw('COALESCE(departed_at, ?::timestamptz)', [at]), updated_at: new Date(),
     }).returning('*');
+    // The dynamic groups that read the status of the end user (marked by the base).
+    if (row) await requestGroupEvaluation(null, tenantId);
     return row ? rowToEndUser(row) : null;
   },
 
@@ -182,6 +186,7 @@ export const endUserService = {
       }
       // The devices of the end users whose profile changed read it through the variables: resolved again.
       await requestEndUserResolution(trx, tenantId, updatedIds);
+      if (updatedIds.length) await requestGroupEvaluation(trx, tenantId);
     });
     return report;
   },
@@ -270,6 +275,7 @@ export async function assignEndUser(trx: Knex.Transaction, tenantId: number, dev
   await trx('device_enrollments').where({ tenant_id: tenantId, device_id: deviceId }).whereNull('ended_at').update({ end_user_id: endUserId });
   // The variables of the policies ({{user.email}}…) follow the end user: resolve the device again.
   await requestDeviceResolution(trx, tenantId, [deviceId]);
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   return true;
 }
 

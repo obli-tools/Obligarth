@@ -25,8 +25,9 @@ type Q = Knex | Knex.Transaction;
 
 /** Filters a view keeps apart from `filters` (the group, the rule), and those it never keeps (the global view's tenants
  *  are a choice of the session, not of the view). */
-const TOP_LEVEL_KEYS = new Set(['groupId', 'includeSubgroups', 'ungrouped', 'rule']);
-const GROUP_KEYS = ['groupId', 'includeSubgroups', 'ungrouped'] as const;
+const TOP_LEVEL_KEYS = new Set(['groupId', 'includeSubgroups', 'ungrouped', 'smartGroupId', 'rule']);
+/** The group of the list: a static group (with its subgroups or not), the devices of no group, a dynamic group (P0-5 T4). */
+const GROUP_KEYS = ['groupId', 'includeSubgroups', 'ungrouped', 'smartGroupId'] as const;
 const SORT_KEYS = ['sortBy', 'sortOrder'] as const;
 
 /** A column key of the console's catalog (utils/deviceLine2Fields.ts): the server keeps them, never interprets them. */
@@ -45,6 +46,7 @@ function definitionSchema(): z.ZodTypeAny {
     groupId: z.number().int().positive().max(2_147_483_647).optional(),
     includeSubgroups: z.boolean().optional(),
     ungrouped: z.boolean().optional(),
+    smartGroupId: z.number().int().positive().max(2_147_483_647).optional(),
     sort: z.object({ by: z.enum(DEVICE_LIST_SORT_KEYS), order: z.enum(['asc', 'desc']) }).strict().optional(),
     columns: z.array(ColumnKey).max(DEVICE_VIEW_LIMITS.columnsMax).optional(),
   }).strict();
@@ -79,6 +81,7 @@ export function normalizeDefinition(input: unknown): DeviceViewDefinition {
   if (d.groupId !== undefined) out.groupId = d.groupId;
   if (d.includeSubgroups !== undefined) out.includeSubgroups = d.includeSubgroups;
   if (d.ungrouped !== undefined) out.ungrouped = d.ungrouped;
+  if (d.smartGroupId !== undefined) out.smartGroupId = d.smartGroupId;
   if (d.sort !== undefined) out.sort = d.sort;
   if (d.columns !== undefined) out.columns = [...new Set(d.columns)];
   if (jsonbTextBytes(out) > DEVICE_VIEW_LIMITS.definitionMaxBytes) {
@@ -89,7 +92,7 @@ export function normalizeDefinition(input: unknown): DeviceViewDefinition {
 }
 
 /** The filters of GET /api/mdm/devices a view gives, merged under the request's own: an explicit parameter wins, and
- *  the group (groupId, includeSubgroups, ungrouped) and the sort (sortBy, sortOrder) go as a whole: one of them in the
+ *  the group (groupId, includeSubgroups, ungrouped, smartGroupId) and the sort (sortBy, sortOrder) go as a whole: one of them in the
  *  request replaces the view's. A stored definition that no longer parses: 409 deviceViewInvalid. */
 export function mergeViewFilters(stored: unknown, explicit: DeviceListFilters): DeviceListFilters {
   let def: DeviceViewDefinition;
@@ -106,6 +109,7 @@ export function mergeViewFilters(stored: unknown, explicit: DeviceListFilters): 
   if (def.groupId !== undefined) fromView.groupId = def.groupId;
   if (def.includeSubgroups !== undefined) fromView.includeSubgroups = def.includeSubgroups;
   if (def.ungrouped !== undefined) fromView.ungrouped = def.ungrouped;
+  if (def.smartGroupId !== undefined) fromView.smartGroupId = def.smartGroupId;
   if (def.sort) { fromView.sortBy = def.sort.by; fromView.sortOrder = def.sort.order; }
   const given = (k: string) => (explicit as Record<string, unknown>)[k] !== undefined;
   if (GROUP_KEYS.some(given)) for (const k of GROUP_KEYS) delete fromView[k];

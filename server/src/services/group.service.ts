@@ -270,6 +270,9 @@ export const groupService = {
       // (modele-donnees-mdm §7.6, §7.12), requested in this transaction.
       const { requestTenantResolution } = await import('../mdm/policies/triggers');
       await requestTenantResolution(trx, Number(group.tenant_id));
+      // The dynamic groups that read the static groups: the devices of the subtree were marked by the base (P0-5 T5).
+      const { requestGroupEvaluation } = await import('../mdm/groups/triggers');
+      await requestGroupEvaluation(trx, Number(group.tenant_id));
       if (updated && o.journal) {
         await audit.appendInTx(trx, {
           tenantId: Number(group.tenant_id), action: 'group.moved', target: { type: 'group', id: String(id) },
@@ -306,10 +309,16 @@ export const groupService = {
       }
       const count = await trx('device_groups').where({ id, tenant_id: tenantId }).del();
       if (!count) return false;
+      // The dynamic groups whose rule names it can no longer be computed: in error, their members frozen (P0-5 T4).
+      const { onStaticGroupDeleted } = await import('../mdm/groups/smartGroupService');
+      await onStaticGroupDeleted(trx, tenantId, id);
       // Its assignments went with it (assignments_cleanup) and its devices left it: the policies follow
       // (modele-donnees-mdm §7.5, §7.12), requested in this transaction.
       const { requestTenantResolution } = await import('../mdm/policies/triggers');
       await requestTenantResolution(trx, tenantId);
+      // Its devices left it (marked by the base): the dynamic groups that read the static groups (P0-5 T5).
+      const { requestGroupEvaluation } = await import('../mdm/groups/triggers');
+      await requestGroupEvaluation(trx, tenantId);
       if (o.journal) {
         await audit.appendInTx(trx, {
           tenantId, action: 'group.deleted', target: { type: 'group', id: String(id) },

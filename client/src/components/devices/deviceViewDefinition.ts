@@ -7,7 +7,7 @@ import { LINE2_FIELDS } from '@/utils/deviceLine2Fields';
 
 // =============================================================================
 // A saved view of the inventory (P0-5 §6) as the console's list holds it: the state of the toolbar (enrollment tab,
-// chips, search, advanced filter), the group of the side panel, the sort and the optional columns, to and from the
+// chips, search, advanced filter), the group of the side panel, the dynamic group (P0-5 T4), the sort and the optional columns, to and from the
 // definition the server keeps (shared DeviceViewDefinition). A view saved elsewhere (the API) may hold what the
 // toolbar cannot show (an enrollment state set that is no tab, supervised = false, a group without its subgroups):
 // fromDefinition takes the closest state.
@@ -40,6 +40,8 @@ export interface InventoryViewState {
   lostOnly: boolean;
   rule: RuleNode | null;
   groupId: number | null;
+  /** A dynamic group (its members), or none. */
+  smartGroupId: number | null;
   sortBy: '' | DeviceListSortKey;
   sortOrder: 'asc' | 'desc';
   columns: ReadonlySet<string>;
@@ -68,6 +70,7 @@ export function definitionOf(s: InventoryViewState): DeviceViewDefinition {
   if (s.rule) def.rule = s.rule;
   if (s.groupId === -1) def.ungrouped = true;
   else if (s.groupId !== null) { def.groupId = s.groupId; def.includeSubgroups = true; }
+  if (s.smartGroupId !== null) def.smartGroupId = s.smartGroupId;
   if (s.sortBy) def.sort = { by: s.sortBy, order: s.sortOrder };
   def.columns = LINE2_FIELDS.map((f) => f.key).filter((k) => s.columns.has(k));
   return def;
@@ -110,6 +113,7 @@ export function fromDefinition(def: DeviceViewDefinition): Omit<InventoryViewSta
     lostOnly: f.lostMode === true,
     rule: def.rule ?? null,
     groupId: def.ungrouped ? -1 : (typeof def.groupId === 'number' ? def.groupId : null),
+    smartGroupId: typeof def.smartGroupId === 'number' ? def.smartGroupId : null,
     sortBy,
     sortOrder: sortBy && def.sort?.order === 'desc' ? 'desc' : 'asc',
     columns: def.columns ? new Set(def.columns.filter((k) => known.has(k))) : undefined,
@@ -129,6 +133,7 @@ function comparable(def: DeviceViewDefinition, columnsFallback?: readonly string
     filters,
     rule: ruleKey(def.rule),
     group: def.ungrouped ? 'none' : def.groupId ?? null,
+    smartGroup: def.smartGroupId ?? null,
     sort: def.sort ? `${def.sort.by}:${def.sort.order}` : '',
     columns: LINE2_FIELDS.map((f) => f.key).filter((k) => columns.includes(k)),
   });

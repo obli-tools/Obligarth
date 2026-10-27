@@ -20,7 +20,9 @@ const WINDOW_MINUTES = PUBLISH_APPROVAL_THRESHOLDS.cumulativeWindowMinutes;
 /** Devices kept per row (a direct change stays below 25 touched devices; a bound for the others). */
 const MAX_IDS = 1000;
 
-export type LedgerKind = 'version' | 'assignments' | 'group_move' | 'group_delete' | 'device_move';
+/** The kinds of change (mdm_change_ledger_kind_check; the governed changes of the dynamic groups: P0-5 T7). */
+export type LedgerKind = 'version' | 'assignments' | 'group_move' | 'group_delete' | 'device_move'
+  | 'smart_group_rule' | 'smart_group_delete' | 'smart_group_release' | 'device_facts';
 
 export interface RecentChanges {
   devices: Set<number>;

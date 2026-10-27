@@ -53,6 +53,10 @@ export async function deviceApps(tenantId: number, deviceId: number): Promise<{ 
   const groupIds = [...new Set(settings.filter((s) => s.source_scope === 'group' && s.source_scope_id !== null).map((s) => Number(s.source_scope_id)))];
   const groupNames = new Map((groupIds.length ? await db('device_groups').where({ tenant_id: tenantId }).whereIn('id', groupIds)
     .select('id', 'name') as Array<{ id: number; name: string }> : []).map((g) => [Number(g.id), g.name]));
+  // A dynamic group (P0-5 T6): its name too (the list of the tenant's groups is read by every member, D8).
+  const smartGroupIds = [...new Set(settings.filter((s) => s.source_scope === 'smart_group' && s.source_scope_id !== null).map((s) => Number(s.source_scope_id)))];
+  const smartGroupNames = new Map((smartGroupIds.length ? await db('smart_groups').where({ tenant_id: tenantId }).whereIn('id', smartGroupIds)
+    .select('id', 'name') as Array<{ id: number; name: string }> : []).map((g) => [Number(g.id), g.name]));
   const managedBy = new Map<string, DeviceAppManagedBy[]>();
   for (const s of settings) {
     const key = String(s.setting_key);
@@ -62,7 +66,8 @@ export async function deviceApps(tenantId: number, deviceId: number): Promise<{ 
     const list = managedBy.get(identifier) ?? [];
     list.push({
       assignmentId: Number(s.source_assignment_id), scope: s.source_scope, scopeId,
-      scopeName: s.source_scope === 'group' && scopeId !== null ? groupNames.get(scopeId) ?? null : null,
+      scopeName: scopeId === null ? null : s.source_scope === 'group' ? groupNames.get(scopeId) ?? null
+        : s.source_scope === 'smart_group' ? smartGroupNames.get(scopeId) ?? null : null,
       availability: String(s.availability),
     });
     managedBy.set(identifier, list);

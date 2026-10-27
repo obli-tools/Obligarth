@@ -5,7 +5,8 @@ import { approvalReasonLabel, settingKeyLabel } from '@/components/mdm/ImpactPre
 import { trCode } from '@/utils/apiError';
 
 // What a request of the type mdm_policy_publish will execute, for its reviewer (modele-donnees-mdm §11.3,
-// MDM-B5b-C16): the change itself first (a publication, a batch of assignments, a group moved or deleted), then
+// MDM-B5b-C16): the change itself first (a publication, a batch of assignments, a group moved or deleted, a change of
+// a dynamic group an assignment targets or of the facts of a device that moves it in such a group: P0-5 T7), then
 // the counters of the preview the request was filed with, then its keys. The generic table of a payload stopped
 // at 80 lines, and the keys of the preview (five lines each) came first: beyond some fifteen keys the counters
 // and the changes could no longer be read.
@@ -22,17 +23,25 @@ interface StoredChange {
   mode?: string; priority?: number;
 }
 export interface PolicyPublishPayload {
-  kind?: 'version' | 'assignments' | 'group_move' | 'group_delete' | string;
+  kind?: 'version' | 'assignments' | 'group_move' | 'group_delete' | 'smart_group_rule' | 'smart_group_delete' | 'smart_group_release'
+    | 'device_facts' | string;
   policyId?: number; version?: number;
   changes?: StoredChange[];
   base?: Array<{ policyId?: number; version?: number }>;
   groupId?: number; newParentId?: number | null;
+  /** A dynamic group (P0-5 T7): the version of its rule the request was filed on, its new name, its entries and exits. */
+  smartGroupId?: number; ruleVersion?: number; name?: string;
+  membership?: { added?: number; removed?: number; total?: number };
+  /** The facts of a device (P0-5 D11): its fields changed (their names only are shown), the targeted groups it enters and leaves. */
+  deviceId?: number; patch?: Record<string, unknown>;
+  smartGroups?: { entered?: number[]; left?: number[] };
   impact?: StoredImpact;
 }
 
 export const POLICY_PUBLISH_REQUEST_TYPE = 'mdm_policy_publish';
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
+const ids = (v: unknown): number[] => (Array.isArray(v) ? v.filter((x): x is number => typeof x === 'number' && Number.isFinite(x)) : []);
 
 function Counter({ label, value, tone }: { label: string; value: number; tone?: string }) {
   return (
@@ -78,6 +87,47 @@ export function PolicyPublishSummary({ payload }: { payload: unknown }) {
           {t('approvals.publish.groupDelete') || 'Deletion of the group'}{' '}
           <Link to={`/group/${p.groupId}`} className="text-accent hover:underline">#{p.groupId}</Link>
         </p>
+      )}
+      {(p.kind === 'smart_group_rule' || p.kind === 'smart_group_delete' || p.kind === 'smart_group_release') && (
+        <div className="text-text-primary">
+          <p>
+            {p.kind === 'smart_group_rule'
+              ? (t('approvals.publish.smartGroupRule', { version: num(p.ruleVersion) }) || `New rule for the dynamic group (its version ${num(p.ruleVersion)} replaced)`)
+              : p.kind === 'smart_group_delete'
+                ? (t('approvals.publish.smartGroupDelete') || 'Deletion of the dynamic group, with its assignments')
+                : (t('approvals.publish.smartGroupRelease') || 'Release of the dynamic group held by the mass guard')}
+            {' '}<span className="font-mono">#{p.smartGroupId}</span>
+            {p.kind === 'smart_group_rule' && typeof p.name === 'string' && <> · {t('approvals.publish.smartGroupName') || 'new name'}: {p.name}</>}
+          </p>
+          {p.membership && (
+            <p className="text-text-secondary">
+              {t('approvals.publish.smartGroupMembership', { added: num(p.membership.added), removed: num(p.membership.removed), total: num(p.membership.total) })
+                || `${num(p.membership.added)} device(s) enter, ${num(p.membership.removed)} leave; ${num(p.membership.total)} member(s) afterwards`}
+            </p>
+          )}
+        </div>
+      )}
+      {p.kind === 'device_facts' && (
+        <div className="text-text-primary">
+          <p>
+            {t('approvals.publish.deviceFacts') || 'Change of the record of the device'}{' '}
+            <Link to={`/devices/${p.deviceId}`} className="text-accent hover:underline">#{p.deviceId}</Link>
+          </p>
+          {/* The names of the fields only: never their values (tags, custom fields). */}
+          {p.patch && typeof p.patch === 'object' && (
+            <p className="text-text-secondary">
+              {t('approvals.publish.deviceFactsFields') || 'Fields'}: <span className="font-mono">{Object.keys(p.patch).slice(0, 20).join(', ')}</span>
+            </p>
+          )}
+          {p.smartGroups && (
+            <p className="text-text-secondary">
+              {t('approvals.publish.deviceFactsGroups', {
+                entered: ids(p.smartGroups.entered).map((x) => `#${x}`).join(', ') || '—',
+                left: ids(p.smartGroups.left).map((x) => `#${x}`).join(', ') || '—',
+              }) || `Dynamic groups entered: ${ids(p.smartGroups.entered).map((x) => `#${x}`).join(', ') || '—'}; left: ${ids(p.smartGroups.left).map((x) => `#${x}`).join(', ') || '—'}`}
+            </p>
+          )}
+        </div>
       )}
       {changes.length > 0 && (
         <div>

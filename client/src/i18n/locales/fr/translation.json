@@ -1692,6 +1692,10 @@
       "group_updated": "Groupe d'appareils modifié",
       "group_deleted": "Groupe d'appareils supprimé",
       "group_moved": "Groupe d'appareils déplacé dans l'arbre",
+      "smart_group_created": "Groupe dynamique créé",
+      "smart_group_updated": "Groupe dynamique modifié",
+      "smart_group_deleted": "Groupe dynamique supprimé",
+      "smart_group_released": "Groupe dynamique remis en route",
       "jobs_cancelled": "Tâche de fond annulée",
       "jobs_dead_letter_discarded": "Lettre morte écartée",
       "jobs_redriven": "Lettres mortes rejouées",
@@ -2016,7 +2020,15 @@
         "update": "modifier",
         "delete": "retirer"
       },
-      "moreChanges": "+{{count}} autres changements"
+      "moreChanges": "+{{count}} autres changements",
+      "smartGroupRule": "Nouvelle règle du groupe dynamique (sa version {{version}} remplacée)",
+      "smartGroupDelete": "Suppression du groupe dynamique, avec ses affectations",
+      "smartGroupRelease": "Remise en route du groupe dynamique suspendu par la garde de masse",
+      "smartGroupName": "nouveau nom",
+      "smartGroupMembership": "{{added}} appareil(s) entrent, {{removed}} sortent ; {{total}} membre(s) ensuite",
+      "deviceFacts": "Modification de la fiche de l'appareil",
+      "deviceFactsFields": "Champs",
+      "deviceFactsGroups": "Groupes dynamiques rejoints : {{entered}} ; quittés : {{left}}"
     }
   },
   "os": {
@@ -2931,6 +2943,16 @@
           "title": "Licence Knox refusée",
           "message": "La licence Knox n'a pas pu être activée sur un appareil de l'agent Android : installation silencieuse et redémarrage indisponibles."
         }
+      },
+      "smart_group": {
+        "rule_invalid": {
+          "title": "Groupe dynamique à corriger",
+          "message": "La règle du groupe dynamique {{name}} cite un groupe statique qui a été supprimé : ses membres restent figés jusqu'à ce que sa règle soit modifiée."
+        },
+        "mass_change": {
+          "title": "Groupe dynamique suspendu",
+          "message": "L'inventaire changerait les membres du groupe dynamique {{name}} au-delà de {{limit}} entrées et sorties dans l'heure : rien n'a été appliqué, ses changements attendent d'être examinés."
+        }
       }
     },
     "errors": {
@@ -3564,7 +3586,8 @@
       "group": "Hérité d'un groupe",
       "ownGroup": "Groupe de l'appareil",
       "tenant": "Tout le tenant",
-      "library": "Bibliothèque"
+      "library": "Bibliothèque",
+      "smartGroup": "Issu d'un groupe dynamique"
     },
     "config": {
       "counts": "{{settings}} réglage(s), {{artifacts}} artefact(s)",
@@ -3665,7 +3688,8 @@
           "tenant": "Tout le tenant",
           "group": "Groupe",
           "device": "Cet appareil",
-          "library": "Bibliothèque"
+          "library": "Bibliothèque",
+          "smart_group": "Groupe dynamique"
         },
         "availability": {
           "not_applicable": "Ne s'applique pas à cet appareil"
@@ -3728,7 +3752,8 @@
       "scope": {
         "tenant": "Tenant",
         "group": "Groupe",
-        "device": "Appareil"
+        "device": "Appareil",
+        "smart_group": "Groupe dynamique"
       }
     },
     "impact": {
@@ -3747,7 +3772,9 @@
       "computing": "Calcul de l'aperçu…",
       "conflicts_one": "{{count}} conflit",
       "conflicts_other": "{{count}} conflits",
-      "conflictsHint": "Deux ressources fixent la même clé sur la même cible avec la même priorité et des valeurs différentes : changez une priorité ou une valeur.",
+      "conflictsHint": "Deux ressources fixent la même clé sur les mêmes appareils (même cible, ou cibles de même rang qui se recouvrent) avec la même priorité et des valeurs différentes : changez une priorité ou une valeur.",
+      "conflictDevices_one": "{{count}} appareil",
+      "conflictDevices_other": "{{count}} appareils",
       "key": "Réglage",
       "added": "Ajoutés",
       "changed": "Modifiés",
@@ -3879,7 +3906,7 @@
     "configurationBusy": "Trop de changements de configuration attendent sur ce tenant : réessayez dans un instant.",
     "validationFailed": "Le contenu de la politique n'est pas valide.",
     "androidAppOptionsInvalid": "Options invalides pour cette app Android : vérifiez le type d’installation et la configuration gérée au regard de l’app.",
-    "policyConflict": "Le changement créerait un conflit : deux politiques fixent la même clé sur la même cible avec la même priorité.",
+    "policyConflict": "Le changement créerait un conflit : deux politiques fixent la même clé sur les mêmes appareils (même cible, ou cibles de même rang qui se recouvrent) avec la même priorité.",
     "rawProfileInvalid": "Le profil ne peut pas être importé.",
     "tooManyTargets": "Trop d'appareils pour une seule demande.",
     "appleEdgeUnavailable": "Le service d'appareils est indisponible : réessayez dans un instant.",
@@ -4031,12 +4058,21 @@
     "invalidOptions": "Ces options ne s'appliquent pas à ce type de rapport.",
     "invalidScope": "Le groupe ou l'appareil choisi n'est pas disponible.",
     "invalidTimezone": "Fuseau horaire inconnu : choisissez un nom IANA comme Europe/Paris ou UTC.",
+    "deviceFactsGoverned": "Cette modification fait entrer ou sortir l'appareil d'un groupe dynamique ciblé par une affectation : elle demande le droit de gérer les appareils, et l'aperçu de son impact.",
     "deviceViewInvalid": "Cette vue ne correspond plus aux filtres de la liste : ouvrez-la, ajustez-la et enregistrez-la de nouveau.",
     "deviceViewLimit": "Trop de vues ({{limit}} au plus) : supprimez-en une d'abord.",
     "deviceViewNameTaken": "Une vue porte déjà ce nom.",
     "deviceViewNotFound": "Cette vue n'existe plus, ou ne vous est plus partagée.",
     "deviceViewReadOnly": "Seul le propriétaire de cette vue, ou un administrateur du tenant pour une vue partagée, peut la modifier.",
     "deviceViewTooLarge": "Cette vue est trop volumineuse pour être enregistrée : simplifiez son filtre avancé.",
+    "smartGroupAdminOnly": "Seul un administrateur du tenant modifie, supprime ou remet en route un groupe dynamique ciblé par une affectation.",
+    "smartGroupLimit": "Trop de groupes dynamiques ({{limit}} au plus) : supprimez-en un d'abord.",
+    "smartGroupNameTaken": "Un groupe dynamique de ce nom existe déjà.",
+    "smartGroupNotFound": "Ce groupe dynamique n'existe pas.",
+    "smartGroupNotHeld": "Ce groupe dynamique n'est pas suspendu : il n'y a rien à remettre en route.",
+    "smartGroupNotTargetable": "Cette règle ne peut pas définir un groupe dynamique ciblé par une affectation : conformité, configuration, dates, groupes statiques, applications et nom de l'appareil sont exclus.",
+    "smartGroupTargeted": "Une affectation cible désormais ce groupe dynamique : soumettez de nouveau la modification pour en voir l'impact.",
+    "smartGroupUnknownGroup": "La règle cite un groupe statique qui n'existe plus.",
     "invalidRule": "Le filtre avancé n'est pas valide."
   },
   "deviceEnrollment": {
@@ -5450,7 +5486,8 @@
         "live_alerts": "Alertes en direct",
         "app_icons_orphaned": "Icônes d'applications qui ne sont plus installées",
         "android_inbox": "Événements Android appliqués",
-        "backups": "Sauvegardes"
+        "backups": "Sauvegardes",
+        "smart_group_memberships": "Entrées et sorties des groupes dynamiques"
       }
     },
     "notice": {
@@ -5862,7 +5899,7 @@
       "empty": "Aucune condition : le filtre avancé retient tous les appareils.",
       "emptyGroup": "Groupe vide.",
       "full": "{{max}} conditions au plus.",
-      "restrictedHint": "Les champs grisés sont interdits ici : champs déduits ou relatifs à l'heure, groupe statique et applications installées.",
+      "restrictedHint": "Les champs grisés sont interdits ici : champs déduits ou relatifs à l'heure, groupe statique, applications installées et nom de l'appareil (son utilisateur peut le changer).",
       "tooLong": "Cette règle est trop longue pour la liste : retirez des conditions ou des valeurs.",
       "previewLoading": "Décompte des appareils…",
       "previewCount_one": "{{count}} appareil correspond",
@@ -5936,5 +5973,9 @@
     "loadFailed": "Les vues n'ont pas pu être chargées.",
     "retry": "Réessayer",
     "createdNotDefault": "Vue enregistrée, mais pas définie par défaut : {{error}}"
+  },
+  "smartGroups": {
+    "filterChip": "Un groupe dynamique",
+    "filterChipHint": "Les membres d'un groupe dynamique : retirer ce filtre"
   }
 }

@@ -45,6 +45,8 @@ export interface DeviceListFilters {
   q?: string;
   /** The advanced filter (P0-5 §2): a valid rule, every field of the catalog permitted (a view, D2). */
   rule?: RuleNode;
+  /** A dynamic group (P0-5 T4): its members, in the tenant of the group. */
+  smartGroupId?: number;
   /** Global view only: a subset of tenants. */
   tenantIds?: number[];
   sortBy?: string;
@@ -255,6 +257,16 @@ registerDeviceListFilter({
   },
 });
 registerDeviceListFilter({ key: 'includeSubgroups', query: boolOpt, apply: () => { /* read by groupId */ } });
+// A dynamic group (P0-5 T4): its materialised members (smart_group_members; the computations leave out the devices out
+// of management, D9).
+// A member row names the tenant of its group: in the global view too, the list stays in the group's tenant.
+registerDeviceListFilter({
+  key: 'smartGroupId', query: intOpt,
+  apply: (q, smartGroupId) => {
+    q.whereRaw(`EXISTS (SELECT 1 FROM smart_group_members sgm
+      WHERE sgm.tenant_id = devices.tenant_id AND sgm.smart_group_id = ? AND sgm.device_id = devices.id)`, [smartGroupId]);
+  },
+});
 registerDeviceListFilter({
   key: 'tags',
   query: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map((s) => String(s).trim()).filter(Boolean)),

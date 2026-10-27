@@ -58,7 +58,8 @@ const CHANNEL_FALLBACK: Record<DeviceArtifactView['channel'], string> = {
   ddm: 'Declaration', profile: 'Profile', setting: 'Setting', app: 'App',
 };
 
-/** Where an effective setting comes from: "inherited from: group X", "set on the device", "whole tenant". */
+/** Where an effective setting comes from: "inherited from: group X", "set on the device", "from a dynamic group",
+ *  "whole tenant". */
 export function ProvenanceBadge({ setting, deviceGroupId }: { setting: Pick<EffectiveSettingView, 'source' | 'sourceName' | 'sourceVersion'>; deviceGroupId?: number | null }) {
   const { t } = useTranslation();
   const { scope, scopeId } = setting.source;
@@ -66,6 +67,7 @@ export function ProvenanceBadge({ setting, deviceGroupId }: { setting: Pick<Effe
     : scope === 'group' ? (scopeId !== null && scopeId === deviceGroupId
       ? (t('mdm.provenance.ownGroup') || "The device's group")
       : (t('mdm.provenance.group') || 'Inherited from a group'))
+      : scope === 'smart_group' ? (t('mdm.provenance.smartGroup') || 'From a dynamic group')
       : scope === 'library' ? (t('mdm.provenance.library') || 'Library')
         : (t('mdm.provenance.tenant') || 'Whole tenant');
   const cls = scope === 'device'
@@ -77,6 +79,7 @@ export function ProvenanceBadge({ setting, deviceGroupId }: { setting: Pick<Effe
       {scope === 'group' && scopeId !== null && (
         <Link to={`/group/${scopeId}`} className="text-[11px] text-text-muted hover:text-accent">#{scopeId}</Link>
       )}
+      {scope === 'smart_group' && scopeId !== null && <span className="text-[11px] text-text-muted">#{scopeId}</span>}
       {setting.source.type === 'policy' ? (
         <Link to={`/policies/${setting.source.id}`} className="text-xs text-text-primary hover:text-accent">
           {setting.sourceName || `#${setting.source.id}`}{setting.sourceVersion ? ` v${setting.sourceVersion}` : ''}

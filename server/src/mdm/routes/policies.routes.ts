@@ -71,7 +71,7 @@ const ListQuery = z.object({
 const AssignmentQuery = z.object({
   resourceType: z.enum(['policy', 'app']).optional(),
   resourceId: z.coerce.number().int().positive().optional(),
-  targetScope: z.enum(['tenant', 'group', 'device']).optional(),
+  targetScope: z.enum(['tenant', 'group', 'device', 'smart_group']).optional(),
   targetId: z.coerce.number().int().positive().optional(),
 }).passthrough();
 const PageQuery = z.object({
