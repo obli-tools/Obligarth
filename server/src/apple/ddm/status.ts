@@ -3,6 +3,7 @@ import { canonicalJson } from '../../audit/canonical';
 import { versionChangedMerge } from '../../mdm/inventory/appMerge';
 import { certificateFacts, ingestStatusItems } from '../../mdm/inventory/ingestors';
 import { requestDeviceResolution } from '../../mdm/policies/triggers';
+import { requestGroupEvaluation } from '../../mdm/groups/triggers';
 import { normalizeSerial, platformFromProductName } from '../../mdm/registry/authenticateRules';
 import { raiseInTx } from '../alerts/service';
 import { privacyRulesFor } from '../devices/privacy';
@@ -318,6 +319,8 @@ export async function applyStatusReport(trx: Knex.Transaction, tenantId: number,
   // What follows: the set (capabilities, major version), the resolution of the policies (what its availability reads).
   if ((effects.capabilitiesChanged || effects.majorChanged) && requestSync) await requestSync(trx, tenantId, deviceId);
   if (effects.capabilitiesChanged || effects.osChanged || resolutionFacts) await requestDeviceResolution(trx, tenantId, [deviceId]);
+  // The dynamic groups: what the base marked of the facts the status carries (the OS version) is computed again.
+  if (effects.osChanged || resolutionFacts) await requestGroupEvaluation(trx, tenantId, [deviceId]);
   if (effects.changed.length > 0) for (const h of hooks) if (h.onItemsChanged) await h.onItemsChanged(trx, tenantId, deviceId, effects.changed);
   return effects;
 }

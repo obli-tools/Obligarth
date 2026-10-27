@@ -18,7 +18,9 @@ export const POLICY_CATEGORY_RE = /^[a-z][a-z0-9_]{1,31}$/;
 
 export const ASSIGNMENT_RESOURCE_TYPES = ['policy', 'app'] as const;
 export type AssignmentResourceType = typeof ASSIGNMENT_RESOURCE_TYPES[number];
-export const ASSIGNMENT_TARGET_SCOPES = ['tenant', 'group', 'device'] as const;
+/** smart_group: a dynamic group (P0-5 T6), at the rank of a static group the device is directly in (D1), with an explicit
+ *  priority; only an administrator of the tenant targets it (D3), and only with a rule of targetable fields (D2). */
+export const ASSIGNMENT_TARGET_SCOPES = ['tenant', 'group', 'device', 'smart_group'] as const;
 export type AssignmentTargetScope = typeof ASSIGNMENT_TARGET_SCOPES[number];
 export const ASSIGNMENT_MODES = ['include', 'exclude'] as const;
 export type AssignmentMode = typeof ASSIGNMENT_MODES[number];

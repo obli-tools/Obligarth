@@ -91,7 +91,7 @@ export function RuleBuilder({
       {allowed !== 'view' && (
         <p className="flex items-start gap-1.5 text-[11px] text-text-muted">
           <Ban className="mt-0.5 h-3 w-3 shrink-0" />
-          {t('rules.builder.restrictedHint') || 'Greyed fields are not permitted here: derived and time-relative fields, the static group and the installed applications.'}
+          {t('rules.builder.restrictedHint') || 'Greyed fields are not permitted here: derived and time-relative fields, the static group, the installed applications and the name of the device (its user can change it).'}
         </p>
       )}
       {(rootIssues.length > 0 || tooLong) && (

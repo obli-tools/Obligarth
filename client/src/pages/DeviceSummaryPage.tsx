@@ -290,8 +290,12 @@ function EditDeviceDialog({ open, onClose, device, onSaved }: { open: boolean; o
         description: description.trim() || null,
         tags: [...new Set(tags.split(',').map((x) => x.trim()).filter(Boolean))].slice(0, 50),
       });
-      onSaved(saved);
-      toast.success(t('common.saved') || 'Saved');
+      if (saved === null) {
+        toast(t('mdm.outcome.awaitingApproval') || 'Waiting for a second approver: nothing has changed yet.', { duration: 7000 });
+      } else {
+        onSaved(saved);
+        toast.success(t('common.saved') || 'Saved');
+      }
       onClose();
     } catch (err) {
       if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });

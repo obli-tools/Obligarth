@@ -8,6 +8,7 @@ import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
 import { requestArtifactReconcile, requestComplianceEvaluation } from '../apple/requests';
 import { requestDeviceResolution } from '../policies/triggers';
+import { requestGroupEvaluation } from '../groups/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 import { appsMerge } from './appMerge';
 
@@ -239,6 +240,8 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
     || (typeof device.model_name === 'string' && device.model_name !== f.modelName)
     || (typeof device.device_name === 'string' && device.device_name !== f.deviceName);
   if (resolutionFacts) await requestDeviceResolution(trx, tenantId, [deviceId]);
+  // The dynamic groups: what the base marked of the inventory is computed again (P0-5 T5).
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   // The compliance reads the inventory (§4.4): a first answer, another OS version, another supervision.
   if (f.last.device_info === null || effects.osChanged === true || effects.supervisionChanged === true) {
     await requestComplianceEvaluation(trx, tenantId, [deviceId]);
@@ -308,6 +311,8 @@ export async function ingestInstalledApplicationList(trx: Knex.Transaction, tena
   if (keep.length) del.whereNotIn('identifier', keep);
   await del.del();
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
+  // The dynamic groups that read the applications (marked by the base, P0-5 T5).
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   return 'applied';
 }
 
@@ -344,6 +349,8 @@ export async function ingestManagedApplicationList(trx: Knex.Transaction, tenant
   else await gone.update({ managed: false, management_status: null });
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
   for (const fn of managedAppsHooks) await fn(trx, tenantId, deviceId);
+  // The dynamic groups that read the applications (marked by the base, P0-5 T5).
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   return 'applied';
 }
 

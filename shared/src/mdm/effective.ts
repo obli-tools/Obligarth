@@ -7,7 +7,8 @@
 import type { ArtifactState, ConfigState } from './enums';
 import type { JsonValue } from './policyContent';
 
-export type SourceScope = 'device' | 'group' | 'tenant' | 'library';
+/** smart_group: a dynamic group the device is a member of (P0-5 T6), scopeId its id. */
+export type SourceScope = 'device' | 'group' | 'tenant' | 'library' | 'smart_group';
 
 /** Why a setting does not apply to a device, in the order of section 7.8. */
 export const UNAVAILABLE_REASONS = [

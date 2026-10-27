@@ -75,6 +75,12 @@ export function impactChanged(): never {
   throw new AppError(409, 'The impact of the change is no longer the one that was checked: submit it again', 'impactChanged');
 }
 
+/** 422 policyConflict: the change would set a key to two values at the same priority (the conflicts listed). */
+export function conflictRefusal(conflicts: PolicyImpact['conflicts']): never {
+  throw new AppError(422, 'The change would set a key to two values at the same priority', 'policyConflict',
+    conflicts as unknown as Record<string, unknown>);
+}
+
 /** What a request for approval kept of its preview (impact.ts, approvalImpact). */
 export interface ApprovedImpact {
   devicesTouched: number;

@@ -3,7 +3,8 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   ASSIGNMENT_PRIORITY, POLICY_PUBLISH_REQUEST_TYPE,
-  type AssignmentChange, type JsonValue, type PolicyConflict, type PolicyContentV1, type PolicyImpact, type PolicyValidationIssue, type SubmitOutcome,
+  type AssignmentChange, type JsonValue, type PolicyContentV1, type PolicyImpact, type PolicyPublishKind, type PolicyValidationIssue,
+  type SubmitOutcome,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { userActor } from '../../db/context';
@@ -26,12 +27,14 @@ import { signImpactToken } from './impactToken';
 import { rowToAssignment } from './loader';
 import { policyService, rowToVersion, settleOrphanedPending, validateForSubmission, validationFailed } from './policyService';
 import {
-  approvedImpactOf, emitPolicyChanged, impactChanged, matrixLevel, refuseUnlessAsApproved, requiredLevel, stepUp, visibleDevices,
-  type RouteOutcome,
+  approvedImpactOf, conflictRefusal, emitPolicyChanged, impactChanged, matrixLevel, refuseUnlessAsApproved, requiredLevel, stepUp,
+  visibleDevices, type RouteOutcome,
 } from './publishGuard';
 import type { ResolutionAssignment } from './resolver';
 import { requestTenantResolution } from './triggers';
 import { assignableApp, normalizeAppOptions } from '../apps/appCatalogService';
+import { requireTargetableGroup } from '../groups/smartGroupService';
+import { executeDeviceFactsChange, executeSmartGroupChange } from '../groups/governance';
 import { androidContributions } from '../android/contributions';
 import { validateAndroidSection } from '../android/validate';
 import { checkAndroidAppAssignment, holdsSecretValue, sealAndroidAppOptions } from '../../android/apps/assignments';
@@ -64,6 +67,17 @@ import { checkAndroidAppAssignment, holdsSecretValue, sealAndroidAppOptions } fr
 // The publication and the change of assignments are written with their
 // critical entry (P1, last statement), and request the resolution of the
 // tenant (mdm.policies.resolve-tenant).
+// A dynamic group as a target (P0-5 T6): one of the tenant's whose rule holds
+// targetable fields only (D2: 409 smartGroupNotTargetable, the fields at
+// fault), an inclusion with an explicit priority (D1, modele §7.13: it ranks
+// as the static group a device is directly in), written by an administrator of
+// the tenant or of the platform only (D3, as the whole tenant). An exclusion by
+// a dynamic group is admitted.
+// The request type mdm_policy_publish carries other kinds of change, each with
+// its own executor (registerPublishKind, below): the tree of groups
+// (groupTree.ts), a move of devices (deviceMove.ts), and the governed changes
+// of the dynamic groups and of the facts of a device (P0-5 T7,
+// groups/governance.ts).
 // =============================================================================
 
 export { emitPolicyChanged, type RouteOutcome };
@@ -75,11 +89,6 @@ const APPS_MANAGE = 'mdm.apps.manage' as const;
  *  keys and conflicts. The sample of devices and the token of their list are the requester's (their scopes, their
  *  session): never stored (S13); a reader asks for a preview of their own. */
 const storedImpact = (impact: PolicyImpact): string => JSON.stringify({ ...impact, sample: [], devicesToken: undefined });
-
-function conflictRefusal(conflicts: PolicyConflict[]): never {
-  throw new AppError(422, 'The change would set a key to two values at the same priority', 'policyConflict',
-    conflicts as unknown as Record<string, unknown>);
-}
 
 /** A preview with its token of the full list of touched devices. */
 async function preview(req: Request, tenantId: number, change: ProposedChange): Promise<PolicyImpact> {
@@ -269,7 +278,7 @@ const Change = z.object({
   resourceType: z.enum(['policy', 'app']).optional(),
   resourceId: z.number().int().positive().optional(),
   resourceTenantId: z.number().int().positive().optional(),
-  targetScope: z.enum(['tenant', 'group', 'device']).optional(),
+  targetScope: z.enum(['tenant', 'group', 'device', 'smart_group']).optional(),
   targetId: z.number().int().positive().nullable().optional(),
   mode: z.enum(['include', 'exclude']).optional(),
   priority: z.number().int().min(ASSIGNMENT_PRIORITY.min).max(ASSIGNMENT_PRIORITY.max).optional(),
@@ -279,13 +288,13 @@ export const ChangesBody = z.object({ changes: z.array(Change).min(1).max(100) }
 
 export interface Requester { userId: number; isPlatformAdmin: boolean }
 
-/** May the requester write assignments on this target? The whole tenant: a tenant administrator; a group or a
- *  device: write access through the teams (an administrator always). */
+/** May the requester write assignments on this target? The whole tenant and a dynamic group (P0-5 D3: it gives no team
+ *  scope, D8): a tenant administrator; a group or a device: write access through the teams (an administrator always). */
 async function canWriteTarget(r: Requester, tenantId: number, scope: string, id: number | null): Promise<boolean> {
   if (r.isPlatformAdmin) return true;
   const ut = await db('user_tenants').where({ user_id: r.userId, tenant_id: tenantId }).first('role') as { role: string } | undefined;
   if (ut?.role === 'admin') return true;
-  if (scope === 'tenant') return false;
+  if (scope === 'tenant' || scope === 'smart_group') return false;
   if (scope === 'group') return permissionService.canWriteGroup(r.userId, Number(id), false);
   return permissionService.canWriteDevice(r.userId, Number(id), false);
 }
@@ -355,8 +364,10 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
       if (scope === 'tenant' && ch.targetId) bad('The tenant has no target id', 'targetId');
       if (scope === 'group' && !(await q('device_groups').where({ tenant_id: tenantId, id: targetId }).first('id'))) throw new AppError(404, 'Group not found');
       if (scope === 'device' && !(await q('devices').where({ tenant_id: tenantId, id: targetId }).first('id'))) throw new AppError(404, 'Device not found');
+      if (scope === 'smart_group') await requireTargetableGroup(q, tenantId, targetId!);
       const mode = ch.mode ?? 'include';
       if (scope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
+      if (scope === 'smart_group' && mode === 'include' && ch.priority === undefined) bad('An inclusion by a dynamic group needs an explicit priority', 'priority');
       if (resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
       if (resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
       const options = resourceType !== 'app' || mode !== 'include' ? {}
@@ -395,6 +406,11 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
     }
     const mode = ch.mode ?? before.mode;
     if (before.targetScope === 'tenant' && mode === 'exclude') bad('The whole tenant is never excluded', 'mode');
+    // An exclusion by a dynamic group made an inclusion: its priority is given again (D1), and its rule still targetable.
+    if (before.targetScope === 'smart_group' && mode === 'include' && before.mode === 'exclude') {
+      if (ch.priority === undefined) bad('An inclusion by a dynamic group needs an explicit priority', 'priority');
+      await requireTargetableGroup(q, tenantId, before.targetId!);
+    }
     if (before.resourceType === 'policy' && ch.options && Object.keys(ch.options).length) bad('A policy assignment has no options', 'options');
     if (before.resourceType === 'app' && mode === 'exclude' && ch.options && Object.keys(ch.options).length) bad('An exclusion has no options', 'options');
     const android = before.resourceType === 'app' && await isAndroidApp(q, before.resourceTenantId, before.resourceId);
@@ -603,7 +619,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
 // ── Approval of a publication or of a batch (request type mdm_policy_publish) ──
 
 interface PublishPayload {
-  kind: 'version' | 'assignments' | 'group_move' | 'group_delete' | 'device_move';
+  kind: PolicyPublishKind;
   policyId?: number;
   versionId?: number;
   version?: number;
@@ -717,12 +733,37 @@ export async function executePolicyPublish(x: ApprovalExecution): Promise<string
     return;
   }
   if (p.kind === 'assignments') return executeAssignmentChanges(x, p);
-  // A group moved in the tree or deleted (groupTree.ts): the same request type, the same checks.
-  if (p.kind === 'group_move' || p.kind === 'group_delete') return executeGroupTreeChange(x);
-  // Devices moved into a group (deviceMove.ts, S12).
-  if (p.kind === 'device_move') return executeDeviceMove(x);
+  // The other kinds: their own executor (the same request type, the same checks of the preview approved).
+  const executor = typeof p.kind === 'string' ? publishKindExecutors.get(p.kind) : undefined;
+  if (executor) return executor(x);
   refuse('Malformed publication request');
 }
+
+/** Executes an approved request of one kind of change (its payload's kind) as the requester. */
+export type PublishKindExecutor = (x: ApprovalExecution) => Promise<string | void>;
+
+/**
+ * The executors of the kinds of change a request of the type mdm_policy_publish carries besides a version and a batch
+ * (the coordination's brick « changement gouverné », P0-5 T7): a lot that adds a governed kind (its proposal registered
+ * in impact.ts, registerProposedKind) registers its executor here (registerPublishKind) instead of a branch above.
+ */
+const publishKindExecutors = new Map<string, PublishKindExecutor>();
+
+/** Registers the executor of a kind of change of the requests mdm_policy_publish. */
+export function registerPublishKind(kind: Exclude<PolicyPublishKind, 'version' | 'assignments'>, execute: PublishKindExecutor): void {
+  publishKindExecutors.set(kind, execute);
+}
+
+// A group moved in the tree or deleted (groupTree.ts), devices moved into a group (deviceMove.ts, S12); the governed
+// changes of the dynamic groups (P0-5 T7, groups/governance.ts): a new rule, a deletion, a release, the facts of a device.
+// Called through a closure: resolved when a request is executed, whatever the order the modules were loaded in.
+registerPublishKind('group_move', (x) => executeGroupTreeChange(x));
+registerPublishKind('group_delete', (x) => executeGroupTreeChange(x));
+registerPublishKind('device_move', (x) => executeDeviceMove(x));
+registerPublishKind('smart_group_rule', (x) => executeSmartGroupChange(x));
+registerPublishKind('smart_group_delete', (x) => executeSmartGroupChange(x));
+registerPublishKind('smart_group_release', (x) => executeSmartGroupChange(x));
+registerPublishKind('device_facts', (x) => executeDeviceFactsChange(x));
 
 /** A request closed without execution: a refused or expired version is rejected (a new draft can be made), a
  *  cancelled one goes back to the draft of its author. P4 entry policy.rejected. */

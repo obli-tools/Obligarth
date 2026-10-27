@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import toast from 'react-hot-toast';
-import { Building2, FolderOpen, Minus, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
+import { Building2, FolderOpen, FolderSearch, Minus, Pencil, Plus, Smartphone, Trash2 } from 'lucide-react';
 import type { AndroidAppDetail, AppleAppOptions, Assignment, AssignmentChange, AssignmentMode, AssignmentTargetScope, DeviceSummary, JsonValue, Policy, SubmitOutcome } from '@obligarth/shared';
 import { APPLE_APP_OPTION_DEFAULTS, ASSIGNMENT_PRIORITY } from '@obligarth/shared';
 import { mdmApi } from '@/api/mdm.api';
@@ -77,7 +77,8 @@ export function announceSubmitOutcome(t: TFunction, outcome: SubmitOutcome): voi
 export interface AssignmentTarget { scope: AssignmentTargetScope; id: number | null; name?: string | null }
 
 const scopeIcon = (scope: AssignmentTargetScope) => (scope === 'tenant' ? <Building2 className="w-3.5 h-3.5" />
-  : scope === 'group' ? <FolderOpen className="w-3.5 h-3.5" /> : <Smartphone className="w-3.5 h-3.5" />);
+  : scope === 'group' ? <FolderOpen className="w-3.5 h-3.5" />
+    : scope === 'smart_group' ? <FolderSearch className="w-3.5 h-3.5" /> : <Smartphone className="w-3.5 h-3.5" />);
 
 export function targetLabel(t: TFunction, a: Pick<Assignment, 'targetScope' | 'targetId' | 'targetName'>): string {
   if (a.targetScope === 'tenant') return t('mdm.assignments.wholeTenant') || 'Whole tenant';

@@ -6,6 +6,7 @@ import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { privacyRulesFor } from '../../apple/devices/privacy';
 import { applyCollectionRules } from '../inventory/ingestors';
 import { requestDeviceResolution } from '../policies/triggers';
+import { requestGroupEvaluation } from '../groups/triggers';
 
 // =============================================================================
 // Changes of the record an operator makes (docs: modele-donnees-mdm §4.3,
@@ -49,6 +50,7 @@ export async function changeOwnership(trx: Knex.Transaction, tenantId: number, d
   }
   // The ownership decides the availability of settings (product rules of the overlay): resolve the device again.
   await requestDeviceResolution(trx, tenantId, [deviceId]);
+  await requestGroupEvaluation(trx, tenantId, [deviceId]);
   // The privacy rules of the ownership decide the status items the device is subscribed to: its declaration set too.
   await requestDdmRecompute(trx, tenantId, { deviceIds: [deviceId] });
   await audit.appendInTx(trx, {
@@ -78,6 +80,7 @@ export async function moveToGroup(trx: Knex.Transaction, tenantId: number, devic
   if (changed.length) {
     await trx('devices').whereIn('id', changed).where({ tenant_id: tenantId }).update({ group_id: groupId, updated_at: new Date() });
     await requestDeviceResolution(trx, tenantId, changed);
+    await requestGroupEvaluation(trx, tenantId, changed);
     // What the providers of declarations serve may follow the group (integration §9.4): the sets are computed again.
     await requestDdmRecompute(trx, tenantId, { deviceIds: changed });
   }

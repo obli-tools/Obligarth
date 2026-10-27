@@ -82,7 +82,7 @@ export interface InitialDeviceFilters {
 
 // The session keys of the filters a link carries (dropped when a different link lands on the page; the saved view
 // chosen too: the link's filters are not the view's), and the key of the last link applied.
-const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost', 'view']
+const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost', 'view', 'smartGroup']
   .map((k) => `obligarth:inventory:${k}`);
 const LINK_SESSION_KEY = 'obligarth:inventory:link';
 /** The tenant of the last opening of the list in this tab: the default view applies at the first opening in a tenant
@@ -90,7 +90,7 @@ const LINK_SESSION_KEY = 'obligarth:inventory:link';
  *  one (a view, the groups of a rule and an end user are a tenant's) and opens on the new tenant's default view. */
 const OPENED_SESSION_KEY = 'obligarth:inventory:opened';
 /** The session keys of the state that belongs to a tenant. */
-const TENANT_SESSION_KEYS = ['view', 'rule', 'endUser'].map((k) => `obligarth:inventory:${k}`);
+const TENANT_SESSION_KEYS = ['view', 'rule', 'endUser', 'smartGroup'].map((k) => `obligarth:inventory:${k}`);
 
 interface DeviceTableProps {
   initialFilters?: InitialDeviceFilters;
@@ -228,6 +228,9 @@ export function DeviceTable({
   const rule = useMemo(() => (storedRule && validateRule(storedRule).length === 0 && ruleParamFits(JSON.stringify(storedRule))
     ? storedRule : null), [storedRule]);
   useEffect(() => { if (storedRule && !rule) setRule(null); }, [storedRule, rule, setRule]);
+  // The members of a dynamic group (P0-5 T4): from a saved view for now (its entry of the group panel comes with the
+  // console of the dynamic groups); counted with the filters, so that clearing them clears it too.
+  const [smartGroupId, setSmartGroupId] = useSessionState<number | null>('obligarth:inventory:smartGroup', null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   // The saved view chosen (its uuid), and the one to apply once the views are loaded.
   const [activeViewUuid, setActiveViewUuid] = useSessionState<string | null>('obligarth:inventory:view', null);
@@ -248,6 +251,7 @@ export function DeviceTable({
     setOwnershipFilters(f.ownership ? new Set([f.ownership]) : new Set());
     setEndUserId(f.endUserId);
     setLostOnly(f.lost === true);
+    setSmartGroupId(null);
     setActiveViewUuid(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkKey]);
@@ -379,12 +383,13 @@ export function DeviceTable({
     groupId: ungroupedOnly ? undefined : (groupId ?? undefined),
     includeSubgroups: ungroupedOnly ? undefined : (groupId ? true : undefined),
     ungrouped: ungroupedOnly ? true : undefined,
+    smartGroupId: smartGroupId ?? undefined,
     tenantIds: isMaster && tenantFilters.size > 0 ? [...tenantFilters] : undefined,
     sortBy: sortBy || undefined,
     sortOrder: sortBy ? sortOrder : undefined,
   }), [debouncedSearch, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters,
     supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder,
-    ruleJson]);
+    ruleJson, smartGroupId]);
 
   const load = useCallback(async (reset: boolean) => {
     const pageToFetch = reset ? 1 : loadedPagesRef.current + 1;
@@ -459,7 +464,7 @@ export function DeviceTable({
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
     + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0)
-    + (lostOnly ? 1 : 0) + (rule ? 1 : 0);
+    + (lostOnly ? 1 : 0) + (rule ? 1 : 0) + (smartGroupId !== null ? 1 : 0);
   const hasFilters = !!debouncedSearch || chipFilterCount > 0;
   const activeFilterCount = chipFilterCount + (stateTab !== 'managed' ? 1 : 0) + (isMaster ? tenantFilters.size : 0);
   const clearAllFilters = () => {
@@ -468,15 +473,16 @@ export function DeviceTable({
     setPlatformFilters(new Set()); setOwnershipFilters(new Set()); setTagFilters(new Set());
     setSupervisedOnly(false); setOsBelow(''); setOsBelowDraft(''); setEndUserId(undefined); setLostOnly(false);
     setRule(null);
+    setSmartGroupId(null);
   };
 
   // ── Saved views (DeviceViewsBar): the state of the list to and from a view's definition ─────────────────
   const currentDefinition = useMemo(() => definitionOf({
     search, stateTab, contact: contactFilters, compliance: complianceFilters, config: configFilters, platform: platformFilters,
-    ownership: ownershipFilters, supervisedOnly, osBelow, tags: tagFilters, endUserId, lostOnly, rule, groupId,
+    ownership: ownershipFilters, supervisedOnly, osBelow, tags: tagFilters, endUserId, lostOnly, rule, groupId, smartGroupId,
     sortBy, sortOrder, columns: visibleFields,
   }), [search, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters, supervisedOnly,
-    osBelow, tagFilters, endUserId, lostOnly, rule, groupId, sortBy, sortOrder, visibleFields]);
+    osBelow, tagFilters, endUserId, lostOnly, rule, groupId, smartGroupId, sortBy, sortOrder, visibleFields]);
   /** Replaces the state of the list with a view's definition; false (and nothing changed) when its advanced filter
    *  cannot go as ?rule= (a view saved through the API with a longer rule). */
   const applyView = (view: DeviceView): boolean => {
@@ -495,6 +501,7 @@ export function DeviceTable({
     setSupervisedOnly(s.supervisedOnly); setOsBelow(s.osBelow); setOsBelowDraft(s.osBelow);
     setTagFilters(new Set(s.tags)); setEndUserId(s.endUserId); setLostOnly(s.lostOnly);
     setRule(s.rule);
+    setSmartGroupId(s.smartGroupId);
     setSortBy(s.sortBy); setSortOrder(s.sortOrder);
     if (s.columns) { saveVisibleFields(s.columns); setVisibleFields(s.columns); }
     if (s.groupId !== groupId) onGroupChange?.(s.groupId);
@@ -716,6 +723,12 @@ export function DeviceTable({
       {endUserId !== undefined && (
         <button onClick={() => setEndUserId(undefined)} className={chipCls(true)}>
           {t('devices.filters.endUser') || 'One end user'} <X className="w-3 h-3" />
+        </button>
+      )}
+      {smartGroupId !== null && (
+        <button onClick={() => setSmartGroupId(null)} className={chipCls(true)}
+          title={t('smartGroups.filterChipHint') || 'The members of a dynamic group: remove this filter'}>
+          {t('smartGroups.filterChip') || 'One dynamic group'} <X className="w-3 h-3" />
         </button>
       )}
       <span className="ml-auto text-xs text-text-muted">{t('devices.list.count', '{{count}} devices', { count: total, defaultValue_one: '{{count}} device' })}</span>

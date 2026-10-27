@@ -71,6 +71,8 @@ export interface DeviceViewDefinition {
   groupId?: number;
   includeSubgroups?: boolean;
   ungrouped?: boolean;
+  /** A dynamic group (P0-5 T4): its members. Part of the group of the list, with groupId, includeSubgroups and ungrouped. */
+  smartGroupId?: number;
   sort?: { by: DeviceListSortKey; order: 'asc' | 'desc' };
   /** The optional columns shown (keys of the console's catalog). */
   columns?: string[];

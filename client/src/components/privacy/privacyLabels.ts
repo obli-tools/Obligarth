@@ -53,6 +53,7 @@ const FIXED_FALLBACK: Record<RetentionFixedKey, string> = {
   enrollment_sessions: 'Enrollment sessions', enrollment_tokens: 'Enrollment links and tokens', inventory_commands: 'Inventory requests',
   ade_removed_devices: 'Devices removed from Apple Business', notification_log: 'Notification log', live_alerts: 'Live alerts',
   app_icons_orphaned: 'Icons of applications no longer installed', android_inbox: 'Android events applied', backups: 'Backups',
+  smart_group_memberships: 'Entries and exits of the dynamic groups',
 };
 export const fixedLabel = (key: RetentionFixedKey): string => trCode(`privacy.retention.fixed.${key}`, FIXED_FALLBACK[key] ?? key);
 

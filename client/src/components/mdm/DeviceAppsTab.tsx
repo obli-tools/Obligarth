@@ -302,6 +302,7 @@ function AppDetail({ app, canManage, badge }: { app: DeviceAppView; canManage: b
       : (t('mdm.inventory.apps.cat.user') || 'Installed by the user');
   const scopeLabel = (s: string): string => s === 'device' ? (t('mdm.inventory.apps.scope.device') || 'This device')
     : s === 'group' ? (t('mdm.inventory.apps.scope.group') || 'Group')
+      : s === 'smart_group' ? (t('mdm.inventory.apps.scope.smart_group') || 'Dynamic group')
       : s === 'library' ? (t('mdm.inventory.apps.scope.library') || 'Library')
         : (t('mdm.inventory.apps.scope.tenant') || 'Whole tenant');
   const cat = app.catalogApp;
@@ -355,6 +356,9 @@ function AppDetail({ app, canManage, badge }: { app: DeviceAppView; canManage: b
                 <StateBadge tone={m.scope === 'device' ? 'amber' : 'violet'} label={scopeLabel(m.scope)} />
                 {m.scope === 'group' && m.scopeId !== null && (
                   <Link to={`/group/${m.scopeId}`} className="text-text-primary hover:text-accent">{m.scopeName || `#${m.scopeId}`}</Link>
+                )}
+                {m.scope === 'smart_group' && m.scopeId !== null && (
+                  <span className="text-text-primary">{m.scopeName || `#${m.scopeId}`}</span>
                 )}
                 <span className="text-text-muted">#{m.assignmentId}</span>
                 <span className={`ml-auto ${m.availability === 'available' ? 'text-green-400' : 'text-amber-500'}`}>

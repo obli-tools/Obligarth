@@ -44,6 +44,8 @@ export const SocketEvents = {
   // configuration of devices recomputed by a resolution ({ deviceIds }).
   POLICY_CHANGED:         'POLICY_CHANGED',
   DEVICE_CONFIG_CHANGED:  'DEVICE_CONFIG_CHANGED',
+  // Dynamic groups (P0-5 T5): the members of groups changed by an automatic computation ({ smartGroupIds }).
+  SMART_GROUP_CHANGED:    'SMART_GROUP_CHANGED',
 
   // Apple integration (integration-apple-edge §12.4): identifiers only, the
   // client reads the objects back through the REST routes (scopes applied).

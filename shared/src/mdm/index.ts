@@ -28,3 +28,5 @@ export * from './legacyAgent';
 export * from './rules';
 // Saved views of the device list (P0-5 §4.1, §5).
 export * from './deviceViews';
+// Dynamic groups (P0-5 §4.2, §5).
+export * from './smartGroups';

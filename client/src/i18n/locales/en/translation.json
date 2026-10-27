@@ -1692,6 +1692,10 @@
       "group_updated": "Device group updated",
       "group_deleted": "Device group deleted",
       "group_moved": "Device group moved in the tree",
+      "smart_group_created": "Dynamic group created",
+      "smart_group_updated": "Dynamic group changed",
+      "smart_group_deleted": "Dynamic group deleted",
+      "smart_group_released": "Dynamic group released",
       "jobs_cancelled": "Background job cancelled",
       "jobs_dead_letter_discarded": "Dead letter discarded",
       "jobs_redriven": "Dead letters redriven",
@@ -2016,7 +2020,15 @@
         "update": "change",
         "delete": "remove"
       },
-      "moreChanges": "+{{count}} more changes"
+      "moreChanges": "+{{count}} more changes",
+      "smartGroupRule": "New rule for the dynamic group (its version {{version}} replaced)",
+      "smartGroupDelete": "Deletion of the dynamic group, with its assignments",
+      "smartGroupRelease": "Release of the dynamic group held by the mass guard",
+      "smartGroupName": "new name",
+      "smartGroupMembership": "{{added}} device(s) enter, {{removed}} leave; {{total}} member(s) afterwards",
+      "deviceFacts": "Change of the record of the device",
+      "deviceFactsFields": "Fields",
+      "deviceFactsGroups": "Dynamic groups entered: {{entered}}; left: {{left}}"
     }
   },
   "os": {
@@ -2931,6 +2943,16 @@
           "title": "Knox licence refused",
           "message": "The Knox licence could not be activated on an Android agent device: silent installation and restart are unavailable."
         }
+      },
+      "smart_group": {
+        "rule_invalid": {
+          "title": "Dynamic group to fix",
+          "message": "The rule of the dynamic group {{name}} names a static group that was deleted: its members are frozen until its rule is changed."
+        },
+        "mass_change": {
+          "title": "Dynamic group held",
+          "message": "The inventory would change the members of the dynamic group {{name}} beyond {{limit}} entries and exits within the hour: nothing was applied, its changes wait to be reviewed."
+        }
       }
     },
     "errors": {
@@ -3564,7 +3586,8 @@
       "group": "Inherited from a group",
       "ownGroup": "The device's group",
       "tenant": "Whole tenant",
-      "library": "Library"
+      "library": "Library",
+      "smartGroup": "From a dynamic group"
     },
     "config": {
       "counts": "{{settings}} setting(s), {{artifacts}} artifact(s)",
@@ -3665,7 +3688,8 @@
           "tenant": "Whole tenant",
           "group": "Group",
           "device": "This device",
-          "library": "Library"
+          "library": "Library",
+          "smart_group": "Dynamic group"
         },
         "availability": {
           "not_applicable": "Not applicable to this device"
@@ -3728,7 +3752,8 @@
       "scope": {
         "tenant": "Tenant",
         "group": "Group",
-        "device": "Device"
+        "device": "Device",
+        "smart_group": "Dynamic group"
       }
     },
     "impact": {
@@ -3747,7 +3772,9 @@
       "computing": "Computing the preview…",
       "conflicts_one": "{{count}} conflict",
       "conflicts_other": "{{count}} conflicts",
-      "conflictsHint": "Two resources set the same key on the same target with the same priority and different values: change a priority or a value.",
+      "conflictsHint": "Two resources set the same key on the same devices (one target, or targets of the same rank that meet) with the same priority and different values: change a priority or a value.",
+      "conflictDevices_one": "{{count}} device",
+      "conflictDevices_other": "{{count}} devices",
       "key": "Setting",
       "added": "Added",
       "changed": "Changed",
@@ -3879,7 +3906,7 @@
     "configurationBusy": "Too many changes of the configuration are waiting on this tenant: try again in a moment.",
     "validationFailed": "The content of the policy is not valid.",
     "androidAppOptionsInvalid": "Invalid options for this Android app: check the installation type and the managed configuration against the app.",
-    "policyConflict": "The change would create a conflict: two policies set the same key on the same target with the same priority.",
+    "policyConflict": "The change would create a conflict: two policies set the same key on the same devices (one target, or targets of the same rank that meet) with the same priority.",
     "rawProfileInvalid": "The profile cannot be imported.",
     "tooManyTargets": "Too many devices for one request.",
     "appleEdgeUnavailable": "The device service is unavailable: try again in a moment.",
@@ -4031,12 +4058,21 @@
     "invalidOptions": "These options do not apply to this type of report.",
     "invalidScope": "The chosen group or device is not available.",
     "invalidTimezone": "Unknown time zone: choose an IANA name such as Europe/Paris or UTC.",
+    "deviceFactsGoverned": "This change makes the device enter or leave a dynamic group an assignment targets: it needs the right to manage devices, and the preview of its impact.",
     "deviceViewInvalid": "This view no longer matches the filters of the list: open it, adjust it and save it again.",
     "deviceViewLimit": "Too many views ({{limit}} at most): delete one first.",
     "deviceViewNameTaken": "A view of this name already exists.",
     "deviceViewNotFound": "This view no longer exists, or is no longer shared with you.",
     "deviceViewReadOnly": "Only the owner of this view, or a tenant administrator for a shared view, can change it.",
     "deviceViewTooLarge": "This view is too large to be saved: simplify its advanced filter.",
+    "smartGroupAdminOnly": "Only an administrator of the tenant changes, deletes or releases a dynamic group an assignment targets.",
+    "smartGroupLimit": "Too many dynamic groups ({{limit}} at most): delete one first.",
+    "smartGroupNameTaken": "A dynamic group of this name already exists.",
+    "smartGroupNotFound": "This dynamic group does not exist.",
+    "smartGroupNotHeld": "This dynamic group is not held: there is nothing to release.",
+    "smartGroupNotTargetable": "This rule cannot define a dynamic group an assignment targets: compliance, configuration, dates, static groups, applications and the name of the device are not allowed.",
+    "smartGroupTargeted": "An assignment now targets this dynamic group: submit the change again to preview its impact.",
+    "smartGroupUnknownGroup": "The rule names a static group that no longer exists.",
     "invalidRule": "The advanced filter is not valid."
   },
   "deviceEnrollment": {
@@ -5450,7 +5486,8 @@
         "live_alerts": "Live alerts",
         "app_icons_orphaned": "Icons of applications no longer installed",
         "android_inbox": "Android events applied",
-        "backups": "Backups"
+        "backups": "Backups",
+        "smart_group_memberships": "Entries and exits of the dynamic groups"
       }
     },
     "notice": {
@@ -5862,7 +5899,7 @@
       "empty": "No condition: the advanced filter selects every device.",
       "emptyGroup": "Empty group.",
       "full": "{{max}} conditions at most.",
-      "restrictedHint": "Greyed fields are not permitted here: derived and time-relative fields, the static group and the installed applications.",
+      "restrictedHint": "Greyed fields are not permitted here: derived and time-relative fields, the static group, the installed applications and the name of the device (its user can change it).",
       "tooLong": "This rule is too long for the list: remove some conditions or values.",
       "previewLoading": "Counting the devices…",
       "previewCount_one": "{{count}} device matches",
@@ -5936,5 +5973,9 @@
     "loadFailed": "The views could not be loaded.",
     "retry": "Try again",
     "createdNotDefault": "View saved, but not set as the default view: {{error}}"
+  },
+  "smartGroups": {
+    "filterChip": "One dynamic group",
+    "filterChipHint": "The members of a dynamic group: remove this filter"
   }
 }

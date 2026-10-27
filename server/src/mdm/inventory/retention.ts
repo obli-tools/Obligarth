@@ -1,6 +1,7 @@
 import type { Knex } from 'knex';
 import { requestEndUserResolution } from '../policies/triggers';
-import { OWNERSHIPS } from '@obligarth/shared';
+import { requestGroupEvaluation } from '../groups/triggers';
+import { OWNERSHIPS, SMART_GROUP_LIMITS } from '@obligarth/shared';
 import { retentionCutoff, retentionDays, unenrolledRetentionDays } from '../../privacy/retention';
 import { ICON_FAILED_DAYS } from './pngIcon';
 
@@ -26,7 +27,9 @@ import { ICON_FAILED_DAYS } from './pngIcon';
 //     decrease (realignLostModePurgeDates, run before the rules);
 //   - app_icons: a lease unanswered for 7 days (a failure of a device is
 //     kept 30 days: it is not asked again meanwhile); an icon (or its
-//     absence) whose app no device of the tenant has, untouched for 90 days.
+//     absence) whose app no device of the tenant has, untouched for 90 days;
+//   - smart_group_membership_log: entries and exits of the dynamic groups older
+//     than 90 days (P0-5 D7: a fixed duration, no category of the tenant).
 // The record of a device past its retention_until is NOT one of these rules:
 // a record is deleted only after its enrollments were purged at apple-edge
 // (integration §13.3), which no generic caller can do. The retention job
@@ -136,7 +139,10 @@ export const mdmRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
       if (!ids.length) return 0;
       // Before the link goes: the devices of these end users, resolved again by a job of this transaction.
       await requestEndUserResolution(trx, tenantId, ids.map(Number));
-      return trx('end_users').where({ tenant_id: tenantId }).whereIn('id', ids).del();
+      const n = await trx('end_users').where({ tenant_id: tenantId }).whereIn('id', ids).del();
+      // Their devices lost their end user (marked by the base): the dynamic groups that read it.
+      await requestGroupEvaluation(trx, tenantId);
+      return n;
     },
   },
   {
@@ -179,6 +185,16 @@ export const mdmRetentionRules: readonly MdmRetentionRule[] = Object.freeze([
          WHERE ic.tenant_id = due.tenant_id AND ic.platform_family = due.platform_family AND ic.identifier = due.identifier`,
       { tenantId, leaseCutoff, orphanCutoff, failedCutoff, limit }) as { rowCount: number | null };
       return Number(res.rowCount ?? 0);
+    },
+  },
+  {
+    name: 'smart_group_membership_log',
+    description: `Entries and exits of the dynamic groups older than ${SMART_GROUP_LIMITS.membershipLogDays} days (fixed)`,
+    async purge(trx, tenantId, now, limit) {
+      const cutoff = new Date(now.getTime() - days(SMART_GROUP_LIMITS.membershipLogDays));
+      const ids = await trx('smart_group_membership_log').where({ tenant_id: tenantId }).where('at', '<', cutoff)
+        .orderBy('at', 'asc').limit(limit).pluck('id') as string[];
+      return ids.length ? trx('smart_group_membership_log').where({ tenant_id: tenantId }).whereIn('id', ids).del() : 0;
     },
   },
 ]);

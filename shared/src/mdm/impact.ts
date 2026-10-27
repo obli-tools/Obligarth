@@ -16,6 +16,11 @@ export interface PolicyConflict {
   target: { scope: SourceScope; id: number | null };
   priority: number;
   resources: Array<{ type: 'policy' | 'app'; id: number; name: string }>;
+  /** A conflict between targets that meet on devices (P0-5 T6: a dynamic group and the static group the devices are
+   *  directly in, or another dynamic group, at the same rank): every target involved (`target` is one of them)… */
+  targets?: Array<{ scope: SourceScope; id: number | null }>;
+  /** …and the devices of their intersection the change would put in this conflict. */
+  devices?: number;
 }
 
 export interface PolicyImpact {
@@ -48,3 +53,16 @@ export interface ImpactDevicesPage {
   pageSize: number;
   devices: Array<{ deviceId: number; label: string; added: string[]; changed: string[]; removed: string[] }>;
 }
+
+/**
+ * The kinds of change a request of the type mdm_policy_publish carries (its payload's `kind`), each executed by its
+ * own executor (server: publish.ts, registerPublishKind): a version, a batch of assignments, the tree of groups, a move
+ * of devices; then the governed changes of the dynamic groups (P0-5 T7): the rule of a group an assignment targets, its
+ * deletion, the release of a held group, the facts of a device that make it enter or leave such a group (D11).
+ * Appended at the end only (coordination §3.2).
+ */
+export const POLICY_PUBLISH_KINDS = [
+  'version', 'assignments', 'group_move', 'group_delete', 'device_move',
+  'smart_group_rule', 'smart_group_delete', 'smart_group_release', 'device_facts',
+] as const;
+export type PolicyPublishKind = typeof POLICY_PUBLISH_KINDS[number];

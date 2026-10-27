@@ -34,6 +34,12 @@ import endUserRoutes from './routes/endUsers.routes';
 import policyRoutes from './routes/policies.routes';
 import appRoutes from './routes/apps.routes';
 import deviceViewRoutes from './routes/deviceViews.routes';
+import smartGroupRoutes from './routes/smartGroups.routes';
+import { smartGroupAlertDefinitions } from './groups/alerts';
+import { registerGroupJobs } from './groups/jobs';
+import { onPrivacyProfilePublished, requestGroupEvaluation } from './groups/triggers';
+import { onProfilePublished } from '../privacy/approvals';
+import { registerAlertDefinitions } from '../services/alertCatalog';
 import { onOperationFinal, onTokenSynced } from '../apple/integrations/vpp.service';
 import { onManagedAppsIngested } from './inventory/ingestors';
 import { appleArtifactProvider, registerAppLicenseGate } from './apple/artifacts';
@@ -58,6 +64,8 @@ import { onUnenrollCleanup } from '../apple/devices/jobs';
 // contributor of the setup plan), the hooks of their ends (final state of a
 // target, declaration status), the minimal compliance, their queues, and the
 // resolution of every tenant when the catalog shipped with the server changes.
+// P0-5: the saved views (T2), the dynamic groups (T4: CRUD and full computation; T5: their incremental computation,
+// its queues, its wakes, the alert of the mass guard).
 // =============================================================================
 
 /** Status items of the DDM channel whose change may change the compliance of a device (section 5.4). */
@@ -107,6 +115,17 @@ export function registerMdmModule(): void {
   } });
   registerArtifactJobs();          // apple.artifacts.reconcile-device, mdm.artifacts.gc
   registerComplianceJobs();        // mdm.compliance.evaluate-device, mdm.compliance.evaluate-all
+  registerGroupJobs();             // mdm.groups.evaluate, mdm.groups.schedule (P0-5 T5)
+  // The dynamic groups (P0-5 T5): a device enrolled was marked 'new' by the base; its onboarding wakes the incremental
+  // computation of its tenant, as its departure from management (Apple: the cleanup of the departure) does. A privacy
+  // profile published changes what a rule sees of the devices of its ownership: they are marked again.
+  for (const channel of ['apple_mdm', 'amapi'] as const) {
+    registerOnboardStep(channel, { name: 'groups.evaluate', run: async ({ job, tenantId, deviceId }) => {
+      await job.inTenant(() => requestGroupEvaluation(null, tenantId, [deviceId]));
+    } });
+  }
+  onUnenrollCleanup(async (trx, tenantId, deviceId) => { await requestGroupEvaluation(trx, tenantId, [deviceId]); });
+  onProfilePublished('mdm.groups', async (trx, p) => { await onPrivacyProfilePublished(trx, p); });
 
   // ── Delivery (§7.10): the extension points of the integration, and only them ─
   // The Apple channels of the common artifact store (profile, ddm, app, setting: lot AN-P, COH-2), the default
@@ -166,10 +185,20 @@ export function registerMdmModule(): void {
     { name: 'device_view.shared_created', criticality: 'standard', label: 'Shared device view created' },
     { name: 'device_view.shared_updated', criticality: 'standard', label: 'Shared device view changed' },
     { name: 'device_view.shared_deleted', criticality: 'standard', label: 'Shared device view deleted' },
+    // Dynamic groups (P0-5 T4): critical (in the transaction of the change) when the group carries an assignment, as
+    // group.moved; standard otherwise (the service raises the class).
+    { name: 'smart_group.created', criticality: 'standard', label: 'Dynamic group created' },
+    { name: 'smart_group.updated', criticality: 'standard', label: 'Dynamic group changed' },
+    { name: 'smart_group.deleted', criticality: 'standard', label: 'Dynamic group deleted' },
+    // The release of a group held by the mass guard (P0-5 T7, D4): same rule.
+    { name: 'smart_group.released', criticality: 'standard', label: 'Dynamic group released' },
   ]);
   registerAuditResourceName('policy', 'policies');
   registerAuditResourceName('app', 'apps');
   registerAuditResourceName('device_view', 'device_views');
+  registerAuditResourceName('smart_group', 'smart_groups');
+  // The alerts of the dynamic groups (P0-5 T4: smart_group.rule_invalid), raised by the catalogue service.
+  registerAlertDefinitions('mdm', smartGroupAlertDefinitions());
 
   // ── Restrictions (§10.7, DM4): the ownership change, a second approver by default; never below a step-up.
   //    The publication of a policy or a change of assignments (§7.12, DM23): a step-up at least (its floor, no
@@ -182,7 +211,8 @@ export function registerMdmModule(): void {
   );
   registerApprovalExecutor('change_ownership', executeChangeOwnership);
   // One request type for every change of the effective configuration that needs a second approver: a version to
-  // publish, a batch of assignment changes, a group moved in the tree or deleted (policies/groupTree.ts, S12).
+  // publish, a batch of assignment changes, a group moved in the tree or deleted (policies/groupTree.ts, S12), devices
+  // moved, the governed changes of the dynamic groups and of the facts of a device (groups/governance.ts, P0-5 T7).
   registerApprovalRequestType('mdm_policy_publish', executePolicyPublish, { onClosed: onPolicyPublishClosed });
 
   // ── Secret references of the documents (DM17; coffre-secrets §6.4): kept alive by the garbage collection of
@@ -197,6 +227,7 @@ export function createMdmRouter(): Router {
   const router = Router();
   router.use('/end-users', endUserRoutes);
   router.use('/device-views', deviceViewRoutes);
+  router.use('/smart-groups', smartGroupRoutes);
   router.use('/', policyRoutes);
   router.use('/', appRoutes);
   router.use('/', deviceRoutes);
