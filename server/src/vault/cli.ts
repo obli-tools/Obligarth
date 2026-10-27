@@ -47,7 +47,7 @@ import { operationError, vaultOperations } from './operations';
 import { secretColumns } from './registry';
 import { runDekRotation } from './reseal';
 import { scopesOf } from './scopes';
-import { verifyVault } from './verify';
+import { verifyVault, type VerifyReport } from './verify';
 import { vaultInternals, VaultStartupError } from './vault';
 
 const CLI_ACTOR: DbActor = { type: 'job', name: 'vault.cli' };
@@ -129,17 +129,24 @@ async function verify(args: string[]): Promise<number> {
   const t = arg(args, '--tenant');
   const tenantId = t === undefined ? undefined : Number(t);
   if (tenantId !== undefined && !(Number.isSafeInteger(tenantId) && tenantId > 0)) throw new CliExit(1, 'verify: --tenant <id>');
-  const report = await verifyVault({ actor: CLI_ACTOR, full: args.includes('--full'), tenantId });
+  const report = await verifyAndRecord({ full: args.includes('--full'), tenantId });
+  out(report);
+  return report.failures ? 2 : 0;
+}
+
+/** The work of verify once the vault is ready: the verification, its operation row, vault.verify_failed in the master
+ *  tenant's journal on a failure (this command, and ops restore-reconcile: ops/cli.ts). */
+export async function verifyAndRecord(o: { full: boolean; tenantId?: number }): Promise<VerifyReport> {
+  const report = await verifyVault({ actor: CLI_ACTOR, full: o.full, tenantId: o.tenantId });
   await asNone(CLI_ACTOR, () => vaultOperations.create(db, {
-    kind: 'verify', state: report.failures ? 'failed' : 'done', tenantId: tenantId ?? null,
-    startedAt: new Date(), finishedAt: new Date(), progress: { report }, params: { full: args.includes('--full') },
+    kind: 'verify', state: report.failures ? 'failed' : 'done', tenantId: o.tenantId ?? null,
+    startedAt: new Date(), finishedAt: new Date(), progress: { report }, params: { full: o.full },
   }));
   if (report.failures) {
     const failed = Object.fromEntries(Object.entries(report.columns).filter(([, c]) => c.failed > 0).map(([k, c]) => [k, c.failed]));
     await master('vault.verify_failed', { deksFailed: report.deks.failed, columns: failed });
   }
-  out(report);
-  return report.failures ? 2 : 0;
+  return report;
 }
 
 async function backfill(): Promise<number> {

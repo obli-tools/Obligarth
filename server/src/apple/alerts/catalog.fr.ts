@@ -56,6 +56,7 @@ export const APPLE_ALERTS_FR: Record<AppleAlertKind, { title: string; message: s
   'deadline.vault_kek_rotation': { title: 'Rotation de clé à faire', message: '{label} : à faire dans {daysLeft} jour(s) ({notAfter}).' },
   'deadline.vault_old_shares': { title: 'Anciennes parts du séquestre à détruire', message: '{label} : à faire dans {daysLeft} jour(s) ({notAfter}).' },
   'deadline.vault_dek_destruction': { title: 'Destruction de clé de données à faire', message: '{label} : à faire dans {daysLeft} jour(s) ({notAfter}).' },
+  'deadline.backup_restore_drill': { title: 'Exercice de reprise des sauvegardes à faire', message: '{label} : à faire dans {daysLeft} jour(s) ({notAfter}).' },
   'tenant.provisioning_failed': { title: 'Tenant non provisionné au service des appareils', message: 'Le tenant {tenantName} n\'a pas pu être créé chez apple-edge : nouvel essai toutes les heures.' },
   'tenant.edge_retired': { title: 'Tenant retiré du service des appareils', message: 'apple-edge tient le tenant {tenantName} pour retiré : ses appareils ne peuvent pas être servis. Créez un nouveau tenant.' },
   'tenant.mdm_key_conflict': { title: 'Conflit de clé MDM', message: 'La clé MDM du tenant {tenantName} diffère entre le cerveau et apple-edge (restauration partielle ?).' },
@@ -73,5 +74,5 @@ export const APPLE_ALERTS_FR: Record<AppleAlertKind, { title: string; message: s
   'ddm.relay_auth_failed': { title: 'Signatures du relais DDM refusées', message: '{count} requête(s) du relais DDM ont échoué à la vérification de leur signature.' },
   'ddm.secret_in_declaration': { title: 'Secret dans une déclaration', message: 'Une déclaration de {provider} portait un secret et a été refusée.' },
   'ddm.declaration_conflict': { title: 'Déclarations en conflit', message: 'Deux déclarations de {provider} portent l\'identifiant {identifier} : aucune n\'est servie.' },
-  'signing.identity_missing': { title: 'Profils d\'enrôlement non signés', message: 'Aucune identité de signature des profils n\'est importée : les profils d\'enrôlement sont servis sans signature.' },
+  'signing.identity_missing': { title: 'Identité de signature des profils absente', message: 'apple-edge ne dispose d\'aucune identité de signature des profils utilisable (aucune importée, ou expirée) : les profils d\'enrôlement sont servis sans signature, ou refusés quand la signature est exigée. Importez-en une avec la commande apple-edge signing-identity import.' },
 };

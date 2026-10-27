@@ -1696,6 +1696,7 @@
       "jobs_dead_letter_discarded": "Lettre morte écartée",
       "jobs_redriven": "Lettres mortes rejouées",
       "jobs_run_triggered": "Tâche de fond lancée à la main",
+      "ops_restore_reconciled": "Instance rapprochée après une restauration",
       "outbox_dead_letter_discarded": "Lettre morte de l'outbox écartée",
       "outbox_dead_letter_redriven": "Lettre morte de l'outbox rejouée",
       "outbox_dead_letter_viewed": "Lettre morte de l'outbox consultée",
@@ -1834,7 +1835,8 @@
       "integration": "Intégrations Apple",
       "mdm": "Commandes MDM",
       "enrollment": "Enrôlement",
-      "privacy": "Confidentialité"
+      "privacy": "Confidentialité",
+      "ops": "Exploitation"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -2027,7 +2029,8 @@
     "tabApprovals": "Approbations",
     "tabVault": "Coffre",
     "tabAuditSettings": "Réglages du journal",
-    "tabGuard": "Garde-fous"
+    "tabGuard": "Garde-fous",
+    "tabOps": "Exploitation"
   },
   "deviceKeys": {
     "level": {
@@ -2821,6 +2824,10 @@
         "vault_dek_destruction": {
           "title": "Destruction de clé de données à faire",
           "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
+        },
+        "backup_restore_drill": {
+          "title": "Exercice de reprise des sauvegardes à faire",
+          "message": "{{label}} : à faire dans {{daysLeft}} jour(s) ({{notAfter}})."
         }
       },
       "tenant": {
@@ -2903,8 +2910,8 @@
       },
       "signing": {
         "identity_missing": {
-          "title": "Profils d'enrôlement non signés",
-          "message": "Aucune identité de signature des profils n'est importée : les profils d'enrôlement sont servis sans signature."
+          "title": "Identité de signature des profils absente",
+          "message": "apple-edge ne dispose d'aucune identité de signature des profils utilisable (aucune importée, ou expirée) : les profils d'enrôlement sont servis sans signature, ou refusés quand la signature est exigée. Importez-en une avec la commande apple-edge signing-identity import."
         }
       },
       "legacy_agent": {
@@ -3277,7 +3284,8 @@
           "vault_escrow_test": "Test du séquestre",
           "vault_kek_rotation": "Rotation de la clé",
           "vault_old_shares": "Anciennes parts du séquestre",
-          "vault_dek_destruction": "Destruction de clés de données"
+          "vault_dek_destruction": "Destruction de clés de données",
+          "backup_restore_drill": "Exercice de reprise"
         },
         "level": {
           "ok": "OK",
@@ -3322,6 +3330,10 @@
         "not_declared": "Activez-le sur un serveur ADE",
         "no_active_token": "Aucun jeton de contenu actif",
         "unsigned_profiles": "Profils non signés",
+        "signing_missing_refused": "Aucune identité de signature : inscriptions refusées (apple-edge signing-identity import)",
+        "signing_expired_refused": "Identité de signature expirée : inscriptions refusées (importez-en une nouvelle)",
+        "signing_expired_unsigned": "Identité de signature expirée : profils non signés (importez-en une nouvelle)",
+        "signing_unknown": "apple-edge n'a pas répondu depuis le démarrage : état inconnu",
         "default_notice": "Notice par défaut, réservée aux essais",
         "default_rules": "Règles de confidentialité par défaut : publiez un profil pour chaque propriété inscrite",
         "notice_incomplete": "Notice des salariés incomplète (responsable du traitement, contact) : inscriptions refusées hors laboratoire",
@@ -5519,6 +5531,163 @@
         "android_byod_invitation": "Invitation Android",
         "android_signin": "Connexion Android"
       }
+    }
+  },
+  "ops": {
+    "title": "Exploitation de l'instance",
+    "description": "Stade de l'instance, prérequis d'un pilote, disponibilité, sauvegardes et exercice de reprise. Codes et comptes seulement : aucune donnée de tenant.",
+    "loadFailed": "Impossible de charger l'état de l'instance",
+    "refresh": "Actualiser",
+    "readyBanner": "L'instance est prête (GET /health/ready répond 200).",
+    "notReadyBanner": "L'instance n'est pas prête (GET /health/ready répond 503) : voir les contrôles en échec ci-dessous.",
+    "ok": "OK",
+    "failed": "En échec",
+    "locked": "Verrouillé",
+    "off": "Désactivé",
+    "up": "joignable",
+    "down": "injoignable",
+    "yes": "Oui",
+    "no": "Non",
+    "listening": "à l'écoute",
+    "notListening": "pas à l'écoute",
+    "notApplicable": "Sans objet",
+    "daysLeft_one": "{{count}} jour restant",
+    "daysLeft_other": "{{count}} jours restants",
+    "duration": {
+      "days": "{{d}} j {{h}} h",
+      "hours": "{{h}} h {{m}} min",
+      "minutes": "{{m}} min"
+    },
+    "state": {
+      "ok": "Rempli",
+      "warning": "À compléter ou à surveiller",
+      "error": "Bloquant",
+      "not_applicable": "Sans objet"
+    },
+    "stage": {
+      "title": "Stade de l'instance",
+      "lab": "Laboratoire",
+      "pilot": "Pilote",
+      "production": "Production",
+      "labHelp": "Laboratoire : les prérequis ci-dessous ne sont pas imposés. Complétez-les, puis passez OBLIGARTH_STAGE=pilot dans .env avant le premier pilote : le serveur refuse alors de démarrer sans les sauvegardes et, avec Apple, sans les profils signés.",
+      "beyondHelp": "Hors laboratoire, les prérequis sont imposés : le serveur ne démarre pas sans eux, un enrôlement est refusé tant que la notice de son tenant est incomplète, et une identité de signature absente ou expirée rend l'instance indisponible.",
+      "blocking_one": "{{count}} prérequis bloquant à ce stade.",
+      "blocking_other": "{{count}} prérequis bloquants à ce stade.",
+      "toDo_one": "{{count}} prérequis à compléter ou à surveiller.",
+      "toDo_other": "{{count}} prérequis à compléter ou à surveiller.",
+      "allOk": "Tous les prérequis d'un pilote sont remplis.",
+      "signingHelp": "L'identité de signature des profils (un certificat S/MIME validé organisation) s'importe sur l'hôte, jamais depuis cette console : apple-edge signing-identity import <chain.pem> <key.pem>."
+    },
+    "pilot": {
+      "backups": {
+        "expected": "Sauvegardes lancées et attendues (BACKUP_EXPECTED)",
+        "fresh": "Sauvegardes à jour"
+      },
+      "restore": {
+        "drill": "Exercice de reprise semestriel"
+      },
+      "signing": {
+        "required": "Profils d'enrôlement signés exigés (APPLE_REQUIRE_SIGNED_PROFILES)",
+        "identity": "Identité de signature des profils"
+      },
+      "notice": {
+        "complete": "Notice des salariés complète dans chaque tenant",
+        "default_allowed": "Notice par défaut refusée (APPLE_ALLOW_DEFAULT_NOTICE)"
+      }
+    },
+    "codes": {
+      "backups_not_expected": "Lancez le profil compose backup, vérifiez ses premiers comptes rendus, puis passez BACKUP_EXPECTED=true.",
+      "base_missing": "Aucune sauvegarde de base signalée pour le moment.",
+      "base_stale": "Dernière sauvegarde de base de plus de 26 heures.",
+      "wal_missing": "Aucun compte rendu du flux WAL pour le moment.",
+      "wal_stale": "Flux WAL muet depuis plus de 15 minutes.",
+      "drill_not_scheduled": "Aucun exercice planifié pour le moment (l'échéance est posée au prochain passage de l'échéancier).",
+      "drill_overdue": "En retard de {{days}} jour(s).",
+      "drill_due_soon": "À faire dans {{daysLeft}} jour(s).",
+      "signed_profiles_not_required": "Passez APPLE_REQUIRE_SIGNED_PROFILES=true une fois l'identité de signature importée.",
+      "signing_identity_missing": "apple-edge ne dispose d'aucune identité de signature : importez-en une (apple-edge signing-identity import).",
+      "signing_identity_expired": "L'identité de signature a expiré : importez-en une nouvelle.",
+      "signing_identity_expiring": "L'identité de signature expire dans {{daysLeft}} jour(s) : renouvelez-la.",
+      "signing_identity_unknown": "apple-edge n'a pas répondu depuis le démarrage : état inconnu.",
+      "notice_incomplete": "{{incomplete}} tenant(s) sur {{total}} sans responsable du traitement ou sans contact (console Confidentialité, Notice).",
+      "default_notice_allowed": "Retirez APPLE_ALLOW_DEFAULT_NOTICE (ou passez-la à false).",
+      "unknown": "Illisible pour le moment.",
+      "timeout": "Pas de réponse à temps.",
+      "error": "Erreur.",
+      "failed": "En échec.",
+      "missing_migrations": "Migrations de cette image non appliquées.",
+      "locked": "Verrouillé.",
+      "incompatible": "Version incompatible."
+    },
+    "readiness": {
+      "title": "Disponibilité",
+      "checkedAt": "Vérifiée le"
+    },
+    "checks": {
+      "database": "Base de données",
+      "schema": "Schéma",
+      "vault": "Coffre",
+      "apple-edge": "apple-edge",
+      "backups": "Sauvegardes",
+      "signing": "Identité de signature"
+    },
+    "instance": {
+      "title": "Instance",
+      "version": "Version",
+      "uptime": "En marche depuis",
+      "jobs": "Tâches de fond",
+      "vault": "Coffre",
+      "metrics": "Écouteur des métriques",
+      "memory": "Mémoire (RSS)"
+    },
+    "signing": {
+      "title": "Profils signés (Apple)",
+      "mode": "apple-edge",
+      "required": "Signature exigée",
+      "identity": "Identité de signature",
+      "notAfter": "Valide jusqu'au",
+      "states": {
+        "unknown": "Inconnue",
+        "missing": "Absente",
+        "expired": "Expirée",
+        "expiring": "Expire bientôt",
+        "ok": "Valide"
+      }
+    },
+    "backups": {
+      "title": "Sauvegardes",
+      "unreadable": "Les comptes rendus des sauvegardes sont illisibles pour le moment.",
+      "expected": "Attendues (BACKUP_EXPECTED=true) : l'instance est indisponible tant que la dernière sauvegarde de base a plus de 26 h ou le flux WAL plus de 15 min.",
+      "notExpected": "Non attendues (BACKUP_EXPECTED=false) : lancez le profil compose backup, vérifiez ici les premiers comptes rendus, puis passez BACKUP_EXPECTED=true.",
+      "disk": "Espace libre : {{free}} sur {{total}}.",
+      "kind": "Genre",
+      "lastSuccess": "Dernier succès",
+      "lastReport": "Dernier compte rendu",
+      "failures": "Échecs depuis le dernier succès",
+      "size": "Taille",
+      "kinds": {
+        "base": "Sauvegarde de base",
+        "wal": "Flux WAL",
+        "offsite": "Copie hors site",
+        "prune": "Rotation et contrôle",
+        "drill": "Exercice de reprise",
+        "restore_verify": "Vérification de restauration"
+      },
+      "recent": "Derniers comptes rendus",
+      "none": "Aucun compte rendu pour le moment."
+    },
+    "drill": {
+      "title": "Exercice de reprise",
+      "unreadable": "L'échéance de l'exercice est illisible pour le moment.",
+      "dueAt": "Prochain exercice dû le",
+      "source": "Fixée par",
+      "lastSuccess": "Dernier exercice réussi",
+      "sources": {
+        "brain": "Dernier exercice + 182 jours",
+        "brainFirst": "Mise en service des sauvegardes + 182 jours",
+        "manual": "Saisie manuelle"
+      },
+      "help": "Tous les six mois : docker compose --profile restore-drill run --rm drill-report (procédure de sauvegarde et de reprise). Un exercice réussi repousse l'échéance de 182 jours."
     }
   }
 }

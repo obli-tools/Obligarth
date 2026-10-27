@@ -4,6 +4,7 @@ import { readJobsConfig } from './jobs/config';
 import { readOutboxConfig } from './jobs/outbox/config';
 import { appleStartupErrors, readAppleConfig } from './apple/config';
 import { opsStartupErrors, readOpsConfig } from './ops/config';
+import { readStageConfig, stageStartupErrors } from './ops/stage';
 
 // Background jobs (JOBS_*, docs: file-durable annex A): parsed once, refused
 // at start when invalid (startupConfigErrors), in every environment.
@@ -16,6 +17,9 @@ const appleEnv = readAppleConfig(process.env);
 // The observability (METRICS_*, P0-13 T8): internal listener of the metrics and its optional token (decision D11);
 // same rule, the token file read at start.
 const opsEnv = readOpsConfig(process.env, parseInt(process.env.PORT || '3001', 10));
+// The stage of the instance (OBLIGARTH_STAGE, P0-13 D8, T11): lab (default), pilot, production; an unknown value is
+// refused at start, and outside lab the prerequisites of a pilot as well (ops/stage.ts stageStartupErrors).
+const stageEnv = readStageConfig(process.env);
 
 function publicUrlFromEnv(): string {
   const appUrl = (process.env.APP_URL || '').trim();
@@ -148,6 +152,8 @@ export const config = {
   apple: appleEnv.config,
   /** The observability: internal listener of the metrics (port, interface, token file). See ops/config.ts. */
   ops: opsEnv.config,
+  /** OBLIGARTH_STAGE: lab | pilot | production (D8). See ops/stage.ts. */
+  stage: stageEnv.stage,
   clientOrigin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
   forceHttps: process.env.FORCE_HTTPS === 'true',
   appName: process.env.APP_NAME || 'Obligarth',
@@ -276,10 +282,15 @@ export function startupConfigErrors(): string[] {
   errors.push(...outboxEnv.errors);
   errors.push(...appleEnv.errors, ...appleStartupErrors(config.apple));
   errors.push(...opsEnv.errors, ...opsStartupErrors(config.ops));
+  // The stage of the instance (D8): refused in every environment, development included (a typo must never weaken it).
+  errors.push(...stageEnv.errors, ...stageStartupErrors(config.stage, {
+    appleMode: config.apple.mode, requireSignedProfiles: config.apple.requireSignedProfiles,
+    allowDefaultNotice: config.apple.allowDefaultNotice, backupsExpected: config.ops.backups.expected,
+  }));
   // The employee notice and the privacy rules of the enrollment are no longer the laboratory's defaults: the privacy
   // profiles (CNF-02, P0-13 T1) and the generated notice (USR-01, P0-13 T5) are installed by registerPrivacyModule in
-  // every process. APPLE_ALLOW_DEFAULT_NOTICE is still read (existing .env files) but has no effect since P0-13; an
-  // incomplete notice is refused at the enrollment outside the stage lab (D7).
+  // every process. APPLE_ALLOW_DEFAULT_NOTICE is still read (existing .env files) but has no effect since P0-13, and is
+  // refused outside the stage lab (above); an incomplete notice is refused at the enrollment outside the stage lab (D7).
   if (config.migrateOnBoot && (!explicitDevelopment || !config.databaseAdminUrl)) {
     errors.push('MIGRATE_ON_BOOT=true is accepted only with NODE_ENV=development and DATABASE_ADMIN_URL set: ' +
       'outside development, the migrations run in the server-migrate service.');

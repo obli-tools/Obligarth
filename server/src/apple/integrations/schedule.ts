@@ -9,6 +9,8 @@ import { forEachTenant } from '../../db/tenantContext';
 import { JobError, registerJob, type JobContext, type JobHandle, type JobResult } from '../../jobs';
 import { logger } from '../../utils/logger';
 import { vault } from '../../vault';
+import { lastRestoreDrillAt } from '../../ops/backups';
+import { RESTORE_DRILL_PERIOD_DAYS } from '../../ops/backupRules';
 import { raiseAlert, raiseInTx, resolveAlert, resolveInTx } from '../alerts/service';
 import type { AppleAlertKind } from '../alerts/catalog';
 import { edgeHealth } from '../edge/health';
@@ -25,7 +27,8 @@ import { abandonStaleRequests } from './push';
 // (annex B):
 //   integrations.deadlines-all     platform, 0 6 * * * UTC: the producers of
 //                                  the instance (vault, signing identity of
-//                                  apple-edge), the items of the instance
+//                                  apple-edge, restore drill of the backups),
+//                                  the items of the instance
 //                                  (alerts in the master tenant), then
 //                                  integrations.deadlines-tenant for each tenant
 //                                  that has items
@@ -172,6 +175,38 @@ async function refreshSigningItem(actor: DbActor): Promise<void> {
   }));
 }
 
+/** The half-yearly restore drill of the backups (P0-13 T9, FND-09), item 'drill' of source brain: due 182 days after
+ *  the last successful drill (report drill of ops_backup_reports, P0-13 T10). Without any drill, while the backups are
+ *  expected (BACKUP_EXPECTED=true) and no item of the kind is open (a date typed in, source manual, is the
+ *  administrator's), the first drill is due 182 days from now. A successful drill done after a date was typed in
+ *  answers it: that manual item is retired (its alerts end with it), the brain's item is the deadline from then on.
+ *  Skipped (logged) when the reports cannot be read. */
+async function refreshRestoreDrillItem(actor: DbActor, now: Date): Promise<boolean> {
+  let last: Date | null;
+  try {
+    last = await lastRestoreDrillAt(actor);
+  } catch (err) {
+    logger.warn({ code: (err as { code?: unknown })?.code ?? null }, 'deadlines: the backup reports are not readable, the restore drill is skipped');
+    return false;
+  }
+  const label = 'Restore drill of the backups';
+  await asIdentity(actor, () => db.transaction(async (trx) => {
+    if (last) {
+      await recordInstanceDeadline(trx, { kind: 'backup_restore_drill', subjectRef: 'drill', label,
+        notAfter: new Date(last.getTime() + RESTORE_DRILL_PERIOD_DAYS * DAY), source: 'brain', replace: true });
+      await trx('integration_deadline_items').whereNull('tenant_id').where({ kind: 'backup_restore_drill', source: 'manual' })
+        .whereNull('retired_at').where('updated_at', '<', last).update({ retired_at: new Date(), updated_at: new Date() });
+      return;
+    }
+    if (!config.ops.backups.expected) return;
+    const open = await trx('integration_deadline_items').whereNull('tenant_id').where({ kind: 'backup_restore_drill' }).whereNull('retired_at').first('id');
+    if (open) return;
+    await recordInstanceDeadline(trx, { kind: 'backup_restore_drill', subjectRef: 'drill', label,
+      notAfter: new Date(now.getTime() + RESTORE_DRILL_PERIOD_DAYS * DAY), source: 'brain', replace: true });
+  }));
+  return true;
+}
+
 let tenantJob: JobHandle<{ tenantId: number }> | null = null;
 
 /** integrations.deadlines-all. */
@@ -179,6 +214,7 @@ async function deadlinesAll(ctx: JobContext<Record<string, never>>): Promise<Job
   const now = new Date();
   const vaultDone = await refreshVaultItems(ctx.dbActor);
   await refreshSigningItem(ctx.dbActor);
+  const drillDone = await refreshRestoreDrillItem(ctx.dbActor, now);
   const items = await asIdentity(ctx.dbActor, async () => {
     await db('integration_deadline_items').whereNull('tenant_id').whereNotNull('retired_at')
       .where('retired_at', '<', new Date(now.getTime() - RETIRED_KEEP_DAYS * DAY)).whereNull('last_alert_threshold').del();
@@ -201,7 +237,7 @@ async function deadlinesAll(ctx: JobContext<Record<string, never>>): Promise<Job
     tenants += 1;
   });
   if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed`);
-  return { output: { instanceItems: items.length, instanceChanged, tenants, vault: vaultDone } };
+  return { output: { instanceItems: items.length, instanceChanged, tenants, vault: vaultDone, restoreDrill: drillDone } };
 }
 
 /** The certificate an HTTPS host presents: its expiry and fingerprint (no trust decision: what is read is the date). */
@@ -294,7 +330,7 @@ export function registerIntegrationJobs(): void {
   registerJob({
     name: 'integrations.deadlines-all',
     scope: 'platform',
-    description: 'Every day at 06:00 UTC: the deadlines of the instance (vault, vendor certificate, TLS, domain, signing identity) and of every tenant',
+    description: 'Every day at 06:00 UTC: the deadlines of the instance (vault, vendor certificate, TLS, domain, signing identity, restore drill) and of every tenant',
     payload: Empty,
     policy: 'exclusive',
     schedule: { cron: '0 6 * * *' },

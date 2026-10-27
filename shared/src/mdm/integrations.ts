@@ -74,10 +74,10 @@ export interface AdeServerView {
 /** Deadline kinds (integration_deadline_items.kind). */
 export const DEADLINE_KINDS = ['apns_certificate', 'ade_token', 'vpp_token', 'device_ca', 'mdm_tls_certificate',
   'vendor_certificate', 'mdm_domain', 'profile_signing_identity', 'vault_escrow_test', 'vault_kek_rotation',
-  'vault_old_shares', 'vault_dek_destruction'] as const;
+  'vault_old_shares', 'vault_dek_destruction', 'backup_restore_drill'] as const;
 export type DeadlineKind = typeof DEADLINE_KINDS[number];
 /** Kinds the platform administrator types in (PUT /api/admin/apple/deadlines/:kind). */
-export const MANUAL_DEADLINE_KINDS = ['mdm_domain', 'profile_signing_identity'] as const;
+export const MANUAL_DEADLINE_KINDS = ['mdm_domain', 'profile_signing_identity', 'backup_restore_drill'] as const;
 export type ManualDeadlineKind = typeof MANUAL_DEADLINE_KINDS[number];
 export const DEADLINE_LEVELS = ['ok', 'warning', 'critical', 'expired', 'unknown', 'retired'] as const;
 export type DeadlineLevel = typeof DEADLINE_LEVELS[number];

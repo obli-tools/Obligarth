@@ -282,16 +282,101 @@ async function spoolImport(all: string[]): Promise<number> {
 
 // ── restore-reconcile ───────────────────────────────────────────────────────
 
-async function restoreReconcile(all: string[]): Promise<number> {
-  const headsFile = arg(all, '--siem-heads');
-  let siem: Record<string, { seq: number; hash: string }> = {};
-  if (headsFile) {
-    const parsed = JSON.parse(readFileSync(headsFile, 'utf8')) as unknown;
+/** The last heads the SIEM received, by tenant: [{ tenant, seq, hash }] or { "<tenant>": { seq, hash } }. */
+export type SiemHeads = Record<string, { seq: number; hash: string }>;
+
+export function readSiemHeads(file: string | undefined): SiemHeads {
+  let siem: SiemHeads = {};
+  if (file) {
+    const parsed = JSON.parse(readFileSync(file, 'utf8')) as unknown;
     if (Array.isArray(parsed)) for (const h of parsed as Array<{ tenant: number; seq: number; hash: string }>) siem[String(h.tenant)] = { seq: Number(h.seq), hash: String(h.hash) };
-    else siem = parsed as typeof siem;
+    else siem = parsed as SiemHeads;
   }
+  return siem;
+}
+
+export interface ReconcileAuditOptions {
+  /** ops restore-reconcile (P0-13 T10): a chain that holds an audit.chain_resumed newer than the last successful
+   *  ops.restore_reconciled (the end of the previous recovery) was resumed by this restore already (a run stopped at a
+   *  later step, then run again): it is left as it is (no second entry, whose restored head and lost range would be
+   *  wrong, cursors untouched), and no seal is taken when every chain was. This command alone (a step replayed by
+   *  hand) resumes every chain. */
+  onceForThisRestore?: boolean;
+}
+
+/** The work of restore-reconcile, in a process whose database context signing is configured, whose vault is ready
+ *  and whose audit module is registered (this command, and ops restore-reconcile: ops/cli.ts). */
+export async function reconcileAuditChains(siem: SiemHeads, opts: ReconcileAuditOptions = {}): Promise<{ chains: Array<Record<string, unknown>>; seal: unknown }> {
   const { db } = await import('../db');
-  const { asNone, asTenant, configureContextSigningFromFile } = await import('../db/context');
+  const { asNone, asTenant } = await import('../db/context');
+  const { append } = await import('./writer');
+  const { fromJob } = await import('./actor');
+  const { runSeal } = await import('./seal');
+  const actor = { type: 'job' as const, name: 'audit.restore-reconcile' };
+  const report: Array<Record<string, unknown>> = [];
+  const chains = (await asNone(actor, () => db.raw('SELECT tenant_id, last_seq, tenant_exists FROM obligarth.audit_chains()')) as {
+    rows: Array<{ tenant_id: number; last_seq: string | number; tenant_exists: boolean }>;
+  }).rows;
+  const ctx = fromJob({ name: actor.name, requestId: `restore-${new Date().toISOString()}` });
+  // The end of the previous recovery: the last successful ops.restore_reconciled of the master tenant.
+  let closedAt: Date | null = null;
+  if (opts.onceForThisRestore) {
+    const last = await asTenant(MASTER_TENANT_ID, actor, () => db('audit_logs')
+      .where({ tenant_id: MASTER_TENANT_ID, action: 'ops.restore_reconciled', outcome: 'success' }).max({ at: 'created_at' }).first()) as
+      { at: Date | string | null } | undefined;
+    closedAt = last?.at ? new Date(last.at) : null;
+  }
+  let resumed = 0;
+  for (const c of chains) {
+    const tenantId = Number(c.tenant_id);
+    if (opts.onceForThisRestore) {
+      // The entry of a deleted tenant's chain is in the master tenant's journal, its tenant in the details.
+      const done = await asTenant(c.tenant_exists ? tenantId : MASTER_TENANT_ID, actor, () => {
+        const q = db('audit_logs').where({ action: 'audit.chain_resumed' });
+        if (c.tenant_exists) q.where({ tenant_id: tenantId }).whereRaw("NOT jsonb_exists(coalesce(details, '{}'::jsonb), 'tenantId')");
+        else q.where({ tenant_id: MASTER_TENANT_ID }).whereRaw("details ->> 'tenantId' = ?", [String(tenantId)]);
+        if (closedAt) q.where('created_at', '>', closedAt);
+        return q.orderBy('chain_seq', 'desc').first('chain_seq', 'details');
+      }) as { chain_seq: string | number | null; details: Record<string, unknown> | null } | undefined;
+      if (done) {
+        report.push({
+          tenantId, chain: c.tenant_exists ? tenantId : MASTER_TENANT_ID, alreadyResumed: true, entrySeq: done.chain_seq === null ? null : Number(done.chain_seq),
+          restoredHead: done.details?.restoredHead ?? null, lostRange: done.details?.lostRange ?? null, cursorsMovedBack: 0,
+        });
+        continue;
+      }
+    }
+    resumed += 1;
+    const head = await asTenant(tenantId, actor, () => db('audit_chain_heads').where({ tenant_id: tenantId }).first('last_seq', 'last_hash')) as
+      { last_seq: string | number; last_hash: Buffer } | undefined;
+    const known = siem[String(tenantId)];
+    const restored = { seq: Number(head?.last_seq ?? 0), hash: head ? head.last_hash.toString('hex') : '0'.repeat(64) };
+    const details = {
+      restoredHead: restored,
+      lastKnownHead: known ? { seq: Number(known.seq), hash: String(known.hash) } : 'unknown',
+      lostRange: known && Number(known.seq) > restored.seq ? { fromSeq: restored.seq + 1, toSeq: Number(known.seq) } : null,
+    };
+    const chain = c.tenant_exists ? tenantId : MASTER_TENANT_ID;
+    await (c.tenant_exists ? asTenant(tenantId, actor, () => append({ tenantId, action: 'audit.chain_resumed', details }, ctx))
+      : asNone(actor, () => append({ tenantId: MASTER_TENANT_ID, action: 'audit.chain_resumed', onBehalfOf: tenantId, details: { ...details, tenantId } }, ctx)));
+    // Cursors beyond the restored head come back to it (the SIEM sees the
+    // fork, documented by the entry above).
+    const moved = await asNone(actor, () => db('audit_export_cursors').where({ tenant_id: tenantId }).andWhere('last_seq', '>', restored.seq)
+      .update({ last_seq: restored.seq }));
+    report.push({ tenantId, chain, ...details, cursorsMovedBack: Number(moved) });
+  }
+  if (opts.onceForThisRestore && resumed === 0 && chains.length > 0) return { chains: report, seal: 'already_sealed' };
+  const maxSeal = await asNone(actor, () => db('audit_seals').max({ s: 'seal_seq' }).first()) as { s: string | number | null } | undefined;
+  await asNone(actor, () => db('audit_export_destinations').where('last_seal_seq', '>', Number(maxSeal?.s ?? 0))
+    .update({ last_seal_seq: Number(maxSeal?.s ?? 0) }));
+  const seal = await asNone({ type: 'job', name: 'audit.seal' }, () => runSeal({ requestId: 'restore-reconcile' }));
+  return { chains: report, seal };
+}
+
+async function restoreReconcile(all: string[]): Promise<number> {
+  const siem = readSiemHeads(arg(all, '--siem-heads'));
+  const { db } = await import('../db');
+  const { asNone, configureContextSigningFromFile } = await import('../db/context');
   const { config } = await import('../config');
   // Signed database context (rls-tenant §4.6, R12): this command queries as the runtime role, like the server.
   try {
@@ -301,9 +386,6 @@ async function restoreReconcile(all: string[]): Promise<number> {
   }
   const { vault, vaultConfigErrors, VaultStartupError } = await import('../vault');
   const { registerAuditModule } = await import('./module');
-  const { append } = await import('./writer');
-  const { fromJob } = await import('./actor');
-  const { runSeal } = await import('./seal');
   registerAuditModule();
   const actor = { type: 'job' as const, name: 'audit.restore-reconcile' };
   const errors = vaultConfigErrors({ warn: () => undefined });
@@ -314,37 +396,8 @@ async function restoreReconcile(all: string[]): Promise<number> {
     if (err instanceof VaultStartupError) throw new CliExit(1, err.refusal);
     throw err;
   }
-  const report: Array<Record<string, unknown>> = [];
   try {
-    const chains = (await asNone(actor, () => db.raw('SELECT tenant_id, last_seq, tenant_exists FROM obligarth.audit_chains()')) as {
-      rows: Array<{ tenant_id: number; last_seq: string | number; tenant_exists: boolean }>;
-    }).rows;
-    const ctx = fromJob({ name: actor.name, requestId: `restore-${new Date().toISOString()}` });
-    for (const c of chains) {
-      const tenantId = Number(c.tenant_id);
-      const head = await asTenant(tenantId, actor, () => db('audit_chain_heads').where({ tenant_id: tenantId }).first('last_seq', 'last_hash')) as
-        { last_seq: string | number; last_hash: Buffer } | undefined;
-      const known = siem[String(tenantId)];
-      const restored = { seq: Number(head?.last_seq ?? 0), hash: head ? head.last_hash.toString('hex') : '0'.repeat(64) };
-      const details = {
-        restoredHead: restored,
-        lastKnownHead: known ? { seq: Number(known.seq), hash: String(known.hash) } : 'unknown',
-        lostRange: known && Number(known.seq) > restored.seq ? { fromSeq: restored.seq + 1, toSeq: Number(known.seq) } : null,
-      };
-      const chain = c.tenant_exists ? tenantId : MASTER_TENANT_ID;
-      await (c.tenant_exists ? asTenant(tenantId, actor, () => append({ tenantId, action: 'audit.chain_resumed', details }, ctx))
-        : asNone(actor, () => append({ tenantId: MASTER_TENANT_ID, action: 'audit.chain_resumed', onBehalfOf: tenantId, details: { ...details, tenantId } }, ctx)));
-      // Cursors beyond the restored head come back to it (the SIEM sees the
-      // fork, documented by the entry above).
-      const moved = await asNone(actor, () => db('audit_export_cursors').where({ tenant_id: tenantId }).andWhere('last_seq', '>', restored.seq)
-        .update({ last_seq: restored.seq }));
-      report.push({ tenantId, chain, ...details, cursorsMovedBack: Number(moved) });
-    }
-    const maxSeal = await asNone(actor, () => db('audit_seals').max({ s: 'seal_seq' }).first()) as { s: string | number | null } | undefined;
-    await asNone(actor, () => db('audit_export_destinations').where('last_seal_seq', '>', Number(maxSeal?.s ?? 0))
-      .update({ last_seal_seq: Number(maxSeal?.s ?? 0) }));
-    const seal = await asNone({ type: 'job', name: 'audit.seal' }, () => runSeal({ requestId: 'restore-reconcile' }));
-    out({ chains: report, seal });
+    out(await reconcileAuditChains(siem));
   } finally {
     await vault.close().catch(() => undefined);
     await db.destroy().catch(() => undefined);

@@ -13,7 +13,8 @@ import { readiness } from './ready';
 //   readiness   the checks of GET /health/ready, evaluated afresh: from the second run in a row not ready, every
 //               run raises the critical alert ops:not-ready (one unread alert per key), naming the failing checks
 //               (fixed names, never a value); a write that fails fails the check.
-// The backups add theirs with P0-13 T9 (ops.backup_stale, ops.wal_stale, ops.disk_low, ops.restore_drill_due).
+// The backups add theirs with P0-13 T9 (ops/backups.ts: ops.backup_stale, ops.wal_stale, ops.disk_low); the restore
+// drill is a deadline of the échéancier (backup_restore_drill, alert deadline.backup_restore_drill at J-30, 14 and 7).
 // =============================================================================
 
 export type OpsWatchCheck = (ctx: JobContext<unknown>) => Promise<Record<string, string | number | boolean | null> | void>;

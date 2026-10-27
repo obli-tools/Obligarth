@@ -17,7 +17,7 @@ import type { Knex } from 'knex';
 export type DeadlineKind = 'apns_certificate' | 'ade_token' | 'vpp_token' | 'device_ca';
 /** Items of the instance (tenant_id NULL), written in the identity context (class tenant_or_global). */
 export type InstanceDeadlineKind = 'mdm_tls_certificate' | 'vendor_certificate' | 'mdm_domain' | 'profile_signing_identity'
-  | 'vault_escrow_test' | 'vault_kek_rotation' | 'vault_old_shares' | 'vault_dek_destruction';
+  | 'vault_escrow_test' | 'vault_kek_rotation' | 'vault_old_shares' | 'vault_dek_destruction' | 'backup_restore_drill';
 
 export interface DeadlineItem {
   kind: DeadlineKind;

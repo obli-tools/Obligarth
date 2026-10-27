@@ -58,6 +58,9 @@
   --c-status-maintenance-bg: 19 23 40;
   --c-status-paused:         75 82 115;
   --c-status-paused-bg:      19 23 40;
+  /* Warning and critical as text (the light themes redefine them, darker). */
+  --c-status-warning:        251 191 36;
+  --c-status-critical:       248 113 113;
 
   /* Accent (see the header): fill #e30557 (the brand), white text 4.75:1,
      4.1:1 against the page and 3.75:1 against cards; hover fill #cc054e

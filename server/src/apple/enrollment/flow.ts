@@ -6,6 +6,9 @@ import { db } from '../../db';
 import { asTenant, type DbActor } from '../../db/context';
 import { logger } from '../../utils/logger';
 import { isNoticeIncomplete } from '../../privacy/notice/errors';
+import { beyondLab } from '../../ops/stage';
+import { raiseSigningCriticalInTx } from '../../ops/signing';
+import { withTenantTransaction } from '../../db/tenantContext';
 import { edgeActorOf } from '../actors';
 import { raiseAlert, resolveAlert } from '../alerts/service';
 import { isAppleEdgeError } from '../edge/errors';
@@ -283,10 +286,13 @@ export function resetEnrollmentFlowForTests(): void {
   signingAlert = null;
 }
 
+/** Raised a warning in lab; critical outside lab (P0-13 T11, D8), as ops.watch raises it (ops/signing.ts): a warning
+ *  still open (raised in lab) is resolved first, so that the critical alert is announced. */
 async function signingAlertState(open: boolean, actor: DbActor): Promise<void> {
   if (signingAlert === open) return;
   try {
-    if (open) await raiseAlert(actor, MASTER_TENANT_ID, 'signing.identity_missing');
+    if (open && beyondLab()) await withTenantTransaction(MASTER_TENANT_ID, actor, (trx) => raiseSigningCriticalInTx(trx));
+    else if (open) await raiseAlert(actor, MASTER_TENANT_ID, 'signing.identity_missing');
     else await resolveAlert(actor, MASTER_TENANT_ID, 'signing.identity_missing');
     signingAlert = open;
   } catch (err) {

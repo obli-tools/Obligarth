@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { registerAuditActions } from '../audit';
 import { config } from '../config';
 import { db } from '../db';
 import { asNone } from '../db/context';
@@ -8,11 +9,13 @@ import { registerStartTask, registerStopTask } from '../lifecycle';
 import { vault } from '../vault';
 import { edgeHealth } from '../apple/edge/health';
 import { logger } from '../utils/logger';
+import { backupFamilies, backupsReady, watchBackups } from '../ops/backups';
 import { registerCoreCollectors } from '../ops/collectors';
 import { readMetricsToken } from '../ops/config';
 import { startMetricsListener, type MetricsListener } from '../ops/listener';
-import { metricsRegistry } from '../ops/metrics';
+import { metricsRegistry, registerMetricsCollector } from '../ops/metrics';
 import { registerReadinessCheck } from '../ops/ready';
+import { signingReady, stageFamilies, watchSigning } from '../ops/signing';
 import { registerOpsWatchCheck, runOpsWatch, watchReadiness } from '../ops/watch';
 
 // =============================================================================
@@ -25,7 +28,15 @@ import { registerOpsWatchCheck, runOpsWatch, watchReadiness } from '../ops/watch
 //     apple-edge (APPLE_EDGE_MODE=on: not known incompatible); the other modules add theirs with
 //     registerReadinessCheck (ops/ready.ts);
 //   - the job ops.watch (platform, every 5 minutes): readiness, then the checks the other modules add with
-//     registerOpsWatchCheck (ops/watch.ts).
+//     registerOpsWatchCheck (ops/watch.ts);
+//   - the backups of the instance (P0-13 T9, ops/backups.ts): their readiness check when BACKUP_EXPECTED=true, the
+//     check 'backups' of ops.watch (ops.backup_stale, ops.wal_stale, ops.disk_low, keeping of the reports), their
+//     metrics (collector 'backups');
+//   - the audit action of the recovery after a restore (P0-13 T10, ops/cli.ts restore-reconcile);
+//   - the stage of the instance and the signed profiles (P0-13 T11, ops/signing.ts): outside lab with
+//     APPLE_EDGE_MODE=on, the readiness check 'signing' and the check 'signing' of ops.watch (critical alert
+//     signing.identity_missing while the profile signing identity is missing or expired); the metrics of the stage
+//     (collector 'stage'). The start-up checks of the stage are startupConfigErrors' (config.ts, ops/stage.ts).
 // GET /health/ready is mounted by app.ts, GET /api/admin/ops/status by routes/index.ts (ops/routes.ts). index.ts calls
 // registerOpsModule() with the other modules, before anything starts.
 // =============================================================================
@@ -60,6 +71,11 @@ export function registerOpsModule(): void {
   if (registered) return;
   registered = true;
 
+  // The recovery after a restore (ops/cli.ts): written once the steps ran, outcome success or failure.
+  registerAuditActions([
+    { name: 'ops.restore_reconciled', criticality: 'critical', label: 'Instance reconciled after a restore' },
+  ]);
+
   registerCoreCollectors();
 
   // ── Readiness (GET /health/ready) ───────────────────────────────────────────
@@ -77,13 +93,23 @@ export function registerOpsModule(): void {
     // known incompatible makes the instance not ready.
     registerReadinessCheck('apple-edge', () => (edgeHealth().compatible === false ? { ok: false, code: 'incompatible' } : true));
   }
+  // The backups (P0-13 T9): last base backup of 26 h at most, WAL stream of 15 min at most, only when they are expected.
+  if (config.ops.backups.expected) registerReadinessCheck('backups', backupsReady);
+  registerMetricsCollector('backups', backupFamilies);
+  // The signed profiles (P0-13 T11, D8): outside lab, a profile signing identity missing or expired makes the instance
+  // not ready. In lab an unsigned profile is served with a warning (apple/enrollment/flow.ts).
+  const watchSignature = config.stage !== 'lab' && config.apple.mode === 'on';
+  if (watchSignature) registerReadinessCheck('signing', signingReady);
+  registerMetricsCollector('stage', stageFamilies);
 
   // ── ops.watch ───────────────────────────────────────────────────────────────
   registerOpsWatchCheck('readiness', watchReadiness);
+  registerOpsWatchCheck('backups', watchBackups);
+  if (watchSignature) registerOpsWatchCheck('signing', watchSigning);
   registerJob({
     name: 'ops.watch',
     scope: 'platform',
-    description: 'Watch of the instance: readiness, then the checks of the modules (backups…); alerts of the master tenant',
+    description: 'Watch of the instance: readiness, then the checks of the modules (backups, signing identity…); alerts of the master tenant',
     payload: empty,
     schedule: { cron: '*/5 * * * *' },
     notify: true,

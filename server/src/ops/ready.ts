@@ -4,8 +4,8 @@ import type { Request, Response } from 'express';
 // GET /health/ready (P0-13 T8; public, relayed by the console's nginx like /health and /health/jobs, no detail):
 // 200 {"status":"ok"} when every readiness check of the instance passes, 503 {"status":"degraded"} otherwise. The
 // checks are registered by the modules (registerReadinessCheck): the core's (modules/ops.ts) are the database, its
-// schema (no migration of this image missing), the vault, apple-edge when APPLE_EDGE_MODE=on; the backups add theirs
-// with P0-13 T9 (BACKUP_EXPECTED). Each check has 3 s; one that throws or does not answer fails, with a fixed code
+// schema (no migration of this image missing), the vault, apple-edge when APPLE_EDGE_MODE=on, the backups when
+// BACKUP_EXPECTED=true (P0-13 T9, ops/backups.ts). Each check has 3 s; one that throws or does not answer fails, with a fixed code
 // (never a message: the detail is for GET /api/admin/ops/status, platform administrators). The answer is cached
 // 10 s, like /health/jobs. Self-contained (unit tests): no import of the server.
 // =============================================================================

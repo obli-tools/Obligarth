@@ -1696,6 +1696,7 @@
       "jobs_dead_letter_discarded": "Dead letter discarded",
       "jobs_redriven": "Dead letters redriven",
       "jobs_run_triggered": "Background job run by hand",
+      "ops_restore_reconciled": "Instance reconciled after a restore",
       "outbox_dead_letter_discarded": "Outbox dead letter discarded",
       "outbox_dead_letter_redriven": "Outbox dead letter redriven",
       "outbox_dead_letter_viewed": "Outbox dead letter viewed",
@@ -1834,7 +1835,8 @@
       "integration": "Apple integrations",
       "mdm": "MDM commands",
       "enrollment": "Enrollment",
-      "privacy": "Privacy"
+      "privacy": "Privacy",
+      "ops": "Operations"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -2027,7 +2029,8 @@
     "tabApprovals": "Approvals",
     "tabVault": "Vault",
     "tabAuditSettings": "Journal settings",
-    "tabGuard": "Guards"
+    "tabGuard": "Guards",
+    "tabOps": "Operations"
   },
   "deviceKeys": {
     "level": {
@@ -2821,6 +2824,10 @@
         "vault_dek_destruction": {
           "title": "Data key destruction due",
           "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
+        },
+        "backup_restore_drill": {
+          "title": "Restore drill of the backups due",
+          "message": "{{label}}: due in {{daysLeft}} day(s) ({{notAfter}})."
         }
       },
       "tenant": {
@@ -2903,8 +2910,8 @@
       },
       "signing": {
         "identity_missing": {
-          "title": "Enrollment profiles not signed",
-          "message": "No profile signing identity is imported: enrollment profiles are served unsigned."
+          "title": "Profile signing identity missing",
+          "message": "apple-edge holds no usable profile signing identity (none imported, or expired): enrollment profiles are served unsigned, or refused when signed profiles are required. Import one with the command apple-edge signing-identity import."
         }
       },
       "legacy_agent": {
@@ -3277,7 +3284,8 @@
           "vault_escrow_test": "Escrow test",
           "vault_kek_rotation": "Key rotation",
           "vault_old_shares": "Old escrow shares",
-          "vault_dek_destruction": "Data key destruction"
+          "vault_dek_destruction": "Data key destruction",
+          "backup_restore_drill": "Restore drill"
         },
         "level": {
           "ok": "OK",
@@ -3322,6 +3330,10 @@
         "not_declared": "Enable it on an ADE server",
         "no_active_token": "No active content token",
         "unsigned_profiles": "Profiles not signed",
+        "signing_missing_refused": "No signing identity: enrollments refused (apple-edge signing-identity import)",
+        "signing_expired_refused": "Signing identity expired: enrollments refused (import a new one)",
+        "signing_expired_unsigned": "Signing identity expired: profiles not signed (import a new one)",
+        "signing_unknown": "apple-edge has not answered since the start: state unknown",
         "default_notice": "Default notice, for trials only",
         "default_rules": "Default privacy rules: publish a privacy profile for each ownership enrolled",
         "notice_incomplete": "Employee notice not complete (data controller, contact): enrollments are refused outside the laboratory",
@@ -5519,6 +5531,163 @@
         "android_byod_invitation": "Android invitation",
         "android_signin": "Android sign-in"
       }
+    }
+  },
+  "ops": {
+    "title": "Operations of the instance",
+    "description": "Stage of the instance, prerequisites of a pilot, readiness, backups and restore drill. Codes and counts only: no tenant data.",
+    "loadFailed": "Could not load the state of the instance",
+    "refresh": "Refresh",
+    "readyBanner": "The instance is ready (GET /health/ready answers 200).",
+    "notReadyBanner": "The instance is not ready (GET /health/ready answers 503): see the failing checks below.",
+    "ok": "OK",
+    "failed": "Failed",
+    "locked": "Locked",
+    "off": "Off",
+    "up": "up",
+    "down": "down",
+    "yes": "Yes",
+    "no": "No",
+    "listening": "listening",
+    "notListening": "not listening",
+    "notApplicable": "Not applicable",
+    "daysLeft_one": "{{count}} day left",
+    "daysLeft_other": "{{count}} days left",
+    "duration": {
+      "days": "{{d}} d {{h}} h",
+      "hours": "{{h}} h {{m}} min",
+      "minutes": "{{m}} min"
+    },
+    "state": {
+      "ok": "Met",
+      "warning": "To complete or to watch",
+      "error": "Blocking",
+      "not_applicable": "Not applicable"
+    },
+    "stage": {
+      "title": "Stage of the instance",
+      "lab": "Laboratory",
+      "pilot": "Pilot",
+      "production": "Production",
+      "labHelp": "Laboratory: the prerequisites below are not imposed. Complete them, then set OBLIGARTH_STAGE=pilot in .env before the first pilot: the server refuses to start without the backups and, with Apple, the signed profiles.",
+      "beyondHelp": "Outside the laboratory the prerequisites are imposed: the server does not start without them, an enrollment is refused while the notice of its tenant is incomplete, and a signing identity missing or expired makes the instance not ready.",
+      "blocking_one": "{{count}} prerequisite blocking at this stage.",
+      "blocking_other": "{{count}} prerequisites blocking at this stage.",
+      "toDo_one": "{{count}} prerequisite to complete or to watch.",
+      "toDo_other": "{{count}} prerequisites to complete or to watch.",
+      "allOk": "Every prerequisite of a pilot is met.",
+      "signingHelp": "The profile signing identity (an organization-validated S/MIME certificate) is imported on the host, never from this console: apple-edge signing-identity import <chain.pem> <key.pem>."
+    },
+    "pilot": {
+      "backups": {
+        "expected": "Backups started and expected (BACKUP_EXPECTED)",
+        "fresh": "Backups up to date"
+      },
+      "restore": {
+        "drill": "Half-yearly restore drill"
+      },
+      "signing": {
+        "required": "Signed enrollment profiles required (APPLE_REQUIRE_SIGNED_PROFILES)",
+        "identity": "Profile signing identity"
+      },
+      "notice": {
+        "complete": "Employee notice complete in every tenant",
+        "default_allowed": "Default notice not allowed (APPLE_ALLOW_DEFAULT_NOTICE)"
+      }
+    },
+    "codes": {
+      "backups_not_expected": "Start the compose profile backup, check its first reports, then set BACKUP_EXPECTED=true.",
+      "base_missing": "No base backup reported yet.",
+      "base_stale": "Last base backup older than 26 hours.",
+      "wal_missing": "No report of the WAL stream yet.",
+      "wal_stale": "WAL stream silent for more than 15 minutes.",
+      "drill_not_scheduled": "No drill scheduled yet (the deadline is set at the next run of the deadlines).",
+      "drill_overdue": "Overdue by {{days}} day(s).",
+      "drill_due_soon": "Due in {{daysLeft}} day(s).",
+      "signed_profiles_not_required": "Set APPLE_REQUIRE_SIGNED_PROFILES=true once the signing identity is imported.",
+      "signing_identity_missing": "apple-edge holds no signing identity: import one (apple-edge signing-identity import).",
+      "signing_identity_expired": "The signing identity has expired: import a new one.",
+      "signing_identity_expiring": "The signing identity expires in {{daysLeft}} day(s): renew it.",
+      "signing_identity_unknown": "apple-edge has not answered since the start: state unknown.",
+      "notice_incomplete": "{{incomplete}} tenant(s) out of {{total}} without a data controller or a contact (console Privacy, Notice).",
+      "default_notice_allowed": "Remove APPLE_ALLOW_DEFAULT_NOTICE (or set it to false).",
+      "unknown": "Not readable right now.",
+      "timeout": "No answer in time.",
+      "error": "Error.",
+      "failed": "Failed.",
+      "missing_migrations": "Migrations of this image not applied.",
+      "locked": "Locked.",
+      "incompatible": "Version incompatible."
+    },
+    "readiness": {
+      "title": "Readiness",
+      "checkedAt": "Checked"
+    },
+    "checks": {
+      "database": "Database",
+      "schema": "Schema",
+      "vault": "Vault",
+      "apple-edge": "apple-edge",
+      "backups": "Backups",
+      "signing": "Signing identity"
+    },
+    "instance": {
+      "title": "Instance",
+      "version": "Version",
+      "uptime": "Running for",
+      "jobs": "Background jobs",
+      "vault": "Vault",
+      "metrics": "Metrics listener",
+      "memory": "Memory (RSS)"
+    },
+    "signing": {
+      "title": "Signed profiles (Apple)",
+      "mode": "apple-edge",
+      "required": "Signature required",
+      "identity": "Signing identity",
+      "notAfter": "Valid until",
+      "states": {
+        "unknown": "Unknown",
+        "missing": "Missing",
+        "expired": "Expired",
+        "expiring": "Expiring soon",
+        "ok": "Valid"
+      }
+    },
+    "backups": {
+      "title": "Backups",
+      "unreadable": "The reports of the backups cannot be read right now.",
+      "expected": "Expected (BACKUP_EXPECTED=true): the instance is not ready while the last base backup is older than 26 h or the WAL stream than 15 min.",
+      "notExpected": "Not expected (BACKUP_EXPECTED=false): start the compose profile backup, check the first reports here, then set BACKUP_EXPECTED=true.",
+      "disk": "Free space: {{free}} of {{total}}.",
+      "kind": "Kind",
+      "lastSuccess": "Last success",
+      "lastReport": "Last report",
+      "failures": "Failures since the last success",
+      "size": "Size",
+      "kinds": {
+        "base": "Base backup",
+        "wal": "WAL stream",
+        "offsite": "Offsite copy",
+        "prune": "Rotation and check",
+        "drill": "Restore drill",
+        "restore_verify": "Restore verification"
+      },
+      "recent": "Last reports",
+      "none": "No report yet."
+    },
+    "drill": {
+      "title": "Restore drill",
+      "unreadable": "The deadline of the drill cannot be read right now.",
+      "dueAt": "Next drill due",
+      "source": "Set by",
+      "lastSuccess": "Last successful drill",
+      "sources": {
+        "brain": "Last drill + 182 days",
+        "brainFirst": "Backups in service + 182 days",
+        "manual": "Typed in"
+      },
+      "help": "Every six months: docker compose --profile restore-drill run --rm drill-report (procedure of backup and recovery). A successful drill moves the deadline by 182 days."
     }
   }
 }
