@@ -3,6 +3,7 @@ import { db } from '../db';
 import { forEachTenant } from '../db/tenantContext';
 import { JobError, registerJob, type JobContext, type JobResult } from '../jobs';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
+import { AUTO_UPDATE_JOB, autoUpdate } from './autoUpdate';
 import { expireDue } from './commands';
 
 // =============================================================================
@@ -13,6 +14,10 @@ import { expireDue } from './commands';
 //                                 and not revoked that have not interrogated
 //                                 for 24 hours (alert legacy_agent.silent,
 //                                 resolved when none is left)
+//   legacy-agent.auto-update      every 10 minutes: the enrolled agents older
+//                                 than the latest version not withdrawn get
+//                                 an agent.update, in batches (autoUpdate.ts,
+//                                 lot AGENT-RU)
 // The packages-gc and retention jobs are v1 (§15.4).
 // =============================================================================
 
@@ -80,5 +85,19 @@ export function registerLegacyAgentJobs(): void {
     pollSeconds: 300,
     deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 172_800, keepPendingSeconds: 86_400,
     handler: silenceCheck,
+  });
+  registerJob({
+    name: AUTO_UPDATE_JOB,
+    scope: 'platform',
+    description: 'Every 10 minutes: the Android agents older than the latest version get an update, in batches (instance settings)',
+    payload: z.object({}).strict(),
+    policy: 'exclusive',
+    schedule: { cron: '*/10 * * * *' },
+    retry: { limit: 0, delaySeconds: 0, backoff: false },
+    timeoutSeconds: 300,
+    // A run every 10 minutes: polled every 5 (baseline-boot L3, the idle load of the server).
+    pollSeconds: 300,
+    deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 86_400, keepPendingSeconds: 3_600,
+    handler: autoUpdate,
   });
 }

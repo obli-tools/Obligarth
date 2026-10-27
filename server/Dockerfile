@@ -25,6 +25,16 @@ COPY server/tsconfig.json server/knexfile.ts ./server/
 COPY server/src/ ./server/src/
 RUN npm run build --workspace=server
 
+# Version of the Android bridge agent embedded in the image: the update of the
+# instance drops the signed APK of the agent and its release.json in
+# server/agent-release/ of the exported commit, just before this build. Never
+# in the repository (.gitignore): a build from a clone has none. Optional
+# copy: server/package.json, always there, keeps the list of sources from
+# ending up empty when the wildcard matches nothing (any builder), and is
+# removed right after. The production stage takes the folder, empty or not.
+COPY server/package.json server/agent-releas[e] ./agent-release/
+RUN rm ./agent-release/package.json
+
 # ---- Production stage ----
 FROM node:24-alpine AS production
 WORKDIR /app
@@ -51,6 +61,11 @@ RUN npm ci --omit=dev --workspace=server && npm cache clean --force
 
 COPY --from=builder /app/shared/dist/ ./shared/dist/
 COPY --from=builder /app/server/dist/ ./server/dist/
+
+# Bridge agent embedded in the image (see the builder stage): obligarth-agent.apk
+# and release.json, or an empty folder. Registered at start, after the
+# migrations, when its signer is admitted (LEGACY_AGENT_SIGNERS).
+COPY --from=builder /app/agent-release/ ./server/agent-release/
 
 # Obli mobile app (Android): drop zone read by GET /api/mobile/android/
 # {version,download} (manifest.json, optional RELEASE_NOTES.md and

@@ -198,6 +198,10 @@ golden/
 # Données d'instance locales
 custom/
 
+# Version de l'agent pont embarquée dans l'image serveur (APK signé et release.json) :
+# déposée par la mise à jour au moment du build, jamais versionnée.
+/server/agent-release/
+
 # Données locales du poste : jamais versionnées ni dans un build
 .cache/
 

@@ -3,9 +3,10 @@ import { registerAuditActions } from '../audit';
 // =============================================================================
 // The audit actions of the bridge agent (docs: agent-pont-android §6, RS-1):
 // declared once. 'critical' written before the action (the export of the
-// instance key, a release of the agent, its withdrawal); 'protective' never
-// blocked (revocations, cancellations); 'standard' after the fact. No entry
-// carries a token, a key, a secret nor an inventory value.
+// instance key, a release of the agent, uploaded or embedded in the image,
+// its withdrawal); 'protective' never blocked (revocations, cancellations);
+// 'standard' after the fact. No entry carries a token, a key, a secret nor an
+// inventory value.
 // =============================================================================
 
 let registered = false;
@@ -24,6 +25,9 @@ export function registerLegacyAgentAuditActions(): void {
     { name: 'legacy_agent.package_uploaded', criticality: 'standard', label: 'Android package uploaded' },
     { name: 'legacy_agent.release_uploaded', criticality: 'critical', label: 'Android agent version uploaded' },
     { name: 'legacy_agent.release_withdrawn', criticality: 'critical', label: 'Android agent version withdrawn' },
+    // Lot AGENT-RU: the version embedded in the server image, registered at start (system actor), in the transaction
+    // of its row.
+    { name: 'legacy_agent.release_bundled', criticality: 'critical', label: 'Android agent version embedded in the server image registered' },
     { name: 'legacy_agent.knox_key_set', criticality: 'standard', label: 'Knox licence key of the Android agents changed' },
     { name: 'legacy_agent.admin_disabled', criticality: 'standard', label: 'Device administrator disabled on an Android agent' },
     { name: 'legacy_agent.settings_changed', criticality: 'standard', label: 'Android agent settings changed' },

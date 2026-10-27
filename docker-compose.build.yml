@@ -340,9 +340,11 @@ services:
       ANDROID_PUBSUB_SUBSCRIPTION: ${ANDROID_PUBSUB_SUBSCRIPTION:-}
       ANDROID_PUBLIC_ORIGIN: ${ANDROID_PUBLIC_ORIGIN:-}
       # Android bridge agent (legacy fleet): SHA-256 fingerprints of the signing
-      # certificates admitted for an uploaded version of the agent; empty = no
-      # upload — see .env.example
-      LEGACY_AGENT_SIGNERS: ${LEGACY_AGENT_SIGNERS:-}
+      # certificates admitted for a version of the agent, uploaded or embedded in
+      # the image; by default the public fingerprint of the certificate that
+      # signs the published agent when the variable is absent (an empty value
+      # stays empty: no version admitted) — see .env.example
+      LEGACY_AGENT_SIGNERS: ${LEGACY_AGENT_SIGNERS-e2fddf4eda60ce742c06bf262db3fc6cfc48d68a4c463ff27d0acb445280cdef}
       SESSION_SECRET: ${SESSION_SECRET:?set it in .env to 32+ random characters (install.sh generates one)}
       SESSION_COOKIE_NAME: ${SESSION_COOKIE_NAME:-obligarth.sid}
       CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost}

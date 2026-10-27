@@ -560,6 +560,7 @@ export function releaseView(r: Record<string, any>): LegacyAgentReleaseView {
   return {
     id: String(r.id), versionCode: Number(r.version_code), versionName: r.version_name, sha256: r.sha256, sizeBytes: Number(r.size_bytes),
     signerSha256: r.signer_sha256, notes: r.notes ?? null, createdAt: iso(r.created_at) as string, withdrawnAt: iso(r.withdrawn_at),
+    origin: r.origin === 'bundled' ? 'bundled' : 'upload', bundledIn: r.bundled_in ?? null,
   };
 }
 

@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { Ban, Copy, Download, KeyRound, Lock, MessageSquare, Package, Plus, RefreshCw, RotateCw, Search, ShieldOff, Trash2, Upload, XCircle } from 'lucide-react';
 import {
-  isMasterTenant, LEGACY_AGENT_TOKEN_BOUNDS,
+  isMasterTenant, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
   type DeviceGroup, type LegacyAgentCommandView, type LegacyAgentConsoleType, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentInstanceSettings, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentServerKeyView,
   type LegacyAgentTokenCreated, type LegacyAgentTokenView,
@@ -25,8 +25,9 @@ import { apiErrorMessage } from '@/utils/apiError';
 // administrator and of Knox, last interrogation, identity conflicts; actions on a selection), the enrollment tokens
 // (the value, the encoded configuration and the MobiControl script shown once), the client APKs, the tenant's Knox
 // licence; for a platform administrator on the master tenant, the versions of the agent, the instance key (to
-// compile in SERVER_KEY_PINS, exported once for the escrow) and the instance settings. Lock and erase go through
-// the dialog of the guard engine.
+// compile in SERVER_KEY_PINS, exported once for the escrow) and the instance settings (automatic update of the fleet
+// included; the version embedded in the server image is shown with its image, lot AGENT-RU). Lock and erase go
+// through the dialog of the guard engine.
 
 type Tab = 'devices' | 'tokens' | 'packages' | 'platform';
 const fieldCls = 'mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary';
@@ -264,7 +265,7 @@ function CommandDialog({ kind, count, onClose, onSend }: { kind: 'message' | 'in
           <label className="block">{t('legacyAgent.releases.choose') || 'Version of the agent'}
             <select className={fieldCls} value={choice} onChange={(e) => setChoice(e.target.value)}>
               <option value="">—</option>
-              {releases.map((r) => <option key={r.id} value={r.id}>{r.versionName} ({r.versionCode})</option>)}
+              {releases.map((r) => <option key={r.id} value={r.id}>{r.versionName} ({r.versionCode}){r.bundledIn ? ` — ${bundledLabel(t, r.bundledIn)}` : ''}</option>)}
             </select></label>
         )}
         <div className="flex justify-end gap-2">
@@ -551,6 +552,7 @@ function PlatformTab() {
         <h3 className="mb-2 font-semibold">{t('legacyAgent.releases.title') || 'Versions of the agent'}</h3>
         <p className="text-xs text-text-muted">{signers.length > 0 ? `LEGACY_AGENT_SIGNERS : ${signers.map((s) => s.slice(0, 12)).join(', ')}…`
           : (t('legacyAgent.releases.noSigners') || 'LEGACY_AGENT_SIGNERS is empty: no version can be added.')}</p>
+        {settings?.bundle && <BundleLine bundle={settings.bundle} />}
         <div className="mt-2 grid gap-2 md:grid-cols-5">
           <label>{t('legacyAgent.packages.file') || 'APK'}<input className={fieldCls} type="file" accept=".apk" onChange={(e) => setFile(e.target.files?.[0] ?? null)} /></label>
           <label>versionCode<input className={fieldCls} value={meta.versionCode} onChange={(e) => setMeta({ ...meta, versionCode: e.target.value })} /></label>
@@ -558,15 +560,18 @@ function PlatformTab() {
           <label>{t('legacyAgent.releases.signer') || 'Signer SHA-256'}<input className={fieldCls} value={meta.signerSha256} onChange={(e) => setMeta({ ...meta, signerSha256: e.target.value })} /></label>
           <div className="flex items-end"><Button onClick={() => void addRelease()} disabled={!file || !meta.versionCode || !meta.versionName || !meta.signerSha256}><Upload size={14} /> {t('legacyAgent.releases.add') || 'Add'}</Button></div>
         </div>
-        <table className="mt-2 w-full">
+        <div className="mt-2 overflow-x-auto">
+        <table className="w-full">
           <tbody>{releases.map((r) => (
             <tr key={r.id} className="border-t border-border">
               <td className="p-2">{r.versionName} ({r.versionCode})</td><td className="p-2 font-mono text-xs">{r.sha256.slice(0, 16)}…</td>
+              <td className="p-2 text-xs text-text-muted">{r.bundledIn ? bundledLabel(t, r.bundledIn) : (t('legacyAgent.releases.uploaded') || 'Uploaded')}</td>
               <td className="p-2">{fmt(r.createdAt)}</td>
               <td className="p-2 text-right">{r.withdrawnAt ? (t('legacyAgent.releases.withdrawn') || 'Withdrawn') : <Button variant="ghost" onClick={() => void withdraw(r)}><Ban size={14} /></Button>}</td>
             </tr>))}
           </tbody>
         </table>
+        </div>
       </section>
       {settings && (
         <section className="rounded border border-border p-3">
@@ -579,15 +584,61 @@ function PlatformTab() {
   );
 }
 
+type TFn = ReturnType<typeof useTranslation>['t'];
+
+/** « Embedded in the image vX » of a version brought by the server image. */
+function bundledLabel(t: TFn, image: string): string {
+  return t('legacyAgent.releases.bundledIn', { image }) || `Embedded in the image v${image}`;
+}
+
+/** What the start of this server found in its image: the version registered, present, withdrawn, or why it was refused. */
+function BundleLine({ bundle }: { bundle: NonNullable<LegacyAgentInstanceSettings['bundle']> }) {
+  const { t } = useTranslation();
+  const image = bundle.imageVersion;
+  if (bundle.state === 'absent') {
+    return <p className="mt-1 text-xs text-text-muted">{t('legacyAgent.releases.bundle.absent', { image }) || `The image v${image} carries no version of the agent.`}</p>;
+  }
+  const version = bundle.versionName ? `${bundle.versionName} (${bundle.versionCode})` : '—';
+  const fallback: Record<string, string> = {
+    registered: `Version ${version} embedded in the image v${image}: registered at start.`,
+    present: `Version ${version} embedded in the image v${image}: already registered.`,
+    withdrawn: `Version ${version} embedded in the image v${image}: withdrawn, never offered again.`,
+    refused: `Version embedded in the image v${image} refused:`,
+    storeError: `Version embedded in the image v${image}: not copied to the store of the APKs (full or read-only volume, rights), tried again at the next start.`,
+    error: `Version embedded in the image v${image}: not registered (database error), tried again at the next start.`,
+  };
+  const reason = bundle.reason ? (t(`legacyAgent.releases.bundle.reasons.${bundle.reason}`) || bundle.reason) : '';
+  const text = t(`legacyAgent.releases.bundle.${bundle.state}`, { version, image }) || fallback[bundle.state];
+  const tone = bundle.state === 'refused' || bundle.state === 'storeError' || bundle.state === 'error' ? 'text-red-500' : 'text-text-muted';
+  return <p className={`mt-1 text-xs ${tone}`}>{text}{bundle.state === 'refused' ? ` ${reason}` : ''}</p>;
+}
+
+/** The instance settings: one button sends the fields changed (turning the automatic update on, or raising its pace
+ *  while on, asks for a second factor: the dialog of the client handles it). */
 function SettingsForm({ settings, onSave }: { settings: LegacyAgentInstanceSettings; onSave: (p: Partial<LegacyAgentInstanceSettings>) => Promise<void> }) {
   const { t } = useTranslation();
   const [v, setV] = useState({ pollSeconds: String(settings.pollSeconds), minVersionCode: String(settings.minVersionCode), inventorySeconds: String(settings.inventorySeconds) });
+  const [auto, setAuto] = useState({ on: settings.autoUpdate, perHour: String(settings.autoUpdatePerHour) });
+  const perHour = Number(auto.perHour);
+  const perHourValid = Number.isInteger(perHour) && perHour >= LEGACY_AGENT_AUTO_UPDATE_BOUNDS.min && perHour <= LEGACY_AGENT_AUTO_UPDATE_BOUNDS.max;
+  const patch: Partial<LegacyAgentInstanceSettings> = {};
+  if (auto.on !== settings.autoUpdate) patch.autoUpdate = auto.on;
+  if (perHourValid && perHour !== settings.autoUpdatePerHour) patch.autoUpdatePerHour = perHour;
+  for (const k of ['pollSeconds', 'minVersionCode', 'inventorySeconds'] as const) {
+    if (Number(v[k]) !== settings[k]) patch[k] = Number(v[k]);
+  }
   return (
     <div className="grid gap-2 md:grid-cols-4">
+      <label className="flex items-center gap-2 md:col-span-3">
+        <input type="checkbox" checked={auto.on} onChange={(e) => setAuto({ ...auto, on: e.target.checked })} />
+        {t('legacyAgent.settings.autoUpdate') || 'Update the agents automatically to the version embedded in the server image'}
+      </label>
+      <label>{t('legacyAgent.settings.autoUpdatePerHour') || 'Devices per hour'}<input className={fieldCls} type="number" min={LEGACY_AGENT_AUTO_UPDATE_BOUNDS.min} max={LEGACY_AGENT_AUTO_UPDATE_BOUNDS.max} value={auto.perHour} disabled={!auto.on} onChange={(e) => setAuto({ ...auto, perHour: e.target.value })} /></label>
+      <p className="text-xs text-text-muted md:col-span-4">{t('legacyAgent.settings.autoUpdateHint') || 'Every 10 minutes, the enrolled agents older than the latest version embedded in the server image (not withdrawn) get it, in batches: those that install silently (device administrator and Knox licence) first. Only the agents that interrogated in the last 24 hours; a refusal, a failure or an expiry is tried again after 24 hours. An uploaded version is never pushed automatically. A frozen tenant, or a device the restrictions matrix holds for the agent update, gets nothing. Turning it on or raising the pace asks for a second factor.'}</p>
       <label>{t('legacyAgent.settings.pollSeconds') || 'Interrogation period (s)'}<input className={fieldCls} type="number" min={60} max={3600} value={v.pollSeconds} onChange={(e) => setV({ ...v, pollSeconds: e.target.value })} /></label>
       <label>{t('legacyAgent.settings.minVersionCode') || 'Minimal versionCode'}<input className={fieldCls} type="number" min={0} value={v.minVersionCode} onChange={(e) => setV({ ...v, minVersionCode: e.target.value })} /></label>
       <label>{t('legacyAgent.settings.inventorySeconds') || 'Inventory period (s)'}<input className={fieldCls} type="number" min={3600} value={v.inventorySeconds} onChange={(e) => setV({ ...v, inventorySeconds: e.target.value })} /></label>
-      <div className="flex items-end"><Button onClick={() => void onSave({ pollSeconds: Number(v.pollSeconds), minVersionCode: Number(v.minVersionCode), inventorySeconds: Number(v.inventorySeconds) })}>{t('common.save') || 'Save'}</Button></div>
+      <div className="flex items-end"><Button onClick={() => void onSave(patch)} disabled={Object.keys(patch).length === 0 || (auto.on && !perHourValid)}>{t('common.save') || 'Save'}</Button></div>
     </div>
   );
 }

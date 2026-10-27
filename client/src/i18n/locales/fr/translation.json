@@ -4566,7 +4566,28 @@
       "add": "Ajouter",
       "added": "Version ajoutée",
       "withdrawn": "Retirée",
-      "confirmWithdraw": "Retirer la version {{version}} ?"
+      "confirmWithdraw": "Retirer la version {{version}} ?",
+      "uploaded": "Envoyée",
+      "bundledIn": "Embarquée dans l'image v{{image}}",
+      "bundle": {
+        "absent": "L'image v{{image}} n'embarque aucune version de l'agent.",
+        "registered": "Version {{version}} embarquée dans l'image v{{image}} : enregistrée au démarrage.",
+        "present": "Version {{version}} embarquée dans l'image v{{image}} : déjà enregistrée.",
+        "withdrawn": "Version {{version}} embarquée dans l'image v{{image}} : retirée, plus jamais proposée.",
+        "refused": "Version embarquée dans l'image v{{image}} refusée :",
+        "storeError": "Version embarquée dans l'image v{{image}} : non copiée dans le magasin des APK (volume plein ou en lecture seule, droits), nouvel essai au prochain démarrage.",
+        "error": "Version embarquée dans l'image v{{image}} : non enregistrée (erreur de la base), nouvel essai au prochain démarrage.",
+        "reasons": {
+          "manifestInvalid": "release.json est absent ou invalide.",
+          "apkMissing": "obligarth-agent.apk est absent.",
+          "apkTooLarge": "l'APK est vide ou dépasse 100 Mio.",
+          "signerNotAdmitted": "son signataire n'est pas dans LEGACY_AGENT_SIGNERS.",
+          "sha256Mismatch": "le SHA-256 de l'APK n'est pas celui de release.json.",
+          "notAnApk": "le fichier n'est pas un APK (archive ZIP).",
+          "signerMismatch": "le bloc de signature de l'APK ne nomme pas le seul signataire déclaré.",
+          "versionConflict": "une autre version a déjà ce versionCode, ou cet APK a un autre versionCode."
+        }
+      }
     },
     "detail": {
       "conflict": "Conflit d'identité : le numéro de série ou l'IMEI déclaré par cet agent est porté par un autre appareil géré.",
@@ -4620,7 +4641,10 @@
       "title": "Réglages de l'instance",
       "pollSeconds": "Période d'interrogation (s)",
       "minVersionCode": "versionCode minimal",
-      "inventorySeconds": "Période d'inventaire (s)"
+      "inventorySeconds": "Période d'inventaire (s)",
+      "autoUpdate": "Mettre à jour automatiquement les agents vers la version embarquée dans l'image serveur",
+      "autoUpdatePerHour": "Appareils par heure",
+      "autoUpdateHint": "Toutes les 10 minutes, les agents enrôlés plus anciens que la dernière version embarquée dans l'image serveur (non retirée) la reçoivent, par lots : d'abord ceux qui l'installent sans intervention (administrateur de l'appareil et licence Knox). Seuls les agents qui se sont interrogés dans les dernières 24 h ; un refus, un échec ou une expiration n'est retenté qu'au bout de 24 h. Une version envoyée à la main n'est jamais poussée automatiquement. Un tenant gelé, ou un appareil que la matrice des restrictions retient pour la mise à jour de l'agent, ne reçoit rien. L'activer ou augmenter le rythme demande un second facteur."
     },
     "openPanel": "Panneau de l'agent Android",
     "unavailable": {
