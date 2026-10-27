@@ -1,8 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  COMPLIANCE_STATES, CONFIG_STATES, ENROLLMENT_STATES, OWNERSHIPS, PLATFORMS, type DeviceAppsMeta, type DeviceLocationPoint,
-  type DeviceLocations, type DeviceSummary,
+  DEVICE_LIST_SORT_KEYS, type DeviceAppsMeta, type DeviceLocationPoint, type DeviceLocations, type DeviceSummary,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { audit } from '../../audit';
@@ -10,6 +9,10 @@ import { asTargetTenant, globalViewRead, globalViewScope } from '../../middlewar
 import { AppError } from '../../middleware/errorHandler';
 import { requireTenantCapability } from '../../middleware/rbac';
 import { deviceService, type DeviceListFilters } from '../../services/device.service';
+import {
+  deviceListFilters, deviceListFiltersVersion, deviceListQueryShape, parseError,
+} from '../../services/deviceListFilters';
+import { deviceViewNotFound, deviceViewService, mergeViewFilters, parseViewRef } from '../views/deviceViewService';
 import { hasGlobalView, parseRequestDeviceId, resolveRequestDevice } from '../../services/deviceScope.service';
 import { permissionService } from '../../services/permission.service';
 import { launchChromium } from '../../utils/chromium';
@@ -42,45 +45,56 @@ const isDryRun = (req: Request): boolean => req.query.dryRun === 'true' || req.q
 
 // ── Query and body schemas ─────────────────────────────────────────────────
 
-/** A list in the query: repeated parameter or comma-separated. */
-const listOf = <T extends string>(values: readonly T[]) => z.preprocess((v) => {
-  if (v === undefined || v === '') return undefined;
-  const arr = Array.isArray(v) ? v : String(v).split(',');
-  return arr.map((s) => String(s).trim()).filter(Boolean);
-}, z.array(z.enum(values as unknown as [T, ...T[]])).max(20).optional());
 const intOpt = z.preprocess((v) => (v === undefined || v === '' ? undefined : Number(v)), z.number().int().positive().optional());
-const boolOpt = z.preprocess((v) => (v === undefined || v === '' ? undefined : v === true || v === 'true'), z.boolean().optional());
 
-const ListQuery = z.object({
-  platform: listOf(PLATFORMS),
-  ownership: listOf(OWNERSHIPS),
-  enrollmentState: listOf(ENROLLMENT_STATES),
-  contact: listOf(['never', 'recent', 'quiet', 'stale'] as const),
-  compliance: listOf(COMPLIANCE_STATES),
-  config: listOf(CONFIG_STATES),
-  osBelow: z.string().max(20).optional(),
-  supervised: boolOpt,
-  groupId: intOpt,
-  includeSubgroups: boolOpt,
-  ungrouped: boolOpt,
-  tags: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map((s) => String(s).trim()).filter(Boolean)),
-    z.array(z.string().max(100)).max(20).optional()),
-  endUserId: intOpt,
-  lostMode: boolOpt,
-  q: z.string().max(200).optional(),
+/** What the list and the export take besides the filters of the registry (services/deviceListFilters.ts): the global
+ *  view's tenants, the sort, the page, the format, and a saved view (id or uuid; P0-5 T2). */
+const LIST_BASE = {
   tenantIds: z.preprocess((v) => (v === undefined || v === '' ? undefined : (Array.isArray(v) ? v : String(v).split(',')).map(Number)),
     z.array(z.number().int().positive()).max(200).optional()),
-  sortBy: z.enum(['name', 'platform', 'os', 'lastCheckin', 'enrolledAt', 'group', 'state', 'compliance', 'ownership', 'model', 'warranty']).optional(),
+  sortBy: z.enum(DEVICE_LIST_SORT_KEYS).optional(),
   sortOrder: z.enum(['asc', 'desc']).optional(),
   page: intOpt,
   pageSize: intOpt,
   format: z.enum(['csv', 'xlsx', 'pdf']).optional(),
-}).passthrough();
+  viewId: z.string().max(36).optional(),
+};
+const LIST_PARAMS = new Set(['tenantIds', 'sortBy', 'sortOrder']);
 
-function parseList(req: Request): z.infer<typeof ListQuery> {
-  const parsed = ListQuery.safeParse(req.query);
-  if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid query', 'invalidRequest');
-  return parsed.data;
+/** The schema of the list's query: the filters registered (rebuilt when a lot registers one) and LIST_BASE. */
+let listQuery: { version: number; schema: z.ZodTypeAny } | null = null;
+function listQuerySchema(): z.ZodTypeAny {
+  const v = deviceListFiltersVersion();
+  if (listQuery?.version !== v) listQuery = { version: v, schema: z.object({ ...deviceListQueryShape(), ...LIST_BASE }).passthrough() };
+  return listQuery.schema;
+}
+
+/**
+ * The filters of a list or export request: its parameters (the filters of the registry, the tenants, the sort), over
+ * the definition of the saved view ?viewId= names when it does (a view the caller sees: theirs, or a shared one of the
+ * session's tenant; 404 deviceViewNotFound otherwise), the explicit parameters winning (deviceViewService.mergeViewFilters); then the
+ * page and the team scopes. ?rule= is the advanced filter (invalidRule: the issues).
+ */
+async function listFiltersOf(req: Request): Promise<{ filters: DeviceListFilters; format?: 'csv' | 'xlsx' | 'pdf' }> {
+  const parsed = listQuerySchema().safeParse(req.query);
+  if (!parsed.success) throw parseError(parsed.error);
+  const q = parsed.data as Record<string, unknown> & z.infer<z.ZodObject<typeof LIST_BASE>>;
+  const filterKeys = new Set<string>(deviceListFilters().map((d) => d.key));
+  const explicit: DeviceListFilters = {};
+  for (const [k, v] of Object.entries(q)) {
+    if (v !== undefined && (filterKeys.has(k) || LIST_PARAMS.has(k))) (explicit as Record<string, unknown>)[k] = v;
+  }
+  let filters = explicit;
+  if (q.viewId !== undefined) {
+    const ref = parseViewRef(q.viewId);
+    const stored = ref ? await deviceViewService.definitionFor(req.tenantId!, Number(req.session.userId), ref) : null;
+    if (stored === null) throw deviceViewNotFound();
+    filters = mergeViewFilters(stored, explicit);
+  }
+  return {
+    filters: { ...filters, page: q.page, pageSize: q.pageSize, visibleIds: await visibleIdsOf(req) },
+    format: q.format,
+  };
 }
 
 /** The devices a non-administrator sees through their teams (undefined: every device, an administrator). */
@@ -176,8 +190,7 @@ async function requireGroupWriteOn(req: Request, groupId: number | null): Promis
 // GET /api/mdm/devices
 router.get('/devices', globalViewScope('console.devices'), async (req, res, next) => {
   try {
-    const q = parseList(req);
-    const filters: DeviceListFilters = { ...q, visibleIds: await visibleIdsOf(req) };
+    const { filters } = await listFiltersOf(req);
     res.json({ data: await deviceService.listDevices(req.tenantId!, filters, { globalView: hasGlobalView(req) }) });
   } catch (err) { next(err); }
 });
@@ -192,9 +205,9 @@ router.get('/devices/facets', globalViewScope('console.devices'), async (req, re
 // GET /api/mdm/devices/export?format=csv|xlsx|pdf: the filtered list, the collected columns only.
 router.get('/devices/export', requireTenantCapability('reports'), globalViewScope('console.devices'), async (req, res, next) => {
   try {
-    const q = parseList(req);
-    const fmt = q.format ?? 'csv';
-    const devices = await deviceService.exportDevices(req.tenantId!, { ...q, visibleIds: await visibleIdsOf(req) }, { globalView: hasGlobalView(req) });
+    const { filters, format } = await listFiltersOf(req);
+    const fmt = format ?? 'csv';
+    const devices = await deviceService.exportDevices(req.tenantId!, filters, { globalView: hasGlobalView(req) });
     await sendExport(res, fmt, devices);
   } catch (err) { next(err); }
 });

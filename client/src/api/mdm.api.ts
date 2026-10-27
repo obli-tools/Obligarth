@@ -5,6 +5,7 @@ import type {
   ImpactDevicesPage, MdmFleetPoint, MdmFleetSummary, Policy, PolicyConflict, PolicyContentV1, PolicyImpact,
   PolicyValidationIssue, PolicyVersion, SchemaEntry, SubmitOutcome, AppCatalogEntry, AppDetail,
 } from '@obligarth/shared';
+import type { DEVICE_CONTACT_FILTERS, DeviceListSortKey } from '@obligarth/shared';
 
 // =============================================================================
 // Console API of the MDM data model (/api/mdm, modele-donnees-mdm §10.6):
@@ -15,9 +16,9 @@ import type {
 
 interface ApiResponse<T> { data?: T; error?: string; code?: string }
 
-export type ContactFilter = 'never' | 'recent' | 'quiet' | 'stale';
-export type DeviceSortField = 'name' | 'platform' | 'os' | 'lastCheckin' | 'enrolledAt' | 'group' | 'state'
-  | 'compliance' | 'ownership' | 'model' | 'warranty';
+export type ContactFilter = typeof DEVICE_CONTACT_FILTERS[number];
+/** The sort keys of the list: the server's whitelist (shared). */
+export type DeviceSortField = DeviceListSortKey;
 
 /** The filters of GET /api/mdm/devices (lists are sent comma-separated). */
 export interface DeviceListParams {
@@ -37,6 +38,10 @@ export interface DeviceListParams {
   /** Only the devices whose lost mode is not off (sent as lostMode=true). */
   lostMode?: boolean;
   q?: string;
+  /** The advanced filter: the JSON of a rule of the rule language (P0-5 §2), DEVICE_VIEW_LIMITS.ruleParamMaxChars at most. */
+  rule?: string;
+  /** A saved view (id or uuid) whose definition the server merges under these parameters (P0-5 §4.1). */
+  viewId?: string;
   /** Master tenant only (global view): a subset of the tenants. */
   tenantIds?: number[];
   sortBy?: DeviceSortField;

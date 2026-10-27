@@ -84,12 +84,18 @@ export interface CurrentPrivacyProfile {
 type Q = Knex | Knex.Transaction;
 interface TenantEntry { at: number; profiles: Map<Ownership, CurrentPrivacyProfile> }
 const cache = new Map<number, TenantEntry>();
+let generation = 0;
 
 /** Drops the cached profiles of a tenant (every tenant without argument). */
 export function invalidatePrivacyProfiles(tenantId?: number): void {
+  generation++;
   if (tenantId === undefined) cache.clear();
   else cache.delete(tenantId);
 }
+
+/** Changes with each invalidatePrivacyProfiles: a cache built on the profiles (the privacy context of the device
+ *  list, services/deviceListFilters.ts) keys its entries with it, and drops them with a publication of this process. */
+export const privacyProfilesGeneration = (): number => generation;
 
 const isOwnership = (v: unknown): v is Ownership => (OWNERSHIPS as readonly string[]).includes(v as string);
 

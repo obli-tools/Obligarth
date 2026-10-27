@@ -5,19 +5,24 @@ import { useSessionState } from '@/hooks/useSessionState';
 import {
   Search, RefreshCw, ChevronRight, ChevronDown, X, Trash2, Download, Loader2, MoreHorizontal, SortAsc, SortDesc,
   FolderOpen, MousePointerClick, Check, FolderX, Tag, Building2, SlidersHorizontal, Columns3, FolderTree,
-  ScrollText, TerminalSquare, ShieldCheck, Siren,
+  ScrollText, TerminalSquare, ShieldCheck, Siren, ListFilter,
 } from 'lucide-react';
 import { mdmApi, type ContactFilter, type DeviceListParams, type DeviceSortField } from '@/api/mdm.api';
 import { appleApi, isAwaitingApproval, newIdempotencyKey } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
-import { MASTER_TENANT_ID, SocketEvents } from '@obligarth/shared';
+import { MASTER_TENANT_ID, SocketEvents, ruleConditionsOf, ruleParamFits, validateRule } from '@obligarth/shared';
 import type {
-  ComplianceState, ConfigState, DeviceFacets, DeviceGroupTreeNode, DeviceSummary, EnrollmentState, Ownership,
+  ComplianceState, ConfigState, DeviceFacets, DeviceGroupTreeNode, DeviceSummary, DeviceView, Ownership, RuleNode,
 } from '@obligarth/shared';
 import { useTenantStore } from '@/store/tenantStore';
 import { groupsApi } from '@/api/groups.api';
 import { DeviceRow } from '@/components/devices/DeviceRow';
 import { DevicesKpiStrip, isApplePlatform, type KpiFilter } from '@/components/devices/DevicesKpiStrip';
+import { AdvancedFilterDialog } from '@/components/devices/AdvancedFilterDialog';
+import { DeviceViewsBar, type PendingView } from '@/components/devices/DeviceViewsBar';
+import {
+  STATE_TABS, definitionOf, fromDefinition, isStateTab, type StateTab,
+} from '@/components/devices/deviceViewDefinition';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { GroupTreePicker } from '@/components/devices/GroupTreePicker';
 import { useAuthStore } from '@/store/authStore';
@@ -53,19 +58,11 @@ import {
 
 // The inventory of the devices (modele-donnees-mdm §11.3): the list of GET /api/mdm/devices with its filters
 // (enrollment, contact, compliance, configuration, platform, ownership, supervision, OS version, tags, group, end
-// user, free text), the tree by group when nothing is sorted, the exports, and the batch actions (group, policy,
-// commands of the integration, deletion of records out of management).
+// user, free text), the advanced filter (a rule of the rule language, P0-5), the saved views (DeviceViewsBar), the tree
+// by group when nothing is sorted, the exports, and the batch actions (group, policy, commands of the integration,
+// deletion of records out of management).
 
-/** The enrollment states the tabs of the toolbar group together. */
-export type StateTab = 'managed' | 'enrolling' | 'enrolled' | 'unenrolled' | 'all';
-const STATE_TABS: Record<StateTab, EnrollmentState[] | undefined> = {
-  managed: ['enrolling', 'awaiting_configuration', 'enrolled', 'unenrolling'],
-  enrolling: ['enrolling', 'awaiting_configuration'],
-  enrolled: ['enrolled'],
-  unenrolled: ['unenrolled'],
-  all: undefined,
-};
-const isStateTab = (v: unknown): v is StateTab => typeof v === 'string' && v in STATE_TABS;
+export type { StateTab } from '@/components/devices/deviceViewDefinition';
 
 // Empty string = no explicit sort: enrollment order, and the table renders as a tree by group.
 type SortField = '' | DeviceSortField;
@@ -83,11 +80,17 @@ export interface InitialDeviceFilters {
   lost?: boolean;
 }
 
-// The session keys of the filters a link carries (dropped when a different link lands on the page), and the key
-// of the last link applied.
-const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost']
+// The session keys of the filters a link carries (dropped when a different link lands on the page; the saved view
+// chosen too: the link's filters are not the view's), and the key of the last link applied.
+const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost', 'view']
   .map((k) => `obligarth:inventory:${k}`);
 const LINK_SESSION_KEY = 'obligarth:inventory:link';
+/** The tenant of the last opening of the list in this tab: the default view applies at the first opening in a tenant
+ *  only; opened in another tenant, the list drops the saved view, the advanced filter and the end user of the previous
+ *  one (a view, the groups of a rule and an end user are a tenant's) and opens on the new tenant's default view. */
+const OPENED_SESSION_KEY = 'obligarth:inventory:opened';
+/** The session keys of the state that belongs to a tenant. */
+const TENANT_SESSION_KEYS = ['view', 'rule', 'endUser'].map((k) => `obligarth:inventory:${k}`);
 
 interface DeviceTableProps {
   initialFilters?: InitialDeviceFilters;
@@ -99,6 +102,10 @@ interface DeviceTableProps {
   /** The host page already pads the content (GroupDetailPage): drop the
    * table's own padding below lg. Desktop (lg+) is unchanged. */
   embedded?: boolean;
+  /** The saved view of the link (?view=<uuid>): applied like a link's filters (it wins over the session). */
+  initialViewUuid?: string | null;
+  /** The saved view chosen changed (the page keeps it in its link). */
+  onViewChange?: (uuid: string | null) => void;
 }
 
 const CONTACTS: ContactFilter[] = ['recent', 'quiet', 'stale', 'never'];
@@ -120,7 +127,7 @@ function toggleIn<T>(set: Set<T>, value: T): Set<T> {
 const BULK_COMMANDS = ['DeviceInformation', 'SecurityInfo', 'InstalledApplicationList', 'ProfileList', 'CertificateList', 'RestartDevice', 'ShutDownDevice'] as const;
 
 export function DeviceTable({
-  initialFilters, groupId: externalGroupId, onGroupChange, onOpenGroups, embedded = false,
+  initialFilters, groupId: externalGroupId, onGroupChange, onOpenGroups, embedded = false, initialViewUuid = null, onViewChange,
 }: DeviceTableProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -155,9 +162,14 @@ export function DeviceTable({
   // drops the session's values of the filters a link carries. A plain /devices keeps them (the menu entry). The same
   // link followed again (a PUSH: the dashboard card clicked once more) applies again too; only a return (POP: the
   // browser's back, a reload) keeps what was changed by hand since.
+  // A saved view (P0-5 §6) follows the same rule: the view of the link (?view=) is applied once the views are loaded,
+  // unless the page comes back (POP) on that very view; a list opened with no link at all, for the first time in the
+  // tab, opens on the user's default view.
   const navigationType = useNavigationType();
+  const currentTenantId = useTenantStore((s) => s.currentTenantId);
   const linkKey = JSON.stringify(initialFilters ?? {});
   const firstLink = useRef<string | null>(null);
+  const firstPending = useRef<PendingView>(null);
   if (firstLink.current === null) {
     firstLink.current = linkKey;
     // Not for an embedded table (a group's page): it carries no link.
@@ -168,6 +180,22 @@ export function DeviceTable({
         }
         sessionStorage.setItem(LINK_SESSION_KEY, linkKey);
       } catch { /* sessionStorage unavailable: the link seeds the state below */ }
+      let sessionView: string | null = null;
+      let opened = false;
+      try {
+        const tenantKey = String(currentTenantId ?? '');
+        const last = sessionStorage.getItem(OPENED_SESSION_KEY);
+        opened = last === tenantKey;
+        if (last !== null && !opened) for (const k of TENANT_SESSION_KEYS) sessionStorage.removeItem(k);
+        sessionStorage.setItem(OPENED_SESSION_KEY, tenantKey);
+        const raw = sessionStorage.getItem('obligarth:inventory:view');
+        sessionView = raw ? (JSON.parse(raw) as string | null) : null;
+      } catch { /* session only */ }
+      if (!embedded && initialViewUuid) {
+        if (navigationType !== 'POP' || sessionView !== initialViewUuid) firstPending.current = { kind: 'uuid', uuid: initialViewUuid };
+      } else if (!embedded && !opened && linkKey === '{}' && externalGroupId == null) {
+        firstPending.current = { kind: 'default' };
+      }
     }
   }
   const [search, setSearch] = useSessionState<string>('obligarth:inventory:search', '');
@@ -193,6 +221,17 @@ export function DeviceTable({
   const [endUserId, setEndUserId] = useSessionState<number | undefined>('obligarth:inventory:endUser', initialFilters?.endUserId);
   const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obligarth:inventory:tenants', new Set<number>());
   const [lostOnly, setLostOnly] = useSessionState<boolean>('obligarth:inventory:lost', () => initialFilters?.lost === true);
+  // The advanced filter: a rule of the rule language, sent as ?rule= (ruleParamFits: the builder refuses a longer one, and
+  // so does applyView for a saved view). A rule the session kept that no longer validates, or no longer fits, is
+  // dropped (from the session too, below).
+  const [storedRule, setRule] = useSessionState<RuleNode | null>('obligarth:inventory:rule', null);
+  const rule = useMemo(() => (storedRule && validateRule(storedRule).length === 0 && ruleParamFits(JSON.stringify(storedRule))
+    ? storedRule : null), [storedRule]);
+  useEffect(() => { if (storedRule && !rule) setRule(null); }, [storedRule, rule, setRule]);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  // The saved view chosen (its uuid), and the one to apply once the views are loaded.
+  const [activeViewUuid, setActiveViewUuid] = useSessionState<string | null>('obligarth:inventory:view', null);
+  const [pendingView, setPendingView] = useState<PendingView>(() => firstPending.current);
   const [facets, setFacets] = useState<DeviceFacets | null>(null);
 
   // A link followed while the page is mounted (another dashboard card): its filters replace the current ones.
@@ -209,8 +248,21 @@ export function DeviceTable({
     setOwnershipFilters(f.ownership ? new Set([f.ownership]) : new Set());
     setEndUserId(f.endUserId);
     setLostOnly(f.lost === true);
+    setActiveViewUuid(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [linkKey]);
+
+  // A link to another view followed while the page is mounted.
+  useEffect(() => {
+    if (!embedded && initialViewUuid && initialViewUuid !== activeViewUuid) setPendingView({ kind: 'uuid', uuid: initialViewUuid });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialViewUuid]);
+  // The page's link follows the view chosen (not while a view of the link waits for the views to load).
+  const onViewChangeRef = useRef(onViewChange);
+  onViewChangeRef.current = onViewChange;
+  useEffect(() => {
+    if (!embedded && !pendingView) onViewChangeRef.current?.(activeViewUuid);
+  }, [embedded, activeViewUuid, pendingView]);
 
   // Optional line-2 fields, kept in localStorage.
   const [visibleFields, setVisibleFields] = useState<Set<string>>(() => loadVisibleFields());
@@ -265,7 +317,6 @@ export function DeviceTable({
   const [guardedDelete, setGuardedDelete] = useState<number[] | null>(null);
 
   // Master tenant (global view): tenants fold by default, same key as the group panel.
-  const currentTenantId = useTenantStore((s) => s.currentTenantId);
   const isMaster = currentTenantId === MASTER_TENANT_ID;
   const visibleFieldsForMaster = useMemo(() => {
     if (!isMaster || visibleFields.has('tenant')) return visibleFields;
@@ -305,8 +356,14 @@ export function DeviceTable({
   const [hasMore, setHasMore] = useState(false);
   const [appending, setAppending] = useState(false);
 
+  // The advanced filter goes as ?rule= (always within ruleParamFits: see rule above). The list never names the saved
+  // view (?viewId=): the server would merge the view's filters under the explicit ones, and those the user emptied
+  // since (an empty list, an unchecked box) are not sent.
+  const ruleJson = rule ? JSON.stringify(rule) : undefined;
+
   /** The filters of the list, as the server takes them (also those of the export). */
   const listParams = useMemo((): DeviceListParams => ({
+    rule: ruleJson,
     q: debouncedSearch.trim() || undefined,
     enrollmentState: STATE_TABS[stateTab],
     contact: [...contactFilters],
@@ -326,7 +383,8 @@ export function DeviceTable({
     sortBy: sortBy || undefined,
     sortOrder: sortBy ? sortOrder : undefined,
   }), [debouncedSearch, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters,
-    supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder]);
+    supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder,
+    ruleJson]);
 
   const load = useCallback(async (reset: boolean) => {
     const pageToFetch = reset ? 1 : loadedPagesRef.current + 1;
@@ -401,7 +459,7 @@ export function DeviceTable({
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
     + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0)
-    + (lostOnly ? 1 : 0);
+    + (lostOnly ? 1 : 0) + (rule ? 1 : 0);
   const hasFilters = !!debouncedSearch || chipFilterCount > 0;
   const activeFilterCount = chipFilterCount + (stateTab !== 'managed' ? 1 : 0) + (isMaster ? tenantFilters.size : 0);
   const clearAllFilters = () => {
@@ -409,7 +467,52 @@ export function DeviceTable({
     setContactFilters(new Set()); setComplianceFilters(new Set()); setConfigFilters(new Set());
     setPlatformFilters(new Set()); setOwnershipFilters(new Set()); setTagFilters(new Set());
     setSupervisedOnly(false); setOsBelow(''); setOsBelowDraft(''); setEndUserId(undefined); setLostOnly(false);
+    setRule(null);
   };
+
+  // ── Saved views (DeviceViewsBar): the state of the list to and from a view's definition ─────────────────
+  const currentDefinition = useMemo(() => definitionOf({
+    search, stateTab, contact: contactFilters, compliance: complianceFilters, config: configFilters, platform: platformFilters,
+    ownership: ownershipFilters, supervisedOnly, osBelow, tags: tagFilters, endUserId, lostOnly, rule, groupId,
+    sortBy, sortOrder, columns: visibleFields,
+  }), [search, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters, supervisedOnly,
+    osBelow, tagFilters, endUserId, lostOnly, rule, groupId, sortBy, sortOrder, visibleFields]);
+  /** Replaces the state of the list with a view's definition; false (and nothing changed) when its advanced filter
+   *  cannot go as ?rule= (a view saved through the API with a longer rule). */
+  const applyView = (view: DeviceView): boolean => {
+    const s = fromDefinition(view.definition);
+    if (s.rule && !ruleParamFits(JSON.stringify(s.rule))) {
+      toast.error(t('deviceViews.ruleTooLong', { name: view.name })
+        || `The advanced filter of "${view.name}" is too long to be applied in the console.`, { duration: 7000 });
+      return false;
+    }
+    setSearch(s.search); setDebouncedSearch(s.search);
+    setStateTab(s.stateTab);
+    setContactFilters(new Set(s.contact) as Set<ContactFilter>);
+    setComplianceFilters(new Set(s.compliance) as Set<ComplianceState>);
+    setConfigFilters(new Set(s.config) as Set<ConfigState>);
+    setPlatformFilters(new Set(s.platform)); setOwnershipFilters(new Set(s.ownership));
+    setSupervisedOnly(s.supervisedOnly); setOsBelow(s.osBelow); setOsBelowDraft(s.osBelow);
+    setTagFilters(new Set(s.tags)); setEndUserId(s.endUserId); setLostOnly(s.lostOnly);
+    setRule(s.rule);
+    setSortBy(s.sortBy); setSortOrder(s.sortOrder);
+    if (s.columns) { saveVisibleFields(s.columns); setVisibleFields(s.columns); }
+    if (s.groupId !== groupId) onGroupChange?.(s.groupId);
+    return true;
+  };
+  /** No view: the list back to its defaults (the columns, a preference of the browser, are kept). */
+  const resetView = () => {
+    clearAllFilters();
+    setStateTab('managed'); setSortBy(''); setSortOrder('asc');
+    if (groupId !== null) onGroupChange?.(null);
+    setActiveViewUuid(null);
+  };
+  /** The count of the list with another advanced filter (the live preview of the builder). */
+  const countWithRule = useCallback(async (r: RuleNode | null): Promise<number> => {
+    const page = await mdmApi.listDevices({ ...listParams, rule: r ? JSON.stringify(r) : undefined, page: 1, pageSize: 1 });
+    return page.total;
+  }, [listParams]);
+  const openAdvanced = () => { setFiltersOpen(false); setAdvancedOpen(true); };
 
   // ── Fleet counters (DevicesKpiStrip): their tiles drive the same filters as the chips ─────────────────────
   // Apple: every Apple platform present in the fleet; on when all of them are filtered on.
@@ -604,6 +707,12 @@ export function DeviceTable({
         {t('devices.filters.tagsLabel', 'Tags')}
         {tagFilters.size > 0 && <span className="text-[10px] text-accent/80">{tagFilters.size}</span>}
       </button>
+      <button onClick={openAdvanced} className={chipCls(!!rule)} aria-pressed={!!rule}
+        title={t('rules.advancedFilter.chipHint') || 'Combine conditions on the inventory (AND, OR, NOT)'}>
+        <ListFilter className="w-3 h-3" />
+        {t('rules.advancedFilter.chip') || 'Advanced filter'}
+        {rule && <span className="text-[10px] text-accent/80">{ruleConditionsOf(rule).length}</span>}
+      </button>
       {endUserId !== undefined && (
         <button onClick={() => setEndUserId(undefined)} className={chipCls(true)}>
           {t('devices.filters.endUser') || 'One end user'} <X className="w-3 h-3" />
@@ -790,6 +899,20 @@ export function DeviceTable({
     { field: 'warranty', label: t('sort.warranty') || 'Warranty expiry' },
   ];
 
+  // The saved views: the inventory page only (a group's page shows one group, the view would move away from it).
+  const viewsBar = !embedded && initialFilters ? (
+    <DeviceViewsBar
+      current={currentDefinition}
+      activeUuid={activeViewUuid}
+      onSelect={(view, apply) => { if (!apply || applyView(view)) setActiveViewUuid(view.uuid); }}
+      onDetach={() => setActiveViewUuid(null)}
+      onReset={resetView}
+      pending={pendingView}
+      onPendingDone={() => setPendingView(null)}
+      compact={compactToolbar}
+    />
+  ) : null;
+
   const shownDevices = isMaster && tenantFilters.size > 0 ? devices.filter((d) => tenantFilters.has(d.tenantId)) : devices;
   const shownTree = isMaster && tenantFilters.size > 0 ? tree.filter((g) => tenantFilters.has(g.tenantId)) : tree;
 
@@ -812,11 +935,13 @@ export function DeviceTable({
             : '!mt-0 -mx-3 px-3 pt-3 sm:-mx-4 sm:px-4 sm:pt-4 lg:-mx-6 lg:px-6 lg:pt-6',
         )}
       >
+        {!compactToolbar && viewsBar}
         {!compactToolbar && stateTabs}
 
         <div className={clsx('space-y-2', !compactToolbar && 'mb-3')}>
           {compactToolbar ? (
             <>
+              {viewsBar}
               <div className="relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted pointer-events-none" />
                 <input type="search" value={search} onChange={(e) => setSearch(e.target.value)}
@@ -1067,6 +1192,17 @@ export function DeviceTable({
         </div>
       )}
       {!treeViewActive && hasMore && <div ref={sentinelRef} className="h-px" aria-hidden />}
+
+      {/* ── Advanced filter (rule builder) ────────────────────────────── */}
+      <AdvancedFilterDialog
+        open={advancedOpen}
+        onClose={() => setAdvancedOpen(false)}
+        rule={rule}
+        onApply={setRule}
+        facets={facets}
+        groups={tree}
+        count={countWithRule}
+      />
 
       {/* ── Batch: change group ──────────────────────────────────────── */}
       {changeGroupOpen && (
