@@ -1000,6 +1000,7 @@
     "ownership": "Ownership",
     "collected": "Collected on this device",
     "collectedHint": "What is struck through is never collected for this ownership: it is absent, not empty.",
+    "collectedChannelHint": "Never read by this management mode, whatever the privacy profile: {{fields}}.",
     "endUser": "End user",
     "model": "Model",
     "serial": "Serial number",

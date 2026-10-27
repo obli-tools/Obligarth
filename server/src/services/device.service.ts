@@ -6,10 +6,11 @@ import { AppError } from '../middleware/errorHandler';
 import { JobError, safeErr } from '../jobs/errors';
 import {
   MDM_STALE_AFTER_DAYS_DEFAULT, SocketEvents, contactState, isMasterTenant, versionNum,
-  type AppleDeviceDetail, type ComplianceReason, type ContactState, type DeviceDetail, type DeviceFacets,
+  type AppleDeviceDetail, type CollectedField, type ComplianceReason, type ContactState, type DeviceDetail, type DeviceFacets,
   type DeviceSummary, type MdmFleetPoint, type MdmFleetSummary, type NanoEnrollType, type Ownership,
 } from '@obligarth/shared';
 import { collectedFields, privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
+import { androidPrivacyRulesFor, legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { staleAfterDaysOf } from '../mdm/settings';
 import type { TenantView } from './deviceScope.service';
 
@@ -127,6 +128,48 @@ const boolOrNull = (v: unknown): boolean | null => (typeof v === 'boolean' ? v :
 const textOrNull = (v: unknown, max = 200): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
 const later = (a: unknown, b: unknown): boolean => !!a && (!b || new Date(a as string).getTime() > new Date(b as string).getTime());
+
+/** The order of the fields in DeviceDetail.privacy (that of collectedFields). */
+const COLLECTED_ORDER: readonly CollectedField[] = ['serialNumber', 'hardwareIds', 'deviceName', 'phoneNumber', 'network', 'allApps', 'allCertificates'];
+const inOrder = (set: ReadonlySet<CollectedField>): CollectedField[] => COLLECTED_ORDER.filter((f) => set.has(f));
+
+/** What a channel never reads, whatever the tenant's profile: Android Enterprise neither the device name, the phone
+ *  number (v1) nor the certificates (android/inventory/privacy.ts); the bridge agent neither the phone number nor the
+ *  certificates (legacyAgent/inventory.ts). Apple reads every field its rules ask for. */
+const NOT_READ_BY_CHANNEL: Readonly<Record<string, readonly CollectedField[]>> = {
+  amapi: ['deviceName', 'phoneNumber', 'allCertificates'],
+  legacy_agent: ['phoneNumber', 'allCertificates'],
+};
+
+/**
+ * DeviceDetail.privacy of a record, by its channel (what the notice and the record announce must be what is kept):
+ *   - Apple: what the rules of its ownership collect (collectedFields of the resolved Apple rules);
+ *   - Android Enterprise: the rules of the ingestion (androidPrivacyRulesFor): the serial number of a company device,
+ *     the IMEI (hardware identifiers) and the network information where they allow them, the applications;
+ *   - bridge agent (corporate only): the serial number always (PB13), the device name and the connection it reports,
+ *     the IMEI and the full list of applications by the corporate profile (D14, legacyAgentPrivacyRulesFor).
+ * notReadByChannel: NOT_READ_BY_CHANNEL, never in collected.
+ */
+async function privacyOf(channel: string, tenantId: number, ownership: string | null, apple: PrivacyRules): Promise<DeviceDetail['privacy']> {
+  const notRead = NOT_READ_BY_CHANNEL[channel] ?? [];
+  const set = new Set<CollectedField>();
+  if (channel === 'amapi') {
+    const a = await androidPrivacyRulesFor(db, tenantId, ownership);
+    if (ownership === 'corporate' || ownership === 'corporate_personal') set.add('serialNumber');
+    if (a.imei) set.add('hardwareIds');
+    if (a.networkInfo) set.add('network');
+    if (a.installedApps === 'all') set.add('allApps');
+  } else if (channel === 'legacy_agent') {
+    const l = await legacyAgentPrivacyRulesFor(db, tenantId);
+    for (const f of ['serialNumber', 'deviceName', 'network'] as const) set.add(f);
+    if (l.imei) set.add('hardwareIds');
+    if (l.installedApps === 'all') set.add('allApps');
+  } else {
+    for (const f of collectedFields(apple)) set.add(f);
+  }
+  for (const f of notRead) set.delete(f);
+  return { collected: inOrder(set), notReadByChannel: inOrder(new Set(notRead)) };
+}
 
 /** Sortable columns: a whitelist, never the caller's text. */
 const SORT_COLUMNS: Record<string, string> = {
@@ -447,7 +490,7 @@ class DeviceService {
       enrollmentProfileId: row.enrollment_profile_id ?? null,
       managementChannel: row.management_channel,
       lostModeChangedAt: iso(row.lost_mode_changed_at),
-      privacy: { collected: collectedFields(r) },
+      privacy: await privacyOf(row.management_channel, deviceTenant, row.ownership ?? null, r),
     };
     if (r.storeDeviceName) detail.deviceName = row.device_name ?? null;
     const apple = await db('apple_devices').where({ device_id: id, tenant_id: deviceTenant }).first(
@@ -487,7 +530,11 @@ class DeviceService {
       }
       const info = asObject(apple.device_information);
       // DeviceInformation refiltered with the rules resolved for the record (a field not collected is absent, EX-19):
-      // what was stored under broader rules (before a change of ownership) is not shown.
+      // what was stored under broader rules (before a change of ownership or a narrower profile of the tenant, until
+      // privacy.apply-profile cleans it) is not shown. Never the raw answer: the fields below only. The phone number,
+      // the ICCID and the EID only where the rules collect them (storePhoneNumber, corporate by default: modele §5.2,
+      // conception §10.3, announced by the notice); the Wi-Fi and Bluetooth addresses where both the network and the
+      // hardware identifiers are collected (corporate and COPE by default).
       if (apple.last_device_info_at || apple.model_number) {
         const v: NonNullable<AppleDeviceDetail['info']> = {
           modelNumber: textOrNull(apple.model_number, 64) ?? textOrNull(info.ModelNumber, 64),

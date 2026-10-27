@@ -21,6 +21,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import tools.obli.obligarth.agent.core.KnoxLicence
 import tools.obli.obligarth.agent.core.Phase
 import java.text.DateFormat
 import java.util.Date
@@ -198,12 +199,21 @@ class SetupActivity : Activity() {
             getString(R.string.label_server) to (s.config?.host ?: "-"),
             getString(R.string.label_agent) to (s.agentId ?: "-"),
             getString(R.string.label_admin) to (if (rt.facts.adminActive()) yes else no),
-            getString(R.string.label_knox) to rt.knox.state(),
+            getString(R.string.label_knox) to knoxLabel(rt.knox.state()),
             getString(R.string.label_phone) to (if (phonePerm) yes else no),
             getString(R.string.label_last_poll) to lastPoll,
             getString(R.string.label_last_status) to (s.lastStatus ?: "-"),
             getString(R.string.label_version) to "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
         ).joinToString("\n") { (k, v) -> "$k : $v" }
+    }
+
+    /** The state shown, translated; the code itself goes to the server as is (AndroidFacts). */
+    private fun knoxLabel(state: String): String = when (state) {
+        KnoxLicence.ABSENT -> getString(R.string.knox_state_absent)
+        KnoxLicence.PRESENT -> getString(R.string.knox_state_present)
+        KnoxLicence.LICENSED -> getString(R.string.knox_state_licensed)
+        KnoxLicence.LICENSE_ERROR -> getString(R.string.knox_state_license_error)
+        else -> state
     }
 
     private fun button(label: Int, onClick: () -> Unit) = Button(this).apply {

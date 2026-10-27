@@ -118,7 +118,9 @@
             android:exported="false" />
 
         <!-- Licence status from the Knox service. Exported by necessity: a status broadcast alone
-             never makes the agent "licensed" (KnoxBridge.state probes a licensed call). -->
+             never decides the state (KnoxLicence): "licensed" only by a licensed call that works,
+             a status taken only in the hour after a sending of this agent, and a refusal gives
+             license_error only when that call fails too. -->
         <receiver
             android:name=".KnoxLicenseReceiver"
             tools:ignore="ExportedReceiver"

@@ -28,13 +28,14 @@ const SUBJECTS: readonly NoticeAckSubject[] = ['enrollment_sessions', 'android_b
 export async function linkNoticeAcknowledgement(trx: Knex.Transaction, tenantId: number, subject: NoticeAckSubject,
   subjectId: string): Promise<number> {
   if (!SUBJECTS.includes(subject)) throw new Error(`notice: unknown acknowledgement subject ${String(subject)}`);
+  // The subject's table: one of SUBJECTS, as an identifier binding (??), quoted by knex.
   const r = await trx.raw(`
     UPDATE obligarth.notice_acknowledgements a
        SET device_id = COALESCE(s.device_id, a.device_id), end_user_id = COALESCE(s.end_user_id, a.end_user_id)
-      FROM obligarth.${subject} s
+      FROM ?? s
      WHERE s.tenant_id = ? AND s.id = ?::uuid AND s.notice_ack_id IS NOT NULL
        AND a.tenant_id = s.tenant_id AND a.id = s.notice_ack_id
        AND (a.device_id IS DISTINCT FROM COALESCE(s.device_id, a.device_id)
-            OR a.end_user_id IS DISTINCT FROM COALESCE(s.end_user_id, a.end_user_id))`, [tenantId, subjectId]) as { rowCount?: number };
+            OR a.end_user_id IS DISTINCT FROM COALESCE(s.end_user_id, a.end_user_id))`, [`obligarth.${subject}`, tenantId, subjectId]) as { rowCount?: number };
   return Number(r.rowCount ?? 0);
 }

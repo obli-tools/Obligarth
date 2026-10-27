@@ -38,6 +38,9 @@ export function ManagementCard({ device, tenantName, canChange, onGroup, onOwner
   const { t } = useTranslation();
   const managed = device.enrollmentState !== 'unenrolled';
   const collected = device.privacy?.collected ?? [];
+  // What the channel never reads (not a rule of the ownership): apart, never struck as "not collected for this ownership".
+  const notRead = device.privacy?.notReadByChannel ?? [];
+  const governed = COLLECTED.filter((f) => !notRead.includes(f));
   const apple = device.apple;
   const change = (onClick: () => void) => <LinkButton onClick={onClick}>{t('deviceSummary.change') || 'Change'}</LinkButton>;
   return (
@@ -121,16 +124,22 @@ export function ManagementCard({ device, tenantName, canChange, onGroup, onOwner
       </InfoRows>
       <details className="mt-3 rounded-lg border border-border/60 px-3 py-2">
         <summary className="cursor-pointer select-none text-xs font-medium text-text-secondary hover:text-text-primary coarse:py-1.5">
-          {t('deviceSummary.collectedToggle') || 'Data collected'} ({collected.length}/{COLLECTED.length})
+          {t('deviceSummary.collectedToggle') || 'Data collected'} ({collected.length}/{governed.length})
         </summary>
         <div className="mt-2 flex flex-wrap gap-1">
-          {COLLECTED.map((f) => (
+          {governed.map((f) => (
             <span key={f} className={`px-1.5 py-0.5 rounded text-[11px] ${collected.includes(f) ? 'bg-accent/10 text-accent' : 'bg-bg-tertiary text-text-muted line-through'}`}>
               {t(`mdm.collected.${f}`) || COLLECTED_FALLBACK[f]}
             </span>
           ))}
         </div>
         <p className="mt-1.5 text-[11px] text-text-muted">{t('deviceSummary.collectedHint') || 'What is struck through is never collected for this ownership: it is absent, not empty.'}</p>
+        {notRead.length > 0 && (
+          <p className="mt-1.5 text-[11px] text-text-muted">
+            {t('deviceSummary.collectedChannelHint', { fields: notRead.map((f) => t(`mdm.collected.${f}`) || COLLECTED_FALLBACK[f]).join(', ') })
+              || `Never read by this management mode, whatever the privacy profile: ${notRead.map((f) => COLLECTED_FALLBACK[f]).join(', ')}.`}
+          </p>
+        )}
       </details>
     </InfoCard>
   );

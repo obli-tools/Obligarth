@@ -3,6 +3,7 @@ package tools.obli.obligarth.agent
 import android.annotation.SuppressLint
 import android.content.Context
 import tools.obli.obligarth.agent.core.AgentLog
+import tools.obli.obligarth.agent.core.KnoxLicence
 import tools.obli.obligarth.agent.core.Sha256
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
@@ -63,27 +64,34 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
         return version to level
     }
 
-    /** absent | present | licensed | license_error (spec §3.2 knox_state). */
-    fun state(): String {
-        if (!present) return "absent"
-        // The broadcast receiver is exported: a status broadcast alone never makes "licensed",
-        // only a licensed call that works does.
-        if (probeLicensed()) return "licensed"
-        return if (prefs.getString(K_STATUS, null) == "fail") "license_error" else "present"
-    }
+    /**
+     * absent | present | licensed | license_error (spec §3.2 knox_state; KnoxLicence.state). A Knox
+     * licence is bound to the package that activated it: with no key ever sent by this agent, "present",
+     * whatever the probe answers (some Knox versions answer it without a licence). Then the probe first:
+     * the receiver is exported and the key goes to two managers, so a status broadcast never decides
+     * alone; a refusal gives license_error only when the probe fails too.
+     */
+    fun state(): String =
+        KnoxLicence.state(present, activatedKeySha(), prefs.getString(K_STATUS, null)) { probeLicensed() }
 
     fun lastError(): String? = prefs.getString(K_ERROR, null)
 
-    /** A harmless licensed call: a SecurityException means no licence. */
+    /**
+     * A harmless licensed call: a SecurityException means no licence. The agent itself is installed,
+     * so a working call answers true; a wrapper that swallows the refusal answers false.
+     */
     private fun probeLicensed(): Boolean = try {
         val app = edm()?.let { call(it, "getApplicationPolicy") } ?: return false
-        call(app, "isApplicationInstalled", context.packageName)
-        true
+        call(app, "isApplicationInstalled", context.packageName) == true
     } catch (e: Throwable) {
         false
     }
 
-    /** Activates a licence key (admin must be active). The status arrives by broadcast (KnoxLicenseReceiver). */
+    /**
+     * Activates a licence key (admin must be active). The status arrives by broadcast (KnoxLicenseReceiver):
+     * synchronized with onLicenseStatus, a status is read once the sending is recorded.
+     */
+    @Synchronized
     fun activateLicense(key: String): Boolean {
         val s = space ?: return false
         val keySha = Sha256.hex(key)
@@ -99,16 +107,30 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
                 log.warn("Knox licence activation $cls: ${describe(e)}")
             }
         }
-        if (sent) prefs.edit().putString(K_KEY_SHA, keySha).remove(K_STATUS).commit()
+        if (sent) prefs.edit().putString(K_KEY_SHA, keySha).putLong(K_SENT_AT, now()).remove(K_STATUS).remove(K_ERROR).commit()
         return sent
     }
 
     fun activatedKeySha(): String? = prefs.getString(K_KEY_SHA, null)
 
-    fun onLicenseStatus(success: Boolean, errorCode: Int?) {
-        prefs.edit().putString(K_STATUS, if (success) "success" else "fail")
-            .putString(K_ERROR, errorCode?.toString()).commit()
+    /** Whether to send [key]: a new key, or one refused or never answered a while ago (KnoxLicence.activationDue). */
+    fun activationDue(key: String): Boolean = KnoxLicence.activationDue(
+        Sha256.hex(key), activatedKeySha(), prefs.getString(K_STATUS, null), prefs.getLong(K_SENT_AT, 0L), now(),
+    ) { state() == KnoxLicence.LICENSED }
+
+    /**
+     * A status broadcast: kept only in the window after a sending of this agent, a success of one
+     * manager never undone by the refusal of the other (KnoxLicence.nextStatus). False when ignored.
+     */
+    @Synchronized
+    fun onLicenseStatus(success: Boolean, errorCode: Int?): Boolean {
+        val next = KnoxLicence.nextStatus(activatedKeySha(), prefs.getLong(K_SENT_AT, 0L), now(), prefs.getString(K_STATUS, null), success)
+            ?: return false
+        prefs.edit().putString(K_STATUS, next).putString(K_ERROR, if (next == KnoxLicence.FAIL) errorCode?.toString() else null).commit()
+        return true
     }
+
+    private fun now(): Long = System.currentTimeMillis() / 1000
 
     // ---- Policies (each returns null when done, else an error code of §5.3) ----
 
@@ -175,6 +197,7 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
         private const val K_STATUS = "licenseStatus"
         private const val K_ERROR = "licenseError"
         private const val K_KEY_SHA = "licenseKeySha"
+        private const val K_SENT_AT = "licenseSentAt"
         private const val K_REMOVABLE = "adminRemovable"
 
         /** Invokes the public method [name] whose parameters accept [args] (boxed primitives accepted). */

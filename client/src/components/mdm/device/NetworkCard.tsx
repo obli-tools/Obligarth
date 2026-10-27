@@ -50,9 +50,11 @@ export function NetworkCard({ device, channel, android, legacy, className }: {
   }
   if (rows.length === 0) return null;
 
-  // What the privacy rules of this ownership leave out (Apple and Android Enterprise collect by these rules).
+  // What the privacy rules of this ownership leave out; a field the channel never reads (the phone number of Android
+  // Enterprise in v1 and of the bridge agent: privacy.notReadByChannel) is not a rule of the ownership, never listed.
   const collected = device.privacy?.collected ?? [];
-  const missing = channel === 'legacy_agent' ? [] : (['network', 'phoneNumber'] as CollectedField[]).filter((f) => !collected.includes(f));
+  const notRead = device.privacy?.notReadByChannel ?? [];
+  const missing = (['network', 'phoneNumber'] as CollectedField[]).filter((f) => !notRead.includes(f) && !collected.includes(f));
   return (
     <InfoCard icon={Signal} title={t('deviceSummary.network.title') || 'Network'} className={className}>
       <InfoRows>{rows}</InfoRows>

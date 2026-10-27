@@ -179,7 +179,12 @@ class KnoxLicenseReceiver : BroadcastReceiver() {
         }
         val ok = success ?: return
         val action = intent.action
-        rt.knox.onLicenseStatus(ok, error)
+        // Exported receiver: a status out of the window after a sending of this agent, or a refusal after
+        // the success of the other manager, is not kept (KnoxLicence.nextStatus), and changes nothing.
+        if (!rt.knox.onLicenseStatus(ok, error)) {
+            rt.log.warn("Knox licence status ignored: ${if (ok) "success" else "fail ($error)"} ($action)")
+            return
+        }
         rt.state.addEvent("knox_license", rt.client.correctedNow(), mapOf("success" to ok, "errorCode" to error, "action" to action))
         rt.log.info("Knox licence status: ${if (ok) "success" else "fail ($error)"}")
         // Knox calls (licence probe, setAdminRemovable) off the main thread.
