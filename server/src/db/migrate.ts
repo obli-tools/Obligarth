@@ -12,12 +12,14 @@ import { missingMigrations, rlsMigrationApplied, shippedMigrations } from './mig
 import { logger } from '../utils/logger';
 
 // =============================================================================
-// server-migrate (rls-tenant §3.3, §3.4, §10.1; R3)
+// Migrations (rls-tenant §3.3, §3.4, §10.1; R3)
 // =============================================================================
 //
-// One-shot service, same image as the server, run before it (compose:
-// `server` depends on it completing successfully). With the administration
-// DSN (DATABASE_ADMIN_URL, role obligarth_admin) that the server never sees:
+// Run by the server itself at start, before anything else touches the
+// database, as the rest of the suite does (index.ts, whenever
+// DATABASE_ADMIN_URL is set), or by hand with the command below. With the
+// administration DSN (DATABASE_ADMIN_URL, role obligarth_admin); the server
+// then works as the runtime role only:
 //   1. refuses a database created before the RLS (role `obligarth`
 //      superuser, or owner of objects: recreate the development volume,
 //      rls-tenant §10.5, or adopt it with annex B);
@@ -154,8 +156,8 @@ function hmacBlocks(key: Buffer): { ikey: Buffer; okey: Buffer } {
  * RLS_CONTEXT_KEY_FILE, and the previous one during a rotation
  * (RLS_CONTEXT_KEY_PREVIOUS_FILE), are deposited as their two inner HMAC
  * blocks; every other active key is retired (retired_at), so a rotation is:
- * server-migrate with the new key and the previous one, restart of the
- * server on the new key, then server-migrate with the new key alone. A key
+ * the migrations with the new key and the previous one, restart of the
+ * server on the new key, then the migrations with the new key alone. A key
  * retired once is refused (a rotation never brings a key back). Without any
  * key, nothing changes (warning: the server refuses to start without one).
  * Written as the owner role (an administrator without superuser can SET ROLE
@@ -224,7 +226,7 @@ export function scramVerifier(password: string, o: { salt?: Buffer; iterations?:
   return `SCRAM-SHA-256$${iterations}:${salt.toString('base64')}$${storedKey.toString('base64')}:${serverKey.toString('base64')}`;
 }
 
-/** Runs server-migrate (steps 1 to 8 of the header). Throws MigrateRefusal
+/** Runs the migrations (steps 1 to 8 of the header). Throws MigrateRefusal
  *  (or a database error) when it cannot. */
 export async function runMigrations(opts: MigrateOptions): Promise<MigrateReport> {
   if (!opts.adminUrl) throw new MigrateRefusal('DATABASE_ADMIN_URL is not set: the administration DSN (obligarth_admin).');
@@ -365,7 +367,7 @@ export async function checkDatabase(adminUrl: string, contextKey: Buffer | null 
     const byName = new Map(roles.rows.map((r) => [r.rolname as string, r]));
     for (const name of ['obligarth', 'obligarth_owner', 'obligarth_reader']) {
       const r = byName.get(name);
-      if (!r) { findings.push(`role ${name} missing (run server-migrate)`); continue; }
+      if (!r) { findings.push(`role ${name} missing (run the migrations: restart the server with DATABASE_ADMIN_URL)`); continue; }
       if (r.rolsuper || r.rolbypassrls || r.rolcreaterole || r.rolcreatedb) findings.push(`role ${name} has a forbidden attribute`);
       if ((name === 'obligarth') !== r.rolcanlogin) findings.push(`role ${name}: unexpected LOGIN attribute`);
     }
@@ -405,7 +407,7 @@ export async function checkDatabase(adminUrl: string, contextKey: Buffer | null 
     const b = backup.rows[0];
     if (b) {
       if (b.rolsuper || b.rolbypassrls || b.rolcreaterole || b.rolcreatedb) findings.push('role obligarth_backup has a forbidden attribute');
-      if (!b.rolreplication || !b.rolcanlogin) findings.push('role obligarth_backup: LOGIN REPLICATION expected (run server-migrate)');
+      if (!b.rolreplication || !b.rolcanlogin) findings.push('role obligarth_backup: LOGIN REPLICATION expected (run the migrations: restart the server with DATABASE_ADMIN_URL)');
       if (b.member) findings.push('role obligarth_backup is a member of a role, or has members: revoke them');
       if (Number(b.extra) > 0) findings.push('role obligarth_backup holds privileges beyond the insert of the backup reports: revoke them');
     }
@@ -434,10 +436,10 @@ export async function checkDatabase(adminUrl: string, contextKey: Buffer | null 
       try {
         const keys = await q('SELECT kid FROM obligarth_private.context_keys WHERE retired_at IS NULL');
         const kids = keys.rows.map((r) => String(r.kid));
-        if (kids.length === 0) findings.push('signed context: no active key (run server-migrate with RLS_CONTEXT_KEY_FILE)');
+        if (kids.length === 0) findings.push('signed context: no active key (run the migrations with RLS_CONTEXT_KEY_FILE: restart the server with DATABASE_ADMIN_URL)');
         if (contextKey && !kids.includes(contextKeyId(contextKey))) {
           findings.push(`signed context: the key of RLS_CONTEXT_KEY_FILE (${contextKeyId(contextKey)}) is not an active key of ` +
-            'the database: the server would refuse to start (run server-migrate with it)');
+            'the database: the server would refuse to start (run the migrations with it: restart the server with DATABASE_ADMIN_URL)');
         }
       } finally {
         await q('RESET ROLE');
@@ -463,37 +465,63 @@ function readOptionalSecret(name: string, value: string | undefined, file: strin
   }
 }
 
-async function main(): Promise<void> {
-  const check = process.argv.includes('--check');
-  const adminUrl = process.env.DATABASE_ADMIN_URL || '';
-  if (check) {
-    const res = await checkDatabase(adminUrl, loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE));
-    for (const f of res.findings) logger.error(f);
-    logger.info({ ok: res.ok, rlsActive: res.rlsActive, pending: res.pending.length }, 'server-migrate --check');
-    process.exitCode = res.ok ? 0 : 1;
-    return;
+/** The runtime role's password the migration sets: DB_APP_PASSWORD(_FILE), else the one of DATABASE_URL. */
+function appPasswordFromEnv(): string | null {
+  const explicit = readSecret(process.env.DB_APP_PASSWORD, process.env.DB_APP_PASSWORD_FILE);
+  if (explicit) return explicit;
+  try {
+    const pw = new URL(process.env.DATABASE_URL || '').password;
+    return pw ? decodeURIComponent(pw) : null;
+  } catch {
+    return null;
   }
+}
+
+/**
+ * The migrations from the environment, as the rest of the suite does at start: run by the server itself before it
+ * starts (index.ts, whenever DATABASE_ADMIN_URL is set) and by this command. `contextKey`: the key already loaded by
+ * the caller, else RLS_CONTEXT_KEY_FILE.
+ */
+export async function migrateFromEnv(contextKey?: Buffer | null): Promise<MigrateReport> {
   const report = await runMigrations({
-    adminUrl,
-    appPassword: readSecret(process.env.DB_APP_PASSWORD, process.env.DB_APP_PASSWORD_FILE),
+    adminUrl: process.env.DATABASE_ADMIN_URL || '',
+    appPassword: appPasswordFromEnv(),
     backupPassword: readOptionalSecret('DB_BACKUP_PASSWORD_FILE', process.env.DB_BACKUP_PASSWORD, process.env.DB_BACKUP_PASSWORD_FILE),
-    contextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE),
+    contextKey: contextKey !== undefined ? contextKey : loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE),
     previousContextKey: loadContextKeyFile(process.env.RLS_CONTEXT_KEY_PREVIOUS_FILE, 'RLS_CONTEXT_KEY_PREVIOUS_FILE'),
   });
   logger.info({
     applied: report.applied.length, rlsActive: report.rlsActive, preRlsGrants: report.preRlsGrants,
     contextKeys: report.contextKeys, retiredContextKeys: report.retiredContextKeys, backupRole: report.backupRole,
     warnings: report.warnings.length,
-  }, 'server-migrate complete');
+  }, 'migrations complete');
+  return report;
+}
+
+/** Logs a failed migration the way the operator can act on it. */
+export function logMigrateFailure(err: unknown): void {
+  if (err instanceof MigrateRefusal) logger.fatal(err.message);
+  else {
+    logger.fatal({ err }, 'migrations failed');
+    if (adminSignInRefused(err)) logger.fatal(SIGN_IN_HINT);
+  }
+}
+
+async function main(): Promise<void> {
+  const check = process.argv.includes('--check');
+  if (check) {
+    const res = await checkDatabase(process.env.DATABASE_ADMIN_URL || '', loadContextKeyFile(process.env.RLS_CONTEXT_KEY_FILE));
+    for (const f of res.findings) logger.error(f);
+    logger.info({ ok: res.ok, rlsActive: res.rlsActive, pending: res.pending.length }, 'migrate --check');
+    process.exitCode = res.ok ? 0 : 1;
+    return;
+  }
+  await migrateFromEnv();
 }
 
 if (require.main === module) {
   main().catch((err) => {
-    if (err instanceof MigrateRefusal) logger.fatal(err.message);
-    else {
-      logger.fatal({ err }, 'server-migrate failed');
-      if (adminSignInRefused(err)) logger.fatal(SIGN_IN_HINT);
-    }
+    logMigrateFailure(err);
     process.exitCode = 1;
   }).finally(() => {
     // pino writes asynchronously: give the last lines a moment.

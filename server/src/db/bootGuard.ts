@@ -21,7 +21,7 @@ import { logger } from '../utils/logger';
 //      C applied, or any table under RLS): before it, no table is
 //      classified yet;
 //   4. every migration shipped in the image is applied (otherwise: "database
-//      schema incompatible, run server-migrate");
+//      schema incompatible …: the server migrates at start");
 //   5. context self-test: asTenant(1) then obligarth.ctx_tenant() = 1 (in
 //      signed mode, proves that the database knows the server's key);
 //   6. DB_CONTEXT_MODE=audit is refused once the RLS is active.
@@ -84,7 +84,7 @@ export async function bootGuard(): Promise<void> {
         AS n,
         (SELECT count(*) FROM pg_namespace WHERE nspname = 'obligarth') AS schema_present`) as Rows<{ n: string; schema_present: string }>;
     if (Number(owned.rows[0]?.schema_present ?? 0) === 0) {
-      findings.push('database schema obligarth missing: run server-migrate');
+      findings.push('database schema obligarth missing: the server migrates at start when DATABASE_ADMIN_URL is set');
       return;
     }
     if (Number(owned.rows[0]?.n ?? 0) > 0) {
@@ -94,13 +94,13 @@ export async function bootGuard(): Promise<void> {
     // 4. migrations
     const tracking = await db.raw(`SELECT to_regclass('obligarth.obligarth_migrations') IS NOT NULL AS present`) as Rows<{ present: boolean }>;
     if (!tracking.rows[0]?.present) {
-      findings.push('database schema incompatible: no migration applied, run server-migrate');
+      findings.push('database schema incompatible: no migration applied, the server migrates at start when DATABASE_ADMIN_URL is set');
       return;
     }
     const applied = await db('obligarth_migrations').select('name') as Array<{ name: string }>;
     const missing = missingMigrations(applied.map((m) => m.name));
     if (missing.length) {
-      findings.push(`database schema incompatible, run server-migrate (missing: ${missing.join(', ')})`);
+      findings.push(`database schema incompatible (missing: ${missing.join(', ')}): the server migrates at start when DATABASE_ADMIN_URL is set`);
     }
     // Once migration C is applied, the RLS is expected even when no table
     // has it any more (turned off by hand, partial restore): the audit below
@@ -137,7 +137,7 @@ export async function bootGuard(): Promise<void> {
       findings.push('database context self-test failed: obligarth.ctx_tenant() did not return the tenant of the context' +
         (contextSigningEnabled()
           ? ` (the database does not know the server's context key ${contextSigningKeyId()}, or retired it: ` +
-            'run server-migrate with this RLS_CONTEXT_KEY_FILE)'
+            'restart the server with this RLS_CONTEXT_KEY_FILE and DATABASE_ADMIN_URL: it migrates at start)'
           : ''));
     }
   }

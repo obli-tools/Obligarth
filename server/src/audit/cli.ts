@@ -14,7 +14,7 @@
 //       but at least the first entry of the range must be covered.
 //       Exit 0 intact, 2 broken, 1 error.
 //   spool-import --dir <folder>
-//       with the administration DSN (DATABASE_ADMIN_URL, the server-migrate
+//       with the administration DSN (DATABASE_ADMIN_URL, the migrations'
 //       service): imports the spooled or rejected bodies of the folder without
 //       the time window; journaled (audit.spool_replayed, forced). Exit 0, 1.
 //   restore-reconcile [--siem-heads <file.json>]
@@ -237,7 +237,7 @@ async function spoolImport(all: string[]): Promise<number> {
   const dir = arg(all, '--dir');
   if (!dir) throw new CliExit(1, 'spool-import: --dir <folder> is required');
   const adminUrl = process.env.DATABASE_ADMIN_URL;
-  if (!adminUrl) throw new CliExit(1, 'spool-import: DATABASE_ADMIN_URL (the administration DSN of server-migrate) is required');
+  if (!adminUrl) throw new CliExit(1, 'spool-import: DATABASE_ADMIN_URL (the administration DSN of the migrations) is required');
   const { readSpoolFile, rejectedFiles, rewriteSpoolFile } = await import('./spool');
   const { buildBody } = await import('./body');
   const pg = (await import('pg')).default;

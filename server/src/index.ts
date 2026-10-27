@@ -38,13 +38,14 @@ import { ensureSealKey } from './audit/sealKeys';
 
 // Start-up order (docs: specs README §4, rls-tenant §7.9, file-durable §3.3,
 // coffre-secrets §6.1): configuration (the vault's KEK file included),
-// registries (no I/O), (development only) migrations, database boot guard,
+// registries (no I/O), migrations, database boot guard,
 // vault (KEK, online lock, canary, tenant keys) and backfill of the inherited
 // clear secrets, initial administrator, durable jobs (pg-boss: queues and
 // schedules), boot tasks, HTTP and Socket.io, start tasks, job workers,
-// listen. The server never migrates in production: the server-migrate
-// service does (src/db/migrate.ts), and the boot guard refuses a schema it
-// did not bring up to date. No timer of this process does periodic work:
+// listen. The server migrates its database at start, as the rest of the
+// suite (src/db/migrate.ts, with DATABASE_ADMIN_URL), then forgets the
+// administration credentials and works as the runtime role; the boot guard
+// refuses a schema that is not up to date. No timer of this process does periodic work:
 // the modules' durable jobs do (jobs/).
 
 /** Exit budget of a shutdown: forced exit past it (the compose gives the
@@ -52,22 +53,6 @@ import { ensureSealKey } from './audit/sealKeys';
 const SHUTDOWN_DEADLINE_MS = 25_000;
 /** Longest wait for the HTTP server to close (open keep-alive connections). */
 const HTTP_CLOSE_WAIT_MS = 5_000;
-
-/** Development only (MIGRATE_ON_BOOT): the runtime role's password the
- *  migration sets — DB_APP_PASSWORD(_FILE), else the one of DATABASE_URL. */
-function devAppPassword(): string | null {
-  if (process.env.DB_APP_PASSWORD_FILE) {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return String(require('fs').readFileSync(process.env.DB_APP_PASSWORD_FILE, 'utf8')).trim() || null;
-  }
-  if (process.env.DB_APP_PASSWORD) return process.env.DB_APP_PASSWORD;
-  try {
-    const pw = new URL(config.databaseUrl).password;
-    return pw ? decodeURIComponent(pw) : null;
-  } catch {
-    return null;
-  }
-}
 
 async function main() {
   // Unsafe configuration (missing database URL, weak or missing session
@@ -112,13 +97,27 @@ async function main() {
   // GET /health/ready, the job ops.watch. Last: its collectors read the snapshots of the modules above.
   registerOpsModule();
 
-  // Development only: the server migrates its own database (server-migrate
-  // in production). Refused outside development by startupConfigErrors.
+  // The server migrates its own database at start, as the rest of the suite
+  // does (DATABASE_ADMIN_URL set: the compose gives it), then runs as the
+  // runtime role only. A failed migration stops the start: nothing runs on a
+  // schema half way.
   if (config.migrateOnBoot) {
-    logger.info('MIGRATE_ON_BOOT: running server-migrate in the server process (development)');
-    const { runMigrations } = await import('./db/migrate');
-    await runMigrations({ adminUrl: config.databaseAdminUrl, appPassword: devAppPassword(), contextKey });
+    const { migrateFromEnv, logMigrateFailure } = await import('./db/migrate');
+    try {
+      await migrateFromEnv(contextKey);
+    } catch (err) {
+      logMigrateFailure(err);
+      logger.fatal('Database not migrated: refusing to start.');
+      process.exit(1);
+    }
   }
+  // The administration credentials serve the migrations only: forgotten
+  // before anything else runs (a migration skipped is told below).
+  const migrationsSkipped = !!config.databaseAdminUrl && !config.migrateOnBoot;
+  for (const name of ['DATABASE_ADMIN_URL', 'DB_APP_PASSWORD', 'DB_APP_PASSWORD_FILE', 'DB_BACKUP_PASSWORD', 'DB_BACKUP_PASSWORD_FILE']) {
+    delete process.env[name];
+  }
+  (config as { databaseAdminUrl: string }).databaseAdminUrl = '';
 
   // Database boot guard: runtime role, ownership, migrations applied,
   // classification, database context (rls-tenant §7.9).
@@ -127,6 +126,9 @@ async function main() {
   } catch (err) {
     if (err instanceof BootGuardError) {
       for (const finding of err.findings) logger.fatal(finding);
+      if (migrationsSkipped) {
+        logger.fatal('MIGRATE_ON_BOOT=false: run the migrations by hand (node dist/src/db/migrate.js) or remove MIGRATE_ON_BOOT.');
+      }
       logger.fatal('Database not ready for this server: refusing to start.');
       process.exit(1);
     }

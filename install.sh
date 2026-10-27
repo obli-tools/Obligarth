@@ -123,7 +123,7 @@ if [ ! -f ".env" ]; then
 
   # Version to run and public URL of the devices, then random secrets: the
   # database's two accounts (the server's, without superuser rights, and the
-  # administrator used by server-migrate only) and the initial administrator's
+  # administrator used by the migrations only) and the initial administrator's
   # password
   VERSION=$(resolve_version) || exit 1
   MDM_BASE=$(resolve_mdm_base) || exit 1
@@ -275,6 +275,5 @@ echo "    docker compose -f $(pwd)/docker-compose.yml logs -f"
 echo "    docker compose -f $(pwd)/docker-compose.yml down"
 echo "  Update: back up the database (and set OBLIGARTH_VERSION in .env if pinned), then"
 echo "    docker compose -f $(pwd)/docker-compose.yml pull && docker compose -f $(pwd)/docker-compose.yml up -d"
-echo "    (server-migrate, then apple-edge-migrate, migrate the database first; the server and"
-echo "    apple-edge start once they have succeeded)"
+echo "    (the server, then apple-edge, migrate the database at start)"
 echo ""

@@ -153,7 +153,7 @@ export type KekComparison = 'match' | 'mismatch' | 'no_keys' | 'not_checked';
 export interface MigrationComparison {
   applied: number;
   shipped: number;
-  /** Shipped by this image, not applied: server-migrate applies them (a backup older than the image). */
+  /** Shipped by this image, not applied: the server applies them at start (a backup older than the image). */
   missing: string[];
   /** Applied, not shipped by this image: the database is newer than the image (restore the image of the backup). */
   unknown: string[];

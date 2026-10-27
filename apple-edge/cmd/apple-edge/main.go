@@ -94,6 +94,18 @@ func serve(cfg *config.Config, logger *obs.Logger) int {
 		logger.Error("msg", "configuration", "err", err)
 		return 2
 	}
+	// The service migrates its schemas at start, as the rest of the suite
+	// does, whenever the administration DSN is given (the compose gives it).
+	if cfg.AdminDatabaseURL != "" {
+		if code := migrateUp(cfg, logger); code != 0 {
+			logger.Fatal("Database not migrated: refusing to start.")
+			return code
+		}
+	}
+	// The administration DSN serves the migrations only: forgotten before
+	// anything else runs.
+	cfg.AdminDatabaseURL = ""
+	os.Unsetenv("EDGE_ADMIN_DATABASE_URL")
 	sec, err := app.LoadSecrets(cfg)
 	if err != nil {
 		if refused(logger, err) || secretFileRefused(logger, err) {

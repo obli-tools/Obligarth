@@ -18,7 +18,7 @@ import type { JobsMode } from './types';
 export const PGBOSS_SCHEMA_VERSION = 43;
 /** The pinned version (server/package.json, exact). */
 export const PGBOSS_VERSION = '12.35.1';
-/** The schema pg-boss lives in, created by the bootstrap of server-migrate
+/** The schema pg-boss lives in, created by the bootstrap of the migrations
  *  and owned by the runtime role. */
 export const PGBOSS_SCHEMA = 'pgboss';
 
@@ -68,7 +68,7 @@ export function createBoss(o: BossOptions): PgBoss {
     schema: PGBOSS_SCHEMA,
     application_name: 'obligarth-jobs',
     max: o.poolMax,                           // JOBS_DB_POOL_MAX, default 10
-    createSchema: false,                      // F2: the bootstrap of server-migrate creates the schema
+    createSchema: false,                      // F2: the bootstrap of the migrations creates the schema
     migrate: true,                            // F3: pg-boss installs and migrates its own objects
     schedule: o.mode === 'all',               // cron pass only where jobs run
     supervise: o.mode !== 'api',              // maintenance (expiry, retention, deletion)

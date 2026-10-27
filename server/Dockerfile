@@ -61,7 +61,9 @@ RUN mkdir -p ./mobile/release
 
 EXPOSE 3001
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
+# Start period: the server migrates the database before it listens; a long
+# migration (an index built on a large table) must not mark it unhealthy.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10m \
     CMD wget --no-verbose --tries=1 --spider http://localhost:3001/health || exit 1
 
 WORKDIR /app/server

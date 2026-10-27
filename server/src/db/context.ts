@@ -23,7 +23,7 @@ import { config } from '../config';
 //
 // Signed mode (rls-tenant §4.6, R12; migration D): the context carries an
 // expiry and travels with its HMAC-SHA256 (obligarth.ctx_sig) under the key
-// of RLS_CONTEXT_KEY_FILE, which server-migrate deposits in the database;
+// of RLS_CONTEXT_KEY_FILE, which the migrations deposit in the database;
 // obligarth.ctx_raw() refuses a context whose signature, key or expiry does
 // not hold, so an injected set_config no longer opens another tenant.
 //
