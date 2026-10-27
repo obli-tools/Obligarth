@@ -10,6 +10,7 @@ import { registerRestrictableActions } from '../services/restriction.service';
 import { logger } from '../utils/logger';
 import { findSecretRefs, registerSecretReferenceHolder } from '../vault/registry';
 import { registerLegacyAgentAuditActions } from '../legacyAgent/audit';
+import { registerBundledRelease } from '../legacyAgent/bundled';
 import { signersFromEnv } from '../legacyAgent/config';
 import { registerLegacyAgentGuardedActions } from '../legacyAgent/guarded';
 import { registerLegacyAgentJobs } from '../legacyAgent/jobs';
@@ -21,7 +22,7 @@ import { ensureServerKey, registerServerKeySecretName } from '../legacyAgent/ser
 // its hooks into the core's registries, registered here and only here;
 // index.ts calls registerLegacyAgentModule() right after registerAppleModule()
 // (the alerts and the freeze of the Apple integration serve it), before
-// anything starts. No I/O but the boot task. The surface /agent/v1 is mounted
+// anything starts. No I/O but the boot tasks. The surface /agent/v1 is mounted
 // by app.ts, the console routes by routes/index.ts.
 // =============================================================================
 
@@ -74,6 +75,18 @@ export function registerLegacyAgentModule(): void {
       logger.info({ state: r.state }, 'legacy agent: instance key');
     } catch (err) {
       logger.error({ code: (err as { code?: unknown })?.code, message: (err as Error)?.message?.slice(0, 200) }, 'legacy agent: instance key not loaded at start');
+    }
+  });
+
+  // The version of the agent embedded in the server image (lot AGENT-RU): registered once, after the migrations, then
+  // rolled out to the fleet by the job legacy-agent.auto-update. A refusal or a failure never stops the server (the
+  // console shows it).
+  registerBootTask('legacy-agent.bundled-release', async () => {
+    try {
+      const r = await registerBundledRelease();
+      logger.info({ state: r.state, reason: r.reason, versionCode: r.versionCode, image: r.imageVersion }, 'legacy agent: version embedded in the image');
+    } catch (err) {
+      logger.error({ message: (err as Error)?.message?.slice(0, 200) }, 'legacy agent: the version embedded in the image was not read at start');
     }
   });
 }

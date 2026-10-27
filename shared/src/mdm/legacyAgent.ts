@@ -66,6 +66,18 @@ export const LEGACY_AGENT_TOKEN_BOUNDS = { maxUsesMax: 2000, maxUsesDefault: 50,
 /** Poll interval bounds and default, seconds (PB10). */
 export const LEGACY_AGENT_POLL_BOUNDS = { min: 60, max: 3600, default: 300 } as const;
 
+/** Automatic update of the fleet to the latest version of the agent (lot AGENT-RU): devices per hour, instance-wide. */
+export const LEGACY_AGENT_AUTO_UPDATE_BOUNDS = { min: 1, max: 5000, default: 500 } as const;
+
+/** Where a version of the agent comes from: uploaded by a platform administrator, or embedded in the server image. */
+export const LEGACY_AGENT_RELEASE_ORIGINS = ['upload', 'bundled'] as const;
+export type LegacyAgentReleaseOrigin = typeof LEGACY_AGENT_RELEASE_ORIGINS[number];
+
+/** Why the version embedded in the server image was not registered (lot AGENT-RU). */
+export const LEGACY_AGENT_BUNDLE_REFUSALS = ['manifestInvalid', 'apkMissing', 'apkTooLarge', 'signerNotAdmitted', 'sha256Mismatch', 'notAnApk',
+  'signerMismatch', 'versionConflict'] as const;
+export type LegacyAgentBundleRefusal = typeof LEGACY_AGENT_BUNDLE_REFUSALS[number];
+
 // ── Views of the console ─────────────────────────────────────────────────────
 
 export interface LegacyAgentDeviceView {
@@ -187,6 +199,9 @@ export interface LegacyAgentReleaseView {
   notes: string | null;
   createdAt: string;
   withdrawnAt: string | null;
+  origin: LegacyAgentReleaseOrigin;
+  /** Version of the server image that first brought a bundled release; null for an upload. */
+  bundledIn: string | null;
 }
 
 export interface LegacyAgentServerKeyView {
@@ -204,4 +219,24 @@ export interface LegacyAgentInstanceSettings {
   inventorySeconds: number;
   signers: string[];
   publicBase: string | null;
+  /** Automatic update of the enrolled agents to the latest version not withdrawn (lot AGENT-RU). */
+  autoUpdate: boolean;
+  autoUpdatePerHour: number;
+  /** The version embedded in this server's image, as its start found it; null before the start task ran. */
+  bundle: LegacyAgentBundleStatus | null;
+}
+
+/**
+ * The version of the agent embedded in the server image (/app/server/agent-release), as the start task of this
+ * server found it: absent; registered now; present already; withdrawn (never brought back); refused (reason);
+ * storeError (the copy to the store of the APKs failed: full or read-only volume, rights); error (the database
+ * failed). A failure is tried again at the next start.
+ */
+export interface LegacyAgentBundleStatus {
+  state: 'absent' | 'registered' | 'present' | 'withdrawn' | 'refused' | 'storeError' | 'error';
+  reason: LegacyAgentBundleRefusal | null;
+  versionCode: number | null;
+  versionName: string | null;
+  imageVersion: string;
+  checkedAt: string;
 }

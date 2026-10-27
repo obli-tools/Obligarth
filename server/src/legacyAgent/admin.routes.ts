@@ -1,6 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { isMasterTenant, LEGACY_AGENT_POLL_BOUNDS, MASTER_TENANT_ID, type LegacyAgentInstanceSettings } from '@obligarth/shared';
+import {
+  isMasterTenant, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_POLL_BOUNDS, MASTER_TENANT_ID, type LegacyAgentInstanceSettings,
+} from '@obligarth/shared';
 import { audit } from '../audit';
 import { config } from '../config';
 import { db } from '../db';
@@ -9,6 +11,7 @@ import { AppError } from '../middleware/errorHandler';
 import { checkSecondFactor, sendStepUpFailure } from '../services/deviceKey/stepUpProof';
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
+import { bundleStatus } from './bundled';
 import { apkDir, CONFIG_KEYS, forgetInstanceSettings, instanceSettings, signersFromEnv } from './config';
 import { looksLikeApk, receiveApk } from './packages';
 import { releaseView } from './routes';
@@ -18,12 +21,15 @@ import { exportServerKey, serverKeyView } from './serverKey';
 // Platform console of the bridge agent (docs: agent-pont-android §7, RC-3),
 // mounted at /api/admin/legacy-agent: the master tenant (404 elsewhere), a
 // platform administrator (403 otherwise).
-//   GET  /releases                    the versions of the agent
+//   GET  /releases                    the versions of the agent (uploaded, or embedded in the server image: origin,
+//                                     bundledIn; lot AGENT-RU)
 //   POST /releases/upload             the APK (raw body), stored by content: { sha256, size }
 //   POST /releases                    { sha256, versionCode, versionName, signerSha256, notes }: strict second factor;
 //                                     the signer must be in LEGACY_AGENT_SIGNERS
 //   POST /releases/:id/withdraw       strict second factor
-//   GET  /settings, PUT /settings     poll period, minimal version, inventory period (app_config)
+//   GET  /settings, PUT /settings     poll period, minimal version, inventory period, automatic update of the fleet
+//                                     and its pace per hour (app_config; turning it on or raising the pace while on:
+//                                     strict second factor); GET also tells what the start found in the image (bundle)
 //   GET  /server-key                  public key of the instance and its fingerprint (to compile in SERVER_KEY_PINS)
 //   POST /server-key/export           the private key, ONCE, strict second factor (escrow)
 // =============================================================================
@@ -55,7 +61,14 @@ const SettingsBody = z.object({
   pollSeconds: z.number().int().min(LEGACY_AGENT_POLL_BOUNDS.min).max(LEGACY_AGENT_POLL_BOUNDS.max).optional(),
   minVersionCode: z.number().int().min(0).max(2_000_000_000).optional(),
   inventorySeconds: z.number().int().min(3_600).max(30 * 86_400).optional(),
+  autoUpdate: z.boolean().optional(),
+  autoUpdatePerHour: z.number().int().min(LEGACY_AGENT_AUTO_UPDATE_BOUNDS.min).max(LEGACY_AGENT_AUTO_UPDATE_BOUNDS.max).optional(),
 }).strict();
+
+async function settingsView(): Promise<LegacyAgentInstanceSettings> {
+  const s = await instanceSettings(true);
+  return { ...s, signers: signersFromEnv().signers, publicBase: config.apple.mdmPublicBase ?? null, bundle: bundleStatus() };
+}
 
 export function createLegacyAgentAdminRouter(): Router {
   const router = Router();
@@ -97,7 +110,7 @@ export function createLegacyAgentAdminRouter(): Router {
       }, ctx);
       const [r] = await trx('legacy_agent_releases').insert({
         id, version_code: m.versionCode, version_name: m.versionName, sha256: m.sha256, size_bytes: size, signer_sha256: m.signerSha256,
-        notes: m.notes || null, created_by: req.session.userId!,
+        notes: m.notes || null, created_by: req.session.userId!, origin: 'upload',
       }).returning('*') as Array<Record<string, any>>;
       return r;
     }));
@@ -122,19 +135,26 @@ export function createLegacyAgentAdminRouter(): Router {
   }));
 
   router.get('/settings', wrap(async (_req, res) => {
-    const s = await instanceSettings(true);
-    const out: LegacyAgentInstanceSettings = { ...s, signers: signersFromEnv().signers, publicBase: config.apple.mdmPublicBase ?? null };
-    res.json({ success: true, data: out });
+    res.json({ success: true, data: await settingsView() });
   }));
 
   router.put('/settings', wrap(async (req, res) => {
     const parsed = SettingsBody.safeParse(req.body ?? {});
     if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
     const b = parsed.data;
-    const pairs: Array<[string, number]> = [];
+    const pairs: Array<[string, number | boolean]> = [];
     if (b.pollSeconds !== undefined) pairs.push([CONFIG_KEYS.pollSeconds, b.pollSeconds]);
     if (b.minVersionCode !== undefined) pairs.push([CONFIG_KEYS.minVersionCode, b.minVersionCode]);
     if (b.inventorySeconds !== undefined) pairs.push([CONFIG_KEYS.inventorySeconds, b.inventorySeconds]);
+    if (b.autoUpdate !== undefined) pairs.push([CONFIG_KEYS.autoUpdate, b.autoUpdate]);
+    if (b.autoUpdatePerHour !== undefined) pairs.push([CONFIG_KEYS.autoUpdatePerHour, b.autoUpdatePerHour]);
+    // Widening the automatic update (turning it on, or raising its pace while it is on) pushes a version to the
+    // fleet of every tenant without any other step: a strict second factor, like the upload of that version.
+    const before = await instanceSettings(true);
+    const on = b.autoUpdate ?? before.autoUpdate;
+    if ((b.autoUpdate === true && !before.autoUpdate) || (on && b.autoUpdatePerHour !== undefined && b.autoUpdatePerHour > before.autoUpdatePerHour)) {
+      if (!(await strictStepUp(req, res, 'legacy_agent.auto_update'))) return;
+    }
     const ctx = await audit.fromRequest(req, MASTER_TENANT_ID);
     await switchToIdentity(() => db.transaction(async (trx) => {
       for (const [key, value] of pairs) await trx('app_config').insert({ key, value: String(value) }).onConflict('key').merge({ value: String(value) });
@@ -143,8 +163,7 @@ export function createLegacyAgentAdminRouter(): Router {
       }
     }));
     forgetInstanceSettings();
-    const s = await instanceSettings(true);
-    res.json({ success: true, data: { ...s, signers: signersFromEnv().signers, publicBase: config.apple.mdmPublicBase ?? null } });
+    res.json({ success: true, data: await settingsView() });
   }));
 
   router.get('/server-key', wrap(async (_req, res) => {

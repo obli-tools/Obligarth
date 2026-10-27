@@ -122,7 +122,7 @@ export const legacyAgentApi = {
       const res = await apiClient.get<ApiResponse<LegacyAgentInstanceSettings>>('/admin/legacy-agent/settings');
       return res.data.data!;
     },
-    async saveSettings(body: { pollSeconds?: number; minVersionCode?: number; inventorySeconds?: number }): Promise<LegacyAgentInstanceSettings> {
+    async saveSettings(body: { pollSeconds?: number; minVersionCode?: number; inventorySeconds?: number; autoUpdate?: boolean; autoUpdatePerHour?: number }): Promise<LegacyAgentInstanceSettings> {
       const res = await apiClient.put<ApiResponse<LegacyAgentInstanceSettings>>('/admin/legacy-agent/settings', body);
       return res.data.data!;
     },

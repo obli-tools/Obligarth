@@ -19,7 +19,8 @@
     "test:apple": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/apple/**/*.test.ts\"",
     "test:reports": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/reports/**/*.test.ts\"",
     "test:ops": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/ops/**/*.test.ts\"",
-    "test:privacy": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/privacy/**/*.test.ts\""
+    "test:privacy": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/privacy/**/*.test.ts\"",
+    "test:legacy-agent": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/legacyAgent/**/*.test.ts\""
   },
   "dependencies": {
     "@obligarth/shared": "*",

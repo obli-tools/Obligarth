@@ -4566,7 +4566,28 @@
       "add": "Add",
       "added": "Version added",
       "withdrawn": "Withdrawn",
-      "confirmWithdraw": "Withdraw the version {{version}}?"
+      "confirmWithdraw": "Withdraw the version {{version}}?",
+      "uploaded": "Uploaded",
+      "bundledIn": "Embedded in the image v{{image}}",
+      "bundle": {
+        "absent": "The image v{{image}} carries no version of the agent.",
+        "registered": "Version {{version}} embedded in the image v{{image}}: registered at start.",
+        "present": "Version {{version}} embedded in the image v{{image}}: already registered.",
+        "withdrawn": "Version {{version}} embedded in the image v{{image}}: withdrawn, never offered again.",
+        "refused": "Version embedded in the image v{{image}} refused:",
+        "storeError": "Version embedded in the image v{{image}}: not copied to the store of the APKs (full or read-only volume, rights), tried again at the next start.",
+        "error": "Version embedded in the image v{{image}}: not registered (database error), tried again at the next start.",
+        "reasons": {
+          "manifestInvalid": "release.json is missing or invalid.",
+          "apkMissing": "obligarth-agent.apk is missing.",
+          "apkTooLarge": "the APK is empty or larger than 100 MiB.",
+          "signerNotAdmitted": "its signer is not in LEGACY_AGENT_SIGNERS.",
+          "sha256Mismatch": "the SHA-256 of the APK is not the one of release.json.",
+          "notAnApk": "the file is not an APK (ZIP archive).",
+          "signerMismatch": "the signing block of the APK does not name the declared signer alone.",
+          "versionConflict": "another version already has this versionCode, or this APK has another versionCode."
+        }
+      }
     },
     "detail": {
       "conflict": "Identity conflict: the serial number or the IMEI declared by this agent is held by another managed device.",
@@ -4620,7 +4641,10 @@
       "title": "Instance settings",
       "pollSeconds": "Interrogation period (s)",
       "minVersionCode": "Minimal versionCode",
-      "inventorySeconds": "Inventory period (s)"
+      "inventorySeconds": "Inventory period (s)",
+      "autoUpdate": "Update the agents automatically to the version embedded in the server image",
+      "autoUpdatePerHour": "Devices per hour",
+      "autoUpdateHint": "Every 10 minutes, the enrolled agents older than the latest version embedded in the server image (not withdrawn) get it, in batches: those that install silently (device administrator and Knox licence) first. Only the agents that interrogated in the last 24 hours; a refusal, a failure or an expiry is tried again after 24 hours. An uploaded version is never pushed automatically. A frozen tenant, or a device the restrictions matrix holds for the agent update, gets nothing. Turning it on or raising the pace asks for a second factor."
     },
     "openPanel": "Android agent panel",
     "unavailable": {
