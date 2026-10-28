@@ -4508,6 +4508,14 @@
       "silent": "Silent for 24 h",
       "revoked": "Include revoked"
     },
+    "summary": {
+      "devices": "{{count}} device(s)",
+      "admin": "Device admin:",
+      "adminActive": "{{count}} active",
+      "adminInactive": "{{count}} inactive",
+      "unknownSources": "Unknown sources:",
+      "notReported": "{{count}} not reported"
+    },
     "actions": {
       "message": "Message",
       "inventory": "Inventory",
