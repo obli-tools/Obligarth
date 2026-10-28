@@ -104,6 +104,16 @@ function DevicesTab() {
   const ids = [...selected];
   const toggle = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const all = rows && rows.length > 0 && rows.every((r) => selected.has(r.deviceId));
+  // Counts of the listed rows (they follow the search and the filters): administrator, unknown sources.
+  const counts = useMemo(() => {
+    const c = { total: 0, adminOn: 0, adminOff: 0, srcYes: 0, srcNo: 0, srcNull: 0 };
+    for (const r of rows ?? []) {
+      c.total++;
+      if (r.adminActive) c.adminOn++; else c.adminOff++;
+      if (r.unknownSources === null) c.srcNull++; else if (r.unknownSources) c.srcYes++; else c.srcNo++;
+    }
+    return c;
+  }, [rows]);
 
   const send = async (type: LegacyAgentConsoleType, p: Record<string, unknown>) => {
     try {
@@ -145,6 +155,24 @@ function DevicesTab() {
         {filter('revoked', t('legacyAgent.filters.revoked') || 'Include revoked')}
         <Button variant="ghost" onClick={load}><RefreshCw size={14} /></Button>
       </div>
+      {rows && rows.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded border border-border bg-bg-secondary px-3 py-2 text-sm">
+          <span className="font-medium text-text-primary">{t('legacyAgent.summary.devices', { count: counts.total }) || `${counts.total} device(s)`}</span>
+          <span className="text-text-muted">
+            {t('legacyAgent.summary.admin') || 'Device admin:'}{' '}
+            <span className="font-medium text-text-primary">{t('legacyAgent.summary.adminActive', { count: counts.adminOn }) || `${counts.adminOn} active`}</span>
+            {' · '}
+            <span className={`font-medium ${counts.adminOff > 0 ? 'text-red-500' : 'text-text-primary'}`}>{t('legacyAgent.summary.adminInactive', { count: counts.adminOff }) || `${counts.adminOff} inactive`}</span>
+          </span>
+          <span className="text-text-muted">
+            {t('legacyAgent.summary.unknownSources') || 'Unknown sources:'}{' '}
+            <span className="font-medium text-text-primary">{t('legacyAgent.yes') || 'Yes'} {counts.srcYes}</span>
+            {' · '}
+            <span className="font-medium text-text-primary">{t('legacyAgent.no') || 'No'} {counts.srcNo}</span>
+            {counts.srcNull > 0 && <>{' · '}{t('legacyAgent.summary.notReported', { count: counts.srcNull }) || `${counts.srcNull} not reported`}</>}
+          </span>
+        </div>
+      )}
       {ids.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded border border-border bg-bg-secondary p-2 text-sm">
           <span className="text-text-muted">{t('legacyAgent.selected', { count: ids.length }) || `${ids.length} selected`}</span>
