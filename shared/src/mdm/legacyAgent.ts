@@ -5,10 +5,11 @@
 // tests load it as is.
 // =============================================================================
 
-/** Command types of v0 (§5.1). agent.retire is v1 (§15.4). */
+/** Command types of v0 (§5.1). agent.retire is v1 (§15.4). remote.open (P0-15 §4.3): the request of a remote
+ *  assistance session, enqueued by server/src/remote only (origin 'remote'), never by a console request. */
 export const LEGACY_AGENT_COMMAND_TYPES = [
   'inventory.refresh', 'device.message', 'device.lock', 'device.wipe', 'device.reboot',
-  'app.install', 'app.uninstall', 'agent.update',
+  'app.install', 'app.uninstall', 'agent.update', 'remote.open',
 ] as const;
 export type LegacyAgentCommandType = typeof LEGACY_AGENT_COMMAND_TYPES[number];
 
@@ -25,12 +26,16 @@ export type LegacyAgentConsoleType = typeof LEGACY_AGENT_CONSOLE_TYPES[number];
 export const LEGACY_AGENT_COMMAND_STATES = ['pending', 'sent', 'acknowledged', 'error', 'rejected', 'expired', 'cancelled'] as const;
 export type LegacyAgentCommandState = typeof LEGACY_AGENT_COMMAND_STATES[number];
 
-/** Result codes of the agent (§5.3). */
+/** Result codes of the agent (§5.3). The remote.open of a remote assistance session (P0-15 §4.3, §0.1; agent 1.1.0):
+ *  projection_denied (the system dialog of the screen capture refused or left 60 s unanswered), remote_injection_unavailable
+ *  (the session taken in view, the control asked but no injection), session_gone (the server closed the session: its
+ *  refusal of /accept), agent_busy (another session runs on the device). */
 export const LEGACY_AGENT_RESULT_CODES = [
   'done', 'wipe_started', 'reboot_started', 'lock_done', 'installed', 'uninstalled', 'update_installed', 'message_shown',
   'admin_inactive', 'knox_required', 'knox_error', 'download_failed', 'hash_mismatch', 'signer_mismatch', 'package_mismatch',
   'version_not_higher', 'install_failed', 'user_declined', 'user_timeout', 'forbidden_package', 'unsupported',
   'expired_on_device', 'bad_params', 'internal',
+  'projection_denied', 'remote_injection_unavailable', 'session_gone', 'agent_busy',
 ] as const;
 export type LegacyAgentResultCode = typeof LEGACY_AGENT_RESULT_CODES[number];
 
@@ -41,10 +46,14 @@ export const LEGACY_AGENT_EVENT_TYPES = [
 ] as const;
 export type LegacyAgentEventType = typeof LEGACY_AGENT_EVENT_TYPES[number];
 
-/** Error codes of the agent surface (§4.8). */
+/** Error codes of the agent surface (§4.8). The routes of the remote assistance (P0-15 §4.3, /agent/v1/remote/<id>/accept
+ *  and /end): remoteSessionState (the session cannot take it in its state, or its deadline passed: it is closed),
+ *  consentExceedsRequest (a control taken on a view request: the session closed), remoteUnavailable (a condition of the
+ *  session lost: the session closed). */
 export const LEGACY_AGENT_ERROR_CODES = [
   'badRequest', 'badKey', 'badSignature', 'unknownAgent', 'clockSkew', 'tokenInvalid', 'agentRevoked', 'notFound', 'seqReplay',
   'tooLarge', 'unsupportedMediaType', 'agentTooOld', 'rateLimited', 'unavailable',
+  'remoteSessionState', 'consentExceedsRequest', 'remoteUnavailable',
 ] as const;
 export type LegacyAgentErrorCode = typeof LEGACY_AGENT_ERROR_CODES[number];
 
@@ -156,14 +165,19 @@ export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
 
 /** One entry of GET /api/legacy-agent/devices/:id/actions: the menu of a bridge agent's device. */
 export interface LegacyAgentDeviceAction {
-  type: 'device.lock' | 'device.wipe' | 'device.message' | 'device.reboot' | 'inventory.refresh';
+  /** remote.view, remote.control (P0-15 §4.2): a remote assistance session, opened through /api/remote-sessions, never
+   *  a command of the queue. */
+  type: 'device.lock' | 'device.wipe' | 'device.message' | 'device.reboot' | 'inventory.refresh' | 'remote.view' | 'remote.control';
   /** The guarded action (legacy_agent.device_lock, legacy_agent.erase_device) or the restriction key of the type. */
   actionKey: string;
   guarded: boolean;
   available: boolean;
   /** capabilityMissing; revoked (the agent's key withdrawn); notEnrolled; adminInactive (the device administrator is
-   *  off: lock and erase fail on the device); knoxRequired (reboot needs a licensed Knox); frozen. */
-  unavailable: 'capabilityMissing' | 'revoked' | 'notEnrolled' | 'adminInactive' | 'knoxRequired' | 'frozen' | null;
+   *  off: lock and erase fail on the device); knoxRequired (reboot needs a licensed Knox); frozen. The remote
+   *  assistance (P0-15, REMOTE_UNAVAILABLE_REASONS of ./remote): privacyDisabled, personalDevice, agentTooOld,
+   *  sessionOpen, injectUnavailable, platformUnsupported. */
+  unavailable: 'capabilityMissing' | 'revoked' | 'notEnrolled' | 'adminInactive' | 'knoxRequired' | 'frozen'
+    | 'privacyDisabled' | 'personalDevice' | 'agentTooOld' | 'sessionOpen' | 'injectUnavailable' | 'platformUnsupported' | null;
 }
 
 export interface LegacyAgentCommandView {

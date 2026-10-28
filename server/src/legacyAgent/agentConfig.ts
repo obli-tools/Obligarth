@@ -1,13 +1,16 @@
 import { createHash } from 'node:crypto';
 import type { Knex } from 'knex';
+import { REMOTE_LIMITS, type LegacyAgentRemoteConfig } from '@obligarth/shared';
 import { logger } from '../utils/logger';
 import { vault } from '../vault';
 import { instanceSettings } from './config';
+import { legacyAgentRemote } from './remoteBridge';
 
 // =============================================================================
 // The configuration an agent receives (docs: agent-pont-android §4.4, §4.5,
 // §6): instance settings (inventory period, minimal version), keep-alive
-// service, and the tenant's Knox licence key, sealed in the vault
+// service, the remote assistance (P0-15 §4.3, agents 1.1.0 and later: its
+// rule, the permanent wait, the armed window), and the tenant's Knox licence key, sealed in the vault
 // (tenant_secrets, purpose legacy_agent_knox_license) and referenced by
 // legacy_agent_settings.knox_license ({"$secret": "<id>"}: a reference holder
 // of the vault, so the row is never collected). Its version is derived from
@@ -23,6 +26,8 @@ export interface AgentConfig {
   keepAlive: boolean;
   knoxLicenseKey: string | null;
   minAgentVersionCode: number;
+  /** The remote assistance (P0-15 §4.3), to an agent of REMOTE_LIMITS.minAgentVersionCode at least only. */
+  remote?: LegacyAgentRemoteConfig;
 }
 
 const knoxCache = new Map<number, { at: number; id: string | null; value: string | null }>();
@@ -58,10 +63,20 @@ export function forgetKnoxKey(tenantId: number): void {
   knoxCache.delete(tenantId);
 }
 
-export async function agentConfigFor(trx: Knex.Transaction, tenantId: number): Promise<AgentConfig> {
+/**
+ * The configuration of the agent of a device. `agent`: the device and the versionCode the request announces; an agent
+ * of REMOTE_LIMITS.minAgentVersionCode at least gets the remote object (P0-15 §4.3: enabled, waitChannel, armedUntil,
+ * minAgentVersion), an older one the configuration of before (unchanged, so is its version). The version follows the
+ * content, so an agent updated from 1.0.x to 1.1.0 that still announces the version it read before gets the whole
+ * configuration again (finding of the agent's workflow T7: a 1.0.x ignored config.remote).
+ */
+export async function agentConfigFor(trx: Knex.Transaction, tenantId: number, agent?: { deviceId: number; versionCode: number }): Promise<AgentConfig> {
   const s = await instanceSettings();
+  const bridge = legacyAgentRemote();
+  const remote = bridge && agent && agent.versionCode >= REMOTE_LIMITS.minAgentVersionCode ? await bridge.config(trx, tenantId, agent.deviceId) : null;
   const content = {
     inventorySeconds: s.inventorySeconds, keepAlive: true, knoxLicenseKey: await knoxKeyOf(trx, tenantId), minAgentVersionCode: s.minVersionCode,
+    ...(remote ? { remote } : {}),
   };
   const digest = createHash('sha256').update(JSON.stringify(content)).digest();
   // A positive 31-bit integer, never 0 (an agent without configuration announces 0 or null).

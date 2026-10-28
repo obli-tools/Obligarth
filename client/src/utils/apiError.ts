@@ -28,14 +28,34 @@ export function apiErrorStatus(err: unknown): number | undefined {
  *  guard engine (delivered with their lots). */
 export const ERROR_NAMESPACES = ['errors', 'apple.errors', 'guard.errors'] as const;
 
-/** The translation of an error code, or null when the console has none for it. */
+/** The translation of an error code, or null when the console has none for it (its details that are codes
+ *  translated first, CODED_DETAILS). */
 export function translateErrorCode(code: string | undefined, params?: Record<string, unknown>): string | null {
   if (!code || !/^[A-Za-z][A-Za-z0-9]*$/.test(code)) return null;
   for (const ns of ERROR_NAMESPACES) {
     const key = `${ns}.${code}`;
-    if (i18n.exists(key)) return i18n.t(key, params ?? {});
+    if (i18n.exists(key)) return i18n.t(key, translatedDetails(code, params) ?? {});
   }
   return null;
+}
+
+/** The details that are themselves codes of the server, translated before they reach the sentence of their error
+ *  (error code → detail → prefix of its labels); a code without a label stays as the server sent it. */
+const CODED_DETAILS: Record<string, Record<string, string>> = {
+  remoteUnavailable: { reason: 'legacyAgent.unavailable' },
+  remoteSessionState: { state: 'remote.state' },
+  remoteQuota: { scope: 'remote.quotaScope' },
+};
+
+function translatedDetails(code: string | undefined, details: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  const coded = code ? CODED_DETAILS[code] : undefined;
+  if (!details || !coded) return details;
+  const out = { ...details };
+  for (const [field, prefix] of Object.entries(coded)) {
+    const v = out[field];
+    if (typeof v === 'string' && /^[A-Za-z][A-Za-z0-9_]*$/.test(v)) out[field] = trCode(`${prefix}.${v}`, v);
+  }
+  return out;
 }
 
 /**

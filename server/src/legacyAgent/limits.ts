@@ -58,6 +58,32 @@ export class BucketLimiter {
   reset(): void { this.buckets.clear(); }
 }
 
+/**
+ * Keys already seen within `ttlMs` (P0-15 §4.3: the signatures of /agent/v1/wait, whose seq 0 is never consumed: a
+ * byte-identical replay inside the clock window is refused). Bounded: past `maxKeys` the expired keys go, then all.
+ */
+export class ReplayCache {
+  private seen = new Map<string, number>();
+
+  constructor(private readonly ttlMs: number, private readonly maxKeys = 100_000) {}
+
+  /** true the first time `key` is seen within the window (it is then remembered). */
+  first(key: string, now = Date.now()): boolean {
+    const until = this.seen.get(key);
+    if (until !== undefined && until > now) return false;
+    if (until === undefined && this.seen.size >= this.maxKeys) this.sweep(now);
+    this.seen.set(key, now + this.ttlMs);
+    return true;
+  }
+
+  private sweep(now: number): void {
+    for (const [k, until] of this.seen) if (until <= now) this.seen.delete(k);
+    if (this.seen.size >= this.maxKeys) this.seen.clear();
+  }
+
+  reset(): void { this.seen.clear(); }
+}
+
 /** Concurrent downloads per key (the APKs: 4 per tenant). */
 export class ConcurrencyLimiter {
   private running = new Map<string, number>();

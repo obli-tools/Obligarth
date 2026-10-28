@@ -7,6 +7,10 @@ import type { NoticeLocale, NoticePlatform, Ownership } from '@obligarth/shared'
 // lawyer reviews them before the pilot (conception §10.9), with the retention of the acknowledgements (D5).
 // A change of these texts changes the content of the notices, hence their versions: the employees acknowledge the new
 // text at their next enrollment (NOTICE_GENERATOR_VERSION, generate.ts, names the generation).
+// P0-15 T2 (generation 2): the remote assistance (remoteSees, notSeesRemote, canDoRemote, durations.remoteSessions,
+// consent.companyRemote), used only where it is allowed (§0.1 of the spec, the MSP model: sessions told on the screen by
+// notifications, logged, never recorded; nothing for the user to accept nor to stop); every other notice keeps, word
+// for word, its text of generation 1 (the same content, hence the same version: nothing to acknowledge again).
 // =============================================================================
 
 type ByOwnership = Readonly<Record<Ownership, string>>;
@@ -43,8 +47,13 @@ export interface NoticeTextSet {
     certificatesManaged: string;
   };
   lostModeSees: string;
+  /** P0-15 T2: the remote assistance (sessions told on the screen by notifications), naming who may intervene
+   *  ({controller}). */
+  remoteSees: string;
   // 3. What it does not see.
   notSeesFixed: string;
+  /** notSeesFixed when the remote assistance is allowed: outside an assistance session. */
+  notSeesRemote: string;
   notSeesPersonal: ByPlatform<string>;
   notCollected: string;
   notCollectedItems: {
@@ -55,6 +64,7 @@ export interface NoticeTextSet {
   // 4. What it can do.
   canDo: ByPlatform<ByOwnership>;
   canDoLostMode: string;
+  canDoRemote: string;
   safeguards: string;
   // 5. Purposes and legal basis.
   purposes: string[];
@@ -65,6 +75,7 @@ export interface NoticeTextSet {
   // 7. Durations.
   durations: {
     record: string; departed: string; logs: string; statusHistory: string; lostMode: string; ack: string; backups: string;
+    remoteSessions: string;
   };
   days: { one: string; other: string };
   months: { one: string; other: string };
@@ -78,6 +89,8 @@ export interface NoticeTextSet {
   // The summary of the enrollment profile (ConsentText, 500 characters at most).
   consent: {
     company: string;
+    /** company when the remote assistance is allowed. */
+    companyRemote: string;
     personal: ByPlatform<string>;
     seesModel: string;
     seesOs: string;
@@ -143,7 +156,9 @@ const FR: NoticeTextSet = {
     certificatesManaged: "les certificats qu'elle installe",
   },
   lostModeSees: "Si l'appareil est perdu ou volé et que l'organisation le place en mode perdu, elle peut voir sa position, uniquement pendant ce mode.",
+  remoteSees: "Assistance à distance : le support informatique de {controller} ou son prestataire peut voir l'écran de l'appareil, et le contrôler, seulement pendant une session d'assistance. Chaque session vous est signalée à l'écran par des notifications (à son ouverture, pendant toute sa durée et à sa fin) et elle est journalisée (qui, quand, durée), sans enregistrement de l'image.",
   notSeesFixed: "Elle ne voit ni vos messages, ni vos e-mails, ni vos photos, ni votre historique de navigation, ni vos appels, ni vos contacts, ni le contenu de vos applications.",
+  notSeesRemote: "En dehors d'une session d'assistance, elle ne voit ni vos messages, ni vos e-mails, ni vos photos, ni votre historique de navigation, ni vos appels, ni vos contacts, ni le contenu de vos applications.",
   notSeesPersonal: {
     apple: 'Elle ne voit rien de votre espace personnel : ni vos applications personnelles, ni leurs données.',
     android: 'Elle ne voit rien de votre espace personnel, en dehors du profil professionnel : ni vos applications personnelles, ni leurs données.',
@@ -173,6 +188,7 @@ const FR: NoticeTextSet = {
     },
   },
   canDoLostMode: "Placer l'appareil en mode perdu et le localiser pendant ce mode.",
+  canDoRemote: "Voir l'écran de l'appareil et en prendre le contrôle pour vous assister, uniquement pendant une session d'assistance signalée à l'écran. L'image n'est jamais enregistrée.",
   safeguards: "Les actions les plus lourdes (effacement, retrait de la gestion) sont protégées par des garde-fous contre les erreurs : délais, confirmation et, lorsque l'organisation l'exige, validation par une seconde personne.",
   purposes: [
     "Ces données servent uniquement à gérer et à sécuriser les appareils utilisés pour le travail : configuration, mises à jour, inventaire, protection des données de votre organisation en cas de perte ou de vol, assistance.",
@@ -198,6 +214,7 @@ const FR: NoticeTextSet = {
     lostMode: 'Les positions relevées en mode perdu sont effacées après {n}.',
     ack: 'La preuve de votre lecture de cette notice est conservée {n}.',
     backups: 'Les sauvegardes chiffrées de la plateforme sont renouvelées en {n} : une donnée effacée en disparaît dans ce délai.',
+    remoteSessions: "Le journal des sessions d'assistance à distance (qui, quand, quel appareil, durée, motif) est conservé {n}.",
   },
   days: { one: '{n} jour', other: '{n} jours' },
   months: { one: '{n} mois', other: '{n} mois' },
@@ -211,6 +228,7 @@ const FR: NoticeTextSet = {
   contactFallback: 'Pour toute question, adressez-vous à {org}.',
   consent: {
     company: '{org} va gérer cet appareil de l\'entreprise : elle peut voir {sees}, installer des réglages et des applications, le verrouiller ou l\'effacer{locate}. Elle ne voit ni vos messages, ni vos photos, ni votre navigation.',
+    companyRemote: '{org} va gérer cet appareil de l\'entreprise : elle peut voir {sees}, installer des réglages et des applications, le verrouiller ou l\'effacer{locate}. Son support peut voir et contrôler l\'écran, seulement pendant une session d\'assistance signalée à l\'écran. En dehors, elle ne voit ni vos messages, ni vos photos, ni votre navigation.',
     personal: {
       apple: '{org} va gérer un espace professionnel séparé sur votre appareil : elle ne voit que son modèle, la version du système et ses applications professionnelles, et peut retirer ses données professionnelles. Elle ne voit pas vos données personnelles et ne peut pas effacer votre appareil.',
       android: '{org} va gérer un profil professionnel séparé sur votre appareil : elle ne voit que son modèle, la version du système et les applications de ce profil, et peut le retirer. Elle ne voit pas vos données personnelles et ne peut pas effacer votre appareil.',
@@ -279,7 +297,9 @@ const EN: NoticeTextSet = {
     certificatesManaged: 'the certificates it installs',
   },
   lostModeSees: 'If the device is lost or stolen and the organisation puts it in lost mode, it can see its location, during that mode only.',
+  remoteSees: 'Remote assistance: the IT support of {controller} or its provider may see the screen of the device, and control it, only during an assistance session. Each session is told to you on the screen by notifications (when it opens, all along and when it ends) and is logged (who, when, duration), without any recording of the image.',
   notSeesFixed: 'It cannot see your messages, e-mails, photos, browsing history, calls, contacts or the content of your apps.',
+  notSeesRemote: 'Outside an assistance session, it cannot see your messages, e-mails, photos, browsing history, calls, contacts or the content of your apps.',
   notSeesPersonal: {
     apple: 'It sees nothing of your personal space: neither your personal apps nor their data.',
     android: 'It sees nothing of your personal space outside the work profile: neither your personal apps nor their data.',
@@ -309,6 +329,7 @@ const EN: NoticeTextSet = {
     },
   },
   canDoLostMode: 'Put the device in lost mode and locate it during that mode.',
+  canDoRemote: 'See the screen of the device and take control of it to assist you, only during an assistance session told on the screen. The image is never recorded.',
   safeguards: 'The heaviest actions (erasure, removal from management) are protected against mistakes: delays, confirmation and, when the organisation requires it, approval by a second person.',
   purposes: [
     'These data serve only to manage and secure the devices used for work: configuration, updates, inventory, protection of the data of your organisation when a device is lost or stolen, support.',
@@ -334,6 +355,7 @@ const EN: NoticeTextSet = {
     lostMode: 'The locations recorded in lost mode are erased after {n}.',
     ack: 'The proof that you read this notice is kept {n}.',
     backups: 'The encrypted backups of the platform are renewed within {n}: an erased datum leaves them within that time.',
+    remoteSessions: 'The log of the remote assistance sessions (who, when, which device, duration, reason) is kept {n}.',
   },
   days: { one: '{n} day', other: '{n} days' },
   months: { one: '{n} month', other: '{n} months' },
@@ -347,6 +369,7 @@ const EN: NoticeTextSet = {
   contactFallback: 'For any question, write to {org}.',
   consent: {
     company: '{org} will manage this company device: it can see {sees}, install settings and apps, and lock or erase it{locate}. It cannot see your messages, photos or browsing.',
+    companyRemote: '{org} will manage this company device: it can see {sees}, install settings and apps, and lock or erase it{locate}. Its support may see and control the screen, only during an assistance session told on the screen. Otherwise, it cannot see your messages, photos or browsing.',
     personal: {
       apple: '{org} will manage a separate work space on your device: it sees the model, the system version and its work apps only, and can remove its work data. It cannot see your personal data nor erase your device.',
       android: '{org} will manage a separate work profile on your device: it sees the model, the system version and the apps of that profile only, and can remove it. It cannot see your personal data nor erase your device.',

@@ -11,7 +11,10 @@ export type MdmTargetState = typeof MDM_TARGET_STATES[number];
 /** A target still waiting for its device. */
 export const MDM_OPEN_TARGET_STATES: readonly MdmTargetState[] = ['pending', 'queued', 'sent', 'notnow'];
 
-export const MDM_COMMAND_ORIGINS = ['console', 'bulk', 'policy', 'ddm', 'inventory', 'enrollment', 'setup', 'system', 'approval', 'guard'] as const;
+/** Who enqueued a command. 'remote' (P0-15): the remote.open of a remote assistance session, written by
+ *  server/src/remote/sessions.ts only (legacy_agent_commands_origin_check widened by p015_remote_sessions; the Apple
+ *  queue's mdm_commands_origin_check does not admit it: no Apple command is enqueued by a session). */
+export const MDM_COMMAND_ORIGINS = ['console', 'bulk', 'policy', 'ddm', 'inventory', 'enrollment', 'setup', 'system', 'approval', 'guard', 'remote'] as const;
 export type MdmCommandOrigin = typeof MDM_COMMAND_ORIGINS[number];
 
 export const MDM_SUBMIT_STATES = ['pending', 'submitted', 'held', 'failed', 'cancelled'] as const;

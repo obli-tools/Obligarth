@@ -15,7 +15,7 @@ import { restrictionService } from '../services/restriction.service';
 import { privacyReviewerSide } from './approvals';
 import { createNoticeRouter } from './notice/routes';
 import { profileImpact } from './impact';
-import { PrivacyProfileRulesSchema, checkProfileRules, currentProfile, effectiveProfileRules } from './profiles';
+import { PrivacyProfileRulesSchema, checkProfileRules, currentProfile, effectiveProfileRules, withRuleDefaults } from './profiles';
 import { PROFILE_CHANGE_REQUEST_TYPE, RETENTION_CHANGE_REQUEST_TYPE, type ProfileChange, type RetentionChange } from './requests';
 import { retentionValues } from './retention';
 import { pendingActive, retentionPolicyDto, retentionRequestWaiting, retentionRow } from './retentionPolicy';
@@ -113,7 +113,7 @@ function versionDto(r: VersionRow): PrivacyProfileVersionDto {
   // The CHECKs of the table make it impossible: refuse rather than show something else.
   if (!rules.success) throw new AppError(500, 'Unreadable privacy profile version', 'privacyProfileInvalid');
   return {
-    id: r.id, version: Number(r.version), rules: rules.data, justification: r.justification ?? null,
+    id: r.id, version: Number(r.version), rules: withRuleDefaults(r.ownership as Ownership, rules.data), justification: r.justification ?? null,
     approvalId: r.approval_id === null ? null : Number(r.approval_id), createdBy: r.created_by === null ? null : Number(r.created_by),
     approvedBy: r.approved_by === null ? null : Number(r.approved_by), createdAt: iso(r.created_at)!, supersededAt: iso(r.superseded_at),
   };
@@ -175,7 +175,7 @@ export function createPrivacyRouter(): Router {
         imposed: imposedKeys(ownership),
         pending: p && pendingRules?.success ? {
           approvalId: Number(p.id), requestedBy: Number(p.requested_by), requestedAt: iso(p.created_at)!, expiresAt: iso(p.expires_at)!,
-          rules: pendingRules.data,
+          rules: withRuleDefaults(ownership, pendingRules.data),
         } : null,
         history: mine.slice(0, HISTORY).map(versionDto),
       });

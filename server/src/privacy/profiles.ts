@@ -26,7 +26,11 @@ import { DEFAULT_PRIVACY, type AndroidPrivacyRules } from '../android/inventory/
 //     device, PB13);
 //   - location in lost mode (P0-13 T2): lostModeLocation of the Apple rules for the bus and the command routes
 //     (DeviceLocation: location_disabled, 409 locationDisabledByPrivacy); lostModeLocationAllowed for the ingestion
-//     of the positions (Apple DeviceLocation, Android usage logs) and their reading (GET /api/mdm/devices/:id/locations).
+//     of the positions (Apple DeviceLocation, Android usage logs) and their reading (GET /api/mdm/devices/:id/locations);
+//   - remote assistance (P0-15 §4.5, §0.1 rule 5): remoteAssistanceAllowed, the corporate profile only (never a
+//     personal or COPE device: IMPOSED_RULES and the CHECKs privacy_profile_versions_*_remote, D3); true by default.
+//     A version published without the key remoteAssistance reads it at the default of its ownership (withRuleDefaults:
+//     true for corporate), never written again.
 // A tenant without a version of an ownership keeps exactly the rules applied before P0-13 (acceptance criterion 1):
 // defaultPrivacyRules for Apple, DEFAULT_PRIVACY for Android (stricter than DEFAULT_PRIVACY_PROFILE: IMEI of a
 // corporate device and network of a COPE device are collected only once the tenant's profile allows them), and
@@ -42,8 +46,9 @@ const CACHE_MAX_TENANTS = 5_000;
 
 const scope = z.enum(PRIVACY_COLLECTION_SCOPES);
 
-/** A profile's rules: the eight keys of PrivacyProfileRules, of their types, and no other (the CHECK
- *  privacy_profile_versions_rules_shape of the table). */
+/** A profile's rules: the nine keys of PrivacyProfileRules, of their types, and no other (the CHECK
+ *  privacy_profile_versions_rules_shape of the table). remoteAssistance (P0-15) may be absent, from a body as from a
+ *  version published before it: withRuleDefaults reads it at the default of the ownership. */
 export const PrivacyProfileRulesSchema = z.object({
   serialNumber: z.boolean(),
   hardwareIds: z.boolean(),
@@ -53,7 +58,15 @@ export const PrivacyProfileRulesSchema = z.object({
   lostModeLocation: z.boolean(),
   installedApps: scope,
   certificates: scope,
+  remoteAssistance: z.boolean().optional(),
 }).strict();
+export type ParsedProfileRules = z.infer<typeof PrivacyProfileRulesSchema>;
+
+/** The rules of a version (or of a body) of `ownership`, a key absent read at the default of the ownership
+ *  (remoteAssistance, P0-15 §0.1 rule 5: true for corporate, false for personal and COPE). */
+export function withRuleDefaults(ownership: Ownership, r: ParsedProfileRules): PrivacyProfileRules {
+  return { ...r, remoteAssistance: r.remoteAssistance ?? DEFAULT_PRIVACY_PROFILE[ownership].remoteAssistance };
+}
 
 export const OwnershipSchema = z.enum(OWNERSHIPS);
 
@@ -67,9 +80,10 @@ export function checkProfileRules(ownership: Ownership, value: unknown):
       .filter(Boolean).slice(0, 10);
     return { ok: false, code: 'invalidPrivacyRules', keys };
   }
-  const imposed = privacyRuleViolations(ownership, parsed.data);
+  const rules = withRuleDefaults(ownership, parsed.data);
+  const imposed = privacyRuleViolations(ownership, rules);
   if (imposed.length > 0) return { ok: false, code: 'privacyRuleImposed', keys: imposed };
-  return { ok: true, rules: parsed.data };
+  return { ok: true, rules };
 }
 
 /** The current version of a tenant's profile for an ownership. */
@@ -113,7 +127,9 @@ async function loadTenant(q: Q, tenantId: number): Promise<Map<Ownership, Curren
     if (!isOwnership(r.ownership) || !rules.success) {
       throw Object.assign(new Error('privacy profile: unreadable version in base'), { code: 'privacyProfileInvalid' });
     }
-    profiles.set(r.ownership, { id: r.profile_id, ownership: r.ownership, version: Number(r.version), rules: rules.data, createdAt: new Date(r.created_at) });
+    profiles.set(r.ownership, {
+      id: r.profile_id, ownership: r.ownership, version: Number(r.version), rules: withRuleDefaults(r.ownership, rules.data), createdAt: new Date(r.created_at),
+    });
   }
   if (cache.size >= CACHE_MAX_TENANTS) cache.delete(cache.keys().next().value as number);
   cache.set(tenantId, { at: now, profiles });
@@ -137,6 +153,7 @@ export function strictestRules(list: readonly PrivacyProfileRules[]): PrivacyPro
   return {
     serialNumber: all('serialNumber'), hardwareIds: all('hardwareIds'), deviceName: all('deviceName'), phoneNumber: all('phoneNumber'),
     network: all('network'), lostModeLocation: all('lostModeLocation'), installedApps: sc('installedApps'), certificates: sc('certificates'),
+    remoteAssistance: all('remoteAssistance'),
   };
 }
 
@@ -155,6 +172,16 @@ export async function effectiveProfileRules(q: Q, tenantId: number, ownership: O
 export async function lostModeLocationAllowed(q: Q, tenantId: number, ownership: string | null): Promise<boolean> {
   if (ownership === 'personal') return false;
   return (await effectiveProfileRules(q, tenantId, isOwnership(ownership) ? ownership : null)).lostModeLocation;
+}
+
+/** May the support open a remote assistance session on a device of this ownership (P0-15 §4.5)? A corporate device
+ *  only, whatever the profile (personal and COPE: imposed false, D3; unknown: no), then the remoteAssistance rule of
+ *  the tenant's corporate profile (true by default and in a version published without the key, §0.1 rule 5). Read
+ *  again at each check of a session (server/src/remote/guard.ts) and for the configuration of the bridge agent
+ *  (remote.enabled). */
+export async function remoteAssistanceAllowed(q: Q, tenantId: number, ownership: string | null): Promise<boolean> {
+  if (ownership !== 'corporate') return false;
+  return (await effectiveProfileRules(q, tenantId, 'corporate')).remoteAssistance;
 }
 
 // ── Apple ───────────────────────────────────────────────────────────────────
@@ -257,7 +284,7 @@ export async function legacyAgentPrivacyRulesFor(q: Q, tenantId: number): Promis
  *  privacy_profile_versions_personal_* or _shared_apps); the function refuses a request that does not match
  *  (42501). The cache of the tenant is dropped now and after the transaction ends. */
 export async function publishProfile(trx: Knex.Transaction, tenantId: number, input: {
-  ownership: Ownership; rules: PrivacyProfileRules; justification: string | null; approvalId: number | null;
+  ownership: Ownership; rules: PrivacyProfileRules | ParsedProfileRules; justification: string | null; approvalId: number | null;
 }): Promise<{ id: string; version: number; previousId: string | null }> {
   const res = await trx.raw('SELECT profile_id, profile_version, previous_id FROM obligarth.privacy_profile_publish(?, ?::jsonb, ?, ?)',
     [input.ownership, JSON.stringify(input.rules), input.justification, input.approvalId]) as {
@@ -272,6 +299,8 @@ export async function publishProfile(trx: Knex.Transaction, tenantId: number, in
 /** The constraints of the imposed rules (a check_violation on one of them: 400 privacyRuleImposed). */
 export const IMPOSED_RULE_CONSTRAINTS: readonly string[] = [
   'privacy_profile_versions_personal_location', 'privacy_profile_versions_personal_serial', 'privacy_profile_versions_shared_apps',
+  // P0-15 (migration p015_privacy_remote_assistance, D3)
+  'privacy_profile_versions_personal_remote', 'privacy_profile_versions_cope_remote',
 ];
 
 let installed = false;

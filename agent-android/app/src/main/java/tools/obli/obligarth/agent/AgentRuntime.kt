@@ -2,14 +2,21 @@ package tools.obli.obligarth.agent
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.SystemClock
 import tools.obli.obligarth.agent.core.AgentClient
 import tools.obli.obligarth.agent.core.AgentEngine
 import tools.obli.obligarth.agent.core.AgentState
+import tools.obli.obligarth.agent.core.AgentTls
 import tools.obli.obligarth.agent.core.CycleReport
 import tools.obli.obligarth.agent.core.Phase
+import tools.obli.obligarth.agent.core.RemoteApi
+import tools.obli.obligarth.agent.core.RemoteSessions
+import tools.obli.obligarth.agent.core.TlsSocketConnector
 import tools.obli.obligarth.agent.core.TrustPolicy
 import tools.obli.obligarth.agent.core.UrlConnectionTransport
+import tools.obli.obligarth.agent.core.WaitClient
 import java.io.File
+import javax.net.ssl.HttpsURLConnection
 
 /** Wires the pure engine to the Android implementations; one per process. */
 class AgentRuntime private constructor(context: Context) {
@@ -30,14 +37,32 @@ class AgentRuntime private constructor(context: Context) {
         if (BuildConfig.PIN_OWN_SIGNER) addAll(facts.ownSignerSha256())
     }
 
-    private val transport = UrlConnectionTransport(
-        tlsPins = BuildConfig.TLS_PINS.split(',').map { it.trim() }.filter { it.length == 64 }.toSet(),
-    )
+    private val tlsPins = BuildConfig.TLS_PINS.split(',').map { it.trim() }.filter { it.length == 64 }.toSet()
+    private val transport = UrlConnectionTransport(tlsPins = tlsPins)
     val client = AgentClient(state, key, transport, clock, log)
+
+    /**
+     * Remote assistance (1.1.0, P0-15): the stream socket trusts the system store plus ISRG Root X1 and X2 (the network
+     * security configuration does not check host names on a raw socket), with the host name checked again.
+     */
+    val remoteApi: RemoteApi by lazy {
+        val isrg = listOf(R.raw.isrg_root_x1, R.raw.isrg_root_x2).flatMap { id -> app.resources.openRawResource(id).use { AgentTls.certificates(it) } }
+        val connector = TlsSocketConnector(AgentTls.agent(isrg), HttpsURLConnection.getDefaultHostnameVerifier(), tlsPins)
+        RemoteApi(state, client, key, connector, log = log)
+    }
+
+    /** /agent/v1/wait on a transport of its own, outside the lock of [client] (§4.3 B). */
+    val waitClient: WaitClient by lazy { WaitClient(state, key, UrlConnectionTransport(tlsPins = tlsPins), clock, log) }
+
+    /** What a remote assistance session shows on the device, and the sessions themselves (one at a time, P0-15). */
+    val remoteUi = AndroidRemoteUi(app, log)
+    val remoteSessions = RemoteSessions({ remoteApi }, remoteUi, { client.correctedNow() }, log, clockMs = { SystemClock.elapsedRealtime() })
+
     val engine = AgentEngine(
         state, client, key, facts, actions, policy, app.packageName, facts.versionCode(), pinnedSigners,
-        File(app.filesDir, "updates"), clock, log,
+        File(app.filesDir, "updates"), clock, log, remoteHost = remoteSessions,
     ).also { e ->
+        remoteSessions.report = { id, status, code -> e.onRemoteOutcome(id, status, code) }
         e.onConfigChanged = { applyKnoxAndKeepAlive() }
         e.onRevoked = {
             Notifications.status(app, app.getString(R.string.status_revoked))

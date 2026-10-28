@@ -26,6 +26,12 @@ object Codes {
     const val EXPIRED_ON_DEVICE = "expired_on_device"
     const val BAD_PARAMS = "bad_params"
     const val INTERNAL = "internal"
+    // Remote assistance (1.1.0, P0-15 §4.3, §0.1: nobody on the device answers, so neither user_declined, user_timeout
+    // nor indicator_unavailable for a remote.open).
+    const val PROJECTION_DENIED = "projection_denied"
+    const val REMOTE_INJECTION_UNAVAILABLE = "remote_injection_unavailable"
+    const val SESSION_GONE = "session_gone"
+    const val AGENT_BUSY = "agent_busy"
 }
 
 /** Result status of the contract (§4.5). */
@@ -64,7 +70,9 @@ enum class CommandType(val wire: String, val immediate: Boolean) {
     DEVICE_REBOOT("device.reboot", true),
     APP_INSTALL("app.install", false),
     APP_UNINSTALL("app.uninstall", false),
-    AGENT_UPDATE("agent.update", false);
+    AGENT_UPDATE("agent.update", false),
+    /** 1.1.0 (P0-15 §4.3, §0.1): a remote assistance session, opened at once and told to the user. */
+    REMOTE_OPEN("remote.open", true);
 
     companion object {
         fun of(wire: String?): CommandType? = values().firstOrNull { it.wire == wire }
@@ -82,6 +90,15 @@ sealed class Params {
     ) : Params()
     data class Uninstall(val packageName: String) : Params()
     data class AgentUpdate(val releaseId: String, val versionCode: Long, val sha256: String, val size: Long) : Params()
+    /**
+     * remote.open (§4.3): operator and operatorOrg are filled by the server (shown to the user in the notifications);
+     * controllerName and the operator's reason are optional since §0.1 (null when absent or blank) and not shown. No
+     * secret ever travels here.
+     */
+    data class RemoteOpen(
+        val sessionId: String, val mode: RemoteMode, val operator: String, val operatorOrg: String,
+        val controllerName: String?, val reason: String?, val maxMinutes: Int,
+    ) : Params()
 }
 
 data class Command(
@@ -164,5 +181,36 @@ object CommandParser {
                 size !in 1..MAX_APK_SIZE
             ) null else Params.AgentUpdate(releaseId, vc, sha, size)
         }
+        CommandType.REMOTE_OPEN -> {
+            val sessionId = p.str("sessionId")?.takeIf { Uuids.isLower(it) }
+            val mode = RemoteMode.of(p.str("mode"))
+            val operator = text(p, "operator", 1, 80)
+            val org = text(p, "operatorOrg", 1, 120)
+            val controller = optionalText(p, "controllerName", 200)
+            val reason = optionalText(p, "reason", 200)
+            val minutes = p.int("maxMinutes")?.takeIf { it in 15..240 }
+            if (sessionId == null || mode == null || operator == null || org == null || controller == null || reason == null || minutes == null) null
+            else Params.RemoteOpen(sessionId, mode, operator, org, controller.value, reason.value, minutes)
+        }
+    }
+
+    /**
+     * A non-blank string of [min]..[max] UTF-16 units (zod's count, the server's bounds: one value refused here would
+     * end the session in bad_params). Control and direction characters are neutralised where it is shown (T7b).
+     */
+    private fun text(p: Map<String, Any?>, key: String, min: Int, max: Int): String? =
+        p.str(key)?.takeIf { it.length in min..max && it.isNotBlank() }
+
+    /** An optional field read: [value] null when absent, null or blank. */
+    private class OptionalText(val value: String?)
+
+    /**
+     * An optional string of at most [max] UTF-16 units: absent, null or blank is an [OptionalText] of null; another
+     * type or a longer string is null (bad_params).
+     */
+    private fun optionalText(p: Map<String, Any?>, key: String, max: Int): OptionalText? = when (val v = p[key]) {
+        null -> OptionalText(null)
+        is String -> if (v.length > max) null else OptionalText(v.takeIf { it.isNotBlank() })
+        else -> null
     }
 }

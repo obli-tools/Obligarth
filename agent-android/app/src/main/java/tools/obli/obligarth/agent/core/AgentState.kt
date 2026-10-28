@@ -71,6 +71,11 @@ class AgentState(private val store: KeyValueStore) {
     var inventorySeconds: Long get() = s(K_INV_SECONDS)?.toLongOrNull() ?: 86_400; set(v) = set(K_INV_SECONDS to v.toString())
     var keepAlive: Boolean get() = s(K_KEEPALIVE)?.toBoolean() ?: true; set(v) = set(K_KEEPALIVE to v.toString())
     var configVersion: Long get() = s(K_CONFIG_VERSION)?.toLongOrNull() ?: 0; set(v) = set(K_CONFIG_VERSION to v.toString())
+    /**
+     * The versionCode of the agent that read the configuration of [configVersion] (1.1.0; absent before): another
+     * version may read more of it (config.remote), so it asks for the whole configuration again.
+     */
+    var configAgentVersion: Long get() = s(K_CONFIG_AGENT)?.toLongOrNull() ?: 0; set(v) = set(K_CONFIG_AGENT to v.toString())
     var minAgentVersionCode: Long get() = s(K_MIN_VERSION)?.toLongOrNull() ?: 0; set(v) = set(K_MIN_VERSION to v.toString())
     /** Licence key delivered by the server (config.knoxLicenseKey), else the one of the dropped configuration. */
     var serverKnoxLicenseKey: String? get() = s(K_KNOX_KEY); set(v) = set(K_KNOX_KEY to v)
@@ -96,6 +101,15 @@ class AgentState(private val store: KeyValueStore) {
     var iconsWanted: List<IconWanted>
         get() = jsonList(K_ICONS_WANTED).mapNotNull { IconWanted.fromJson(it) }
         set(v) = set(K_ICONS_WANTED to Json.write(v.map { it.toJson() }))
+
+    // ---- Remote assistance (1.1.0, P0-15) ----
+
+    /** config.remote of the last signed configuration; disabled until one says otherwise. */
+    var remote: RemoteConfig
+        get() = s(K_REMOTE)?.let { Json.parseObjectOrNull(it) }?.let { RemoteConfig.fromJson(it) } ?: RemoteConfig.DISABLED
+        set(v) = set(K_REMOTE to Json.write(v.toJson()))
+    /** End of the /wait window opened by "Ask for help", local seconds (0: none). */
+    var helpArmedUntil: Long get() = s(K_HELP_ARMED)?.toLongOrNull() ?: 0; set(v) = set(K_HELP_ARMED to v.toString())
 
     // ---- Outbox (results), events, journal, install queue ----
 
@@ -156,6 +170,7 @@ class AgentState(private val store: KeyValueStore) {
         const val K_INV_SECONDS = "inventorySeconds"
         const val K_KEEPALIVE = "keepAlive"
         const val K_CONFIG_VERSION = "configVersion"
+        const val K_CONFIG_AGENT = "configAgentVersion"
         const val K_MIN_VERSION = "minAgentVersionCode"
         const val K_KNOX_KEY = "knoxLicenseKey"
         const val K_KNOX_DONE = "knoxActivatedKeySha"
@@ -174,11 +189,14 @@ class AgentState(private val store: KeyValueStore) {
         const val K_SERVER_APPS_V2 = "serverAppsV2"
         const val K_ICONS_BLOCKED = "iconsBlockedUntil"
         const val K_ICONS_WANTED = "iconsWanted"
+        const val K_REMOTE = "remote"
+        const val K_HELP_ARMED = "helpArmedUntil"
 
         private val ALL_IDENTITY_KEYS = listOf(
             K_CONFIG, K_AGENT_ID, K_DEVICE_UUID, K_SEQ, K_CLOCK, K_SERVER_KEYS, K_POLL, K_INV_SECONDS, K_KEEPALIVE,
             K_CONFIG_VERSION, K_MIN_VERSION, K_KNOX_KEY, K_LAST_INV, K_INV_REQ, K_AUTH_FAIL, K_NOT_BEFORE, K_BACKOFF,
             K_OUTBOX, K_EVENTS, K_JOURNAL, K_INSTALL_QUEUE, K_AWAITING, K_SERVER_APPS_V2, K_ICONS_BLOCKED, K_ICONS_WANTED,
+            K_REMOTE, K_HELP_ARMED, K_CONFIG_AGENT,
         )
 
         private fun configFromStored(m: Map<String, Any?>): AgentConfig? {

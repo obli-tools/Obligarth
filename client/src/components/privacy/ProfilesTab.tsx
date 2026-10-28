@@ -156,7 +156,10 @@ function OwnershipPanel({ profile, canManage, onFiled }: { profile: PrivacyOwner
               </div>
               {isBoolean(k) ? (
                 <span className="flex items-center gap-2">
-                  <span className="text-xs text-text-muted">{value ? (t('privacy.rules.collected') || 'Collected') : (t('privacy.rules.notCollected') || 'Not collected')}</span>
+                  <span className="text-xs text-text-muted">{k === 'remoteAssistance'
+                    // P0-15: a permission, not a datum collected.
+                    ? (value ? (t('privacy.rules.remoteAssistance.on') || 'Allowed') : (t('privacy.rules.remoteAssistance.off') || 'Not allowed'))
+                    : (value ? (t('privacy.rules.collected') || 'Collected') : (t('privacy.rules.notCollected') || 'Not collected'))}</span>
                   <ToggleSwitch checked={value === true} onChange={(v) => set(k, v)} disabled={!editable || isImposed} ariaLabel={ruleLabel(k)} />
                 </span>
               ) : (

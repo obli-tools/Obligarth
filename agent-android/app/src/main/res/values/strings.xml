@@ -39,4 +39,14 @@
     <string name="label_version">Version</string>
     <string name="yes">yes</string>
     <string name="no">no</string>
+    <!-- Remote assistance (1.1.0, P0-15 §0.1): the opening, the session, the end, as in Oblireach. -->
+    <string name="remote_channel_name">Remote assistance</string>
+    <string name="remote_channel_description">Remote assistance sessions of your IT support.</string>
+    <string name="remote_open_title">Remote assistance</string>
+    <string name="remote_open_text">%1$s (%2$s) is opening a remote assistance session.</string>
+    <string name="remote_live_title">Assistance session in progress: %1$s</string>
+    <string name="remote_live_text">%1$s (%2$s) sees the screen of this device. Nothing is recorded.</string>
+    <string name="remote_ended_title">Remote assistance ended</string>
+    <string name="remote_ended_text">%1$s closed the assistance session at %2$s (duration %3$s).</string>
+    <string name="remote_ended_text_short">The assistance session of %1$s ended at %2$s, before any image was sent.</string>
 </resources>

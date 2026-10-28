@@ -3,7 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import {
-  ArrowLeft, History, KeyRound, LayoutGrid, Package, ScrollText, SlidersHorizontal, Smartphone, TerminalSquare, Zap,
+  ArrowLeft, History, KeyRound, LayoutGrid, MonitorSmartphone, Package, ScrollText, SlidersHorizontal, Smartphone, TerminalSquare, Zap,
 } from 'lucide-react';
 import type { DeviceDetail, EndUser, ManagementChannel } from '@obligarth/shared';
 import { SocketEvents } from '@obligarth/shared';
@@ -28,6 +28,7 @@ import { DeviceHero } from '@/components/mdm/device/DeviceHero';
 import { DeviceOverview, LOCATION_ANCHOR } from '@/components/mdm/device/DeviceOverview';
 import { LegacyActionsTab, LegacyCommandsTab } from '@/components/mdm/device/LegacyActionsTab';
 import { LostModeBanner } from '@/components/mdm/device/LostModeBanner';
+import { DeviceRemoteTab } from '@/components/remote/DeviceRemoteTab';
 import { channelOf, useDeviceActions } from '@/components/mdm/device/useDeviceActions';
 import { anonymize } from '@/utils/anonymize';
 import { apiErrorMessage } from '@/utils/apiError';
@@ -35,15 +36,17 @@ import { apiErrorMessage } from '@/utils/apiError';
 // The record of a device (modele-donnees-mdm §11.3): a header with its states and the quick actions of a lost or
 // stolen device, the lost mode banner, then the tabs of its channel — the overview (figures, health, lost device panel,
 // location, security, management, hardware, identifiers, network, declarative management), the Android Enterprise
-// view, applications, configuration, profiles, certificates, commands (the queue of the channel), history, actions.
+// view, applications, configuration, profiles, certificates, commands (the queue of the channel), history, actions,
+// and the remote assistance sessions of a device of the bridge agent (P0-15).
 
-type Tab = 'overview' | 'android' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions';
-const TABS: Tab[] = ['overview', 'android', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions'];
+type Tab = 'overview' | 'android' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions' | 'remote';
+const TABS: Tab[] = ['overview', 'android', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions', 'remote'];
 /** The tabs of each channel, in their order. */
 const CHANNEL_TABS: Record<ManagementChannel, Tab[]> = {
   apple_mdm: ['overview', 'apps', 'configuration', 'profiles', 'certificates', 'commands', 'history', 'actions'],
   amapi: ['overview', 'android', 'apps', 'configuration', 'commands', 'history', 'actions'],
-  legacy_agent: ['overview', 'apps', 'commands', 'history', 'actions'],
+  // remote: the remote assistance sessions of the device (P0-15 §7).
+  legacy_agent: ['overview', 'apps', 'commands', 'history', 'actions', 'remote'],
 };
 
 /** The shape of the record while it loads: header, figures, cards (no spinner in the middle of the page). */
@@ -211,6 +214,7 @@ export function DeviceSummaryPage() {
     commands: { id: 'commands', label: t('deviceSummary.tabs.commands') || 'Commands', icon: <TerminalSquare size={15} />, badge: pendingBadge },
     history: { id: 'history', label: t('deviceSummary.tabs.history') || 'History', icon: <History size={15} /> },
     actions: { id: 'actions', label: t('deviceSummary.tabs.actions') || 'Actions', icon: <Zap size={15} /> },
+    remote: { id: 'remote', label: t('deviceSummary.tabs.remote') || 'Remote assistance', icon: <MonitorSmartphone size={15} /> },
   };
   const tabs = shownTabs.map((k) => allTabs[k]);
   const showLocation = () => {
@@ -251,6 +255,7 @@ export function DeviceSummaryPage() {
         ? <LegacyCommandsTab deviceId={device.id} canAct={canWrite} onChanged={deviceActions.reload} />
         : <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />)}
       {current === 'history' && <DeviceHistoryTab deviceId={device.id} />}
+      {current === 'remote' && <DeviceRemoteTab deviceId={device.id} canAct={canWrite} />}
       {current === 'android' && channel === 'amapi' && <AndroidDeviceTab deviceId={device.id} canAct={canWrite} />}
       {current === 'actions' && (channel === 'amapi'
         ? <AndroidDeviceActions deviceId={device.id} ownership={device.ownership} canAct={canWrite} onQueued={() => { void reload(); deviceActions.reload(); }} />

@@ -8,7 +8,7 @@ import { reviewerRefusal } from '../guard/policy';
 import { AppError } from '../middleware/errorHandler';
 import { refuse, requireTenantCapability, type ApprovalExecution, type ApprovalReviewCheck } from '../services/approval.service';
 import { requestProfileApplication } from './apply';
-import { checkProfileRules, effectiveProfileRules, invalidatePrivacyProfiles, publishProfile } from './profiles';
+import { checkProfileRules, effectiveProfileRules, invalidatePrivacyProfiles, publishProfile, withRuleDefaults } from './profiles';
 import { ProfileChangePayload, type PrivacyReviewerSide } from './requests';
 
 // =============================================================================
@@ -137,7 +137,9 @@ export async function executeProfileChange(x: ApprovalExecution): Promise<void> 
     // What changes against the rules in force now (the same as at the filing, the version being unchanged), read from
     // the base (another process may have published since this one cached the tenant).
     invalidatePrivacyProfiles(x.tenantId);
-    const changes = privacyRuleChanges(await effectiveProfileRules(trx, x.tenantId, p.ownership), p.rules);
+    const changes = privacyRuleChanges(await effectiveProfileRules(trx, x.tenantId, p.ownership), withRuleDefaults(p.ownership, p.rules));
+    // The rules exactly as filed: obligarth.privacy_profile_publish compares them with the request's payload (a request
+    // filed without the key remoteAssistance, P0-15, is published without it: read at the default of its ownership).
     const out = await publishProfile(trx, x.tenantId, {
       ownership: p.ownership, rules: p.rules, justification: p.justification, approvalId: x.approvalId!,
     });

@@ -39,6 +39,7 @@
     "import": "Import"
   },
   "nav": {
+    "remoteSessions": "Remote assistance",
     "dashboard": "Dashboard",
     "groups": "Groups",
     "users": "Users",
@@ -971,6 +972,7 @@
     "lastSeen": "Last seen",
     "tenant": "Tenant",
     "tabs": {
+      "remote": "Remote assistance",
       "label": "Sections of the device",
       "overview": "Overview",
       "configuration": "Configuration",
@@ -2506,7 +2508,9 @@
       "mdm_lost_mode": "MDM · Lost mode",
       "mdm_passcode": "MDM · Clear the passcode",
       "mdm_wipe": "MDM · Erase",
-      "mdm_remove": "MDM · Remove from management"
+      "mdm_remove": "MDM · Remove from management",
+      "mdm_remote_view": "MDM · View the screen",
+      "mdm_remote_control": "MDM · Take control"
     }
   },
   "apple": {
@@ -2567,7 +2571,8 @@
         "setup": "Setup assistant",
         "system": "System",
         "approval": "Approved request",
-        "guard": "Guarded action"
+        "guard": "Guarded action",
+        "remote": "Remote assistance"
       },
       "push": {
         "sent": "Push sent",
@@ -3877,6 +3882,7 @@
     "tenantFrozen": "The commands of this tenant are frozen.",
     "commandRefused": "The command cannot be sent to this device.",
     "locationDisabledByPrivacy": "The privacy profile of this device's ownership does not allow locating it.",
+    "clientApproverRequired": "A designated client approver of the tenant must examine this request, never the provider's side: designate one first.",
     "invalidNoticeSettings": "A setting of the notice is not accepted (too long, or holding markup).",
     "invalidPrivacyRules": "The privacy rules are not valid.",
     "justificationRequired": "A justification of 10 characters at least is required.",
@@ -3888,6 +3894,16 @@
     "privacyRetentionChangePending": "A change of the retention already waits for its approval.",
     "privacyRuleImposed": "An imposed rule of this ownership cannot change.",
     "rateLimited": "Too many requests: try again in a minute.",
+    "escalationRestricted": "The control of a device is held for approval in this tenant: end this session and ask a control session.",
+    "frozen": "The tenant is frozen: no remote assistance session until it is unfrozen.",
+    "remoteQuota": "Too many remote assistance sessions are open ({{limit}} at most {{scope}}). End one, then try again.",
+    "remoteSessionOpen": "A remote assistance session is already open on this device.",
+    "remoteSessionRequired": "A remote assistance session is opened from the device's page, not as a command.",
+    "remoteSessionState": "The session cannot do this in its current state ({{state}}).",
+    "remoteSettingsChangePending": "A change of the remote assistance settings already waits for its approval.",
+    "remoteSettingsUnchanged": "The remote assistance settings already have these values.",
+    "remoteUnavailable": "A remote assistance session is not available on this device. {{reason}}.",
+    "viewerTokenIssued": "The viewer of this session was already opened once: it cannot be opened from another place.",
     "retentionOutOfRange": "A retention is outside its range.",
     "retentionUnchanged": "The retention already has these values.",
     "deviceUnderManagement": "A device under management leaves management before its record is deleted.",
@@ -4501,7 +4517,9 @@
       "update": "Update the agent",
       "lock": "Lock",
       "wipe": "Erase",
-      "revoke": "Revoke"
+      "revoke": "Revoke",
+      "remoteView": "See the screen",
+      "remoteControl": "Take control"
     },
     "cols": {
       "name": "Name",
@@ -4655,12 +4673,20 @@
     },
     "openPanel": "Android agent panel",
     "unavailable": {
+      "policyConflict": "A policy of the device forbids the capture of its screen",
+      "quota": "Too many remote assistance sessions are open",
       "capabilityMissing": "Your team does not hold this capability",
       "revoked": "The agent is revoked",
       "notEnrolled": "Not enrolled",
       "adminInactive": "The device administrator of the agent is off",
       "knoxRequired": "Needs a licensed Knox",
-      "frozen": "Tenant frozen"
+      "frozen": "Tenant frozen",
+      "privacyDisabled": "The privacy profile of the tenant does not allow remote assistance",
+      "personalDevice": "Never on a personal or COPE device",
+      "agentTooOld": "Needs the Android agent 1.1.0 or later",
+      "sessionOpen": "A remote assistance session is already open on this device",
+      "injectUnavailable": "The agent cannot inject the inputs on this device (Knox remote control)",
+      "platformUnsupported": "Not possible on this device"
     }
   },
   "android": {
@@ -5425,6 +5451,12 @@
           "managed_only": "Managed only"
         }
       },
+      "remoteAssistance": {
+        "label": "Remote assistance",
+        "hint": "The support may see the screen, and control it, during an assistance session told on the device by notifications (when it opens, all along, when it ends). Allowed by default on company devices; never on a personal or COPE device.",
+        "on": "Allowed",
+        "off": "Not allowed"
+      },
       "collected": "Collected",
       "notCollected": "Not collected"
     },
@@ -5506,6 +5538,10 @@
         "notice_ack_months": {
           "label": "Acknowledgements of the notice",
           "hint": "The proof that an employee read the notice before an enrollment."
+        },
+        "remote_sessions_months": {
+          "label": "Remote assistance sessions",
+          "hint": "The journal of the sessions: who, when, which device, mode, duration and reason (no image is recorded)."
         }
       },
       "fixed": {
@@ -6008,5 +6044,178 @@
   "smartGroups": {
     "filterChip": "One dynamic group",
     "filterChipHint": "The members of a dynamic group: remove this filter"
+  },
+  "remote": {
+    "nav": {
+      "label": "Navigation of the device",
+      "back": "Back",
+      "home": "Home",
+      "recents": "Recent apps",
+      "notifications": "Notifications",
+      "volumeDown": "Volume down",
+      "volumeUp": "Volume up",
+      "wake": "Wake the screen"
+    },
+    "keys": {
+      "enter": "Enter",
+      "del": "Delete",
+      "left": "Left",
+      "right": "Right",
+      "up": "Up",
+      "down": "Down"
+    },
+    "text": {
+      "placeholder": "Text to type on the device",
+      "label": "Text to type on the device",
+      "send": "Type it"
+    },
+    "quotaScope": {
+      "tenant": "per tenant",
+      "operator": "per operator",
+      "instance": "on the instance"
+    },
+    "state": {
+      "awaiting_approval": "Awaiting approval",
+      "queued": "Waiting for the device",
+      "awaiting_consent": "Starting the capture",
+      "connecting": "Connecting",
+      "live": "In progress",
+      "ended": "Ended",
+      "expired": "Expired",
+      "cancelled": "Cancelled",
+      "failed": "Failed"
+    },
+    "endReason": {
+      "operator": "Ended by the technician",
+      "projection_denied": "The screen capture was not authorised on the device",
+      "device_timeout": "The device did not answer in time",
+      "idle": "Ended after a period without activity",
+      "max_duration": "Maximum duration reached",
+      "screen_off_timeout": "The screen of the device stayed off too long",
+      "freeze": "The tenant was frozen",
+      "revoked": "A right or a condition of the session was withdrawn",
+      "agent_error": "Error of the agent on the device",
+      "server_restart": "The server restarted",
+      "approval_denied": "The approval was refused",
+      "approval_expired": "The approval request expired"
+    },
+    "endedBy": {
+      "operator": "the technician",
+      "user": "the device",
+      "system": "the system"
+    },
+    "mode": {
+      "view": "View",
+      "control": "Control"
+    },
+    "side": {
+      "msp": "Provider",
+      "client": "Client"
+    },
+    "viewer": {
+      "stalled": "No picture for a while…",
+      "live": "Connected",
+      "retrying": "Connection lost, attaching again…",
+      "closed": "Disconnected",
+      "connecting": "Connecting to the device…",
+      "quality": "Quality",
+      "codec": "Video format",
+      "zoomOut": "Zoom out",
+      "fit": "Fit",
+      "zoomIn": "Zoom in",
+      "fullscreen": "Full screen",
+      "screen": "Screen of the device",
+      "waitingPicture": "Waiting for the picture of the device…",
+      "screenOff": "Screen off",
+      "locked": "Locked screen",
+      "idleWarning": "No activity: the session ends in {{seconds}} s. Touch the screen to keep it.",
+      "idleTimeout": "The session ends for lack of activity.",
+      "agentError": "The device reports: {{message}}",
+      "inputUnavailable": "The device did not take the input ({{reason}}).",
+      "controlHelp": "Click or touch: a finger; drag: a swipe; Ctrl + drag: a pinch; right click: Back; middle click: Home; wheel: scroll. With the picture selected, the keyboard types on the device.",
+      "viewHelp": "View only: nothing you do here reaches the device.",
+      "secureHelp": "The screens an app protects (banking, passwords) show black: the device does not let them be captured."
+    },
+    "open": {
+      "button": "Open",
+      "start": "Open the session",
+      "heldForApproval": "The session waits for its approval.",
+      "informed": "The user of the device accepts nothing: a notification tells them a remote assistance session opens, another stays during the whole session, a last one tells its end.",
+      "stepUp": "Your second factor is asked at each opening and each move to the control. The session is journaled (who, when, device, mode, duration); the picture is never recorded.",
+      "controlNote": "In control, your touches, the navigation keys and the text you type reach the device, including on its locked screen.",
+      "projectionNote": "The first session on a device asks the system authorisation of the screen capture: someone must accept it once on the device, ticking « Don't show again ». Without it, a session on a device with nobody in front fails after 60 s.",
+      "reason": "Reason (optional)",
+      "ticket": "Ticket number (optional)"
+    },
+    "session": {
+      "title": "Remote assistance",
+      "backToDevice": "Back to the device",
+      "notFound": "Session not found",
+      "asked": "asked",
+      "device": "Device",
+      "by": "By",
+      "reason": "Reason",
+      "ticket": "Ticket",
+      "duration": "Duration",
+      "informedBanner": "The user is informed by a notification: at the opening, during the whole session, and at its end.",
+      "takeControl": "Take control",
+      "backToView": "Back to the view",
+      "end": "End",
+      "confirmEnd": "End this remote assistance session?",
+      "ended": "Session ended",
+      "controlGranted": "You have the control",
+      "controlReleased": "Back to the view",
+      "awaitingApproval": "The session waits for its approval by another person.",
+      "approvalRequest": "Request #{{id}}",
+      "timeLeft": "{{time}} left",
+      "openApprovals": "Approvals",
+      "queued": "Waiting for the device: it takes the request at its next contact with the server.",
+      "askForHelp": "To go faster, ask the user to press « Ask for help » in the Obligarth agent: the device contacts the server at once.",
+      "startingCapture": "The device starts the capture of its screen.",
+      "projectionHint": "If the system authorisation of the capture was never validated with « Don't show again » ticked, someone must press « Start now » on the device within 60 s; otherwise the session fails.",
+      "needToken": "Open the viewer of this session (your second factor is asked).",
+      "openViewer": "Open the viewer",
+      "notRequester": "Only the technician who opened this session sees its screen.",
+      "replaced": "The viewer of this session is open in another tab or browser. End the session there, or end it here and open a new one.",
+      "disconnected": "The viewer lost its connection to the session.",
+      "reconnect": "Connect again",
+      "endedByLabel": "ended by",
+      "startedAt": "Started",
+      "endedAt": "Ended",
+      "inputs": "Inputs",
+      "projectionDeniedTitle": "The screen capture was not authorised on the device",
+      "projectionDeniedHelp": "Android asks once for the authorisation to capture the screen. Nobody accepted it within 60 s, or it was refused. Have it validated once on site: start a session, then on the device tick « Don't show again » and press « Start now ». The next sessions then start with nobody before the device."
+    },
+    "journal": {
+      "previous": "Previous page",
+      "next": "Next page",
+      "title": "Remote assistance sessions",
+      "count": "{{n}} session(s)",
+      "empty": "No remote assistance session.",
+      "intro": "Every remote assistance session of this tenant: who opened it, when, on which device, in which mode, how long, and why it ended. The picture is never recorded.",
+      "device": "Device number",
+      "state": "State",
+      "side": "Side",
+      "all": "All",
+      "from": "From",
+      "to": "To"
+    },
+    "settings": {
+      "title": "Remote assistance",
+      "intro": "The remote assistance sessions of this tenant. A change is examined by a second person; a change made by the MSP to the client approval of its sessions is examined by a client approver.",
+      "pending": "A change waits for its approval (request #{{id}}).",
+      "mspApproval": "Sessions of the MSP approved by the client",
+      "mspApprovalDesc": "Every session asked by a technician of the MSP waits for the approval of a designated client approver of the tenant.",
+      "maxMinutes": "Maximum duration of a session",
+      "maxMinutesDesc": "From {{min}} to {{max}} minutes; the session ends when it is reached.",
+      "minutes": "minutes",
+      "waitChannel": "Permanent wake-up of the Android agents",
+      "waitChannelDesc": "Off by default: an agent keeps a long wait only for 15 minutes after « Ask for help » or after a session. Turning it on costs battery and mobile data on every device: decide after the measures of the pilot.",
+      "approvalNote": "The change applies once approved.",
+      "readOnly": "Read only: changing these settings needs the Settings capability.",
+      "request": "Request the change",
+      "requested": "Change requested: it waits for its approval.",
+      "failed": "The change could not be requested."
+    }
   }
 }

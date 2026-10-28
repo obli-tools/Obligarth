@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { db } from '../db';
 import { forEachTenant } from '../db/tenantContext';
 import { JobError, registerJob, type JobContext, type JobResult } from '../jobs';
+import { safeErr } from '../jobs/errors';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { AUTO_UPDATE_JOB, autoUpdate } from './autoUpdate';
 import { expireDue } from './commands';
@@ -9,7 +10,9 @@ import { expireDue } from './commands';
 // =============================================================================
 // Jobs of the bridge agent (docs: agent-pont-android §6):
 //   legacy-agent.commands-expire  every minute: the open commands past their
-//                                 lifetime become 'expired'
+//                                 lifetime become 'expired'; then the steps
+//                                 of other modules (registerLegacyAgentMinuteStep:
+//                                 the deadlines of the remote sessions, P0-15)
 //   legacy-agent.silence-check    every hour: per tenant, the agents enrolled
 //                                 and not revoked that have not interrogated
 //                                 for 24 hours (alert legacy_agent.silent,
@@ -21,6 +24,17 @@ import { expireDue } from './commands';
 // The packages-gc and retention jobs are v1 (§15.4).
 // =============================================================================
 
+/** A step another module runs in the minute job of the bridge agent (P0-15 §4.1: the deadlines of the remote sessions;
+ *  no new minute job, C5): its counters join the job's output; a failure fails the run after the other steps. */
+export type LegacyAgentMinuteStep = (ctx: JobContext<Record<string, never>>) => Promise<Record<string, number>>;
+const minuteSteps: Array<{ name: string; run: LegacyAgentMinuteStep }> = [];
+
+/** Registered before anything starts (modules/remote.ts). */
+export function registerLegacyAgentMinuteStep(name: string, run: LegacyAgentMinuteStep): void {
+  if (minuteSteps.some((s) => s.name === name)) throw new Error(`legacy agent minute step ${name} registered twice`);
+  minuteSteps.push({ name, run });
+}
+
 async function expireCommands(ctx: JobContext<Record<string, never>>): Promise<JobResult> {
   let expired = 0;
   const { failed } = await forEachTenant(ctx.dbActor, async (tenantId) => {
@@ -30,8 +44,21 @@ async function expireCommands(ctx: JobContext<Record<string, never>>): Promise<J
     if (!any) return;
     expired += await db.transaction((trx) => expireDue(trx, tenantId));
   });
+  const output: Record<string, number> = { expired };
+  const stepsFailed: string[] = [];
+  for (const step of minuteSteps) {
+    ctx.throwIfAborted();
+    try {
+      Object.assign(output, await step.run(ctx));
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      stepsFailed.push(step.name);
+      ctx.log.warn({ err: safeErr(err), step: step.name }, 'legacy-agent.commands-expire: step failed');
+    }
+  }
   if (failed > 0) throw new JobError('partial_failure', `${failed} tenant(s) failed`);
-  return { output: { expired } };
+  if (stepsFailed.length > 0) throw new JobError('partial_failure', `step(s) failed: ${stepsFailed.join(', ')}`);
+  return { output };
 }
 
 async function silenceCheck(ctx: JobContext<Record<string, never>>): Promise<JobResult> {

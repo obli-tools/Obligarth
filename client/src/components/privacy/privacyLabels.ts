@@ -17,6 +17,10 @@ const RULE_FALLBACK: Record<PrivacyRuleKey, { label: string; hint: string }> = {
   lostModeLocation: { label: 'Location in lost mode', hint: 'The position of a lost device, only while the lost mode is on.' },
   installedApps: { label: 'Installed applications', hint: 'Every application, or only those the organisation manages.' },
   certificates: { label: 'Certificates', hint: 'Every certificate, or only those the organisation installed.' },
+  remoteAssistance: {
+    label: 'Remote assistance',
+    hint: 'The support may see the screen, and control it, during an assistance session told on the device by notifications.',
+  },
 };
 
 export const ruleLabel = (key: PrivacyRuleKey): string => trCode(`privacy.rules.${key}.label`, RULE_FALLBACK[key].label);
@@ -42,6 +46,7 @@ const CATEGORY_FALLBACK: Record<RetentionCategory, { label: string; hint: string
   technical_log_months: { label: 'Technical log', hint: 'The commands sent to the devices and their timeline.' },
   status_history_days: { label: 'Status history', hint: 'The history of the declarative status of the devices.' },
   notice_ack_months: { label: 'Acknowledgements of the notice', hint: 'The proof that an employee read the notice before an enrollment.' },
+  remote_sessions_months: { label: 'Remote assistance sessions', hint: 'The journal of the sessions: who, when, which device, mode, duration and reason.' },
 };
 
 export const categoryLabel = (key: RetentionCategory): string =>

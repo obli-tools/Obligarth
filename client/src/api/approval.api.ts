@@ -13,7 +13,9 @@ export interface PendingApproval {
     // or deleted (modele-donnees-mdm §7.12).
     | 'apple_action' | 'mdm_policy_publish'
     // A change of a privacy profile or of the retention of the tenant (P0-13 T3, T4).
-    | 'privacy_profile_change' | 'privacy_retention_change';
+    | 'privacy_profile_change' | 'privacy_retention_change'
+    // A remote assistance session held at 'restricted', a change of the settings of the remote assistance (P0-15 T3).
+    | 'remote_session' | 'remote_settings_change';
   description: string;
   payload: Record<string, any>;
   status: 'pending' | 'approved' | 'denied' | 'executed' | 'expired' | 'cancelled';

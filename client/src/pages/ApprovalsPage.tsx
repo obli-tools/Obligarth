@@ -308,7 +308,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  }
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code, err?.response?.data?.details) || err?.response?.data?.error || t('approvals.approveFailed', 'Approval failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }
@@ -330,7 +330,7 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  toast(t('approvals.deniedToast', 'Denied'));
  await load(false);
  } catch (err: any) {
- if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code) || err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
+ if (!isStepUpHandled(err)) toast.error(privacyReviewError(t, a, err) ?? guardErrorMessage(t, err?.response?.data?.code, translateErrorCode(err?.response?.data?.code, err?.response?.data?.details) || err?.response?.data?.error || t('approvals.denyFailed', 'Deny failed'), err?.response?.data?.details));
  } finally {
  setBusyId(null);
  }

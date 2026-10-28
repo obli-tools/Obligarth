@@ -11,13 +11,15 @@ import { fill, noticeTexts, type NoticeTextSet } from './i18n';
 // language. Nine sections, in this order:
 //   1. who manages (the data controller, its address, the paragraph of the organisation);
 //   2. what the organisation sees, built from the rules (identifiers, applications, network, location in lost mode
-//      only);
-//   3. what it does not see (a fixed list, plus the data the profile refuses);
+//      only; the screen during an assistance session told by notifications, P0-15);
+//   3. what it does not see (a fixed list, outside an assistance session when it is allowed, plus the data the profile
+//      refuses);
 //   4. what it can do (erasure of the whole device or of the work data only, by ownership and platform; location only
-//      with lostModeLocation);
+//      with lostModeLocation; the assistance session, P0-15);
 //   5. purposes and legal basis (legitimate interest, articles 6.1.f and 32 of the GDPR);
 //   6. recipients (the operator of the platform, Apple or Google, the other recipients of the settings);
-//   7. durations (the categories of CNF-04 in force, the rotation of the backups);
+//   7. durations (the categories of CNF-04 in force, the journal of the assistance sessions when it is allowed, the
+//      rotation of the backups);
 //   8. rights and complaint to the CNIL;
 //   9. contacts (data controller, DPO, other contact).
 // consentSummary (the ConsentText of the enrollment profile) is 500 characters at most. Plain text only: every value is
@@ -26,8 +28,9 @@ import { fill, noticeTexts, type NoticeTextSet } from './i18n';
 // No I/O, no import of the database: the unit tests load this file (npm run test:privacy).
 // =============================================================================
 
-/** The generation of the texts: moves with any change of i18n.ts or of the assembly below that changes a content. */
-export const NOTICE_GENERATOR_VERSION = 1;
+/** The generation of the texts: moves with any change of i18n.ts or of the assembly below that changes a content.
+ *  2: the remote assistance (P0-15 T2); a notice without it keeps its content of generation 1, word for word. */
+export const NOTICE_GENERATOR_VERSION = 2;
 
 /** consentSummary at most (ConsentText of the enrollment profile; CHECK notice_versions_content_shape). */
 export const MAX_CONSENT_SUMMARY = 500;
@@ -62,6 +65,15 @@ export interface AndroidCollectionRules {
 }
 
 const isCompany = (o: Ownership): boolean => o === 'corporate' || o === 'corporate_personal';
+
+/**
+ * Is the remote assistance (P0-15, §4.5) told by the notice of this platform and ownership? Where a channel can open a
+ * session and the profile allows it: the corporate Android devices (the bridge agent; the companion app of Android
+ * Enterprise, T10), never a personal or COPE device (IMPOSED_RULES, D3); Apple has no channel in v1 (T11 optional).
+ */
+export function noticeRemoteAssistance(platform: NoticePlatform, ownership: Ownership, rules: PrivacyProfileRules): boolean {
+  return platform === 'android' && ownership === 'corporate' && rules.remoteAssistance === true;
+}
 
 /**
  * What the organisation collects, as each channel applies the rules of the profile in force:
@@ -115,6 +127,8 @@ export interface NoticeInput {
   /** The rotation of the backups of the platform, in days (BACKUP_RETENTION_DAYS). */
   backupDays: number;
   settings: Readonly<NoticeSettings>;
+  /** P0-15 T2: the remote assistance is allowed (noticeRemoteAssistance); absent: no. */
+  remoteAssistance?: boolean;
 }
 
 /** "a, b and c". */
@@ -164,6 +178,8 @@ export function generateNotice(i: NoticeInput): NoticeContent {
   const contact = clean(s.contact);
   const extra = clean(s.recipientsExtra);
   const intro = clean(i.locale === 'fr' ? s.introFr : s.introEn);
+  // P0-15: only a company device (the rule is imposed false elsewhere; checked again here).
+  const remote = i.remoteAssistance === true && o === 'corporate';
   const sections: NoticeContent['sections'] = [];
 
   // 1. Who manages.
@@ -184,10 +200,12 @@ export function generateNotice(i: NoticeInput): NoticeContent {
   if (c.certificates) seen.push(c.certificates === 'all' ? t.data.certificatesAll : t.data.certificatesManaged);
   const sees = [fill(t.sees, { list: seen.join(t.listSep) })];
   if (c.lostModeLocation) sees.push(t.lostModeSees);
+  // Who may intervene (recipients, art. 13 GDPR): the IT support of the employer (the data controller) or its provider.
+  if (remote) sees.push(fill(t.remoteSees, { controller: controller ?? org }));
   sections.push({ heading: t.headings.sees, paragraphs: sees });
 
   // 3. What it does not see.
-  const notSees = [t.notSeesFixed];
+  const notSees = [remote ? t.notSeesRemote : t.notSeesFixed];
   if (!company) notSees.push(t.notSeesPersonal[p]);
   const refused: string[] = [];
   const n = t.notCollectedItems;
@@ -206,6 +224,7 @@ export function generateNotice(i: NoticeInput): NoticeContent {
   // 4. What it can do.
   const canDo = [fill(t.canDo[p][o], v)];
   if (c.lostModeLocation) canDo.push(t.canDoLostMode);
+  if (remote) canDo.push(t.canDoRemote);
   if (company) canDo.push(t.safeguards);
   sections.push({ heading: t.headings.canDo, paragraphs: canDo });
 
@@ -227,6 +246,7 @@ export function generateNotice(i: NoticeInput): NoticeContent {
   ];
   if (p === 'apple') durations.push(fill(d.statusHistory, { n: duration(t, 'days', r.status_history_days) }));
   if (c.lostModeLocation) durations.push(fill(d.lostMode, { n: duration(t, 'days', r.lost_mode_location_days) }));
+  if (remote) durations.push(fill(d.remoteSessions, { n: duration(t, 'months', r.remote_sessions_months) }));
   durations.push(fill(d.ack, { n: duration(t, 'months', r.notice_ack_months) }));
   durations.push(fill(d.backups, { n: duration(t, 'days', i.backupDays) }));
   sections.push({ heading: t.headings.durations, paragraphs: durations });
@@ -257,7 +277,9 @@ function consentSummary(t: NoticeTextSet, i: NoticeInput): string {
   const sees = [t.consent.seesModel, t.consent.seesOs];
   if (c.serialNumber) sees.push(t.consent.seesSerial);
   sees.push(c.installedApps === 'all' ? t.consent.seesAppsAll : t.consent.seesAppsManaged);
-  const text = fill(t.consent.company, { org, sees: joinList(sees, t.and), locate: c.lostModeLocation ? t.consent.locate : '' });
+  const remote = i.remoteAssistance === true && i.ownership === 'corporate';
+  const text = fill(remote ? t.consent.companyRemote : t.consent.company,
+    { org, sees: joinList(sees, t.and), locate: c.lostModeLocation ? t.consent.locate : '' });
   return clampText(text, MAX_CONSENT_SUMMARY);
 }
 

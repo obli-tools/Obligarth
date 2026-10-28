@@ -19,6 +19,11 @@ export const PRIVACY_BOOLEAN_RULES = [
   'phoneNumber',        // phone number, ICCID, subscriptions
   'network',            // carrier, roaming, Wi-Fi and Bluetooth MAC (Android: networkInfo)
   'lostModeLocation',   // location of a lost device, in lost mode only (REQ-03)
+  // P0-15 (remote assistance, §0.1 of the spec): may the support see the screen of a device, and control it, during
+  // a session shown on the screen by notifications? True by default on a corporate device, never on a personal or
+  // COPE device (IMPOSED_RULES, D3). A version published without the key reads it at the default of its ownership
+  // (server/src/privacy/profiles.ts).
+  'remoteAssistance',
 ] as const;
 export type PrivacyBooleanRule = typeof PRIVACY_BOOLEAN_RULES[number];
 
@@ -29,7 +34,8 @@ export type PrivacyScopeRule = typeof PRIVACY_SCOPE_RULES[number];
 export const PRIVACY_COLLECTION_SCOPES = ['all', 'managed_only'] as const;
 export type PrivacyCollectionScope = typeof PRIVACY_COLLECTION_SCOPES[number];
 
-/** Every key of a profile, in display order (the CHECK of the table admits these keys and no other). */
+/** Every key of a profile, in display order (the CHECK of the table admits these keys and no other;
+ *  remoteAssistance may be absent from a version, read at the default of its ownership). */
 export const PRIVACY_RULE_KEYS = [...PRIVACY_BOOLEAN_RULES, ...PRIVACY_SCOPE_RULES] as const;
 export type PrivacyRuleKey = typeof PRIVACY_RULE_KEYS[number];
 
@@ -42,31 +48,35 @@ export interface PrivacyProfileRules {
   lostModeLocation: boolean;
   installedApps: PrivacyCollectionScope;
   certificates: PrivacyCollectionScope;
+  /** P0-15: sessions of remote assistance (the screen seen, or controlled, during a session shown on the screen). */
+  remoteAssistance: boolean;
 }
 
 /** The rules of a tenant without a profile (conception §10.3): exactly those applied to Apple before P0-13
  *  (apple/devices/privacy.ts defaultPrivacyRules). Android and the bridge agent keep their own minimal rules
- *  while the tenant has no version of the ownership (privacy/profiles.ts). */
+ *  while the tenant has no version of the ownership (privacy/profiles.ts). The remote assistance (P0-15 §0.1 rule 5):
+ *  allowed by default on a corporate device, as the support of an MSP works. */
 export const DEFAULT_PRIVACY_PROFILE: Readonly<Record<Ownership, Readonly<PrivacyProfileRules>>> = {
   corporate: {
     serialNumber: true, hardwareIds: true, deviceName: true, phoneNumber: true, network: true, lostModeLocation: true,
-    installedApps: 'all', certificates: 'all',
+    installedApps: 'all', certificates: 'all', remoteAssistance: true,
   },
   corporate_personal: {
     serialNumber: true, hardwareIds: true, deviceName: false, phoneNumber: false, network: true, lostModeLocation: true,
-    installedApps: 'managed_only', certificates: 'managed_only',
+    installedApps: 'managed_only', certificates: 'managed_only', remoteAssistance: false,
   },
   personal: {
     serialNumber: false, hardwareIds: false, deviceName: false, phoneNumber: false, network: false, lostModeLocation: false,
-    installedApps: 'managed_only', certificates: 'managed_only',
+    installedApps: 'managed_only', certificates: 'managed_only', remoteAssistance: false,
   },
 };
 
-/** The rules no profile may change, per ownership (conception §10.3; D2: applications managed only in COPE). */
+/** The rules no profile may change, per ownership (conception §10.3; D2: applications managed only in COPE; P0-15 D3:
+ *  no remote assistance on a personal or COPE device, the capture taking the whole screen, personal apps included). */
 export const IMPOSED_RULES: Readonly<Record<Ownership, Readonly<Partial<PrivacyProfileRules>>>> = {
   corporate: {},
-  corporate_personal: { installedApps: 'managed_only' },
-  personal: { serialNumber: false, lostModeLocation: false, installedApps: 'managed_only' },
+  corporate_personal: { installedApps: 'managed_only', remoteAssistance: false },
+  personal: { serialNumber: false, lostModeLocation: false, installedApps: 'managed_only', remoteAssistance: false },
 };
 
 /** The keys of `rules` that break an imposed rule of `ownership` (empty: none). */
@@ -154,8 +164,8 @@ export interface PrivacyImpactDto {
 // obligarth.tenant_retention_policies (values in force, decreases waiting), read by obligarth.retention_value (the
 // purges, the dates of purge, the notice); changed by obligarth.retention_set after an approval (D3). A decrease takes
 // effect RETENTION_LOWERING_DELAY_DAYS days after its approval and may be cancelled meanwhile; an increase at once (D4).
-// The catalogue is copied into the migration retention_policies (obligarth_private.retention_catalog, the CHECKs): both
-// change together (testbed 172 compares them).
+// The catalogue is copied into the migration retention_policies (obligarth_private.retention_catalog, the CHECKs), and
+// widened by p015_remote_retention (remote_sessions_months): both change together (testbeds 172 and 340 compare them).
 
 export type RetentionUnit = 'days' | 'months';
 
@@ -178,6 +188,7 @@ export const RETENTION_CATEGORIES = [
   { key: 'technical_log_months', default: 6, min: 3, max: 12, unit: 'months' },                  // commands (MDM queue, bridge agent), timeline
   { key: 'status_history_days', default: 90, min: 30, max: 365, unit: 'days' },                  // DDM status history
   { key: 'notice_ack_months', default: 36, min: 12, max: 72, unit: 'months' },                   // acknowledgements of the notice (D5)
+  { key: 'remote_sessions_months', default: 12, min: 6, max: 36, unit: 'months' },               // journal of the remote assistance sessions (P0-15 D7)
 ] as const satisfies readonly RetentionCategoryDef[];
 
 export type RetentionCategory = typeof RETENTION_CATEGORIES[number]['key'];

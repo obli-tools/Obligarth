@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { OWNERSHIPS, RETENTION_CATEGORY_KEYS, type RetentionCategory } from '@obligarth/shared';
+import { OWNERSHIPS, PRIVACY_RULE_KEYS, RETENTION_CATEGORY_KEYS, type RetentionCategory } from '@obligarth/shared';
 import { PrivacyProfileRulesSchema } from './profiles';
 
 // =============================================================================
@@ -25,8 +25,9 @@ export const ProfileChangePayload = z.object({
   /** The version in force when the request was filed (null: none, the defaults). */
   baseVersion: z.number().int().positive().nullable(),
   reviewerSide: z.enum(['client', 'platform']),
-  narrowed: z.array(z.string()).max(8),
-  widened: z.array(z.string()).max(8),
+  // Bounded by the catalogues (P0-15 M3: a ninth rule and a ninth category), never by a number written here.
+  narrowed: z.array(z.string()).max(PRIVACY_RULE_KEYS.length),
+  widened: z.array(z.string()).max(PRIVACY_RULE_KEYS.length),
 }).strict();
 export type ProfileChange = z.infer<typeof ProfileChangePayload>;
 
@@ -49,8 +50,8 @@ export const RetentionChangePayload = z.object({
   /** tenant_retention_policies.version when the request was filed (0: never set). */
   baseVersion: z.number().int().min(0),
   reviewerSide: z.enum(['client', 'platform']),
-  raised: z.array(z.string()).max(8),
-  lowered: z.array(z.string()).max(8),
-  restored: z.array(z.string()).max(8),
+  raised: z.array(z.string()).max(RETENTION_CATEGORY_KEYS.length),
+  lowered: z.array(z.string()).max(RETENTION_CATEGORY_KEYS.length),
+  restored: z.array(z.string()).max(RETENTION_CATEGORY_KEYS.length),
 }).strict();
 export type RetentionChange = z.infer<typeof RetentionChangePayload>;
