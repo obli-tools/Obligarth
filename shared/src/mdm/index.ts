@@ -30,3 +30,5 @@ export * from './rules';
 export * from './deviceViews';
 // Dynamic groups (P0-5 §4.2, §5).
 export * from './smartGroups';
+// Remote assistance (P0-15 §6): sessions, limits, messages of the stream.
+export * from './remote';

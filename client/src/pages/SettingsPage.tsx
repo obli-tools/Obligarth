@@ -2,6 +2,7 @@ import { useState, useEffect, type FormEvent, type KeyboardEvent } from 'react';
 import { Shield, Server, Plus, Pencil, Trash2, Wifi, Eye, EyeOff, ArrowLeftRight, Info, Cpu, HardDrive, Database, Clock } from 'lucide-react';
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { DeviceKeysSettingsSection } from '@/components/settings/DeviceKeysSettingsSection';
+import { RemoteSettingsSection } from '@/components/settings/RemoteSettingsSection';
 import { useAuthStore } from '@/store/authStore';
 import { smtpServerApi, type CreateSmtpServerRequest } from '@/api/smtpServer.api';
 import { appConfigApi } from '@/api/appConfig.api';
@@ -370,6 +371,9 @@ export function SettingsPage() {
 
  {/* ── Default Monitor Settings ── */}
  <SettingsPanel scope="global" scopeId={null} title={t('settings.defaultMonitorSettings')} />
+
+ {/* ── Remote assistance (P0-15): hidden when the settings cannot be read ── */}
+ <RemoteSettingsSection />
 
  {admin && (
  <>

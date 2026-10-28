@@ -20,7 +20,8 @@
     "test:reports": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/reports/**/*.test.ts\"",
     "test:ops": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/ops/**/*.test.ts\"",
     "test:privacy": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/privacy/**/*.test.ts\"",
-    "test:legacy-agent": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/legacyAgent/**/*.test.ts\""
+    "test:legacy-agent": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/legacyAgent/**/*.test.ts\"",
+    "test:remote": "node --import ./src/services/deviceKey/test-resolve.mjs --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --test \"src/remote/**/*.test.ts\""
   },
   "dependencies": {
     "@obligarth/shared": "*",
@@ -47,6 +48,7 @@
     "shamir-secret-sharing": "0.0.4",
     "socket.io": "^4.7.4",
     "undici": "^7.21.0",
+    "ws": "~8.21.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {
@@ -60,6 +62,7 @@
     "@types/node": "^20.11.0",
     "@types/nodemailer": "^7.0.9",
     "@types/qrcode": "^1.5.6",
+    "@types/ws": "^8.18.2",
     "tsx": "^4.7.0",
     "typescript": "^5.4.0"
   }

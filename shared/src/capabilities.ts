@@ -83,6 +83,11 @@ export const DEVICE_CAPABILITIES = [
   'mdm:passcode',
   'mdm:wipe',
   'mdm:remove',
+  // P0-15 (remote assistance, §0.1 rule 4: the rights of Obliance): granted through a team, and held by the
+  // administrators of the tenant and of the platform (canUseCapability, server/src/remote/guard.ts); no cooldown, no
+  // link with mdm:wipe. mdm:remote_control includes the view.
+  'mdm:remote_view',
+  'mdm:remote_control',
 ] as const;
 
 export type DeviceCapability = typeof DEVICE_CAPABILITIES[number];
@@ -99,6 +104,8 @@ export const DEVICE_CAPABILITY_LABELS: Record<DeviceCapability, string> = {
   'mdm:passcode':  'MDM · Clear the passcode',
   'mdm:wipe':      'MDM · Erase',
   'mdm:remove':    'MDM · Remove from management',
+  'mdm:remote_view':    'MDM · View the screen',
+  'mdm:remote_control': 'MDM · Take control',
 };
 
 /** Capabilities of a new team permission row, and of a row stored without any. */

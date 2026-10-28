@@ -26,8 +26,11 @@ import { permissionService } from '../services/permission.service';
 import { applyRestriction } from '../services/restriction.service';
 import { vault } from '../vault';
 import { forgetKnoxKey, KNOX_PURPOSE, knoxSecretIdOf } from './agentConfig';
-import { cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommands, LOCK_ACTION, type CommandSpec, type EnqueueOutcome } from './commands';
+import {
+  cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommands, LOCK_ACTION, REMOTE_OPEN, type CommandSpec, type EnqueueOutcome,
+} from './commands';
 import { looksLikeApk, receiveApk } from './packages';
+import { legacyAgentRemote } from './remoteBridge';
 import { currentServerKey } from './serverKey';
 import { sha256Hex } from './signature';
 
@@ -41,7 +44,8 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // out of reach answers like an unknown one (404).
 //   GET  /devices                       the agents of the tenant the caller sees
 //   GET  /devices/:id                   one agent: satellite, status items, apps
-//   GET  /devices/:id/actions           its menu (lock, erase, message, reboot, inventory) and what greys an entry
+//   GET  /devices/:id/actions           its menu (lock, erase, message, reboot, inventory; remote view and
+//                                       control, P0-15) and what greys an entry
 //   GET  /devices/:id/commands          its queue
 //   POST /devices/:id/commands          capability of the type, restriction → 202
 //   POST /commands/bulk                 the same on 500 devices at most
@@ -220,6 +224,17 @@ router.get('/devices/:id/actions', wrap(async (req, res) => {
               : frozen ? 'frozen' : null;
     actions.push({ type, actionKey: spec.guardedBy ?? spec.restrictionKey ?? type, guarded: spec.guardedBy !== null, available: unavailable === null, unavailable });
   }
+  // P0-15 §4.2: the remote assistance, opened through /api/remote-sessions (its restriction remote.view or
+  // remote.control, the strict step-up), with the reason the server would refuse it now (remote/guard.ts checkOpenable).
+  const remote = legacyAgentRemote();
+  if (remote) {
+    for (const mode of ['view', 'control'] as const) {
+      const why = await remote.availability(tenantId, userId, id, mode);
+      // quota and policyConflict never come from the check of a menu (no quota) of this channel (no Android policy).
+      const unavailable: LegacyAgentDeviceAction['unavailable'] = why === 'quota' || why === 'policyConflict' ? 'platformUnsupported' : why;
+      actions.push({ type: `remote.${mode}`, actionKey: `remote.${mode}`, guarded: false, available: unavailable === null, unavailable });
+    }
+  }
   res.json({ success: true, data: actions });
 }));
 
@@ -236,6 +251,8 @@ async function consoleCommand(tenantId: number, type: string, raw: Record<string
   const spec = commandSpecOrNull(type);
   if (!spec) throw new AppError(422, 'Unknown command type', 'unknownRequestType');
   if (spec.guardedBy) throw new AppError(409, 'This command goes through its guarded action', 'guardedActionRequired', { actionKey: spec.guardedBy });
+  // P0-15 §4.3: a remote session goes through /api/remote-sessions (its capability, restriction, consent), before the 422.
+  if (spec.type === REMOTE_OPEN) throw new AppError(409, 'A remote session is opened through /api/remote-sessions', 'remoteSessionRequired');
   if (!(LEGACY_AGENT_CONSOLE_TYPES as readonly string[]).includes(type)) throw new AppError(422, 'Unknown command type', 'unknownRequestType');
   let params: Record<string, unknown> = raw ?? {};
   if (type === 'app.install') {
@@ -624,6 +641,8 @@ export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<st
   }
   if (p.action !== 'legacy_agent.command' || typeof p.type !== 'string') refuse('Malformed request');
   const spec = commandSpecOrNull(p.type);
+  // P0-15 §4.3: never a remote session from a command request (remoteSessionRequired), whatever the payload says.
+  if (spec?.type === REMOTE_OPEN) refuse('remoteSessionRequired: a remote session is opened through /api/remote-sessions');
   if (!spec || spec.guardedBy || !(LEGACY_AGENT_CONSOLE_TYPES as readonly string[]).includes(spec.type)) refuse('This command type is no longer available');
   const s = spec as CommandSpec;
   let params = (p.params && typeof p.params === 'object' && !Array.isArray(p.params) ? p.params : {}) as Record<string, unknown>;

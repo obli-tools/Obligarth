@@ -10,6 +10,7 @@ import type { DbActor } from '../db/context';
 import { lateCancelOf } from '../guard/types';
 import { AppError } from '../middleware/errorHandler';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
+import { legacyAgentRemote } from './remoteBridge';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
 const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
@@ -33,7 +34,8 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 //   results    applied by rank (a state never goes back, trigger of the
 //              migration); a result of an unknown command or of another
 //              device is ignored and counted, never told to the agent
-// Never a call outside the database: the agent fetches its commands.
+// Never a call outside the database: the agent fetches its commands (a lock or
+// an erase wakes its long wait after the commit, P0-15 §4.3: remoteBridge.ts).
 // =============================================================================
 
 export type LegacyCommandOrigin = MdmCommandOrigin;
@@ -104,7 +106,25 @@ const SPECS: Record<LegacyAgentCommandType, CommandSpec> = {
     }).strict(),
     capability: 'mdm:apps', restrictionKey: 'legacy_agent.update', guardedBy: null, lifetimeSeconds: 3 * DAY,
   },
+  // P0-15 §4.3: a remote assistance session asked of the device (server/src/remote/sessions.ts alone enqueues it, origin
+  // 'remote'; never a console request: consoleCommand answers 409 remoteSessionRequired). operator, operatorOrg and
+  // controllerName are filled by the server; the agent tells the user by its notifications who opens the session
+  // (§0.1 rule 2: nothing to accept). The reason is optional (§0.1 rule 3: absent when none was given). No secret: the
+  // console lists the queue. The control is checked by the module (mdm:remote_control), not by the queue; the
+  // restriction is taken by remote/routes.ts, not twice.
+  'remote.open': {
+    type: 'remote.open',
+    params: z.object({
+      sessionId: z.string().uuid(), mode: z.enum(['view', 'control']), operator: z.string().trim().min(1).max(80),
+      operatorOrg: z.string().trim().min(1).max(120), controllerName: z.string().trim().min(1).max(200),
+      reason: z.string().trim().min(1).max(200).optional(), maxMinutes: z.number().int().min(15).max(240),
+    }).strict(),
+    capability: 'mdm:remote_view', restrictionKey: null, guardedBy: null, lifetimeSeconds: 600,
+  },
 };
+
+/** The request of a remote assistance session (P0-15 §4.3): never a console command. */
+export const REMOTE_OPEN = 'remote.open';
 
 export function commandSpecOrNull(type: unknown): CommandSpec | null {
   return typeof type === 'string' && Object.prototype.hasOwnProperty.call(SPECS, type) ? SPECS[type as LegacyAgentCommandType] : null;
@@ -208,6 +228,16 @@ async function eligible(trx: Knex.Transaction, tenantId: number, ids: number[]):
   return { kept, refused };
 }
 
+/** The wake of the long waits of `deviceIds` once the outermost transaction committed (remoteBridge.ts); never on a
+ *  rollback, never throws. */
+function wakeAfterCommit(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): void {
+  const bridge = legacyAgentRemote();
+  if (!bridge) return;
+  let outer = trx as Knex.Transaction & { parentTransaction?: Knex.Transaction };
+  while (outer.parentTransaction) outer = outer.parentTransaction as typeof outer;
+  outer.executionPromise?.then(() => bridge.wake(tenantId, deviceIds), () => { /* rolled back: nothing to wake */ });
+}
+
 async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<EnqueueOutcome> {
   const tenantId = Number(req.tenantId);
   if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new Error('legacyAgentCommands.enqueue: tenantId');
@@ -247,6 +277,12 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
   } else if (req.origin === 'guard' || req.guardActionUuid || req.commandIdFor) {
     invalid(`${spec.type} is not a guarded command`, 'notGuardedCommand');
   }
+  // The request of a remote session: its session alone, one device (P0-15 §4.3); the origin 'remote' carries nothing else.
+  if ((spec.type === REMOTE_OPEN) !== (req.origin === 'remote')) {
+    if (spec.type === REMOTE_OPEN) throw new AppError(409, 'A remote session is opened through /api/remote-sessions', 'remoteSessionRequired');
+    invalid('the origin remote carries remote.open only', 'invalidOrigin');
+  }
+  if (spec.type === REMOTE_OPEN && ids.length !== 1) invalid('remote.open: one device');
 
   const held = await tenantFrozen(trx, tenantId);
   const { kept, refused } = await eligible(trx, tenantId, ids);
@@ -289,6 +325,9 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
   }
   outcome.commandIds = rows.map((r) => r.id);
   outcome.targets = rows.length;
+  // P0-15 §4.3: a lock or an erase does not wait for the next interrogation: the long waits of these devices are woken
+  // once the transaction committed (nothing while frozen: nothing would be delivered).
+  if (!held && (spec.type === 'device.lock' || spec.type === 'device.wipe')) wakeAfterCommit(trx, tenantId, kept);
   const ctx = await auditContext(req);
   const entry = {
     tenantId, action: 'legacy_agent.command_queued',
@@ -347,8 +386,9 @@ export async function cancelOpenOfDevice(trx: Knex.Transaction, tenantId: number
 
 export interface DeliveredCommand { id: string; type: string; params: Record<string, unknown>; issuedAt: number; expiresAt: number }
 
-/** Delivery order (RS-2): erase, lock, then by age. A constant: no value interpolated. */
-const DELIVERY_ORDER_SQL = "CASE request_type WHEN 'device.wipe' THEN 0 WHEN 'device.lock' THEN 1 ELSE 2 END, created_at, id";
+/** Delivery order (RS-2): erase, lock, the request of a remote session (P0-15 §4.3: the user waits for it), then by
+ *  age. A constant: no value interpolated. */
+const DELIVERY_ORDER_SQL = "CASE request_type WHEN 'device.wipe' THEN 0 WHEN 'device.lock' THEN 1 WHEN 'remote.open' THEN 2 ELSE 3 END, created_at, id";
 export const MAX_DELIVERED = 20;
 
 /**
@@ -366,7 +406,13 @@ export const WITHDRAWN_UPDATE_EXCLUDED_SQL = "NOT (request_type = 'agent.update'
  * `onlyTypes` narrows them (agentTooOld: agent.update and inventory.refresh only).
  */
 export async function deliver(trx: Knex.Transaction, tenantId: number, deviceId: number,
-  o: { pollSeconds: number; frozen: boolean; onlyTypes?: readonly string[] }): Promise<DeliveredCommand[]> {
+  o: {
+    pollSeconds: number; frozen: boolean; onlyTypes?: readonly string[];
+    /** P0-15 §4.3: the remote.open about to be handed, seen by their session (remoteBridge.ts): the withdrawn ones
+     *  (session ended or past its deadline) are not delivered and leave the queue; the deferred ones (the agent took
+     *  the session already) are not delivered and stay as they are. */
+    admitRemote?: (commandIds: string[]) => Promise<{ withdraw: Set<string>; defer: Set<string> }>;
+  }): Promise<DeliveredCommand[]> {
   const now = new Date();
   if (o.frozen) {
     await trx('legacy_agent_commands').where({ tenant_id: tenantId, device_id: deviceId, state: 'pending' }).whereNull('hold_reason')
@@ -381,9 +427,24 @@ export async function deliver(trx: Knex.Transaction, tenantId: number, deviceId:
     });
   if (o.onlyTypes) q = q.whereIn('request_type', o.onlyTypes as string[]);
   q = q.whereRaw(WITHDRAWN_UPDATE_EXCLUDED_SQL);
-  const rows = await q.orderByRaw(DELIVERY_ORDER_SQL).limit(MAX_DELIVERED).forUpdate()
+  let rows = await q.orderByRaw(DELIVERY_ORDER_SQL).limit(MAX_DELIVERED).forUpdate()
     .select('id', 'request_type', 'params', 'created_at', 'expires_at') as
     Array<{ id: string; request_type: string; params: unknown; created_at: Date; expires_at: Date }>;
+  const remote = rows.filter((r) => r.request_type === REMOTE_OPEN).map((r) => String(r.id).toLowerCase());
+  if (remote.length > 0 && o.admitRemote) {
+    const { withdraw, defer } = await o.admitRemote(remote);
+    if (defer.size > 0) rows = rows.filter((r) => !defer.has(String(r.id).toLowerCase()));
+    if (withdraw.size > 0) {
+      // A session that ended there may have withdrawn its pending command already (cancelled): the others leave the
+      // queue here, never delivered (a 'sent' one, delivered before, expires).
+      await trx('legacy_agent_commands').where({ tenant_id: tenantId }).whereIn('id', [...withdraw]).whereIn('state', ['pending', 'sent'])
+        .update({
+          state: trx.raw("CASE WHEN state = 'pending' THEN 'cancelled' ELSE 'expired' END"), state_event_at: now, completed_at: now,
+          result_code: trx.raw("CASE WHEN state = 'pending' THEN 'cancelled' ELSE result_code END"), updated_at: now,
+        });
+      rows = rows.filter((r) => !withdraw.has(String(r.id).toLowerCase()));
+    }
+  }
   if (rows.length === 0) return [];
   await trx('legacy_agent_commands').where({ tenant_id: tenantId }).whereIn('id', rows.map((r) => r.id))
     .update({ state: 'sent', state_event_at: now, delivered_at: now, hold_reason: null, delivery_count: trx.raw('delivery_count + 1'), updated_at: now });

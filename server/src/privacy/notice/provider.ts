@@ -14,7 +14,7 @@ import { retentionValues } from '../retention';
 import { backupRetentionDays } from '../retentionPolicy';
 import { NoticeIncompleteError } from './errors';
 import { noticeGate } from './gate';
-import { NOTICE_GENERATOR_VERSION, generateNotice, noticeCollection, type NoticeContent } from './generate';
+import { NOTICE_GENERATOR_VERSION, generateNotice, noticeCollection, noticeRemoteAssistance, type NoticeContent } from './generate';
 
 // =============================================================================
 // The notice of the employees served by the enrollments (P0-13 T5, USR-01), replacing the laboratory's default notices
@@ -99,6 +99,7 @@ export async function generateNoticeNow(q: Q, tenantId: number, platform: Notice
   const content = generateNotice({
     platform, ownership, locale, organization, collection: noticeCollection(platform, ownership, rules, android),
     retention, backupDays: backupRetentionDays(), settings: settings.settings,
+    remoteAssistance: noticeRemoteAssistance(platform, ownership, rules),
   });
   return { content, settings, profile: profile ? { id: profile.id, version: profile.version } : null, retentionVersion };
 }

@@ -33,6 +33,8 @@ class AgentEngine(
     private val clock: () -> Long,
     private val log: AgentLog = AgentLog.None,
     private val random: Random = Random.Default,
+    /** Remote assistance sessions (1.1.0, P0-15); none: remote.open is refused. */
+    private val remoteHost: RemoteHost = RemoteHost.None,
 ) {
     /** Called when a delivered configuration changes (Knox licence, keep-alive...). */
     var onConfigChanged: (() -> Unit)? = null
@@ -135,7 +137,18 @@ class AgentEngine(
             }
         }
         state.awaitingUser = awaiting
+        settleRemote()
         cleanUpdates()
+    }
+
+    /** A remote.open the host no longer runs (the process was killed during the session) gets an answer. */
+    private fun settleRemote() {
+        val active = remoteHost.activeCommand()
+        for (e in state.journal) {
+            if (e.type == CommandType.REMOTE_OPEN.wire && e.state == "awaiting_user" && e.id != active && now - e.at > REMOTE_ORPHAN_S) {
+                finish(e.id, CommandResult(e.id, ResultStatus.ERROR, Codes.INTERNAL, mapOf("message" to "session lost by the agent"), now))
+            }
+        }
     }
 
     private fun cleanUpdates() {
@@ -220,10 +233,13 @@ class AgentEngine(
 
     private fun applyConfig(c: Map<String, Any?>) {
         c.long("version")?.let { state.configVersion = it }
+        state.configAgentVersion = versionCode
         c.long("inventorySeconds")?.let { if (it in 3600..30L * 86_400) state.inventorySeconds = it }
         c.bool("keepAlive")?.let { state.keepAlive = it }
         c.long("minAgentVersionCode")?.let { state.minAgentVersionCode = it }
         if (c.containsKey("knoxLicenseKey")) state.serverKnoxLicenseKey = c.str("knoxLicenseKey")?.takeIf { it.isNotBlank() }
+        // The whole configuration travels each time: no remote object (a server before P0-15) disables it.
+        state.remote = RemoteConfig.fromServer(c.obj("remote"), now)
         onConfigChanged?.invoke()
     }
 
@@ -270,7 +286,13 @@ class AgentEngine(
         val outbox = state.outbox.take(MAX_RESULTS)
         val events = state.events.take(MAX_EVENTS)
         val body = linkedMapOf<String, Any?>(
-            "agent" to linkedMapOf("versionCode" to versionCode, "configVersion" to state.configVersion),
+            // The server sends the configuration only when the version announced differs, and its version hashes the
+            // content alone: a configuration read by another version of the agent (1.0.x ignored config.remote) is
+            // asked again whole, once, by announcing none.
+            "agent" to linkedMapOf(
+                "versionCode" to versionCode,
+                "configVersion" to if (state.configAgentVersion == versionCode) state.configVersion else 0L,
+            ),
             "status" to facts.status(),
             "results" to outbox.map { it.toJson() },
             "events" to events,
@@ -427,6 +449,7 @@ class AgentEngine(
                     state.inventoryRequested = true
                     null
                 }
+                CommandType.REMOTE_OPEN -> openRemote(c)
                 else -> err(c, Codes.INTERNAL)
             }
         } catch (e: Exception) {
@@ -434,6 +457,32 @@ class AgentEngine(
             err(c, Codes.INTERNAL)
         }
         if (result != null) finish(c.id, result)
+    }
+
+    /**
+     * remote.open (P0-15 §0.1, §4.3, §8): refused without showing anything unless the signed configuration enables
+     * remote assistance; one session at a time (agent_busy); otherwise the host opens it (the opening told, the system
+     * dialog of MediaProjection) and the result comes with [onRemoteOutcome].
+     */
+    private fun openRemote(c: Command): CommandResult? {
+        val p = c.params as Params.RemoteOpen
+        if (!state.remote.enabled) return rej(c, Codes.UNSUPPORTED)
+        if (remoteHost.activeCommand() != null) return rej(c, Codes.AGENT_BUSY)
+        val refusal = remoteHost.open(c.id, p)
+        if (refusal != null) return if (refusal == Codes.UNSUPPORTED || refusal == Codes.AGENT_BUSY) rej(c, refusal) else err(c, refusal)
+        record(JournalEntry(c.id, c.type.wire, "awaiting_user", null, now))
+        return null
+    }
+
+    /**
+     * The outcome of a remote.open handed to the host: projection_denied, session_gone, internal... or acknowledged
+     * once /accept was taken. Ignored for another command or one already answered.
+     */
+    @Synchronized
+    fun onRemoteOutcome(commandId: String, status: ResultStatus, code: String) {
+        val e = state.journal.firstOrNull { it.id == commandId } ?: return
+        if (e.type != CommandType.REMOTE_OPEN.wire || e.state == "done") return
+        finish(commandId, CommandResult(commandId, status, code, emptyMap(), now))
     }
 
     private fun runTerminal(t: Terminal) {
@@ -770,6 +819,8 @@ class AgentEngine(
         /** Longest legitimate wait: slow(DAY_S), Retry-After (1 day at most), back-off (36 min). */
         const val MAX_WAIT_S = DAY_S + 3_600L
         const val USER_TIMEOUT_S = 86_400L
+        /** A remote.open the host does not run any more is answered after this (corrected seconds since handed over). */
+        const val REMOTE_ORPHAN_S = 60L
         const val CLOCK_EVENT_S = 120L
         const val BACKOFF_MIN_S = 30L
         const val BACKOFF_MAX_S = 1_800L

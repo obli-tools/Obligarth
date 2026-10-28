@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { Ban, Play, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Ban, MonitorSmartphone, Play, RefreshCw, ShieldAlert } from 'lucide-react';
 import type { LegacyAgentCommandState, LegacyAgentCommandView, LegacyAgentDeviceAction } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { isStepUpHandled } from '@/api/client';
@@ -24,7 +24,11 @@ const TYPE_LABEL: Record<string, { key: string; fallback: string }> = {
   'app.uninstall': { key: 'legacyAgent.actions.uninstall', fallback: 'Uninstall an app' },
   'agent.update': { key: 'legacyAgent.actions.update', fallback: 'Update the agent' },
 };
-const MENU: Array<LegacyAgentDeviceAction['type']> = ['device.lock', 'device.message', 'device.reboot', 'inventory.refresh', 'device.wipe'];
+const MENU: Array<LegacyAgentDeviceAction['type']> = [
+  'remote.view', 'remote.control', 'device.lock', 'device.message', 'device.reboot', 'inventory.refresh', 'device.wipe',
+];
+/** The remote assistance (P0-15): opened by its dialog and its viewer, never a command of the queue. */
+const REMOTE_TYPES = new Set<LegacyAgentDeviceAction['type']>(['remote.view', 'remote.control']);
 
 export function LegacyActionsTab({ deviceId, canAct, onQueued }: { deviceId: number; canAct: boolean; onQueued?: () => void }) {
   const { t } = useTranslation();
@@ -52,7 +56,9 @@ export function LegacyActionsTab({ deviceId, canAct, onQueued }: { deviceId: num
                 )}
               </span>
               <Button size="sm" variant={a.type === 'device.wipe' ? 'danger' : 'secondary'} disabled={!canAct || !a.available || runner.busy === a.type} onClick={() => runner.run(a)}>
-                <Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}
+                {REMOTE_TYPES.has(a.type)
+                  ? <><MonitorSmartphone className="w-3.5 h-3.5 mr-1" />{t('remote.open.button') || 'Open'}</>
+                  : <><Play className="w-3.5 h-3.5 mr-1" />{t('apple.actions.run') || 'Request'}</>}
               </Button>
             </li>
           ))}

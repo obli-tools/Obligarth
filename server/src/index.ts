@@ -29,6 +29,7 @@ import { registerAuditModule } from './audit/module';
 import { registerGuardModule } from './guard/module';
 import { registerAppleModule } from './modules/apple';
 import { registerLegacyAgentModule } from './modules/legacyAgent';
+import { registerRemoteModule } from './modules/remote';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
 import { registerAndroidModule } from './modules/android';
@@ -89,6 +90,8 @@ async function main() {
   registerMdmModule();
   registerAppleModule();
   registerLegacyAgentModule();
+  // Remote assistance (P0-15): right after the bridge agent, its first channel.
+  registerRemoteModule();
   registerPrivacyModule();
   // Android (android-amapi §3.4, lot AN-A2): after the Apple and privacy modules. Without I/O; its queues, handlers,
   // start check of the Google identity and pull loop only when ANDROID_MODE is not off (AN39).

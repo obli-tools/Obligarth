@@ -6,6 +6,9 @@
 //   A2  third refusal for cooldown in a tenant in 24 h: the tenant is frozen;
 //   A3  one actor requests guarded actions in 2 tenants or more in 1 hour:
 //       critical alert to every platform administrator, no freeze.
+//   remote.burst (P0-15 §4.6)  more than 10 remote assistance sessions asked
+//       by one operator in a tenant in 1 hour: warning to the tenant and the
+//       MSP, no freeze (counted by server/src/remote/routes.ts).
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { db } from '../db';
 import { asTenant, type DbActor } from '../db/context';
@@ -63,5 +66,19 @@ export async function alertA3(userId: number, tenants: number): Promise<void> {
     message: `Account #${userId} requested guarded actions in ${tenants} tenants within one hour.`,
     stableKey: `guard:a3:${userId}:${hour}`,
     navigateTo: '/admin/security?tab=guard',
+  });
+}
+
+/** remote.burst (P0-15 §4.6): one operator asked more than REMOTE_LIMITS.burstPerHour remote assistance sessions in
+ *  a tenant within an hour. A warning to the tenant (its administrators and its client approvers) and to the master
+ *  tenant (the MSP); one per operator, tenant and hour (stable key). No freeze: a session targets one device. */
+export async function alertRemoteBurst(tenantId: number, userId: number, sessions: number): Promise<void> {
+  const hour = new Date().toISOString().slice(0, 13);
+  await alertTenants([tenantId, MASTER_TENANT_ID], {
+    severity: 'warning',
+    title: 'Burst of remote assistance sessions',
+    message: `Account #${userId} asked ${sessions} remote assistance sessions within one hour in tenant #${tenantId}.`,
+    stableKey: `remote:burst:${tenantId}:${userId}:${hour}`,
+    navigateTo: '/remote-sessions',
   });
 }

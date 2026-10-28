@@ -60,6 +60,7 @@ import { createAndroidKioskRouter } from '../android/routes/kiosk.routes';
 import { createAndroidOperationsAdminRouter, createAndroidOperationsRouter } from '../android/routes/operations.routes';
 import { createAndroidSignupCallbackRouter } from '../android/routes/signupCallback.routes';
 import { createLegacyAgentRouter } from '../legacyAgent/routes';
+import { createRemoteSessionsRouter } from '../remote/routes';
 import { createLegacyAgentAdminRouter } from '../legacyAgent/admin.routes';
 
 const router = Router();
@@ -175,6 +176,8 @@ tenantRouter.use('/privacy', createPrivacyRouter());
 // The Android bridge agent (agent-pont-android §7): the console of the tenant, the platform's (versions of the agent,
 // instance key, settings; master tenant, platform administrators).
 tenantRouter.use('/legacy-agent', createLegacyAgentRouter());
+// The remote assistance sessions (P0-15 §4.2): request, journal, end, escalation, settings (remote/routes.ts).
+tenantRouter.use('/remote-sessions', createRemoteSessionsRouter());
 tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
 // The hardened audit journal: retention, legal holds, SIEM destinations,
 // seal keys (master tenant, platform administrators; audit/admin.routes.ts).

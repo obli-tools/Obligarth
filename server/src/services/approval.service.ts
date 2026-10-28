@@ -82,7 +82,11 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   // A new version of a privacy profile of the tenant (P0-13 T3, CNF-02, D3): always a second person (privacy/approvals.ts).
   | 'privacy_profile_change'
   // A change of the retention of the tenant (P0-13 T4, CNF-04, D3, D4): always a second person (privacy/retentionPolicy.ts).
-  | 'privacy_retention_change';
+  | 'privacy_retention_change'
+  // A remote assistance session the matrix (or the tenant's setting mspSessionsNeedClientApproval) holds at
+  // 'restricted', and a change of the settings of the remote assistance (P0-15 §4.6, D16; remote/approvals.ts).
+  | 'remote_session'
+  | 'remote_settings_change';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */

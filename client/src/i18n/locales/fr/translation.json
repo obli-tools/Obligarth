@@ -39,6 +39,7 @@
     "import": "Importer"
   },
   "nav": {
+    "remoteSessions": "Assistance à distance",
     "dashboard": "Tableau de bord",
     "groups": "Groupes",
     "users": "Utilisateurs",
@@ -971,6 +972,7 @@
     "lastSeen": "Vu en dernier",
     "tenant": "Tenant",
     "tabs": {
+      "remote": "Assistance à distance",
       "label": "Sections de la fiche",
       "overview": "Vue d'ensemble",
       "configuration": "Configuration",
@@ -2506,7 +2508,9 @@
       "mdm_lost_mode": "MDM · Mode perdu",
       "mdm_passcode": "MDM · Supprimer le code",
       "mdm_wipe": "MDM · Effacer",
-      "mdm_remove": "MDM · Retirer de la gestion"
+      "mdm_remove": "MDM · Retirer de la gestion",
+      "mdm_remote_view": "MDM · Voir l'écran",
+      "mdm_remote_control": "MDM · Prendre la main"
     }
   },
   "apple": {
@@ -2567,7 +2571,8 @@
         "setup": "Assistant de configuration",
         "system": "Système",
         "approval": "Demande approuvée",
-        "guard": "Action gardée"
+        "guard": "Action gardée",
+        "remote": "Assistance à distance"
       },
       "push": {
         "sent": "Poussée envoyée",
@@ -3877,6 +3882,7 @@
     "tenantFrozen": "Les commandes de ce tenant sont gelées.",
     "commandRefused": "La commande ne peut pas être envoyée à cet appareil.",
     "locationDisabledByPrivacy": "Le profil de confidentialité de la propriété de cet appareil n'autorise pas sa localisation.",
+    "clientApproverRequired": "Un approbateur côté client désigné du tenant doit examiner cette demande, jamais le côté du prestataire : désignez-en un d'abord.",
     "invalidNoticeSettings": "Un réglage de la notice n'est pas accepté (trop long, ou avec du balisage).",
     "invalidPrivacyRules": "Les règles de confidentialité ne sont pas valides.",
     "justificationRequired": "Une justification d'au moins 10 caractères est exigée.",
@@ -3888,6 +3894,16 @@
     "privacyRetentionChangePending": "Une modification de la rétention attend déjà son approbation.",
     "privacyRuleImposed": "Une règle imposée de cette propriété ne peut pas changer.",
     "rateLimited": "Trop de demandes : réessayez dans une minute.",
+    "escalationRestricted": "La prise de contrôle d'un appareil est soumise à approbation dans ce tenant : terminez cette session et demandez une session de contrôle.",
+    "frozen": "Le tenant est gelé : aucune session d'assistance à distance tant qu'il n'est pas dégelé.",
+    "remoteQuota": "Trop de sessions d'assistance à distance sont ouvertes ({{limit}} au plus {{scope}}). Terminez-en une, puis réessayez.",
+    "remoteSessionOpen": "Une session d'assistance à distance est déjà ouverte sur cet appareil.",
+    "remoteSessionRequired": "Une session d'assistance à distance s'ouvre depuis la fiche de l'appareil, pas comme une commande.",
+    "remoteSessionState": "La session ne peut pas faire cela dans son état actuel (« {{state}} »).",
+    "remoteSettingsChangePending": "Une modification des réglages de l'assistance à distance attend déjà son approbation.",
+    "remoteSettingsUnchanged": "Les réglages de l'assistance à distance ont déjà ces valeurs.",
+    "remoteUnavailable": "Une session d'assistance à distance n'est pas disponible sur cet appareil. {{reason}}.",
+    "viewerTokenIssued": "La visionneuse de cette session a déjà été ouverte une fois : elle ne peut pas l'être depuis un autre endroit.",
     "retentionOutOfRange": "Une durée de conservation sort de sa plage.",
     "retentionUnchanged": "La rétention a déjà ces valeurs.",
     "deviceUnderManagement": "Un appareil sous gestion sort de gestion avant la suppression de sa fiche.",
@@ -4501,7 +4517,9 @@
       "update": "Mettre à jour l'agent",
       "lock": "Verrouiller",
       "wipe": "Effacer",
-      "revoke": "Révoquer"
+      "revoke": "Révoquer",
+      "remoteView": "Voir l'écran",
+      "remoteControl": "Prendre la main"
     },
     "cols": {
       "name": "Nom",
@@ -4655,12 +4673,20 @@
     },
     "openPanel": "Panneau de l'agent Android",
     "unavailable": {
+      "policyConflict": "Une politique de l'appareil interdit la capture de son écran",
+      "quota": "Trop de sessions d'assistance à distance sont ouvertes",
       "capabilityMissing": "Votre équipe n'a pas cette capacité",
       "revoked": "L'agent est révoqué",
       "notEnrolled": "Non enrôlé",
       "adminInactive": "L'administrateur de l'appareil de l'agent est désactivé",
       "knoxRequired": "Exige un Knox sous licence",
-      "frozen": "Tenant gelé"
+      "frozen": "Tenant gelé",
+      "privacyDisabled": "Le profil de confidentialité du tenant n'autorise pas l'assistance à distance",
+      "personalDevice": "Jamais sur un appareil personnel ou COPE",
+      "agentTooOld": "Exige l'agent Android 1.1.0 ou plus récent",
+      "sessionOpen": "Une session d'assistance à distance est déjà ouverte sur cet appareil",
+      "injectUnavailable": "L'agent ne peut pas injecter les entrées sur cet appareil (contrôle à distance Knox)",
+      "platformUnsupported": "Impossible sur cet appareil"
     }
   },
   "android": {
@@ -5425,6 +5451,12 @@
           "managed_only": "Gérés seulement"
         }
       },
+      "remoteAssistance": {
+        "label": "Assistance à distance",
+        "hint": "Le support peut voir l'écran, et le contrôler, pendant une session d'assistance signalée sur l'appareil par des notifications (à son ouverture, pendant toute sa durée, à sa fin). Permise par défaut sur les appareils d'entreprise ; jamais sur un appareil personnel ou COPE.",
+        "on": "Permise",
+        "off": "Non permise"
+      },
       "collected": "Collecté",
       "notCollected": "Non collecté"
     },
@@ -5506,6 +5538,10 @@
         "notice_ack_months": {
           "label": "Accusés de lecture de la notice",
           "hint": "La preuve qu'un salarié a lu la notice avant une inscription."
+        },
+        "remote_sessions_months": {
+          "label": "Sessions d'assistance à distance",
+          "hint": "Le journal des sessions : qui, quand, quel appareil, mode, durée et motif (aucune image n'est enregistrée)."
         }
       },
       "fixed": {
@@ -6008,5 +6044,178 @@
   "smartGroups": {
     "filterChip": "Un groupe dynamique",
     "filterChipHint": "Les membres d'un groupe dynamique : retirer ce filtre"
+  },
+  "remote": {
+    "nav": {
+      "label": "Navigation de l'appareil",
+      "back": "Retour",
+      "home": "Accueil",
+      "recents": "Applications récentes",
+      "notifications": "Notifications",
+      "volumeDown": "Baisser le volume",
+      "volumeUp": "Monter le volume",
+      "wake": "Allumer l'écran"
+    },
+    "keys": {
+      "enter": "Entrée",
+      "del": "Effacer",
+      "left": "Gauche",
+      "right": "Droite",
+      "up": "Haut",
+      "down": "Bas"
+    },
+    "text": {
+      "placeholder": "Texte à saisir sur l'appareil",
+      "label": "Texte à saisir sur l'appareil",
+      "send": "Saisir"
+    },
+    "quotaScope": {
+      "tenant": "par tenant",
+      "operator": "par opérateur",
+      "instance": "sur l'instance"
+    },
+    "state": {
+      "awaiting_approval": "En attente d'approbation",
+      "queued": "En attente de l'appareil",
+      "awaiting_consent": "Démarrage de la capture",
+      "connecting": "Connexion",
+      "live": "En cours",
+      "ended": "Terminée",
+      "expired": "Expirée",
+      "cancelled": "Annulée",
+      "failed": "Échouée"
+    },
+    "endReason": {
+      "operator": "Terminée par le technicien",
+      "projection_denied": "La capture de l'écran n'a pas été autorisée sur l'appareil",
+      "device_timeout": "L'appareil n'a pas répondu à temps",
+      "idle": "Terminée après une période sans activité",
+      "max_duration": "Durée maximale atteinte",
+      "screen_off_timeout": "L'écran de l'appareil est resté éteint trop longtemps",
+      "freeze": "Le tenant a été gelé",
+      "revoked": "Un droit ou une condition de la session a été retiré",
+      "agent_error": "Erreur de l'agent sur l'appareil",
+      "server_restart": "Le serveur a redémarré",
+      "approval_denied": "L'approbation a été refusée",
+      "approval_expired": "La demande d'approbation a expiré"
+    },
+    "endedBy": {
+      "operator": "le technicien",
+      "user": "l'appareil",
+      "system": "le système"
+    },
+    "mode": {
+      "view": "Vue",
+      "control": "Contrôle"
+    },
+    "side": {
+      "msp": "Prestataire",
+      "client": "Client"
+    },
+    "viewer": {
+      "stalled": "Plus d'image depuis un moment…",
+      "live": "Connecté",
+      "retrying": "Connexion perdue, reconnexion…",
+      "closed": "Déconnecté",
+      "connecting": "Connexion à l'appareil…",
+      "quality": "Qualité",
+      "codec": "Format vidéo",
+      "zoomOut": "Dézoomer",
+      "fit": "Ajuster",
+      "zoomIn": "Zoomer",
+      "fullscreen": "Plein écran",
+      "screen": "Écran de l'appareil",
+      "waitingPicture": "En attente de l'image de l'appareil…",
+      "screenOff": "Écran éteint",
+      "locked": "Écran verrouillé",
+      "idleWarning": "Aucune activité : la session se termine dans {{seconds}} s. Touchez l'écran pour la garder.",
+      "idleTimeout": "La session se termine faute d'activité.",
+      "agentError": "L'appareil signale : {{message}}",
+      "inputUnavailable": "L'appareil n'a pas pris l'entrée ({{reason}}).",
+      "controlHelp": "Clic ou toucher : un doigt ; glisser : un balayage ; Ctrl + glisser : un pincement ; clic droit : Retour ; clic du milieu : Accueil ; molette : défilement. Image sélectionnée, le clavier saisit sur l'appareil.",
+      "viewHelp": "Vue seule : rien de ce que vous faites ici n'atteint l'appareil.",
+      "secureHelp": "Les écrans qu'une application protège (banque, mots de passe) apparaissent noirs : l'appareil ne les laisse pas capturer."
+    },
+    "open": {
+      "button": "Ouvrir",
+      "start": "Ouvrir la session",
+      "heldForApproval": "La session attend son approbation.",
+      "informed": "L'utilisateur de l'appareil n'a rien à accepter : une notification lui annonce l'ouverture d'une session d'assistance à distance, une autre reste affichée pendant toute la session, une dernière lui en annonce la fin.",
+      "stepUp": "Votre second facteur est demandé à chaque ouverture et à chaque passage au contrôle. La session est journalisée (qui, quand, appareil, mode, durée) ; l'image n'est jamais enregistrée.",
+      "controlNote": "En contrôle, vos touchers, les touches de navigation et le texte que vous saisissez atteignent l'appareil, y compris sur son écran verrouillé.",
+      "projectionNote": "La première session sur un appareil demande l'autorisation système de capture de l'écran : quelqu'un doit l'accepter une fois sur l'appareil, en cochant « Ne plus afficher ». Sans cela, une session sur un appareil sans personne devant échoue au bout de 60 s.",
+      "reason": "Motif (facultatif)",
+      "ticket": "Numéro de ticket (facultatif)"
+    },
+    "session": {
+      "title": "Assistance à distance",
+      "backToDevice": "Retour à l'appareil",
+      "notFound": "Session introuvable",
+      "asked": "demandé",
+      "device": "Appareil",
+      "by": "Par",
+      "reason": "Motif",
+      "ticket": "Ticket",
+      "duration": "Durée",
+      "informedBanner": "L'utilisateur est informé par une notification : à l'ouverture, pendant toute la session et à sa fin.",
+      "takeControl": "Prendre la main",
+      "backToView": "Revenir à la vue",
+      "end": "Terminer",
+      "confirmEnd": "Terminer cette session d'assistance à distance ?",
+      "ended": "Session terminée",
+      "controlGranted": "Vous avez la main",
+      "controlReleased": "Retour à la vue",
+      "awaitingApproval": "La session attend son approbation par une autre personne.",
+      "approvalRequest": "Demande n° {{id}}",
+      "timeLeft": "reste {{time}}",
+      "openApprovals": "Approbations",
+      "queued": "En attente de l'appareil : il prend la demande à son prochain contact avec le serveur.",
+      "askForHelp": "Pour aller plus vite, demandez à l'utilisateur d'appuyer sur « Demander de l'aide » dans l'agent Obligarth : l'appareil contacte aussitôt le serveur.",
+      "startingCapture": "L'appareil démarre la capture de son écran.",
+      "projectionHint": "Si l'autorisation système de capture n'a jamais été validée en cochant « Ne plus afficher », quelqu'un doit appuyer sur « Commencer maintenant » sur l'appareil dans les 60 s ; sinon la session échoue.",
+      "needToken": "Ouvrez la visionneuse de cette session (votre second facteur est demandé).",
+      "openViewer": "Ouvrir la visionneuse",
+      "notRequester": "Seul le technicien qui a ouvert cette session en voit l'écran.",
+      "replaced": "La visionneuse de cette session est ouverte dans un autre onglet ou navigateur. Terminez la session là-bas, ou terminez-la ici et ouvrez-en une nouvelle.",
+      "disconnected": "La visionneuse a perdu sa connexion à la session.",
+      "reconnect": "Se reconnecter",
+      "endedByLabel": "terminée par",
+      "startedAt": "Début",
+      "endedAt": "Fin",
+      "inputs": "Entrées",
+      "projectionDeniedTitle": "La capture de l'écran n'a pas été autorisée sur l'appareil",
+      "projectionDeniedHelp": "Android demande une fois l'autorisation de capturer l'écran. Personne ne l'a acceptée dans les 60 s, ou elle a été refusée. Faites-la valider une fois sur place : lancez une session, puis sur l'appareil cochez « Ne plus afficher » et appuyez sur « Commencer maintenant ». Les sessions suivantes démarrent ensuite sans personne devant l'appareil."
+    },
+    "journal": {
+      "previous": "Page précédente",
+      "next": "Page suivante",
+      "title": "Sessions d'assistance à distance",
+      "count": "{{n}} session(s)",
+      "empty": "Aucune session d'assistance à distance.",
+      "intro": "Toutes les sessions d'assistance à distance de ce tenant : qui l'a ouverte, quand, sur quel appareil, dans quel mode, combien de temps, et pourquoi elle s'est terminée. L'image n'est jamais enregistrée.",
+      "device": "Numéro d'appareil",
+      "state": "État",
+      "side": "Côté",
+      "all": "Tous",
+      "from": "Du",
+      "to": "Au"
+    },
+    "settings": {
+      "title": "Assistance à distance",
+      "intro": "Les sessions d'assistance à distance de ce tenant. Une modification est examinée par une seconde personne ; une modification, par le prestataire, de l'approbation de ses sessions par le client est examinée par un approbateur côté client.",
+      "pending": "Une modification attend son approbation (demande n° {{id}}).",
+      "mspApproval": "Sessions du prestataire approuvées par le client",
+      "mspApprovalDesc": "Chaque session demandée par un technicien du prestataire attend l'approbation d'un approbateur côté client désigné du tenant.",
+      "maxMinutes": "Durée maximale d'une session",
+      "maxMinutesDesc": "De {{min}} à {{max}} minutes ; la session se termine une fois cette durée atteinte.",
+      "minutes": "minutes",
+      "waitChannel": "Réveil permanent des agents Android",
+      "waitChannelDesc": "Désactivé par défaut : un agent ne garde une attente longue que pendant 15 minutes après « Demander de l'aide » ou après une session. L'activer coûte de la batterie et des données mobiles sur chaque appareil : à décider après les mesures du pilote.",
+      "approvalNote": "La modification s'applique une fois approuvée.",
+      "readOnly": "Lecture seule : modifier ces réglages demande la capacité Paramètres.",
+      "request": "Demander la modification",
+      "requested": "Modification demandée : elle attend son approbation.",
+      "failed": "La modification n'a pas pu être demandée."
+    }
   }
 }

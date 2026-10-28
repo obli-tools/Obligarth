@@ -86,6 +86,26 @@ sealed class InstallOutcome {
     data class Failed(val code: String, val detail: String? = null) : InstallOutcome()
 }
 
+/**
+ * A remote assistance session from its opening to its end (1.1.0, P0-15 §0.1, §8; Android: RemoteSessions).
+ * [None] refuses every session (unsupported) and shows nothing.
+ */
+interface RemoteHost {
+    /** The command id of the session in progress (system dialog, /accept or stream), null when none. */
+    fun activeCommand(): String?
+
+    /**
+     * Opens [request] (one session at a time): the opening told, the system dialog asked. Null when started: the
+     * outcome comes later through AgentEngine.onRemoteOutcome. Otherwise the result code of the refusal.
+     */
+    fun open(commandId: String, request: Params.RemoteOpen): String?
+
+    object None : RemoteHost {
+        override fun activeCommand(): String? = null
+        override fun open(commandId: String, request: Params.RemoteOpen): String = Codes.UNSUPPORTED
+    }
+}
+
 /** What the agent can do on the device (Android framework and Knox). */
 interface DeviceActions {
     fun isAdminActive(): Boolean

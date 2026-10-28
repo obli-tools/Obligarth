@@ -57,16 +57,18 @@ function sameSecret(secret: string, expectedHex: string): boolean {
   return a.length === 32 && b.length === 32 && timingSafeEqual(a, b);
 }
 
-async function answer(trx: Knex.Transaction, tenantId: number, agentId: string, deviceUuid: string, status: 200 | 201): Promise<Reply> {
+/** `versionCode`: the agent's of this request (its configuration depends on it: the remote object from 1.1.0, P0-15). */
+async function answer(trx: Knex.Transaction, tenantId: number, agentId: string, deviceUuid: string, status: 200 | 201, versionCode: number): Promise<Reply> {
   const key = await currentServerKey();
   const s = await instanceSettings();
-  const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, agent_id: agentId }).first('poll_seconds') as { poll_seconds: number | null } | undefined;
+  const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, agent_id: agentId }).first('poll_seconds', 'device_id') as
+    { poll_seconds: number | null; device_id: number } | undefined;
   return {
     status,
     body: {
       agentId, deviceUuid, serverTime: Math.floor(Date.now() / 1000), pollSeconds: sat?.poll_seconds ?? s.pollSeconds,
       serverKeys: key ? [{ keyId: key.keyId, spki: key.spkiB64url }] : [],
-      config: await agentConfigFor(trx, tenantId),
+      config: await agentConfigFor(trx, tenantId, sat ? { deviceId: Number(sat.device_id), versionCode } : undefined),
     },
   };
 }
@@ -109,7 +111,7 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
         { agent_id: string; revoked_at: Date | null; uuid: string } | undefined;
       if (existing) {
         if (existing.revoked_at) return errorReply(403, 'agentRevoked', 'This device was removed from management');
-        return answer(trx, tenantId, String(existing.agent_id), String(existing.uuid), 200);
+        return answer(trx, tenantId, String(existing.agent_id), String(existing.uuid), 200, b.agent.versionCode);
       }
       if (!tok.usable) return tokenInvalid();
       const used = await trx('legacy_agent_enrollment_tokens')
@@ -179,7 +181,7 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
         }, ctx, { onFailure: 'spool' });
         await raiseInTx(trx, tenantId, 'legacy_agent.identity_conflict', { discriminant: deviceId, navigateTo: `/legacy-agent?device=${deviceId}` });
       }
-      return answer(trx, tenantId, agentId, String(dev.uuid), 201);
+      return answer(trx, tenantId, agentId, String(dev.uuid), 201, b.agent.versionCode);
     }));
     return { reply, tenantId };
   } catch (err) {
@@ -193,7 +195,7 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
           { agent_id: string; revoked_at: Date | null; uuid: string } | undefined;
         if (!won) return null;
         if (won.revoked_at) return errorReply(403, 'agentRevoked', 'This device was removed from management');
-        return answer(trx, tenantId, String(won.agent_id), String(won.uuid), 200);
+        return answer(trx, tenantId, String(won.agent_id), String(won.uuid), 200, b.agent.versionCode);
       }));
       return again ? { reply: again, tenantId } : { reply: tokenInvalid() };
     }

@@ -1,19 +1,21 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import type { LegacyAgentConsoleType, LegacyAgentDeviceAction } from '@obligarth/shared';
+import type { LegacyAgentConsoleType, LegacyAgentDeviceAction, RemoteMode } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { isStepUpHandled } from '@/api/client';
 import { Button } from '@/components/common/Button';
 import { Modal } from '@/components/common/Modal';
 import { useConfirm } from '@/components/common/ConfirmDialog';
 import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
+import { RemoteOpenDialog } from '@/components/remote/RemoteOpenDialog';
 import { apiErrorMessage } from '@/utils/apiError';
 
 // How an action of the Android bridge agent is launched on one device (agent-pont-android §5, §7), shared by the
 // Actions tab and the quick actions of the record. Lock and erase go through their guarded action
 // (legacy_agent.device_lock, legacy_agent.erase_device) exactly as on the agent page; the message, the restart and
-// the inventory go to the command route, behind the restriction of the tenant.
+// the inventory go to the command route, behind the restriction of the tenant. See the screen and take control open
+// the dialog of a remote assistance session (P0-15), then its viewer.
 
 type LegacyType = LegacyAgentDeviceAction['type'];
 
@@ -23,6 +25,8 @@ const LABEL: Record<LegacyType, { key: string; fallback: string }> = {
   'device.message': { key: 'legacyAgent.actions.message', fallback: 'Message' },
   'device.reboot': { key: 'legacyAgent.actions.reboot', fallback: 'Restart' },
   'inventory.refresh': { key: 'legacyAgent.actions.inventory', fallback: 'Inventory' },
+  'remote.view': { key: 'legacyAgent.actions.remoteView', fallback: 'See the screen' },
+  'remote.control': { key: 'legacyAgent.actions.remoteControl', fallback: 'Take control' },
 };
 /** The guarded action of lock and erase when the menu does not name it. */
 const GUARD_KEY: Partial<Record<LegacyType, string>> = { 'device.lock': 'legacy_agent.device_lock', 'device.wipe': 'legacy_agent.erase_device' };
@@ -46,6 +50,7 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
   const [text, setText] = useState('');
   const [mode, setMode] = useState<'notification' | 'fullscreen'>('notification');
   const [busy, setBusy] = useState<string | null>(null);
+  const [remoteMode, setRemoteMode] = useState<RemoteMode | null>(null);
   // The latest callback (the caller's reload changes with its state).
   const queued = useRef(onQueued);
   useEffect(() => { queued.current = onQueued; }, [onQueued]);
@@ -67,6 +72,11 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
   };
 
   const run = (a: LegacyAgentDeviceAction) => {
+    // A remote assistance session is opened through /api/remote-sessions (its viewer), never as a command.
+    if (a.type === 'remote.view' || a.type === 'remote.control') {
+      setRemoteMode(a.type === 'remote.control' ? 'control' : 'view');
+      return;
+    }
     if (a.type === 'device.lock' || a.type === 'device.wipe') {
       setGuarded({ type: a.type, actionKey: a.guarded && a.actionKey ? a.actionKey : (GUARD_KEY[a.type] as string) });
       return;
@@ -135,6 +145,8 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
           onDone={() => { setGuarded(null); queued.current?.(); }}
         />
       )}
+
+      <RemoteOpenDialog deviceId={deviceId} mode={remoteMode} onClose={() => setRemoteMode(null)} />
     </>
   );
 

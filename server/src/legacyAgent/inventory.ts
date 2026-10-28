@@ -1,4 +1,5 @@
 import type { Knex } from 'knex';
+import { REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
 import { audit } from '../audit';
 import { raiseInTx } from '../apple/alerts/service';
 import { appsMerge } from '../mdm/inventory/appMerge';
@@ -137,6 +138,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       'agent.knox.state': b.knox.state,
       'agent.security.patch': d.securityPatch ?? null,
       'agent.install.unknown-sources': b.install?.unknownSources ?? null,
+      // P0-15 §8: the measured capability of the control (agent 1.1.0 and later), only when the agent tells it.
+      ...(typeof b.knox.remoteInject === 'boolean' ? { [REMOTE_LEGACY_INJECT_ITEM]: b.knox.remoteInject } : {}),
     });
     // The dynamic groups: what the base marked of this inventory (facts, API level, patch, applications), P0-5 T5.
     await requestGroupEvaluation(trx, who.tenantId, [who.deviceId]);

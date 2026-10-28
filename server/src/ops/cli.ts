@@ -60,6 +60,7 @@ import { registerAuditModule } from '../audit/module';
 import { registerGuardModule } from '../guard/module';
 import { registerAppleModule } from '../modules/apple';
 import { registerLegacyAgentModule } from '../modules/legacyAgent';
+import { registerRemoteModule } from '../modules/remote';
 import { registerMdmModule } from '../mdm';
 import { registerPrivacyModule } from '../modules/privacy';
 import { registerAndroidModule } from '../modules/android';
@@ -108,6 +109,7 @@ export function registerServerModules(): void {
   registerMdmModule();
   registerAppleModule();
   registerLegacyAgentModule();
+  registerRemoteModule();
   registerPrivacyModule();
   registerAndroidModule();
   registerOpsModule();

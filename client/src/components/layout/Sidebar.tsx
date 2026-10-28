@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { Link, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
+  MonitorSmartphone,
   Settings,
   Users,
   UserCircle,
@@ -515,6 +516,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // Privacy (P0-13 T7) — the privacy profiles, the retention and the notice of the employees (order of the section:
     // coordination C8).
     ...(admin || hasPrivacyCap ? [{ label: t('nav.privacy', 'Privacy'), path: '/privacy', icon: <Lock size={18} /> } as NavItem] : []),
+    // Remote assistance (P0-15) — the journal of the sessions of the tenant (audit.read: the client approver and the
+    // auditor too), beside Privacy (coordination C8).
+    ...(admin || tenantCaps.has('audit.read') ? [{ label: t('nav.remoteSessions', 'Remote assistance'), path: '/remote-sessions', icon: <MonitorSmartphone size={18} /> } as NavItem] : []),
     // Security — the journal (audit.read), the approvals (approvals.review)
     // and, for platform administrators, the vault and the journal settings.
     ...(admin || hasSecurityCap ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: admin ? pendingApprovalsCount : 0 } as NavItem] : []),

@@ -12,9 +12,11 @@ import { apkDir } from './config';
 import { handleEnroll } from './enroll';
 import { handleIcons } from './icons';
 import { handleInventory } from './inventory';
-import { BucketLimiter, ConcurrencyLimiter, WindowLimiter } from './limits';
+import { BucketLimiter, ConcurrencyLimiter, ReplayCache, WindowLimiter } from './limits';
 import { handlePackage, type PackageReply } from './packages';
 import { handlePoll } from './poll';
+import { legacyAgentRemote } from './remoteBridge';
+import { WaitBody } from './schemas';
 import { currentServerKey, signWith, type ServerKey } from './serverKey';
 import { EMPTY_SHA256, p256PublicKey, requestString, responseString, sha256Hex, verifySignature } from './signature';
 import { withAgentTransaction } from './session';
@@ -30,11 +32,15 @@ import { withAgentTransaction } from './session';
 //   POST /agent/v1/inventory            full inventory → iconsWanted
 //   POST /agent/v1/icons                the icons asked for (PNG or none)
 //   GET  /agent/v1/packages/<sha256>    an APK of an open command of the device
-// Every request of /poll, /inventory, /icons and /packages is signed by the agent's
-// key (OBL-AGENT-1) and numbered (seq strictly increasing, written in the
-// transaction of its processing); every answer of the five routes, errors
-// included, is signed by the instance key (OBL-SERVER-2), except 401
-// badSignature and unknownAgent. Cache-Control: no-store. The log line:
+//   POST /agent/v1/remote/<id>/accept   remote assistance (P0-15 §4.3): the session taken → its stream token
+//   POST /agent/v1/remote/<id>/end      the end of a session from the device's side
+//   POST /agent/v1/wait                 the long wait of the armed window (Obl-Seq 0, never numbered)
+// Every request of /poll, /inventory, /icons, /packages and /remote is signed by
+// the agent's key (OBL-AGENT-1) and numbered (seq strictly increasing, written in
+// the transaction of its processing), /wait signed with seq 0 (its signatures
+// remembered over the clock window); every answer, errors included, is signed by
+// the instance key (OBL-SERVER-2), except 401 badSignature and unknownAgent (and
+// the clockSkew of /wait). Cache-Control: no-store. The log line:
 // route template, status, duration, tenant; never the address, never a body.
 // The tenant is resolved by two SECURITY DEFINER lookups in the context
 // 'none' (actor i:legacy-agent), then every read and write is the tenant's.
@@ -44,6 +50,9 @@ export const MAX_BODY = 256 * 1024;
 export const MAX_INVENTORY_BODY = 2 * 1024 * 1024;
 /** 16 icons of 32 KiB at most, in base64, with their JSON. */
 export const MAX_ICONS_BODY = 512 * 1024;
+/** /agent/v1/remote/<id>/accept and /end (P0-15 §4.3); /agent/v1/wait. */
+export const MAX_REMOTE_BODY = 8 * 1024;
+export const MAX_WAIT_BODY = 1024;
 /** Beyond the limit the body is still hashed (a signed 413), up to this size; then the connection is cut. */
 const HASH_CAP = 16 * 1024 * 1024;
 export const CLOCK_WINDOW_SECONDS = 300;
@@ -78,7 +87,8 @@ export interface Reply {
 export const errorReply = (status: number, code: LegacyAgentErrorCode, error: string, extra: Record<string, unknown> = {},
   headers?: Record<string, string>): Reply => ({ status, body: { success: false, error, code, ...extra }, ...(headers ? { headers } : {}) });
 
-interface SurfaceLocals { route: string; tenantId: number | null }
+/** quiet: a held long wait answered 200 is logged at debug (2 000 waits every 50 s would flood the log). */
+interface SurfaceLocals { route: string; tenantId: number | null; quiet?: boolean }
 const locals = (res: Response): SurfaceLocals => res.locals as unknown as SurfaceLocals;
 
 /** Sends a reply: JSON, signed over (status, agent, seq, request hash, response hash) when it must be. */
@@ -131,14 +141,20 @@ function headerOf(req: Request, name: string): string | null {
   return typeof v === 'string' ? v : null;
 }
 
+/** The kind of a signed request: /enroll (no agent yet, seq 0), a numbered one (seq strictly increasing), or a long
+ *  wait (/wait: an agent, seq 0, neither read nor consumed: P0-15 §4.3). */
+type ExchangeKind = 'enroll' | 'numbered' | 'unnumbered';
+
 /** The headers of a signed request; null when one is missing or malformed (401 badSignature). */
-function exchangeOf(req: Request, reqSha: string, enroll: boolean): Exchange | null {
+function exchangeOf(req: Request, reqSha: string, kind: ExchangeKind): Exchange | null {
   const agentId = headerOf(req, 'Obl-Agent-Id');
   const seq = headerOf(req, 'Obl-Seq');
   const ts = headerOf(req, 'Obl-Ts');
   const signature = headerOf(req, 'Obl-Signature');
   if (agentId === null || seq === null || ts === null || signature === null || !TS_RE.test(ts) || signature.length > 120) return null;
-  if (enroll ? (agentId !== '-' || seq !== '0') : (!UUID_LOWER.test(agentId) || !SEQ_RE.test(seq))) return null;
+  if (kind === 'enroll' ? (agentId !== '-' || seq !== '0')
+    : kind === 'unnumbered' ? (!UUID_LOWER.test(agentId) || seq !== '0')
+      : (!UUID_LOWER.test(agentId) || !SEQ_RE.test(seq))) return null;
   return { agentId, seq, ts: Number(ts), signature, reqSha, path: rawPath(req), method: req.method };
 }
 
@@ -183,6 +199,12 @@ export const surfaceLimits = {
   inventoryPerAgent: new WindowLimiter(1, 60_000),
   iconsPerAgent: new WindowLimiter(6, 60_000),
   downloadsPerTenant: new ConcurrencyLimiter(4),
+  // P0-15 §4.3: /accept and /end of the remote sessions; the long wait (one held at a time, again at once after its
+  // answer: a burst for the wakes, one more every 10 s), and the signatures of the waits already received (its seq 0 is
+  // never consumed: a replay inside the clock window is refused, it would take the place of the agent's own wait).
+  remotePerAgent: new WindowLimiter(20, 60_000),
+  waitPerAgent: new BucketLimiter(6, 10_000),
+  waitReplays: new ReplayCache(2 * CLOCK_WINDOW_SECONDS * 1000),
 };
 
 const limited = (retryAfter: number): Reply => errorReply(429, 'rateLimited', 'Too many requests', {}, { 'Retry-After': String(retryAfter) });
@@ -198,13 +220,15 @@ export function createLegacyAgentSurface(): Router {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.on('finish', () => {
       const ms = Number(process.hrtime.bigint() - started) / 1e6;
-      logger.info({ surface: locals(res).route, status: res.statusCode, ms: Math.round(ms), tenantId: locals(res).tenantId }, 'agent surface request');
+      const line = { surface: locals(res).route, status: res.statusCode, ms: Math.round(ms), tenantId: locals(res).tenantId };
+      if (locals(res).quiet && res.statusCode === 200) logger.debug(line, 'agent surface request');
+      else logger.info(line, 'agent surface request');
     });
     next();
   });
 
   /** The common frame of a POST route: media type, body, headers, clock, the instance key. */
-  const post = (template: string, limit: number, enroll: boolean,
+  const post = (template: string, limit: number, kind: ExchangeKind,
     handle: (ex: Exchange, body: Buffer, req: Request, res: Response) => Promise<Reply>) =>
     async (req: Request, res: Response): Promise<void> => {
       locals(res).route = template;
@@ -216,9 +240,10 @@ export function createLegacyAgentSurface(): Router {
         if (!res.headersSent) res.status(413).end();
         return;
       }
+      const enroll = kind === 'enroll';
       const draft = { agentId: enroll ? '-' : (headerOf(req, 'Obl-Agent-Id') ?? '-'), seq: enroll ? '0' : (headerOf(req, 'Obl-Seq') ?? '0'), reqSha: raw.sha };
       if (!key) { send(res, draft, { ...errorReply(503, 'unavailable', 'Service unavailable'), headers: { 'Retry-After': '300' }, signed: false }, null); return; }
-      const ex = exchangeOf(req, raw.sha, enroll);
+      const ex = exchangeOf(req, raw.sha, kind);
       if (!ex) { send(res, draft, { ...errorReply(401, 'badSignature', 'Missing or malformed signature headers'), signed: false }, key); return; }
       if (req.headers['content-encoding'] !== undefined) { send(res, ex, errorReply(415, 'unsupportedMediaType', 'Compressed bodies are refused'), key); return; }
       const ctype = String(req.headers['content-type'] ?? '').toLowerCase().split(';')[0].trim();
@@ -246,7 +271,7 @@ export function createLegacyAgentSurface(): Router {
   };
 
   router.post('/enroll', (req, res) => {
-    void post('POST /agent/v1/enroll', MAX_BODY, true, async (ex, body) => {
+    void post('POST /agent/v1/enroll', MAX_BODY, 'enroll', async (ex, body) => {
       const wait = surfaceLimits.enrollPerAddress.hit(`ip:${req.ip ?? 'unknown'}`);
       if (wait) return limited(wait);
       // The clock window is checked by handleEnroll after the proof of possession (no signed clockSkew otherwise).
@@ -257,7 +282,7 @@ export function createLegacyAgentSurface(): Router {
   });
 
   router.post('/poll', (req, res) => {
-    void post('POST /agent/v1/poll', MAX_BODY, false, async (ex, body) => {
+    void post('POST /agent/v1/poll', MAX_BODY, 'numbered', async (ex, body) => {
       const who = await authenticated(ex);
       if (isReply(who)) return who;
       locals(res).tenantId = who.tenantId;
@@ -268,7 +293,7 @@ export function createLegacyAgentSurface(): Router {
   });
 
   router.post('/inventory', (req, res) => {
-    void post('POST /agent/v1/inventory', MAX_INVENTORY_BODY, false, async (ex, body) => {
+    void post('POST /agent/v1/inventory', MAX_INVENTORY_BODY, 'numbered', async (ex, body) => {
       const who = await authenticated(ex);
       if (isReply(who)) return who;
       locals(res).tenantId = who.tenantId;
@@ -279,13 +304,54 @@ export function createLegacyAgentSurface(): Router {
   });
 
   router.post('/icons', (req, res) => {
-    void post('POST /agent/v1/icons', MAX_ICONS_BODY, false, async (ex, body) => {
+    void post('POST /agent/v1/icons', MAX_ICONS_BODY, 'numbered', async (ex, body) => {
       const who = await authenticated(ex);
       if (isReply(who)) return who;
       locals(res).tenantId = who.tenantId;
       const wait = surfaceLimits.iconsPerAgent.hit(who.agentId);
       if (wait) return limited(wait);
       return handleIcons(who, ex, body);
+    })(req, res);
+  });
+
+  // P0-15 §4.3: the remote assistance (server/src/remote, registered by modules/remote.ts), signed and numbered as /poll.
+  //   POST /agent/v1/remote/<id>/accept   the agent takes the session → the stream token (signed answer)
+  //   POST /agent/v1/remote/<id>/end      the end from the device's side
+  router.post(/^\/remote\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/(accept|end)$/, (req, res) => {
+    const sessionId = String(req.params[0]);
+    const step = req.params[1] === 'accept' ? 'accept' : 'end';
+    void post(`POST /agent/v1/remote/:id/${step}`, MAX_REMOTE_BODY, 'numbered', async (ex, body) => {
+      const who = await authenticated(ex);
+      if (isReply(who)) return who;
+      locals(res).tenantId = who.tenantId;
+      const remote = legacyAgentRemote();
+      if (!remote) return errorReply(404, 'notFound', 'Not found');
+      const wait = surfaceLimits.remotePerAgent.hit(who.agentId);
+      if (wait) return limited(wait);
+      return step === 'accept' ? remote.accept(who, ex, sessionId, body) : remote.end(who, ex, sessionId, body);
+    })(req, res);
+  });
+
+  // POST /agent/v1/wait (P0-15 §4.3 B, D9): the long wait of an agent in its armed window, signed with Obl-Seq 0 (the
+  // sequence neither read nor consumed: no race with /poll), answered { wake, nonce } within 50 s, signed. No signed
+  // clockSkew here (the agent ignores it; its next /poll sets its clock).
+  router.post('/wait', (req, res) => {
+    void post('POST /agent/v1/wait', MAX_WAIT_BODY, 'unnumbered', async (ex, body) => {
+      locals(res).quiet = true;
+      const who = await identify(ex);
+      if (isReply(who)) return who;
+      if (clockReply(ex)) return { ...errorReply(401, 'clockSkew', 'Clock out of the allowed window'), signed: false };
+      locals(res).tenantId = who.tenantId;
+      const remote = legacyAgentRemote();
+      if (!remote) return errorReply(404, 'notFound', 'Not found');
+      if (!surfaceLimits.waitReplays.first(`${who.agentId}:${ex.signature}`)) return errorReply(409, 'seqReplay', 'This wait was already received');
+      const wait = surfaceLimits.waitPerAgent.take(who.agentId);
+      if (wait) return limited(wait);
+      let json: unknown;
+      try { json = JSON.parse(body.toString('utf8')); } catch { return errorReply(400, 'badRequest', 'Malformed JSON'); }
+      const parsed = WaitBody.safeParse(json);
+      if (!parsed.success) return errorReply(400, 'badRequest', `Invalid body: ${parsed.error.issues[0]?.path.join('.') ?? ''}`.slice(0, 200));
+      return remote.wait(who, ex, parsed.data.nonce, (fn) => { res.on('close', fn); });
     })(req, res);
   });
 
@@ -298,7 +364,7 @@ export function createLegacyAgentSurface(): Router {
       try { raw = await readBody(req, 0); } catch { if (!res.headersSent) res.status(413).end(); return; }
       const draft = { agentId: headerOf(req, 'Obl-Agent-Id') ?? '-', seq: headerOf(req, 'Obl-Seq') ?? '0', reqSha: raw.sha };
       if (!key) { send(res, draft, { ...errorReply(503, 'unavailable', 'Service unavailable'), signed: false }, null); return; }
-      const ex = exchangeOf(req, raw.sha, false);
+      const ex = exchangeOf(req, raw.sha, 'numbered');
       if (!ex) { send(res, draft, { ...errorReply(401, 'badSignature', 'Missing or malformed signature headers'), signed: false }, key); return; }
       if (raw.size > 0) { send(res, ex, errorReply(400, 'badRequest', 'A GET has no body'), key); return; }
       let release: (() => void) | null = null;
@@ -349,4 +415,6 @@ export function createLegacyAgentSurface(): Router {
   return router;
 }
 
+/** The agent of a signed request (lookup, signature, revocation): the attachment of a remote stream (remote/upgrade.ts). */
+export { identify as identifyAgent, isReply as isAgentReply };
 export { withAgentTransaction, EMPTY_SHA256 };

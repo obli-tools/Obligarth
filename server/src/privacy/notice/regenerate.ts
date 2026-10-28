@@ -21,6 +21,10 @@ import { ensureNotice, noticePublishedEntry, noticeSettingsOf } from './provider
 // (provider.ts): this job keeps the versions of the console and their audit up to date without waiting for one.
 // Policy stately, key t:<tenant>: a change while a run is active queues one more run; more are folded into it.
 // The cache of the profiles of the tenant is dropped first: the run reads what was just published in another process.
+// Generation 2 (P0-15 T2, the remote assistance): the tenants concerned are those whose corporate profile allows it —
+// by default every tenant (§0.1 rule 5) —; a publication queues this job by its hook, and the daily retention of every
+// tenant queues it too, so no notice stays at generation 1 a day after an update. The other notices keep their content
+// word for word: nothing is published for them (notice_ensure compares the contents), nothing to acknowledge again.
 // =============================================================================
 
 const JOB_NAME = 'privacy.notice-regenerate';

@@ -14,6 +14,16 @@
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- PackageInstaller.uninstall with a confirmation prompt (Android 9 and later). -->
     <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <!--
+      Remote assistance (1.1.0, P0-15 §0.1, §8): the session's foreground service (no effect under
+      targetSdk 25, declared for a future raise), the system dialog of MediaProjection reached through a
+      full-screen notification from Android 10 (background starts blocked), the border over the screen when
+      the user grants it (never required). Nothing here injects an input: the control (Knox RemoteInjection
+      and its permissions) is T8.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
       Samsung Knox permissions of the policies used, both namespaces (§8.2, F-2).
@@ -145,6 +155,23 @@
 
         <service
             android:name=".KeepAliveService"
+            android:exported="false" />
+
+        <!--
+          Remote assistance (P0-15 §0.1, §8): the system dialog of MediaProjection, behind a transparent screen, asked
+          at remote.open (no consent screen: nobody on the device answers; the agent never answers the dialog).
+        -->
+        <activity
+            android:name=".ProjectionRequestActivity"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:taskAffinity="tools.obli.obligarth.agent.remote"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
+        <!-- The session: its permanent notification stays all along (no Stop on the device). -->
+        <service
+            android:name=".ScreenShareService"
             android:exported="false" />
     </application>
 </manifest>

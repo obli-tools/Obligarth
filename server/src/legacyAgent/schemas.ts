@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_EVENT_TYPES, LEGACY_AGENT_KEY_STORAGES, LEGACY_AGENT_KNOX_STATES,
+  LEGACY_AGENT_EVENT_TYPES, LEGACY_AGENT_KEY_STORAGES, LEGACY_AGENT_KNOX_STATES, REMOTE_AGENT_END_REASONS, REMOTE_MODES,
 } from '@obligarth/shared';
 
 // =============================================================================
@@ -60,6 +60,9 @@ export const PollBody = z.object({
     storageFreeBytes: nint(0, Number.MAX_SAFE_INTEGER),
     network: z.object({ type: nstr(16), ip: nstr(45) }).strict().nullable().optional(),
     uptimeSeconds: nint(0, Number.MAX_SAFE_INTEGER),
+    // P0-15 §8 (agent 1.1.0 and later): the measured capability of the control, Knox RemoteInjection held and
+    // instantiable (status item agent.remote.inject); absent: unchanged.
+    remoteInject: z.boolean().nullable().optional(),
   }).strict(),
   results: z.array(z.object({
     commandId: z.string().uuid(),
@@ -82,7 +85,10 @@ export const InventoryBody = z.object({
   storage: z.object({ totalBytes: nint(0, Number.MAX_SAFE_INTEGER), freeBytes: nint(0, Number.MAX_SAFE_INTEGER) }).strict().nullable().optional(),
   battery: z.object({ level: nint(0, 100), charging: z.boolean().nullable().optional(), health: nstr(32) }).strict().nullable().optional(),
   network: z.object({ type: nstr(16), ip: nstr(45), mac: nstr(32), ssid: nstr(64), operator: nstr(64) }).strict().nullable().optional(),
-  knox: z.object({ state: z.enum(LEGACY_AGENT_KNOX_STATES), version: nstr(64), mdmApiLevel: nstr(64), error: nstr(200) }).strict(),
+  knox: z.object({
+    state: z.enum(LEGACY_AGENT_KNOX_STATES), version: nstr(64), mdmApiLevel: nstr(64), error: nstr(200),
+    remoteInject: z.boolean().nullable().optional(),
+  }).strict(),
   admin: z.object({ active: z.boolean(), removable: z.boolean().nullable().optional() }).strict(),
   install: z.object({ unknownSources: z.boolean().nullable() }).strict().nullable().optional(),
   apps: z.array(z.object({
@@ -111,3 +117,29 @@ export const IconsBody = z.object({
     .min(1).max(16),
 }).strict();
 export type IconsBody = z.infer<typeof IconsBody>;
+
+// ── Remote assistance (P0-15 §4.3; §0.1: nothing is asked of the user of the device) ──
+
+/** POST /agent/v1/remote/<id>/accept: the agent takes the session. consentedMode is the mode asked (view when it cannot
+ *  inject), consentedAt the time it took it (the names of the contract); what it measured. */
+export const RemoteAcceptBody = z.object({
+  consentedAt: UNIX,
+  consentedMode: z.enum(REMOTE_MODES),
+  capabilities: z.object({
+    inject: z.boolean(), remoteInject: z.boolean(),
+    codecs: z.array(z.enum(['h264', 'jpeg'])).min(1).max(2).refine((c) => new Set(c).size === c.length, 'codecs: each once'),
+    width: int(1, 16_384), height: int(1, 16_384),
+    /** Informative (§0.1 rule 2): blocked notifications refuse nothing. */
+    notificationsEnabled: z.boolean(),
+    overlay: z.boolean(),
+  }).strict(),
+}).strict();
+export type RemoteAcceptBody = z.infer<typeof RemoteAcceptBody>;
+
+/** POST /agent/v1/remote/<id>/end: the end from the device's side. */
+export const RemoteEndBody = z.object({ reason: z.enum(REMOTE_AGENT_END_REASONS) }).strict();
+export type RemoteEndBody = z.infer<typeof RemoteEndBody>;
+
+/** POST /agent/v1/wait: a random nonce, given back in the signed answer (16 bytes in base64url: 22 characters). */
+export const WaitBody = z.object({ nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/) }).strict();
+export type WaitBody = z.infer<typeof WaitBody>;

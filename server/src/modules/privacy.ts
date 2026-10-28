@@ -13,6 +13,7 @@ import {
   type MdmRetentionRule,
 } from '../mdm/inventory/retention';
 import { legacyAgentRetentionRules } from '../legacyAgent/retention';
+import { remoteRetentionRules } from '../remote/retention';
 import type { ManagementChannel } from '../guard/types';
 import { registerPrivacyProfileChanges } from '../privacy';
 import { noticeRetentionRules, registerNotice, requestNoticeRegeneration } from '../privacy/notice';
@@ -243,7 +244,8 @@ async function retentionTenant(ctx: JobContext<z.infer<typeof TenantPayload>>): 
   await step('lost_mode_locations.purge_at', async () => {
     output.lost_mode_locations_realigned = await drain(ctx, (trx) => realignLostModePurgeDates(trx, tenantId, SLICE_ROWS));
   });
-  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules, ...legacyAgentRetentionRules, ...noticeRetentionRules];
+  const rules: MdmRetentionRule[] = [...mdmRetentionRules, ...appleRetentionRules, ...legacyAgentRetentionRules, ...noticeRetentionRules,
+    ...remoteRetentionRules];
   for (const rule of rules) {
     await step(rule.name, async () => {
       const n = await drain(ctx, (trx) => rule.purge(trx, tenantId, now, SLICE_ROWS));

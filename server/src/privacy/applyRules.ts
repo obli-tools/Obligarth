@@ -3,7 +3,7 @@ import { DEFAULT_PRIVACY_PROFILE, privacyRuleChanges, type Ownership, type Priva
 import { privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
 import {
   PrivacyProfileRulesSchema, androidPrivacyRulesFor, currentProfile, invalidatePrivacyProfiles, legacyAgentPrivacyRulesFor,
-  lostModeLocationAllowed, type AndroidProfileRules, type LegacyAgentProfileRules,
+  lostModeLocationAllowed, remoteAssistanceAllowed, withRuleDefaults, type AndroidProfileRules, type LegacyAgentProfileRules,
 } from './profiles';
 
 // =============================================================================
@@ -21,6 +21,9 @@ export interface ApplyRules {
   android: AndroidProfileRules;
   agent: LegacyAgentProfileRules;
   locate: boolean;
+  /** P0-15: remote assistance sessions allowed on the devices of the ownership (remoteAssistanceAllowed); a session
+   *  still open once narrowed is closed by the revalidation of server/src/remote (revoked). */
+  remote: boolean;
 }
 
 /** The rules of a version of the ownership (null: the defaults, as before the first version); null when unreadable. */
@@ -28,7 +31,7 @@ async function rulesOfVersion(q: Q, tenantId: number, ownership: Ownership, vers
   if (version === null) return DEFAULT_PRIVACY_PROFILE[ownership];
   const row = await q('privacy_profile_versions').where({ tenant_id: tenantId, ownership, version }).first('rules') as { rules: unknown } | undefined;
   const parsed = row ? PrivacyProfileRulesSchema.safeParse(row.rules) : null;
-  return parsed?.success ? parsed.data : null;
+  return parsed?.success ? withRuleDefaults(ownership, parsed.data) : null;
 }
 
 /** The rules of a run: those in force (the current version, read again from the base), and the keys narrowed since
@@ -48,5 +51,6 @@ export async function resolveApplyRules(q: Q, tenantId: number, ownership: Owner
     android: await androidPrivacyRulesFor(q, tenantId, ownership),
     agent: await legacyAgentPrivacyRulesFor(q, tenantId),
     locate: await lostModeLocationAllowed(q, tenantId, ownership),
+    remote: await remoteAssistanceAllowed(q, tenantId, ownership),
   };
 }

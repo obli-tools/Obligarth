@@ -57,6 +57,11 @@ export const SocketEvents = {
   ENROLLMENT_SESSION_CHANGED:  'ENROLLMENT_SESSION_CHANGED',
   INTEGRATION_CHANGED:         'INTEGRATION_CHANGED',
 
+  // Remote assistance (P0-15 §4.2): a session changed state (RemoteSessionChanged
+  // of mdm/remote: ids, state, reason of its end; never a token), to the room of
+  // its requester and to the tenant's admin room.
+  REMOTE_SESSION_CHANGED:      'REMOTE_SESSION_CHANGED',
+
   // Client → Server
   DEVICE_SUBSCRIBE:       'DEVICE_SUBSCRIBE',
   DEVICE_UNSUBSCRIBE:     'DEVICE_UNSUBSCRIBE',

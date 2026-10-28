@@ -36,6 +36,8 @@ import { SecurityPage } from '@/pages/SecurityPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { DownloadPage } from '@/pages/DownloadPage';
 import { LegacyAgentPage } from '@/pages/LegacyAgentPage';
+import { RemoteSessionPage } from '@/pages/RemoteSessionPage';
+import { RemoteSessionsPage } from '@/pages/RemoteSessionsPage';
 import { TwoFactorGate } from '@/components/common/TwoFactorGate';
 import { ConfirmProvider } from '@/components/common/ConfirmDialog';
 import '@/i18n';
@@ -64,6 +66,10 @@ export default function App() {
  <Route path="/devices" element={<DeviceListPage />} />
  {/* The record of a device: overview, configuration, inventory, commands, history, actions. */}
  <Route path="/devices/:id" element={<DeviceSummaryPage />} />
+ {/* Remote assistance (P0-15): a session and its viewer; the journal of the tenant (the server reads the scope:
+     audit.read for every session, else the devices the caller may assist). */}
+ <Route path="/devices/:id/remote/:sessionId" element={<RemoteSessionPage />} />
+ <Route path="/remote-sessions" element={<RemoteSessionsPage />} />
  {/* Policies: any member reads them; writing needs mdm.policies.manage (checked by the pages and the server). */}
  <Route path="/policies" element={<PoliciesPage />} />
  <Route path="/policies/:id" element={<PolicyEditorPage />} />

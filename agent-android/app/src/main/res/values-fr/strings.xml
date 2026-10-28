@@ -39,4 +39,14 @@
     <string name="label_version">Version</string>
     <string name="yes">oui</string>
     <string name="no">non</string>
+    <!-- Assistance à distance (1.1.0, P0-15 §0.1) : ouverture, session, fin, comme dans Oblireach. -->
+    <string name="remote_channel_name">Assistance à distance</string>
+    <string name="remote_channel_description">Sessions d\'assistance à distance de votre support informatique.</string>
+    <string name="remote_open_title">Assistance à distance</string>
+    <string name="remote_open_text">%1$s (%2$s) ouvre une session d\'assistance à distance.</string>
+    <string name="remote_live_title">Session d\'assistance en cours : %1$s</string>
+    <string name="remote_live_text">%1$s (%2$s) voit l\'écran de cet appareil. Rien n\'est enregistré.</string>
+    <string name="remote_ended_title">Assistance à distance terminée</string>
+    <string name="remote_ended_text">%1$s a fermé la session d\'assistance à %2$s (durée %3$s).</string>
+    <string name="remote_ended_text_short">La session d\'assistance de %1$s s\'est terminée à %2$s, avant l\'envoi de toute image.</string>
 </resources>
