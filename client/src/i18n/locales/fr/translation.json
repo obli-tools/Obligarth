@@ -4504,15 +4504,13 @@
     },
     "filters": {
       "conflict": "Conflit d'identité",
-      "adminInactive": "Administrateur inactif",
       "silent": "Silencieux depuis 24 h",
       "revoked": "Inclure les révoqués"
     },
     "importNames": {
       "button": "Importer les noms",
-      "title": "Importer les noms des appareils (MobiControl)",
-      "help": "Un export CSV de MobiControl avec les colonnes « Nom term. » et « IMEI / MEID / ESN ». Chaque IMEI est comparé à celui que l'agent a remonté (ou le script d'enrôlement MobiControl) ; l'appareil correspondant prend le nom. Rien ne change avant « Renommer ».",
-      "orPaste": "ou collez le contenu ci-dessous",
+      "title": "Importer les noms des appareils",
+      "orPaste": "ou coller le contenu",
       "lines": "{{count}} ligne(s) lue(s)",
       "preview": "Prévisualiser",
       "apply": "Renommer {{count}} appareil(s)",
@@ -4520,28 +4518,34 @@
       "tooMany": "{{max}} lignes au plus par import",
       "cols": {
         "name": "Nouveau nom",
-        "imei": "IMEI",
         "current": "Nom actuel",
-        "status": "Résultat"
+        "status": "Résultat",
+        "nameCol": "Colonne du nom",
+        "imeiCol": "Colonne de l'IMEI",
+        "serialCol": "Colonne du numéro de série",
+        "key": "IMEI / n° de série"
       },
       "status": {
         "rename": "À renommer",
         "renamed": "Renommé",
         "same": "Déjà nommé",
-        "notFound": "IMEI introuvable",
+        "notFound": "Introuvable",
         "ambiguous": "Plusieurs appareils",
         "duplicate": "Doublon",
         "forbidden": "Non autorisé",
         "invalid": "Ligne invalide"
+      },
+      "format": "Format de l'export",
+      "file": "Fichier",
+      "choose": "Choisir un fichier CSV",
+      "none": "— aucune —",
+      "matching": "Une ligne est rapprochée par son IMEI quand elle en a un, sinon par son numéro de série. Rien ne change avant « Renommer ».",
+      "formats": {
+        "mobicontrol": "Export des appareils : « Nom term. » / « Device Name » et « IMEI / MEID / ESN ».",
+        "omnissa": "Export CSV de la liste des appareils : « Friendly Name », « IMEI » et « Serial Number ».",
+        "csvLabel": "Autre CSV",
+        "csv": "N'importe quel CSV : choisissez la colonne du nom, et celle de l'IMEI ou du numéro de série."
       }
-    },
-    "summary": {
-      "devices": "{{count}} appareil(s)",
-      "admin": "Mode administrateur :",
-      "adminActive": "{{count}} actif(s)",
-      "adminInactive": "{{count}} inactif(s)",
-      "unknownSources": "Sources inconnues :",
-      "notReported": "{{count}} non remonté(s)"
     },
     "actions": {
       "message": "Message",
@@ -4560,9 +4564,8 @@
       "name": "Nom",
       "model": "Modèle",
       "android": "Android",
-      "patch": "Correctif de sécurité",
       "agent": "Agent",
-      "admin": "Admin actif",
+      "admin": "Mode admin",
       "knox": "Knox",
       "unknownSources": "Sources inconnues",
       "lastPoll": "Dernière interrogation",
@@ -4609,7 +4612,9 @@
       "uploaded": "Paquet téléversé",
       "version": "Version",
       "size": "Taille",
-      "mib": "{{size}} Mio"
+      "mib": "{{size}} Mio",
+      "empty": "Aucun paquet pour l'instant.",
+      "chooseApk": "Choisir un APK"
     },
     "releases": {
       "choose": "Version de l'agent",
@@ -4640,7 +4645,8 @@
           "signerMismatch": "le bloc de signature de l'APK ne nomme pas le seul signataire déclaré.",
           "versionConflict": "une autre version a déjà ce versionCode, ou cet APK a un autre versionCode."
         }
-      }
+      },
+      "withdraw": "Retirer"
     },
     "detail": {
       "conflict": "Conflit d'identité : le numéro de série ou l'IMEI déclaré par cet agent est porté par un autre appareil géré.",
@@ -4655,7 +4661,8 @@
       "enrolledAt": "Enrôlé",
       "status": "État",
       "queue": "Commandes",
-      "apps": "Apps ({{count}})"
+      "apps": "Apps ({{count}})",
+      "noCommand": "Aucune commande."
     },
     "tokens": {
       "label": "Libellé",
@@ -4679,7 +4686,9 @@
       "script": "Script MobiControl (après installation)",
       "config": "Configuration encodée (extra « config »)",
       "configJson": "Fichier de configuration (obligarth-agent.json)",
-      "token": "Jeton"
+      "token": "Jeton",
+      "empty": "Aucun jeton pour l'instant.",
+      "revoke": "Révoquer"
     },
     "adminMode": {
       "title": "Administrateur de l'appareil et verrouillage MobiControl",
@@ -4722,6 +4731,32 @@
       "sessionOpen": "Une session d'assistance à distance est déjà ouverte sur cet appareil",
       "injectUnavailable": "L'agent ne peut pas injecter les entrées sur cet appareil (contrôle à distance Knox)",
       "platformUnsupported": "Impossible sur cet appareil"
+    },
+    "kpi": {
+      "title": "Parc",
+      "hint": "Décompte des agents enrôlés (hors révoqués), pas de la vue filtrée. Une tuile active ou retire son filtre.",
+      "total": "Appareils",
+      "adminOn": "Mode admin actif",
+      "adminOff": "Mode admin inactif",
+      "srcYes": "Sources inconnues : oui",
+      "srcNo": "Sources inconnues : non",
+      "silent": "Silencieux depuis 24 h"
+    },
+    "lastPoll": {
+      "never": "Jamais",
+      "now": "à l'instant",
+      "weekday": "{{day}} à {{time}}",
+      "old": "{{date}} ({{days}} j)"
+    },
+    "adminOn": "Actif",
+    "adminOff": "Inactif",
+    "notReported": "Non remonté",
+    "shown": "{{count}} sur {{total}}",
+    "clearFilters": "Effacer les filtres",
+    "clearSelection": "Vider la sélection",
+    "noMatch": "Aucun appareil ne correspond à ces filtres.",
+    "file": {
+      "none": "Aucun fichier choisi"
     }
   },
   "android": {

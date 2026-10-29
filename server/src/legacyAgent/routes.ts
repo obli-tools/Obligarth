@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
   LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE,
-  LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
+  LEGACY_AGENT_NAME_IMPORT_FORMATS, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
   type DeviceCapability, type LegacyAgentNameImportResult, type LegacyAgentNameImportRow, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
   type LegacyAgentTokenView,
@@ -51,7 +51,7 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 //   POST /commands/bulk                 the same on 500 devices at most
 //   POST /commands/:commandId/cancel    a pending command, not guarded
 //   POST /actions                       lock / erase: the guard engine (its floors, delays, confirmation)
-//   POST /devices/names                 import of display names by IMEI (a MobiControl export), preview or apply;
+//   POST /devices/names                 import of display names by IMEI or serial (MobiControl, Omnissa, CSV), preview or apply;
 //                                       write scope on each renamed device
 //   POST /devices/:id/revoke            restriction legacy_agent.revoke (floor sensitive); 423 tenantFrozen
 //                                       during a freeze, here and at the execution of an approval (PONT-R-RV2)
@@ -437,20 +437,30 @@ router.post('/devices/:id/revoke', wrap(async (req, res) => {
   res.json({ success: true, data: { revoked: changed } });
 }));
 
-// ── Import of device names (a MobiControl export: name, IMEI) ───────────────
-// POST /api/legacy-agent/devices/names { rows: [{ imei, name }], apply }: matches each IMEI against the IMEIs the
-// non-revoked agents of the tenant the caller sees reported (their own reading, or the MobiControl macro of the
-// enrollment), on its first 14 digits (the check digit may be missing). Without `apply`, a preview; with it, the
-// display names written in one transaction, one audit entry per renamed device (never the IMEI).
+// ── Import of device names (an export of MobiControl, of Omnissa Workspace ONE, or any CSV) ─────────────────────────
+// POST /api/legacy-agent/devices/names { rows: [{ name, imei?, serial? }], format?, apply }: a row is matched by its
+// IMEI when it has a valid one, else by its serial number, against the non-revoked agents of the tenant the caller
+// sees: the IMEIs they reported (their own reading, or the MobiControl macro of the enrollment), whole, else on their
+// first 14 digits (the check digit may be missing); the serial numbers of the device, of the build, of Samsung and of the
+// macro, without case nor spaces. Without `apply`, a preview; with it, the display names written in one transaction,
+// one audit entry per renamed device (never the IMEI nor the serial number).
 
 const NameImportBody = z.object({
-  rows: z.array(z.object({ imei: z.string().max(64), name: z.string().max(512) })).min(1).max(LEGACY_AGENT_NAME_IMPORT_MAX_ROWS),
+  rows: z.array(z.object({
+    name: z.string().max(512), imei: z.string().max(64).optional(), serial: z.string().max(128).optional(),
+  })).min(1).max(LEGACY_AGENT_NAME_IMPORT_MAX_ROWS),
+  format: z.enum(LEGACY_AGENT_NAME_IMPORT_FORMATS).optional(),
   apply: z.boolean().optional(),
 });
 
-const imeiKey = (v: unknown): string | null => {
+/** The digits of an IMEI (14 to 16), or null. */
+const imeiDigits = (v: unknown): string | null => {
   const digits = typeof v === 'string' ? v.replace(/\D/g, '') : '';
-  return digits.length >= 14 && digits.length <= 16 ? digits.slice(0, 14) : null;
+  return digits.length >= 14 && digits.length <= 16 ? digits : null;
+};
+const serialKey = (v: unknown): string | null => {
+  const s = typeof v === 'string' ? v.replace(/\s/g, '').toUpperCase() : '';
+  return s.length >= 4 && s.length <= 64 ? s : null;
 };
 
 router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
@@ -459,32 +469,46 @@ router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
   const seen = await visible(req);
   let q = agentsQuery(tenantId).whereNull('a.revoked_at');
   if (seen !== 'all') q = q.whereRaw('d.id = ANY (?::int[])', [seen]);
-  const agents = await q.select('d.id', 'd.label', 'd.display_name', 'a.imeis', 'a.hints') as
-    Array<{ id: number; label: string | null; display_name: string | null; imeis: string[] | null; hints: unknown }>;
+  const agents = await q.select('d.id', 'd.label', 'd.display_name', 'd.serial_number', 'a.imeis', 'a.claimed_serial', 'a.samsung_serial', 'a.hints') as
+    Array<{ id: number; label: string | null; display_name: string | null; serial_number: string | null; imeis: string[] | null;
+      claimed_serial: string | null; samsung_serial: string | null; hints: unknown }>;
+  const index = (map: Map<string, Set<number>>, k: string | null, id: number) => {
+    if (k) { if (!map.has(k)) map.set(k, new Set()); map.get(k)!.add(id); }
+  };
   const byImei = new Map<string, Set<number>>();
+  const byImei14 = new Map<string, Set<number>>();
+  const bySerial = new Map<string, Set<number>>();
   const byId = new Map<number, { label: string | null; displayName: string | null }>();
   for (const a of agents) {
     const id = Number(a.id);
     byId.set(id, { label: a.label ?? null, displayName: a.display_name ?? null });
-    const hint = jsonOf(a.hints)?.imei;
-    for (const raw of [...(a.imeis ?? []), hint]) {
-      const k = imeiKey(raw);
-      if (k) { if (!byImei.has(k)) byImei.set(k, new Set()); byImei.get(k)!.add(id); }
+    const hints = jsonOf(a.hints);
+    for (const raw of [...(a.imeis ?? []), hints?.imei]) {
+      const digits = imeiDigits(raw);
+      index(byImei, digits, id);
+      index(byImei14, digits ? digits.slice(0, 14) : null, id);
     }
+    for (const raw of [a.serial_number, a.claimed_serial, a.samsung_serial, hints?.serial]) index(bySerial, serialKey(raw), id);
   }
 
-  const imeisSeen = new Set<string>();
+  const keysSeen = new Set<string>();
   const devicesSeen = new Set<number>();
   const rows: LegacyAgentNameImportRow[] = [];
   for (const r of b.rows) {
     const name = r.name.replace(/[\u0000-\u001f\u007f]/g, '').trim();
-    const k = imeiKey(r.imei);
-    const row: LegacyAgentNameImportRow = { imei: r.imei.trim(), name, status: 'invalid', deviceId: null, currentName: null };
+    const ik = imeiDigits(r.imei);
+    const sk = ik ? null : serialKey(r.serial);
+    const row: LegacyAgentNameImportRow = {
+      imei: (r.imei ?? '').trim(), serial: (r.serial ?? '').trim(), matchedBy: ik ? 'imei' : sk ? 'serial' : null,
+      name, status: 'invalid', deviceId: null, currentName: null,
+    };
     rows.push(row);
-    if (!k || !name || name.length > LEGACY_AGENT_NAME_MAX) continue;
-    if (imeisSeen.has(k)) { row.status = 'duplicate'; continue; }
-    imeisSeen.add(k);
-    const hits = byImei.get(k);
+    const key = ik ? `i:${ik}` : sk ? `s:${sk}` : null;
+    if (!key || !name || name.length > LEGACY_AGENT_NAME_MAX) continue;
+    if (keysSeen.has(key)) { row.status = 'duplicate'; continue; }
+    keysSeen.add(key);
+    // The whole IMEI first; its first 14 digits when it is not found (a file without the check digit).
+    const hits = ik ? (byImei.get(ik) ?? byImei14.get(ik.slice(0, 14))) : bySerial.get(sk!);
     if (!hits || hits.size === 0) { row.status = 'notFound'; continue; }
     if (hits.size > 1) { row.status = 'ambiguous'; continue; }
     const id = [...hits][0];
@@ -515,7 +539,7 @@ router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
           if (n === 0) continue;
           await audit.appendInTx(trx, {
             tenantId, action: 'legacy_agent.device_renamed', target: { type: 'device', id: String(r.deviceId), device: r.deviceId! },
-            details: { from: r.currentName, to: r.name, source: 'import' },
+            details: { from: r.currentName, to: r.name, source: 'import', format: b.format ?? null, matchedBy: r.matchedBy },
           }, auditCtx);
           r.status = 'renamed';
           applied++;

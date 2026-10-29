@@ -1,7 +1,7 @@
 import apiClient from './client';
 import type {
   LegacyAgentCommandView, LegacyAgentConsoleType, LegacyAgentDeviceAction, LegacyAgentDeviceDetail, LegacyAgentDeviceView,
-  LegacyAgentInstanceSettings, LegacyAgentNameImportResult,
+  LegacyAgentInstanceSettings, LegacyAgentNameImportFormat, LegacyAgentNameImportResult,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
 } from '@obligarth/shared';
 
@@ -71,9 +71,9 @@ export const legacyAgentApi = {
     const res = await apiClient.post<ApiResponse<{ revoked: boolean }>>(`/legacy-agent/devices/${deviceId}/revoke`, { reason });
     return res.data.data!;
   },
-  /** Display names by IMEI (a MobiControl export): a preview, or with `apply` the renaming. */
-  async importNames(rows: Array<{ imei: string; name: string }>, apply: boolean): Promise<LegacyAgentNameImportResult> {
-    const res = await apiClient.post<ApiResponse<LegacyAgentNameImportResult>>('/legacy-agent/devices/names', { rows, apply });
+  /** Display names by IMEI or serial number (MobiControl, Omnissa Workspace ONE, any CSV): a preview, or with `apply` the renaming. */
+  async importNames(rows: Array<{ name: string; imei?: string; serial?: string }>, apply: boolean, format: LegacyAgentNameImportFormat): Promise<LegacyAgentNameImportResult> {
+    const res = await apiClient.post<ApiResponse<LegacyAgentNameImportResult>>('/legacy-agent/devices/names', { rows, apply, format });
     return res.data.data!;
   },
   async tokens(): Promise<LegacyAgentTokenView[]> {
