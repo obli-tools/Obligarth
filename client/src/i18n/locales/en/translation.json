@@ -4504,15 +4504,13 @@
     },
     "filters": {
       "conflict": "Identity conflict",
-      "adminInactive": "Administrator inactive",
       "silent": "Silent for 24 h",
       "revoked": "Include revoked"
     },
     "importNames": {
       "button": "Import names",
-      "title": "Import device names (MobiControl)",
-      "help": "A CSV export of MobiControl with the columns \"Nom term.\" and \"IMEI / MEID / ESN\". Each IMEI is compared with the one the agent reported (or the MobiControl enrollment script); the matching device takes the name. Nothing changes before \"Rename\".",
-      "orPaste": "or paste the content below",
+      "title": "Import device names",
+      "orPaste": "or paste the content",
       "lines": "{{count}} line(s) read",
       "preview": "Preview",
       "apply": "Rename {{count}} device(s)",
@@ -4520,28 +4518,34 @@
       "tooMany": "{{max}} lines at most per import",
       "cols": {
         "name": "New name",
-        "imei": "IMEI",
         "current": "Current name",
-        "status": "Result"
+        "status": "Result",
+        "nameCol": "Column of the name",
+        "imeiCol": "Column of the IMEI",
+        "serialCol": "Column of the serial number",
+        "key": "IMEI / serial"
       },
       "status": {
         "rename": "To rename",
         "renamed": "Renamed",
         "same": "Already named",
-        "notFound": "IMEI not found",
+        "notFound": "Not found",
         "ambiguous": "Several devices",
         "duplicate": "Duplicate",
         "forbidden": "Not allowed",
         "invalid": "Invalid line"
+      },
+      "format": "Format of the export",
+      "file": "File",
+      "choose": "Choose a CSV file",
+      "none": "— none —",
+      "matching": "A row is matched by its IMEI when it has one, else by its serial number. Nothing changes before \"Rename\".",
+      "formats": {
+        "mobicontrol": "Export of the devices: \"Nom term.\" / \"Device Name\" and \"IMEI / MEID / ESN\".",
+        "omnissa": "Export of the device list as CSV: \"Friendly Name\", \"IMEI\" and \"Serial Number\".",
+        "csvLabel": "Other CSV",
+        "csv": "Any CSV: choose the column of the name, and that of the IMEI or of the serial number."
       }
-    },
-    "summary": {
-      "devices": "{{count}} device(s)",
-      "admin": "Device admin:",
-      "adminActive": "{{count}} active",
-      "adminInactive": "{{count}} inactive",
-      "unknownSources": "Unknown sources:",
-      "notReported": "{{count}} not reported"
     },
     "actions": {
       "message": "Message",
@@ -4560,9 +4564,8 @@
       "name": "Name",
       "model": "Model",
       "android": "Android",
-      "patch": "Security patch",
       "agent": "Agent",
-      "admin": "Admin active",
+      "admin": "Admin mode",
       "knox": "Knox",
       "unknownSources": "Unknown sources",
       "lastPoll": "Last interrogation",
@@ -4609,7 +4612,9 @@
       "uploaded": "Package uploaded",
       "version": "Version",
       "size": "Size",
-      "mib": "{{size}} MiB"
+      "mib": "{{size}} MiB",
+      "empty": "No package yet.",
+      "chooseApk": "Choose an APK"
     },
     "releases": {
       "choose": "Version of the agent",
@@ -4640,7 +4645,8 @@
           "signerMismatch": "the signing block of the APK does not name the declared signer alone.",
           "versionConflict": "another version already has this versionCode, or this APK has another versionCode."
         }
-      }
+      },
+      "withdraw": "Withdraw"
     },
     "detail": {
       "conflict": "Identity conflict: the serial number or the IMEI declared by this agent is held by another managed device.",
@@ -4655,7 +4661,8 @@
       "enrolledAt": "Enrolled",
       "status": "Status",
       "queue": "Commands",
-      "apps": "Apps ({{count}})"
+      "apps": "Apps ({{count}})",
+      "noCommand": "No command."
     },
     "tokens": {
       "label": "Label",
@@ -4679,7 +4686,9 @@
       "script": "MobiControl script (after installation)",
       "config": "Encoded configuration (extra \"config\")",
       "configJson": "Configuration file (obligarth-agent.json)",
-      "token": "Token"
+      "token": "Token",
+      "empty": "No token yet.",
+      "revoke": "Revoke"
     },
     "adminMode": {
       "title": "Device administrator and MobiControl Lockdown",
@@ -4722,6 +4731,32 @@
       "sessionOpen": "A remote assistance session is already open on this device",
       "injectUnavailable": "The agent cannot inject the inputs on this device (Knox remote control)",
       "platformUnsupported": "Not possible on this device"
+    },
+    "kpi": {
+      "title": "Fleet",
+      "hint": "Counts of the enrolled agents (revoked ones aside), not of the filtered view. A tile toggles its filter.",
+      "total": "Devices",
+      "adminOn": "Admin mode on",
+      "adminOff": "Admin mode off",
+      "srcYes": "Unknown sources: yes",
+      "srcNo": "Unknown sources: no",
+      "silent": "Silent for 24 h"
+    },
+    "lastPoll": {
+      "never": "Never",
+      "now": "just now",
+      "weekday": "{{day}} at {{time}}",
+      "old": "{{date}} ({{days}} d)"
+    },
+    "adminOn": "On",
+    "adminOff": "Off",
+    "notReported": "Not reported",
+    "shown": "{{count}} of {{total}}",
+    "clearFilters": "Clear the filters",
+    "clearSelection": "Clear the selection",
+    "noMatch": "No device matches these filters.",
+    "file": {
+      "none": "No file chosen"
     }
   },
   "android": {
