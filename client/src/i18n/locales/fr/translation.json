@@ -4757,6 +4757,12 @@
     "noMatch": "Aucun appareil ne correspond à ces filtres.",
     "file": {
       "none": "Aucun fichier choisi"
+    },
+    "export": {
+      "button": "Exporter ({{count}})",
+      "csvHint": "tout tableur",
+      "xlsxHint": "filtres prêts",
+      "scope": "La liste telle qu'affichée : ses filtres, sa recherche et son tri."
     }
   },
   "android": {

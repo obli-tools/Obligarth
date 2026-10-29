@@ -53,6 +53,7 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 //   POST /actions                       lock / erase: the guard engine (its floors, delays, confirmation)
 //   POST /devices/names                 import of display names by IMEI or serial (MobiControl, Omnissa, CSV), preview or apply;
 //                                       write scope on each renamed device
+//   POST /devices/export                the view of the console as CSV or XLSX (capability reports)
 //   POST /devices/:id/revoke            restriction legacy_agent.revoke (floor sensitive); 423 tenantFrozen
 //                                       during a freeze, here and at the execution of an approval (PONT-R-RV2)
 //   GET  /tokens, POST /tokens, POST /tokens/:id/revoke     mdm.enrollment.manage
@@ -70,6 +71,7 @@ const limitedHandler = (_q: Request, res: Response): void => { res.status(429).j
 const enqueueLimiter = rateLimit({ windowMs: 60_000, max: 60, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const bulkLimiter = rateLimit({ windowMs: 60_000, max: 5, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const tokenLimiter = rateLimit({ windowMs: 60_000, max: 20, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
+const exportLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const uploadLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -549,6 +551,114 @@ router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
   }
   const out: LegacyAgentNameImportResult = { rows, applied };
   res.json({ success: true, data: out });
+}));
+
+// ── Export of the list (CSV, XLSX) ───────────────────────────────────────────
+// POST /api/legacy-agent/devices/export { deviceIds, format, lang, timeZone }: the view of the console (its filters,
+// its sort: the ids in their order), among the agents of the tenant the caller sees, with the columns of the list and
+// of the record (IMEIs, Samsung serial, group, days without interrogation). Capability `reports`, like the export of
+// /devices. Headers and values in the language of the console, dates in its time zone; a CSV cell that would read
+// as a formula is neutralised (MDM-B2-R10), and the CSV starts with a BOM (accents in a spreadsheet).
+
+const ExportBody = z.object({
+  deviceIds: z.array(z.number().int().positive()).min(1).max(5000),
+  format: z.enum(['csv', 'xlsx']).optional(),
+  lang: z.string().max(16).optional(),
+  timeZone: z.string().max(64).optional(),
+});
+
+const csvText = (v: string): string => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
+
+const EXPORT_LABELS = {
+  en: {
+    name: 'Name', serial: 'Serial number', samsungSerial: 'Samsung serial', imei: 'IMEI', imei2: 'IMEI 2', model: 'Model', android: 'Android',
+    api: 'API', patch: 'Security patch', agent: 'Agent', versionCode: 'versionCode', admin: 'Admin mode', knox: 'Knox',
+    unknownSources: 'Unknown sources', battery: 'Battery (%)', lastPoll: 'Last interrogation', daysSilent: 'Days without interrogation',
+    lastInventory: 'Last inventory', enrolled: 'Enrolled', group: 'Group', conflict: 'Identity conflict', revoked: 'Revoked', uuid: 'UUID',
+    yes: 'Yes', no: 'No', on: 'On', off: 'Off', sheet: 'Android agents',
+    knoxStates: { absent: 'Absent', present: 'Present', licensed: 'Licensed', license_error: 'Licence error' } as Record<string, string>,
+  },
+  fr: {
+    name: 'Nom', serial: 'N° de série', samsungSerial: 'Série Samsung', imei: 'IMEI', imei2: 'IMEI 2', model: 'Modèle', android: 'Android',
+    api: 'API', patch: 'Correctif de sécurité', agent: 'Agent', versionCode: 'versionCode', admin: 'Mode admin', knox: 'Knox',
+    unknownSources: 'Sources inconnues', battery: 'Batterie (%)', lastPoll: 'Dernière interrogation', daysSilent: 'Jours sans interrogation',
+    lastInventory: 'Dernier inventaire', enrolled: 'Enrôlé le', group: 'Groupe', conflict: "Conflit d'identité", revoked: 'Révoqué le', uuid: 'UUID',
+    yes: 'Oui', no: 'Non', on: 'Actif', off: 'Inactif', sheet: 'Agents Android',
+    knoxStates: { absent: 'Absent', present: 'Présent', licensed: 'Licencié', license_error: 'Erreur de licence' } as Record<string, string>,
+  },
+};
+
+router.post('/devices/export', requireTenantCapability('reports'), exportLimiter, wrap(async (req, res) => {
+  const b = body(ExportBody, req);
+  const tenantId = req.tenantId!;
+  const lang = b.lang?.toLowerCase().startsWith('fr') ? 'fr' : 'en';
+  const L = EXPORT_LABELS[lang];
+  let timeZone = 'UTC';
+  try { if (b.timeZone) { new Intl.DateTimeFormat('en', { timeZone: b.timeZone }); timeZone = b.timeZone; } } catch { /* UTC */ }
+  const seen = await visible(req);
+  const wanted = [...new Set(b.deviceIds)].filter((id) => seen === 'all' || seen.includes(id));
+  const found = wanted.length === 0 ? [] : await agentsQuery(tenantId)
+    .leftJoin('device_groups as g', function j() { this.on('g.id', '=', 'd.group_id').andOn('g.tenant_id', '=', 'd.tenant_id'); })
+    .whereRaw('d.id = ANY (?::int[])', [wanted])
+    .select([...DEVICE_COLUMNS, 'a.imeis', 'a.samsung_serial', 'g.name as group_name']) as Array<Record<string, any>>;
+  const byId = new Map(found.map((r) => [Number(r.id), r]));
+  const ordered = wanted.map((id) => byId.get(id)).filter((r): r is Record<string, any> => !!r);
+
+  const when = (v: unknown): string => (v ? new Intl.DateTimeFormat(lang === 'fr' ? 'fr-FR' : 'en-GB', {
+    timeZone, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).format(new Date(v as string | Date)) : '');
+  const now = Date.now();
+  const columns: Array<{ header: string; key: string; width: number }> = [
+    { header: L.name, key: 'name', width: 24 }, { header: L.serial, key: 'serial', width: 16 }, { header: L.samsungSerial, key: 'samsungSerial', width: 16 },
+    { header: L.imei, key: 'imei', width: 17 }, { header: L.imei2, key: 'imei2', width: 17 }, { header: L.model, key: 'model', width: 22 },
+    { header: L.android, key: 'android', width: 9 }, { header: L.api, key: 'api', width: 6 }, { header: L.patch, key: 'patch', width: 12 },
+    { header: L.agent, key: 'agent', width: 9 }, { header: L.versionCode, key: 'versionCode', width: 11 }, { header: L.admin, key: 'admin', width: 11 },
+    { header: L.knox, key: 'knox', width: 16 }, { header: L.unknownSources, key: 'unknownSources', width: 12 }, { header: L.battery, key: 'battery', width: 10 },
+    { header: L.lastPoll, key: 'lastPoll', width: 18 }, { header: L.daysSilent, key: 'daysSilent', width: 10 }, { header: L.lastInventory, key: 'lastInventory', width: 18 },
+    { header: L.enrolled, key: 'enrolled', width: 18 }, { header: L.group, key: 'group', width: 18 }, { header: L.conflict, key: 'conflict', width: 10 },
+    { header: L.revoked, key: 'revoked', width: 18 }, { header: L.uuid, key: 'uuid', width: 38 },
+  ];
+  const rows = ordered.map((r) => {
+    const v = deviceView(r);
+    const imeis: string[] = Array.isArray(r.imeis) ? r.imeis : [];
+    const yn = (x: boolean | null) => (x === null ? '' : x ? L.yes : L.no);
+    return {
+      name: v.name ?? '', serial: v.serialNumber ?? '', samsungSerial: r.samsung_serial ?? '', imei: imeis[0] ?? '', imei2: imeis[1] ?? '',
+      model: v.modelName ?? v.model ?? '', android: v.osVersion ?? '', api: v.apiLevel ?? '', patch: v.securityPatch ?? '',
+      agent: v.agentVersionName, versionCode: v.agentVersionCode, admin: v.adminActive ? L.on : L.off, knox: L.knoxStates[v.knoxState] ?? v.knoxState,
+      unknownSources: yn(v.unknownSources), battery: v.batteryLevel ?? '', lastPoll: when(v.lastPollAt),
+      daysSilent: v.lastPollAt ? Math.floor((now - new Date(v.lastPollAt).getTime()) / 86_400_000) : '',
+      lastInventory: when(v.lastInventoryAt), enrolled: when(v.enrolledAt), group: r.group_name ?? '', conflict: v.identityConflict ? L.yes : '',
+      revoked: when(v.revokedAt), uuid: v.deviceUuid,
+    };
+  });
+
+  const fmt = b.format ?? 'csv';
+  const ts = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+  const baseName = `obligarth-android-agents-${ts}`;
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook();
+  wb.creator = 'Obligarth';
+  const ws = wb.addWorksheet(L.sheet);
+  ws.columns = columns;
+  rows.forEach((r) => ws.addRow(fmt === 'csv'
+    ? Object.fromEntries(Object.entries(r).map(([k, x]) => [k, typeof x === 'string' ? csvText(x) : x]))
+    : r));
+  if (fmt === 'csv') {
+    const buffer = await wb.csv.writeBuffer();
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.csv"`);
+    res.send(Buffer.concat([Buffer.from('﻿', 'utf8'), Buffer.from(buffer as ArrayBuffer)]));
+    return;
+  }
+  ws.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  ws.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F2937' } };
+  ws.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: columns.length } };
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+  const buffer = await wb.xlsx.writeBuffer();
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="${baseName}.xlsx"`);
+  res.send(Buffer.from(buffer as ArrayBuffer));
 }));
 
 // ── Enrollment tokens ────────────────────────────────────────────────────────

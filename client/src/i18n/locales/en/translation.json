@@ -4757,6 +4757,12 @@
     "noMatch": "No device matches these filters.",
     "file": {
       "none": "No file chosen"
+    },
+    "export": {
+      "button": "Export ({{count}})",
+      "csvHint": "any spreadsheet",
+      "xlsxHint": "filters ready",
+      "scope": "The list as shown: its filters, its search and its sort."
     }
   },
   "android": {
