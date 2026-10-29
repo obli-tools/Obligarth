@@ -4508,6 +4508,33 @@
       "silent": "Silent for 24 h",
       "revoked": "Include revoked"
     },
+    "importNames": {
+      "button": "Import names",
+      "title": "Import device names (MobiControl)",
+      "help": "A CSV export of MobiControl with the columns \"Nom term.\" and \"IMEI / MEID / ESN\". Each IMEI is compared with the one the agent reported (or the MobiControl enrollment script); the matching device takes the name. Nothing changes before \"Rename\".",
+      "orPaste": "or paste the content below",
+      "lines": "{{count}} line(s) read",
+      "preview": "Preview",
+      "apply": "Rename {{count}} device(s)",
+      "done": "{{count}} device(s) renamed",
+      "tooMany": "{{max}} lines at most per import",
+      "cols": {
+        "name": "New name",
+        "imei": "IMEI",
+        "current": "Current name",
+        "status": "Result"
+      },
+      "status": {
+        "rename": "To rename",
+        "renamed": "Renamed",
+        "same": "Already named",
+        "notFound": "IMEI not found",
+        "ambiguous": "Several devices",
+        "duplicate": "Duplicate",
+        "forbidden": "Not allowed",
+        "invalid": "Invalid line"
+      }
+    },
     "summary": {
       "devices": "{{count}} device(s)",
       "admin": "Device admin:",

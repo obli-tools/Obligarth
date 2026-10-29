@@ -1,7 +1,7 @@
 import apiClient from './client';
 import type {
   LegacyAgentCommandView, LegacyAgentConsoleType, LegacyAgentDeviceAction, LegacyAgentDeviceDetail, LegacyAgentDeviceView,
-  LegacyAgentInstanceSettings,
+  LegacyAgentInstanceSettings, LegacyAgentNameImportResult,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
 } from '@obligarth/shared';
 
@@ -69,6 +69,11 @@ export const legacyAgentApi = {
   },
   async revoke(deviceId: number, reason: string): Promise<{ revoked: boolean }> {
     const res = await apiClient.post<ApiResponse<{ revoked: boolean }>>(`/legacy-agent/devices/${deviceId}/revoke`, { reason });
+    return res.data.data!;
+  },
+  /** Display names by IMEI (a MobiControl export): a preview, or with `apply` the renaming. */
+  async importNames(rows: Array<{ imei: string; name: string }>, apply: boolean): Promise<LegacyAgentNameImportResult> {
+    const res = await apiClient.post<ApiResponse<LegacyAgentNameImportResult>>('/legacy-agent/devices/names', { rows, apply });
     return res.data.data!;
   },
   async tokens(): Promise<LegacyAgentTokenView[]> {
