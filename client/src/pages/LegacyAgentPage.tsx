@@ -2,12 +2,12 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { Ban, Copy, Download, KeyRound, Lock, MessageSquare, Package, Plus, RefreshCw, RotateCw, Search, ShieldOff, Trash2, Upload, XCircle } from 'lucide-react';
+import { Ban, Copy, Download, FileSpreadsheet, KeyRound, Lock, MessageSquare, Package, Plus, RefreshCw, RotateCw, Search, ShieldOff, Trash2, Upload, XCircle } from 'lucide-react';
 import {
-  isMasterTenant, LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
+  isMasterTenant, LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
   type DeviceGroup, type LegacyAgentCommandView, type LegacyAgentConsoleType, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentInstanceSettings, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentServerKeyView,
-  type LegacyAgentTokenCreated, type LegacyAgentTokenView,
+  type LegacyAgentNameImportResult, type LegacyAgentNameImportStatus, type LegacyAgentTokenCreated, type LegacyAgentTokenView,
 } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { groupsApi } from '@/api/groups.api';
@@ -94,6 +94,7 @@ function DevicesTab() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [pending, setPending] = useState<Pending>(null);
   const [guarded, setGuarded] = useState<'device.lock' | 'device.wipe' | null>(null);
+  const [importing, setImporting] = useState(false);
   const detailId = Number(params.get('device') ?? 0) || null;
 
   const load = useCallback(() => {
@@ -154,6 +155,7 @@ function DevicesTab() {
         {filter('silent', t('legacyAgent.filters.silent') || 'Silent for 24 h')}
         {filter('revoked', t('legacyAgent.filters.revoked') || 'Include revoked')}
         <Button variant="ghost" onClick={load}><RefreshCw size={14} /></Button>
+        <Button variant="secondary" className="ml-auto" onClick={() => setImporting(true)}><FileSpreadsheet size={14} /> {t('legacyAgent.importNames.button') || 'Import names'}</Button>
       </div>
       {rows && rows.length > 0 && (
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 rounded border border-border bg-bg-secondary px-3 py-2 text-sm">
@@ -233,6 +235,7 @@ function DevicesTab() {
           </tbody>
         </table>
       </div>
+      {importing && <NameImportDialog onClose={() => setImporting(false)} onDone={load} />}
       {pending && <CommandDialog kind={pending.kind} count={ids.length} onClose={() => setPending(null)} onSend={send} />}
       {guarded && (
         <GuardedActionDialog open onClose={() => setGuarded(null)}
@@ -243,6 +246,151 @@ function DevicesTab() {
       )}
       {detailId && <DeviceDetail id={detailId} onClose={() => { params.delete('device'); setParams(params); }} />}
     </div>
+  );
+}
+
+// ── Import of device names (a MobiControl export of the devices: "Nom term.", "IMEI / MEID / ESN") ──────────────────────
+
+/** The text of a CSV file: UTF-16 by its BOM (Excel "Unicode text"), else UTF-8, else Windows-1252. */
+async function readCsvFile(file: File): Promise<string> {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf[0] === 0xff && buf[1] === 0xfe) return new TextDecoder('utf-16le').decode(buf);
+  if (buf[0] === 0xfe && buf[1] === 0xff) return new TextDecoder('utf-16be').decode(buf);
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(buf); } catch { return new TextDecoder('windows-1252').decode(buf); }
+}
+
+function splitCsvLine(line: string, sep: string): string[] {
+  const out: string[] = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i];
+    if (quoted) {
+      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') quoted = false; else cur += c;
+    } else if (c === '"') quoted = true;
+    else if (c === sep) { out.push(cur.trim()); cur = ''; } else cur += c;
+  }
+  out.push(cur.trim());
+  return out;
+}
+
+/** The (name, IMEI) pairs of a CSV: separator , ; or tab; the header (if any) names the columns, else name then IMEI. */
+function parseNameCsv(text: string): Array<{ name: string; imei: string }> {
+  const lines = text.replace(/^﻿/, '').split(/\r?\n/).filter((l) => l.trim() !== '');
+  if (lines.length === 0) return [];
+  const first = lines[0];
+  const sep = [',', ';', '\t'].map((c) => ({ c, n: first.split(c).length })).sort((a, b) => b.n - a.n)[0].c;
+  const head = splitCsvLine(first, sep);
+  const isImei = (v: string) => /^\d{14,16}$/.test(v.replace(/[\s-]/g, ''));
+  let nameCol = 0;
+  let imeiCol = 1;
+  let start = 0;
+  if (!head.some(isImei)) {
+    start = 1;
+    const i = head.findIndex((h) => /imei/i.test(h));
+    const n = head.findIndex((h) => /^(nom|name)|device name/i.test(h));
+    if (i >= 0) imeiCol = i;
+    if (n >= 0 && n !== imeiCol) nameCol = n; else if (imeiCol === 0) nameCol = 1;
+  } else {
+    imeiCol = head.findIndex(isImei);
+    nameCol = imeiCol === 0 ? 1 : 0;
+  }
+  return lines.slice(start).map((l) => {
+    const cells = splitCsvLine(l, sep);
+    return { name: cells[nameCol] ?? '', imei: cells[imeiCol] ?? '' };
+  });
+}
+
+const IMPORT_ORDER: LegacyAgentNameImportStatus[] = ['rename', 'renamed', 'same', 'notFound', 'ambiguous', 'duplicate', 'forbidden', 'invalid'];
+
+function NameImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
+  const { t } = useTranslation();
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<LegacyAgentNameImportResult | null>(null);
+  const pairs = useMemo(() => parseNameCsv(text), [text]);
+  const counts = useMemo(() => {
+    const c: Partial<Record<LegacyAgentNameImportStatus, number>> = {};
+    for (const r of result?.rows ?? []) c[r.status] = (c[r.status] ?? 0) + 1;
+    return c;
+  }, [result]);
+  const sorted = useMemo(() => [...(result?.rows ?? [])].sort((a, b) => IMPORT_ORDER.indexOf(a.status) - IMPORT_ORDER.indexOf(b.status)), [result]);
+  const label = (s: LegacyAgentNameImportStatus) => t(`legacyAgent.importNames.status.${s}`) || s;
+  const tone = (s: LegacyAgentNameImportStatus) => (s === 'rename' || s === 'renamed' ? 'text-accent'
+    : s === 'same' ? 'text-text-muted' : s === 'notFound' ? 'text-amber-500' : 'text-red-500');
+  const toRename = counts.rename ?? 0;
+
+  const run = async (apply: boolean) => {
+    if (pairs.length === 0) return;
+    if (pairs.length > LEGACY_AGENT_NAME_IMPORT_MAX_ROWS) {
+      toast.error(t('legacyAgent.importNames.tooMany', { max: LEGACY_AGENT_NAME_IMPORT_MAX_ROWS }) || `${LEGACY_AGENT_NAME_IMPORT_MAX_ROWS} rows at most`);
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await legacyAgentApi.importNames(pairs, apply);
+      setResult(r);
+      if (apply) {
+        toast.success(t('legacyAgent.importNames.done', { count: r.applied }) || `${r.applied} device(s) renamed`);
+        onDone();
+      }
+    } catch (err) { fail(err); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open onClose={onClose} size="2xl" title={t('legacyAgent.importNames.title') || 'Import device names'}>
+      <div className="space-y-3 text-sm">
+        <p className="text-text-muted">
+          {t('legacyAgent.importNames.help') || 'A CSV export of MobiControl with the columns "Nom term." and "IMEI / MEID / ESN". Each IMEI is compared with the one the agent reported (or the MobiControl enrollment script); the matching device takes the name. Nothing changes before "Rename".'}
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input type="file" accept=".csv,.txt,text/csv,text/plain" className="text-xs"
+            onChange={async (e) => { const f = e.target.files?.[0]; if (f) { setText(await readCsvFile(f)); setResult(null); } }} />
+          <span className="text-xs text-text-muted">{t('legacyAgent.importNames.orPaste') || 'or paste the content below'}</span>
+        </div>
+        <textarea className={`${fieldCls} font-mono text-xs`} rows={6} value={text} spellCheck={false}
+          placeholder={'Nom term.,IMEI / MEID / ESN\nC0000001,350000000000000'}
+          onChange={(e) => { setText(e.target.value); setResult(null); }} />
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-text-muted">{t('legacyAgent.importNames.lines', { count: pairs.length }) || `${pairs.length} line(s) read`}</span>
+          <Button variant="secondary" className="ml-auto" disabled={busy || pairs.length === 0} onClick={() => void run(false)}>
+            <Search size={14} /> {t('legacyAgent.importNames.preview') || 'Preview'}
+          </Button>
+          <Button disabled={busy || !result || toRename === 0} onClick={() => void run(true)}>
+            <FileSpreadsheet size={14} /> {t('legacyAgent.importNames.apply', { count: toRename }) || `Rename ${toRename} device(s)`}
+          </Button>
+        </div>
+        {result && (<>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 rounded border border-border bg-bg-secondary px-3 py-2 text-xs">
+            {IMPORT_ORDER.filter((s) => counts[s]).map((s) => (
+              <span key={s} className={tone(s)}>{label(s)} : <span className="font-semibold">{counts[s]}</span></span>
+            ))}
+          </div>
+          <div className="max-h-80 overflow-auto rounded border border-border">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-bg-secondary text-left text-text-muted">
+                <tr>
+                  <th className="p-2">{t('legacyAgent.importNames.cols.name') || 'New name'}</th>
+                  <th className="p-2">{t('legacyAgent.importNames.cols.imei') || 'IMEI'}</th>
+                  <th className="p-2">{t('legacyAgent.importNames.cols.current') || 'Current name'}</th>
+                  <th className="p-2">{t('legacyAgent.importNames.cols.status') || 'Result'}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map((r, i) => (
+                  <tr key={`${r.imei}-${i}`} className="border-t border-border">
+                    <td className="p-2">{r.name || '—'}</td>
+                    <td className="p-2 font-mono">{r.imei || '—'}</td>
+                    <td className="p-2 text-text-muted">{r.currentName ?? '—'}</td>
+                    <td className={`p-2 ${tone(r.status)}`}>{label(r.status)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>)}
+      </div>
+    </Modal>
   );
 }
 

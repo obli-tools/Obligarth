@@ -4508,6 +4508,33 @@
       "silent": "Silencieux depuis 24 h",
       "revoked": "Inclure les révoqués"
     },
+    "importNames": {
+      "button": "Importer les noms",
+      "title": "Importer les noms des appareils (MobiControl)",
+      "help": "Un export CSV de MobiControl avec les colonnes « Nom term. » et « IMEI / MEID / ESN ». Chaque IMEI est comparé à celui que l'agent a remonté (ou le script d'enrôlement MobiControl) ; l'appareil correspondant prend le nom. Rien ne change avant « Renommer ».",
+      "orPaste": "ou collez le contenu ci-dessous",
+      "lines": "{{count}} ligne(s) lue(s)",
+      "preview": "Prévisualiser",
+      "apply": "Renommer {{count}} appareil(s)",
+      "done": "{{count}} appareil(s) renommé(s)",
+      "tooMany": "{{max}} lignes au plus par import",
+      "cols": {
+        "name": "Nouveau nom",
+        "imei": "IMEI",
+        "current": "Nom actuel",
+        "status": "Résultat"
+      },
+      "status": {
+        "rename": "À renommer",
+        "renamed": "Renommé",
+        "same": "Déjà nommé",
+        "notFound": "IMEI introuvable",
+        "ambiguous": "Plusieurs appareils",
+        "duplicate": "Doublon",
+        "forbidden": "Non autorisé",
+        "invalid": "Ligne invalide"
+      }
+    },
     "summary": {
       "devices": "{{count}} appareil(s)",
       "admin": "Mode administrateur :",

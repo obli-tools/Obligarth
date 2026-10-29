@@ -20,6 +20,7 @@ export function registerLegacyAgentAuditActions(): void {
     { name: 'legacy_agent.device_enrolled', criticality: 'standard', label: 'Android agent enrolled' },
     { name: 'legacy_agent.identity_conflict', criticality: 'standard', label: 'Android agent identity conflict' },
     { name: 'legacy_agent.device_revoked', criticality: 'protective', label: 'Android agent revoked' },
+    { name: 'legacy_agent.device_renamed', criticality: 'standard', label: 'Android agent device renamed (import of names)' },
     { name: 'legacy_agent.command_queued', criticality: 'standard', label: 'Android agent command queued' },
     { name: 'legacy_agent.command_cancelled', criticality: 'protective', label: 'Android agent command cancelled' },
     { name: 'legacy_agent.package_uploaded', criticality: 'standard', label: 'Android package uploaded' },

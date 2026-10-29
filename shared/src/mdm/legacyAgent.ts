@@ -291,3 +291,30 @@ export interface LegacyAgentBundleStatus {
   imageVersion: string;
   checkedAt: string;
 }
+
+// ── Import of device names (a MobiControl export: name, IMEI) ────────────────
+
+/** The rows one import takes at most; the IMEI is 14 to 16 digits, the name 120 characters at most. */
+export const LEGACY_AGENT_NAME_IMPORT_MAX_ROWS = 2000;
+export const LEGACY_AGENT_NAME_MAX = 120;
+
+/**
+ * What became of a row: `rename` (preview) / `renamed` (applied), `same` (the device already has the name), `notFound`
+ * (no agent of the tenant the caller sees reports this IMEI), `ambiguous` (several report it), `duplicate` (the IMEI, or
+ * the device, is already taken by an earlier row of the file), `invalid` (IMEI or name not acceptable), `forbidden` (the
+ * caller cannot write on the device).
+ */
+export type LegacyAgentNameImportStatus = 'rename' | 'renamed' | 'same' | 'notFound' | 'ambiguous' | 'duplicate' | 'invalid' | 'forbidden';
+
+export interface LegacyAgentNameImportRow {
+  imei: string;
+  name: string;
+  status: LegacyAgentNameImportStatus;
+  deviceId: number | null;
+  currentName: string | null;
+}
+
+export interface LegacyAgentNameImportResult {
+  rows: LegacyAgentNameImportRow[];
+  applied: number;
+}
