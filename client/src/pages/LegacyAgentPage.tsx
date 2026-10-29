@@ -28,6 +28,7 @@ import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { apiErrorMessage } from '@/utils/apiError';
+import { saveBlob } from '@/utils/download';
 
 // The Android bridge agent (agent-pont-android §7): the devices of the tenant (state of the agent, of the device
 // administrator and of Knox, last interrogation, identity conflicts; actions on a selection), the enrollment tokens
@@ -195,7 +196,7 @@ function SortTh({ label, k, sort, onSort, className }: { label: string; k: SortK
 const KNOX_RANK: Record<LegacyAgentKnoxState, number> = { licensed: 0, present: 1, license_error: 2, absent: 3 };
 
 function DevicesTab() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const confirm = useConfirm();
   const prompt = usePrompt();
   const now = useMinuteClock();
@@ -208,6 +209,9 @@ function DevicesTab() {
   const [pending, setPending] = useState<Pending>(null);
   const [guarded, setGuarded] = useState<'device.lock' | 'device.wipe' | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exportMenu, setExportMenu] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const canExport = useAuthStore((s) => s.isAdmin() || (s.permissions?.tenantCapabilities ?? []).includes('reports'));
   const detailId = Number(params.get('device') ?? 0) || null;
 
   const load = useCallback(() => {
@@ -298,6 +302,18 @@ function DevicesTab() {
     try { await legacyAgentApi.revoke(d.deviceId, reason); toast.success(t('legacyAgent.revoked') || 'Agent revoked'); load(); } catch (err) { fail(err); }
   };
 
+  // The export: the view as shown (filters, search, sort), headers in the language of the console.
+  const exportView = async (format: 'csv' | 'xlsx') => {
+    setExportMenu(false);
+    if (rows.length === 0) return;
+    setExporting(true);
+    try {
+      const { blob, filename } = await legacyAgentApi.exportDevices(rows.map((r) => r.deviceId), format, i18n.language,
+        Intl.DateTimeFormat().resolvedOptions().timeZone);
+      if (!(await saveBlob(blob, filename))) toast.error(t('common.error') || 'Error');
+    } catch (err) { fail(err); } finally { setExporting(false); }
+  };
+
   // The tiles: each one is a shortcut to one value of a chip group (on when that group holds that value alone).
   type Tile = { key: string; icon: ReactNode; label: string; value: number; tone: 'neutral' | 'red' | 'amber'; on: boolean; toggle: () => void };
   const pickOnly = <T,>(field: 'admin' | 'src', v: T) => setFilters((f) => ({ ...f, [field]: only(f[field] as Set<T>, v) ? new Set() : new Set([v]) }));
@@ -358,9 +374,31 @@ function DevicesTab() {
             className="rounded-lg p-2 text-text-muted transition-colors hover:bg-bg-tertiary hover:text-text-primary coarse:min-h-10 coarse:min-w-10">
             <RefreshCw className="h-4 w-4" />
           </button>
-          <Button size="sm" variant="secondary" className="ml-auto" onClick={() => setImporting(true)}>
-            <FileSpreadsheet className="mr-1 h-4 w-4" />{t('legacyAgent.importNames.button') || 'Import names'}
-          </Button>
+          <div className="ml-auto flex items-center gap-2">
+            {canExport && (
+              <div className="relative">
+                <Button size="sm" variant="secondary" loading={exporting} disabled={exporting || rows.length === 0} aria-haspopup="menu" aria-expanded={exportMenu}
+                  onClick={() => setExportMenu((v) => !v)}>
+                  <Download className="mr-1 h-4 w-4" />{t('legacyAgent.export.button', { count: rows.length }) || `Export (${rows.length})`}
+                </Button>
+                {exportMenu && (<>
+                  <div className="fixed inset-0 z-30" onClick={() => setExportMenu(false)} aria-hidden />
+                  <div role="menu" className="absolute right-0 z-40 mt-1 w-56 overflow-hidden rounded-lg bg-bg-secondary py-1 shadow-xl ring-1 ring-border">
+                    <button type="button" role="menuitem" className="block w-full px-3 py-2 text-left text-sm text-text-primary hover:bg-bg-tertiary coarse:py-3" onClick={() => void exportView('csv')}>
+                      CSV <span className="text-xs text-text-muted">· {t('legacyAgent.export.csvHint') || 'any spreadsheet'}</span>
+                    </button>
+                    <button type="button" role="menuitem" className="block w-full px-3 py-2 text-left text-sm text-text-primary hover:bg-bg-tertiary coarse:py-3" onClick={() => void exportView('xlsx')}>
+                      Excel (XLSX) <span className="text-xs text-text-muted">· {t('legacyAgent.export.xlsxHint') || 'filters ready'}</span>
+                    </button>
+                    <p className="px-3 pb-1 pt-1.5 text-[11px] leading-snug text-text-muted">{t('legacyAgent.export.scope') || 'The list as shown: its filters, its search and its sort.'}</p>
+                  </div>
+                </>)}
+              </div>
+            )}
+            <Button size="sm" variant="secondary" onClick={() => setImporting(true)}>
+              <FileSpreadsheet className="mr-1 h-4 w-4" />{t('legacyAgent.importNames.button') || 'Import names'}
+            </Button>
+          </div>
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {groupLabel(t('legacyAgent.cols.admin') || 'Admin mode')}

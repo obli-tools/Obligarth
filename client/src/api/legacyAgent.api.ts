@@ -76,6 +76,12 @@ export const legacyAgentApi = {
     const res = await apiClient.post<ApiResponse<LegacyAgentNameImportResult>>('/legacy-agent/devices/names', { rows, apply, format });
     return res.data.data!;
   },
+  /** The view of the console (ids in their order) as CSV or XLSX, headers in the language of the console. */
+  async exportDevices(deviceIds: number[], format: 'csv' | 'xlsx', lang: string, timeZone: string): Promise<{ blob: Blob; filename: string }> {
+    const res = await apiClient.post('/legacy-agent/devices/export', { deviceIds, format, lang, timeZone }, { responseType: 'blob' });
+    const match = /filename="([^"]+)"/.exec(String(res.headers['content-disposition'] ?? ''));
+    return { blob: res.data as Blob, filename: match ? match[1] : `obligarth-android-agents.${format}` };
+  },
   async tokens(): Promise<LegacyAgentTokenView[]> {
     const res = await apiClient.get<ApiResponse<LegacyAgentTokenView[]>>('/legacy-agent/tokens');
     return res.data.data ?? [];
