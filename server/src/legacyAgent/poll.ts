@@ -31,6 +31,10 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 
 const TOO_OLD_TYPES = ['agent.update', 'inventory.refresh'] as const;
 
+/** The versionName of an agent build from its versionCode (major × 10000 + minor × 100 + patch, the rule of
+ *  agent-android/app/build.gradle.kts): the name set at enrollment would otherwise stay after a self update. */
+export const versionNameOf = (code: number): string => `${Math.floor(code / 10_000)}.${Math.floor(code / 100) % 100}.${code % 100}`;
+
 async function applyEvents(trx: Knex.Transaction, who: AgentIdentity, body: PollBody, sat: Satellite): Promise<void> {
   const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, who.tenantId);
   const target = { type: 'device', id: String(who.deviceId), device: who.deviceId };
@@ -75,7 +79,8 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
     // 1. The state.
     await trx('legacy_agent_devices').where({ tenant_id: who.tenantId, device_id: who.deviceId }).update({
       last_poll_at: now, clock_offset_s: Math.max(-2_000_000_000, Math.min(2_000_000_000, serverTime - ex.ts)),
-      admin_active: s.adminActive, knox_state: s.knoxState, agent_version_code: body.agent.versionCode, updated_at: now,
+      admin_active: s.adminActive, knox_state: s.knoxState, agent_version_code: body.agent.versionCode,
+      agent_version_name: versionNameOf(body.agent.versionCode), updated_at: now,
     });
     await trx('devices').where({ tenant_id: who.tenantId, id: who.deviceId }).update({ last_checkin_at: now, updated_at: now });
     await writeStatusItems(trx, who.tenantId, who.deviceId, now, {
