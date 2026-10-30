@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import { performance } from 'node:perf_hooks';
 import { db } from '../db';
+import { noteSessionAddress } from '../security/liveSessionAddresses';
+import { clientAddress } from '../utils/clientIp';
 import { rebaseDbContext } from './dbContext';
 
 // P6 (docs/mobile/device-bound-2fa.md §6.0) — the session's user is re-read.
@@ -54,6 +56,8 @@ export async function sessionUserGuard(req: Request, _res: Response, next: NextF
       return;
     }
     if (req.session.role !== state.role) req.session.role = state.role;
+    // The address carries a live session: never reported to Obliguard by a block of the MCP server.
+    try { noteSessionAddress(clientAddress(req).ip); } catch { /* never blocks the request */ }
     next();
   } catch (err) {
     next(err);

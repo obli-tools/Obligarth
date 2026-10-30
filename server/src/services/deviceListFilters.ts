@@ -53,6 +53,8 @@ export interface DeviceListFilters {
   sortOrder?: 'asc' | 'desc';
   page?: number;
   pageSize?: number;
+  /** An exact row offset, in place of the page's (the MCP server's paging: any offset, not only a multiple of the size). */
+  offset?: number;
   /** Non-administrators: the devices their teams see (permissionService.getVisibleDeviceIds). */
   visibleIds?: number[] | 'all';
 }

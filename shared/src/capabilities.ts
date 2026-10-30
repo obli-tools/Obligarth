@@ -43,6 +43,9 @@ export const TENANT_CAPABILITIES = [
   // Request the changes of the privacy profiles and of the retention (each one approved by another person), write the
   // settings of the notice (P0-13: CNF-02, CNF-04, USR-01); reading them needs settings, audit.read or this one.
   'mdm.privacy.manage',
+  // Create and use personal access keys for the MCP server (an AI agent acting as the user); default off. Every key
+  // stays within the rights of its owner, re-checked at each call (server/src/mcp).
+  'mcp.access_keys',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -64,6 +67,7 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'mdm.integrations.manage': 'Apple integrations · Push certificate, ADE servers, Apps and Books',
   'mdm.apps.manage':       'Apps · Catalog and assignments',
   'mdm.privacy.manage':    'Privacy · Profiles, notice and retention',
+  'mcp.access_keys':       'MCP · Personal access keys for AI agents',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

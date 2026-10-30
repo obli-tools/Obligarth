@@ -75,7 +75,8 @@
     "apps": "Apps",
     "androidPlatform": "Android",
     "legacyAgent": "Agent Android",
-    "privacy": "Confidentialité"
+    "privacy": "Confidentialité",
+    "accessKeys": "Clés d’accès"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -467,6 +468,72 @@
         "label": "Second approbateur : part du parc comptée à partir de",
         "description": "Un changement de configuration (publication, affectations, groupe, appareils déplacés) demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
       }
+    },
+    "mcp": {
+      "title": "Serveur MCP (agents IA)",
+      "intro": "Qui peut atteindre /mcp. Quand chaque clé active liste ses adresses, le serveur est en mode strict : toute autre adresse est bloquée immédiatement, définitivement, et signalée à Obliguard. Dès qu’une clé accepte n’importe quelle adresse, il repasse en mode comptage : les tentatives échouées sont comptées par adresse, puis bloquées.",
+      "currentMode": "Mode actuel",
+      "mode": {
+        "strict": "Strict",
+        "rate": "Comptage des tentatives",
+        "closed": "Fermé (aucune clé)"
+      },
+      "keysCount": "{{active}} clé(s) active(s), {{open}} sans liste d’adresses",
+      "forceIp": "Exiger une liste d’adresses sur chaque clé",
+      "forceIpDesc": "Une clé sans adresses refuse alors les tenants concernés ; un tenant peut être exempté ou forcé ci-dessous.",
+      "fields": {
+        "minPrefixV4": "Réseau IPv4 le plus large d’une clé (préfixe)",
+        "minPrefixV6": "Réseau IPv6 le plus large d’une clé (préfixe)",
+        "failureThreshold": "Tentatives échouées avant blocage (mode comptage)",
+        "failureWindowSeconds": "Fenêtre des tentatives échouées (secondes)",
+        "blockSeconds": "Durée d’un blocage (secondes)",
+        "knownIpDays": "Jours pendant lesquels une adresse d’une clé révoquée ou expirée reste connue",
+        "maxNewBlocksPerMinute": "Nouveaux blocages par minute au plus",
+        "prefixBlockThreshold": "Adresses bloquées d’un même /64 IPv6 avant blocage du /64",
+        "keyRequestsPerMinute": "Requêtes par minute d’une clé",
+        "authorizationMinutes": "Validité d’une autorisation (minutes)",
+        "maxPendingPerKey": "Autorisations en attente par clé",
+        "maxPendingPerUser": "Autorisations en attente par utilisateur",
+        "maxCreatedPerKeyHour": "Autorisations créées par clé et par heure"
+      },
+      "obliguard": "Signaler les blocages à Obliguard",
+      "obliguardDesc": "Adresses publiques uniquement. Sans adresse, Obliguard est trouvé via Obligate.",
+      "obliguardUrl": "Adresse d’Obliguard (facultative)",
+      "urlInvalid": "Une adresse http(s) sans identifiants.",
+      "test": "Tester",
+      "obliguardOk": "Obliguard a répondu.",
+      "obliguardFailed": "Obliguard n’a pas pu être joint.",
+      "neverBlock": "Jamais bloquées (adresses ou réseaux, séparés par des virgules)",
+      "pendingApproval": "Le changement attend son approbation.",
+      "tenantPolicies": "Liste d’adresses par tenant",
+      "policy": {
+        "inherit": "Réglage de l’instance",
+        "force": "Exigée",
+        "exempt": "Exempté"
+      },
+      "blocks": "Adresses bloquées",
+      "noBlocks": "Aucune adresse n’est bloquée.",
+      "source": {
+        "mcp_strict": "Adresse inconnue (mode strict)",
+        "mcp_failures": "Trop de tentatives échouées",
+        "mcp_prefix": "Réseau IPv6 /64",
+        "manual": "Manuel"
+      },
+      "hits_one": "{{count}} tentative",
+      "hits_other": "{{count}} tentatives",
+      "until": "jusqu’à",
+      "permanent": "définitif",
+      "obliguardStatus": {
+        "pending": "Obliguard : en attente",
+        "sent": "Obliguard : envoyé",
+        "failed": "Obliguard : échec",
+        "disabled": "Obliguard : désactivé",
+        "withdrawn": "Obliguard : retiré",
+        "skipped": "Obliguard : non signalé"
+      },
+      "unblock": "Débloquer",
+      "unblockConfirm": "Débloquer {{ip}} ? Obliguard est aussi prié de lever son bannissement.",
+      "unblocked": "Adresse débloquée."
     }
   },
   "profile": {
@@ -1867,7 +1934,8 @@
       "mdm_enrollment_manage": "Inscription · Profils, liens et invitations",
       "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE, Apps and Books",
       "mdm_apps_manage": "Apps · Catalogue et affectations",
-      "mdm_privacy_manage": "Confidentialité · Profils, notice et rétention"
+      "mdm_privacy_manage": "Confidentialité · Profils, notice et rétention",
+      "mcp_access_keys": "MCP · Clés d’accès personnelles pour agents IA"
     }
   },
   "notificationCenter": {
@@ -4089,7 +4157,25 @@
     "smartGroupNotTargetable": "Cette règle ne peut pas définir un groupe dynamique ciblé par une affectation : conformité, configuration, dates, groupes statiques, applications et nom de l'appareil sont exclus.",
     "smartGroupTargeted": "Une affectation cible désormais ce groupe dynamique : soumettez de nouveau la modification pour en voir l'impact.",
     "smartGroupUnknownGroup": "La règle cite un groupe statique qui n'existe plus.",
-    "invalidRule": "Le filtre avancé n'est pas valide."
+    "invalidRule": "Le filtre avancé n'est pas valide.",
+    "invalidIpAllow": "Une entrée de la liste d’adresses n’est ni une adresse ni un réseau.",
+    "ipPrefixTooWide": "Un réseau de la liste d’adresses est trop large.",
+    "twoFactorSetupRequired": "Configurez un second facteur (application d’authentification) sur votre profil avant de créer une clé d’accès.",
+    "tenantNotAllowed": "Un tenant de la clé n’est pas un tenant que vous pouvez lui donner.",
+    "scopeNotHeld": "Vous ne détenez pas ce droit dans les tenants choisis : {{scope}}.",
+    "scopeUnknown": "Droit inconnu.",
+    "invalidPerimeter": "Le périmètre de la clé est incomplet.",
+    "ipAllowListRequired": "Une liste d’adresses est exigée par votre administrateur.",
+    "invalidExpiry": "L’expiration doit être comprise entre 1 et 365 jours.",
+    "tooManyKeys": "Vous avez déjà le nombre maximal de clés actives : révoquez-en une d’abord.",
+    "authorizationClosed": "Cette autorisation est close.",
+    "perimeterLost": "L’action n’est plus dans vos droits ou dans le périmètre de la clé : rien n’a été fait.",
+    "tooManyPendingAuthorizations": "Trop d’autorisations attendent une décision.",
+    "stepUpFactorMissing": "Un second facteur est requis.",
+    "tenantNotInPerimeter": "Ce tenant n’est pas dans le périmètre de la clé.",
+    "neverBlock": "Cette adresse n’est jamais bloquée.",
+    "invalidIp": "Une adresse unique est attendue.",
+    "stepUpRequired": "Un second facteur est requis."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -6297,6 +6383,199 @@
       "request": "Demander la modification",
       "requested": "Modification demandée : elle attend son approbation.",
       "failed": "La modification n'a pas pu être demandée."
+    }
+  },
+  "accessKeys": {
+    "title": "Clés d’accès pour agents IA",
+    "intro": "Un agent IA comme Claude Code se connecte au serveur MCP d’Obligarth avec l’une de vos clés et agit en votre nom, pour diagnostiquer et corriger : jamais plus que vos droits actuels, limités aux droits et au périmètre de la clé. Les actions sensibles attendent toujours votre approbation avec un second facteur.",
+    "new": "Nouvelle clé",
+    "empty": "Aucune clé active. Créez-en une pour connecter un agent IA.",
+    "hideInactive": "Masquer les clés révoquées et expirées",
+    "showInactive_one": "Afficher la clé révoquée ou expirée ({{count}})",
+    "showInactive_other": "Afficher les clés révoquées et expirées ({{count}})",
+    "revokeTitle": "Révoquer la clé",
+    "revokeConfirm": "La clé « {{name}} » cesse de fonctionner immédiatement, et les actions qu’elle a demandées et qui attendent encore sont annulées. C’est irréversible.",
+    "revoked": "Clé révoquée.",
+    "shownOnce": "Copiez la clé maintenant : elle n’est affichée qu’une fois. Obligarth n’en garde qu’une empreinte et ne peut pas la réafficher.",
+    "profileHint": "Laisser un agent IA comme Claude Code agir en votre nom, dans vos droits, via le serveur MCP.",
+    "tabs": {
+      "keys": "Mes clés",
+      "authorizations": "Autorisations",
+      "tenant": "Clés de ce tenant"
+    },
+    "scopes": {
+      "devices_read": "Lire les appareils, les groupes et l’inventaire",
+      "devices_identifiers": "Lire les identifiants des appareils (IMEI, numéros de série)",
+      "commands_read": "Lire les files de commandes et leurs résultats",
+      "alerts_read": "Lire les alertes en direct",
+      "apps_read": "Lire le catalogue d’apps, les paquets et les versions de l’agent",
+      "audit_read": "Lire le journal d’audit du tenant",
+      "commands_inventory": "Rafraîchir l’inventaire",
+      "commands_message": "Afficher un message sur les appareils",
+      "commands_restart": "Redémarrer les appareils",
+      "commands_apps": "Installer, désinstaller et récupérer des apps, mettre à jour l’agent",
+      "commands_cancel": "Annuler des commandes en attente",
+      "groups_move": "Déplacer des appareils entre groupes (toujours approuvé par vous)"
+    },
+    "state": {
+      "active": "Active",
+      "expired": "Expirée",
+      "revoked": "Révoquée"
+    },
+    "revokeReason": {
+      "user": "Révoquée par vous",
+      "admin": "Révoquée par un administrateur de la plateforme",
+      "user_disabled": "Compte désactivé",
+      "credentials_changed": "Mot de passe ou second facteur changé",
+      "sessions_killed": "Sessions du compte terminées",
+      "owner_removed": "Compte supprimé"
+    },
+    "perimeter": {
+      "allTenants": "Tous mes tenants",
+      "allGroups": "Tous les groupes",
+      "allDevices": "Tous les appareils"
+    },
+    "list": {
+      "key": "Clé",
+      "perimeter": "Droits et périmètre",
+      "usage": "Expiration et usage",
+      "scopes": "Droits",
+      "noTenantNow": "Aucun tenant accessible actuellement (droits ou tenants perdus).",
+      "tenants": "Tenants",
+      "groups": "Groupes",
+      "devices": "Appareils",
+      "excluded": "Exclus",
+      "excludedTenants_one": "{{count}} tenant, par ses gestionnaires",
+      "excludedTenants_other": "{{count}} tenants, par leurs gestionnaires",
+      "anyIp": "Toute IP",
+      "expired": "Expirée",
+      "expires": "Expire",
+      "lastUsed": "Dernier usage",
+      "revoked": "Révoquée",
+      "revoke": "Révoquer"
+    },
+    "create": {
+      "title": "Nouvelle clé d’accès",
+      "intro": "Un agent IA (Claude Code…) utilise cette clé pour agir en votre nom, jamais avec plus de droits que les vôtres, revérifiés à chaque appel. Choisissez ce qu’il peut atteindre et faire. Les actions sensibles attendent toujours votre approbation avec un second facteur.",
+      "submit": "Créer la clé",
+      "failed": "La clé n’a pas pu être créée.",
+      "needFactor": "Configurez d’abord un second facteur sur votre profil.",
+      "needName": "Donnez un nom à la clé.",
+      "needTenant": "Choisissez au moins un tenant.",
+      "needGroup": "Choisissez au moins un groupe.",
+      "needDevice": "Choisissez au moins un appareil.",
+      "needScope": "Choisissez au moins un droit.",
+      "needIp": "Une liste d’adresses autorisées est exigée par votre administrateur.",
+      "noFactor": "Une clé a besoin d’un second facteur (une application d’authentification, ou votre compte Obligate) pour approuver ses actions sensibles. Configurez-en un sur votre profil.",
+      "toProfile": "Profil",
+      "name": "Nom",
+      "namePlaceholder": "Claude Code : diagnostic",
+      "expiry": "Expire dans",
+      "days_one": "{{count}} jour",
+      "days_other": "{{count}} jours",
+      "tenants": "Tenants",
+      "thisTenant": "Ce tenant",
+      "choose": "Choisir",
+      "allMyTenants": "Tous mes tenants",
+      "ipForcedShort": "Liste d’IP exigée",
+      "allTenantsAdmin": "En tant qu’administrateur de la plateforme, cela signifie TOUS les tenants de l’instance, y compris ceux créés plus tard. La clé n’a jamais la vue globale : chaque appel nomme un tenant.",
+      "allTenantsHint": "Tous les tenants auxquels vous avez accès au moment de chaque appel, y compris ceux qui vous seront ouverts plus tard.",
+      "groups": "Groupes",
+      "allGroups": "Tous les groupes",
+      "groupsHint": "Un groupe inclut ses sous-groupes. Les appareils hors de ces groupes (ou sans groupe) sont hors de la clé ; un tenant de la clé sans groupe choisi ne montre aucun appareil.",
+      "noGroups": "Aucun groupe listé dans cette session pour les tenants choisis.",
+      "devices": "Appareils",
+      "allDevices": "Tous les appareils",
+      "deviceSearch": "Rechercher un appareil",
+      "noDevices": "Aucun appareil ne correspond.",
+      "pickerHint": "Seuls les groupes et appareils listés dans cette session sont proposés : changez de tenant pour choisir dans un autre tenant. Avec des groupes et des appareils choisis, la clé atteint les appareils choisis qui sont dans les groupes choisis.",
+      "scopes": "Droits",
+      "scopesHint": "Seuls les droits que vous détenez dans un tenant choisi peuvent être donnés. Dans chaque tenant, la clé ne fait jamais plus que ce que vous pouvez y faire.",
+      "scopesRead": "Lire",
+      "scopesAct": "Agir",
+      "scopeNotHeld": "non détenu dans les tenants choisis",
+      "ipAllow": "Adresses autorisées",
+      "ipForced": "Exigée par votre administrateur pour un tenant choisi.",
+      "removeIp": "Retirer",
+      "ipTooWide": "Trop large : au moins /{{v4}} (IPv4) ou /{{v6}} (IPv6).",
+      "ipInvalid": "Ce n’est ni une adresse ni un réseau.",
+      "addIp": "Ajouter",
+      "ipOpenNote": "Sans adresse, la clé fonctionne depuis n’importe quelle IP. Tant qu’une telle clé existe, le serveur ne peut pas bloquer immédiatement une adresse inconnue : il compte seulement les tentatives échouées.",
+      "ipListNote": "La clé ne fonctionne que depuis ces adresses."
+    },
+    "created": {
+      "title": "Clé « {{name}} » créée",
+      "done": "Je l’ai copiée",
+      "token": "Clé",
+      "command": "Connecter Claude Code",
+      "commandHint": "Lancez-la dans un terminal où Claude Code est installé. L’agent appelle ensuite whoami pour savoir ce que cette clé lui permet de voir et de faire."
+    },
+    "tenant": {
+      "intro": "Les clés d’accès des utilisateurs qui peuvent atteindre ce tenant actuellement. Chaque clé agit au nom de son propriétaire, dans ses droits ici.",
+      "empty": "Aucune clé d’accès n’atteint ce tenant.",
+      "owner": "Propriétaire et clé",
+      "exclude": "Exclure de ce tenant",
+      "excludeTitle": "Exclure ce tenant de la clé",
+      "excludeConfirm": "La clé « {{name}} » de {{owner}} n’atteindra plus ce tenant. Ses actions en attente ici sont annulées. C’est irréversible.",
+      "excluded": "Ce tenant est exclu de la clé."
+    },
+    "newNetwork": {
+      "title": "Votre clé « {{name}} » a été utilisée depuis un nouveau réseau",
+      "hint": "Si ce n’était ni vous ni votre agent, révoquez la clé."
+    }
+  },
+  "mcpAuthorizations": {
+    "title": "Action demandée par un agent IA",
+    "back": "Autorisations",
+    "intro": "Une action sensible demandée par l’un de vos agents IA ne s’exécute jamais seule : ouvrez-la, vérifiez-la, puis approuvez-la avec votre second facteur (un code ou votre téléphone), ou refusez-la.",
+    "notice": "Un agent IA attend votre approbation",
+    "filter": {
+      "pending": "En attente de moi",
+      "all": "Toutes"
+    },
+    "emptyPending": "Aucune action ne vous attend.",
+    "empty": "Aucune autorisation pour l’instant.",
+    "notFound": "Cette autorisation n’existe pas dans ce tenant.",
+    "key": "Clé",
+    "expires": "Expire",
+    "tool": "Outil",
+    "tenant": "Tenant",
+    "agentIp": "Adresse de l’agent",
+    "asked": "Demandée",
+    "timeLeft": "Temps restant",
+    "approvedWith": "Approuvée avec",
+    "error": "Erreur",
+    "approvalRequest": "Demande d’approbation",
+    "devices_one": "Appareil ({{count}})",
+    "devices_other": "Appareils ({{count}})",
+    "params": "Paramètres",
+    "agentText": "Texte écrit par l’agent IA",
+    "agentTextHint": "Écrit par l’agent, pas par Obligarth : lisez-le comme une citation, il peut être faux ou trompeur.",
+    "agentField": {
+      "reason": "Motif",
+      "title": "Titre",
+      "text": "Message",
+      "package_name": "Paquet"
+    },
+    "preview": "Ce que change le déplacement",
+    "previewHint": "Vous approuvez exactement cet effet : s’il change avant l’exécution, rien n’est déplacé.",
+    "approveHint": "Approuver demande votre second facteur (un code, ou votre téléphone). L’action s’exécute alors une fois, en votre nom, vos droits revérifiés.",
+    "approve": "Approuver",
+    "deny": "Refuser",
+    "denyConfirm": "Refuser cette action ? Rien ne sera fait, et l’agent saura qu’elle a été refusée.",
+    "denied": "Refusée : rien n’a été fait.",
+    "executed": "Approuvée : l’action s’est exécutée.",
+    "filedToast": "Approuvée : l’action attend maintenant un autre approbateur.",
+    "state": {
+      "pending": "Vous attend",
+      "executing": "En cours",
+      "executed": "Faite",
+      "failed": "Échouée",
+      "denied": "Refusée",
+      "expired": "Expirée",
+      "cancelled": "Annulée",
+      "filed": "Envoyée en approbation",
+      "interrupted": "Interrompue"
     }
   }
 }

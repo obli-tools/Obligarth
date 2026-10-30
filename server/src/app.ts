@@ -28,6 +28,7 @@ import { createAppleDeviceSurface } from './apple/enrollment';
 import { createAndroidByodSurface } from './android/byod/surface';
 import { createAndroidSigninSurface } from './android/signin/surface';
 import { createLegacyAgentSurface } from './legacyAgent/surface';
+import { createMcpRouter } from './mcp/router';
 import { createNoticePublicSurface } from './privacy/notice/surface';
 import { jobs } from './jobs';
 import { httpMetricsMiddleware } from './ops/http';
@@ -109,6 +110,10 @@ export function createApp() {
   // body reader (the signatures cover the exact bytes), limits and limiters; no session, no cookie. Reached through
   // the edge proxy (mdm.<domain>) only.
   app.use('/agent/v1', createLegacyAgentSurface());
+  // The MCP server (/mcp; docs: specs mcp-server §3.1): AI agents through personal access keys. Before cors, the
+  // parsers, the cookies, the session and the console's database context: no session exists here, nothing can write
+  // one nor set a cookie; its own no-store, IP gate, Origin guard, JSON parser and key authentication.
+  app.use('/mcp', createMcpRouter());
   app.use(
     cors({
       origin: config.clientOrigin,

@@ -38,6 +38,8 @@ import { DownloadPage } from '@/pages/DownloadPage';
 import { LegacyAgentPage } from '@/pages/LegacyAgentPage';
 import { RemoteSessionPage } from '@/pages/RemoteSessionPage';
 import { RemoteSessionsPage } from '@/pages/RemoteSessionsPage';
+import { AccessKeysPage } from '@/pages/AccessKeysPage';
+import { AuthorizationPage } from '@/components/accessKeys/AuthorizationPage';
 import { TwoFactorGate } from '@/components/common/TwoFactorGate';
 import { ConfirmProvider } from '@/components/common/ConfirmDialog';
 import '@/i18n';
@@ -83,6 +85,9 @@ export default function App() {
  {/* User */}
  <Route path="/profile" element={<ProfilePage />} />
  <Route path="/download" element={<DownloadPage />} />
+ {/* An action an AI agent asked through one of the user's access keys (MCP server, owner decision 1): any user, the
+     server answers only his own authorizations. */}
+ <Route path="/access-keys/authorizations/:id" element={<AuthorizationPage />} />
 
  {/* Admin-only — Settings / Users / Tenants / Audit / Security
      remain locked to platform admins. */}
@@ -139,6 +144,11 @@ export default function App() {
  </Route>
  {/* The approval queue on its own (the Security page embeds it): its reviewers, and the members who
      may request a restricted action. */}
+ {/* Access keys of the MCP server (owner decision 4): the holders of mcp.access_keys (their keys), the managers of
+     the tenant (the keys that reach it); platform administrators always. */}
+ <Route element={<ProtectedRoute requiredCapabilities={['mcp.access_keys', 'users.manage']} />}>
+ <Route path="/access-keys" element={<AccessKeysPage />} />
+ </Route>
  <Route element={<ProtectedRoute requiredCapabilities={['approvals.review', 'devices.manage', 'mdm.policies.manage']} />}>
  <Route path="/admin/approvals" element={<ApprovalsPage />} />
  </Route>

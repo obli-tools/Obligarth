@@ -26,6 +26,7 @@ import {
   QrCode,
   Plug,
   AppWindow,
+  KeyRound,
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -35,6 +36,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useUiStore, useEffectiveSidebar } from '@/store/uiStore';
 import { IconButton } from '@/components/common/IconButton';
 import { useTenantStore } from '@/store/tenantStore';
+import { useMcpAuthorizationsStore, livePending } from '@/store/mcpAuthorizationsStore';
 import { groupsApi } from '@/api/groups.api';
 import { getSocket } from '@/socket/socketClient';
 import type { DeviceGroupTreeNode } from '@obligarth/shared';
@@ -281,6 +283,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const canFloat = !inDrawer && effective.canFloat;
 
   const admin = isAdmin();
+  // Actions of the user's AI agents waiting for his approval (user-scoped, every tenant).
+  const mcpPendingCount = useMcpAuthorizationsStore((s) => livePending(s.pending).length);
 
   // ── Layout preferences ─────────────────────────────────────────────────────
   const [storedSidebarLayout, setSidebarLayout] = usePersisted<'stacked' | 'side-by-side'>('sidebar-layout', 'stacked');
@@ -519,6 +523,11 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // Remote assistance (P0-15) — the journal of the sessions of the tenant (audit.read: the client approver and the
     // auditor too), beside Privacy (coordination C8).
     ...(admin || tenantCaps.has('audit.read') ? [{ label: t('nav.remoteSessions', 'Remote assistance'), path: '/remote-sessions', icon: <MonitorSmartphone size={18} /> } as NavItem] : []),
+    // Access keys of the MCP server (AI agents acting as the user; owner decision 4) — mcp.access_keys for one's own
+    // keys, users.manage for the keys reaching the tenant; the badge counts the actions waiting for the user's approval.
+    ...(admin || tenantCaps.has('mcp.access_keys') || tenantCaps.has('users.manage')
+      ? [{ label: t('nav.accessKeys', 'Access keys'), path: '/access-keys', icon: <KeyRound size={18} />, badgeCount: mcpPendingCount } as NavItem]
+      : []),
     // Security — the journal (audit.read), the approvals (approvals.review)
     // and, for platform administrators, the vault and the journal settings.
     ...(admin || hasSecurityCap ? [{ label: t('nav.security', 'Security'), path: '/admin/security', icon: <ShieldCheck size={18} />, badgeCount: admin ? pendingApprovalsCount : 0 } as NavItem] : []),

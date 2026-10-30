@@ -3,6 +3,7 @@ import { Shield, Server, Plus, Pencil, Trash2, Wifi, Eye, EyeOff, ArrowLeftRight
 import { SettingsPanel } from '@/components/settings/SettingsPanel';
 import { DeviceKeysSettingsSection } from '@/components/settings/DeviceKeysSettingsSection';
 import { RemoteSettingsSection } from '@/components/settings/RemoteSettingsSection';
+import { McpSettingsSection } from '@/components/settings/McpSettingsSection';
 import { useAuthStore } from '@/store/authStore';
 import { smtpServerApi, type CreateSmtpServerRequest } from '@/api/smtpServer.api';
 import { appConfigApi } from '@/api/appConfig.api';
@@ -807,6 +808,9 @@ export function SettingsPage() {
 
  {/* ── Device-bound 2FA (fingerprint on the Android app) ── */}
  {admin && <DeviceKeysSettingsSection />}
+
+ {/* ── MCP server (AI agents): the master tenant only, hidden when the server refuses the reading ── */}
+ {admin && <McpSettingsSection />}
  </PageContainer>
  );
 }

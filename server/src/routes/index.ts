@@ -62,6 +62,9 @@ import { createAndroidSignupCallbackRouter } from '../android/routes/signupCallb
 import { createLegacyAgentRouter } from '../legacyAgent/routes';
 import { createRemoteSessionsRouter } from '../remote/routes';
 import { createLegacyAgentAdminRouter } from '../legacyAgent/admin.routes';
+import { createAccessKeysRouter } from '../mcp/keys/routes';
+import { createMcpAuthorizationsRouter } from '../mcp/authorizations/routes';
+import { createMcpAdminRouter } from '../mcp/admin.routes';
 
 const router = Router();
 
@@ -179,6 +182,12 @@ tenantRouter.use('/legacy-agent', createLegacyAgentRouter());
 // The remote assistance sessions (P0-15 §4.2): request, journal, end, escalation, settings (remote/routes.ts).
 tenantRouter.use('/remote-sessions', createRemoteSessionsRouter());
 tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
+// The MCP server in the console: the user's personal access keys and the tenant managers' oversight of them, the
+// authorizations an AI agent asked (approved with a second factor), and the platform side (settings, tenant IP
+// policies, blocks, every key; master tenant, platform administrators). /mcp itself is mounted by app.ts.
+tenantRouter.use('/access-keys', createAccessKeysRouter());
+tenantRouter.use('/mcp-authorizations', createMcpAuthorizationsRouter());
+tenantRouter.use('/admin/mcp', createMcpAdminRouter());
 // The hardened audit journal: retention, legal holds, SIEM destinations,
 // seal keys (master tenant, platform administrators; audit/admin.routes.ts).
 tenantRouter.use('/admin/audit', createAuditAdminRouter());

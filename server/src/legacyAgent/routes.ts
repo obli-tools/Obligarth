@@ -113,7 +113,7 @@ async function visible(req: Request): Promise<number[] | 'all'> {
   return permissionService.getVisibleDeviceIds(req.session.userId!, false);
 }
 
-const DEVICE_COLUMNS = [
+export const DEVICE_COLUMNS = [
   'd.id', 'd.uuid', 'd.label', 'd.model', 'd.model_name', 'd.os_version', 'd.serial_number', 'd.enrollment_state', 'd.enrolled_at', 'd.group_id',
   'a.agent_id', 'a.api_level', 'a.security_patch', 'a.agent_version_code', 'a.agent_version_name', 'a.admin_active', 'a.knox_state',
   'a.key_storage', 'a.identity_conflict', 'a.last_poll_at', 'a.last_inventory_at', 'a.revoked_at', 'a.revoke_reason',
@@ -121,13 +121,13 @@ const DEVICE_COLUMNS = [
   db.raw("(SELECT s.value FROM obligarth.device_status_items s WHERE s.tenant_id = d.tenant_id AND s.device_id = d.id AND s.item = 'agent.install.unknown-sources') AS unknown_sources"),
 ];
 
-function agentsQuery(tenantId: number) {
+export function agentsQuery(tenantId: number) {
   return db('legacy_agent_devices as a')
     .join('devices as d', function j() { this.on('d.id', '=', 'a.device_id').andOn('d.tenant_id', '=', 'a.tenant_id'); })
     .where('a.tenant_id', tenantId);
 }
 
-function deviceView(r: Record<string, any>): LegacyAgentDeviceView {
+export function deviceView(r: Record<string, any>): LegacyAgentDeviceView {
   const battery = jsonOf(r.battery);
   const unknown = jsonOf(r.unknown_sources);
   return {
@@ -142,7 +142,7 @@ function deviceView(r: Record<string, any>): LegacyAgentDeviceView {
   };
 }
 
-function commandView(r: Record<string, any>): LegacyAgentCommandView {
+export function commandView(r: Record<string, any>): LegacyAgentCommandView {
   return {
     id: String(r.id).toLowerCase(), batchId: String(r.batch_id).toLowerCase(), deviceId: Number(r.device_id), type: r.request_type,
     params: jsonOf(r.params) ?? {}, origin: r.origin, state: r.state, holdReason: r.hold_reason ?? null, deliveryCount: Number(r.delivery_count ?? 0),
@@ -251,7 +251,7 @@ const CommandBody = z.object({
 const BulkBody = CommandBody.extend({ deviceIds: z.array(z.union([z.number(), z.string()])).min(1).max(500) }).strict();
 
 /** The type of a console request and its full parameters: a package or a release of the tenant resolved here. */
-async function consoleCommand(tenantId: number, type: string, raw: Record<string, unknown> | undefined): Promise<{ spec: CommandSpec; params: Record<string, unknown> }> {
+export async function consoleCommand(tenantId: number, type: string, raw: Record<string, unknown> | undefined): Promise<{ spec: CommandSpec; params: Record<string, unknown> }> {
   const spec = commandSpecOrNull(type);
   if (!spec) throw new AppError(422, 'Unknown command type', 'unknownRequestType');
   if (spec.guardedBy) throw new AppError(409, 'This command goes through its guarded action', 'guardedActionRequired', { actionKey: spec.guardedBy });
@@ -751,7 +751,7 @@ const PackageMeta = z.object({
   label: z.string().trim().max(100).optional(),
 }).strict();
 
-function packageView(r: Record<string, any>): LegacyAgentPackageView {
+export function packageView(r: Record<string, any>): LegacyAgentPackageView {
   return {
     id: String(r.id), packageName: r.package_name, versionCode: String(r.version_code), versionName: r.version_name ?? null, sha256: r.sha256,
     sizeBytes: Number(r.size_bytes), signerSha256: r.signer_sha256 ?? null, label: r.label ?? null, createdAt: iso(r.created_at) as string,

@@ -8,6 +8,9 @@ declare global {
       /** The fresh proof a step-up of this request accepted (restriction
        *  envelope), for its audit entry (audit-durci §5.3, actor.stepUp). */
       stepUpVia?: StepUpVia;
+      /** Request-scoped memo of a fresh second factor (the approval of an MCP authorization): checkSecondFactor
+       *  accepts these action keys without asking again. Set by that handler only, never persisted. */
+      stepUpVerified?: { via: StepUpVia; actionKeys: ReadonlySet<string> };
     }
   }
 }

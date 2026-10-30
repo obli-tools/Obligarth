@@ -62,6 +62,13 @@ export const SocketEvents = {
   // its requester and to the tenant's admin room.
   REMOTE_SESSION_CHANGED:      'REMOTE_SESSION_CHANGED',
 
+  // MCP server (AI agents through personal access keys), to the room of the key's owner only (user:<id>), never to a
+  // tenant room: an authorization the owner approves with a second factor changed state (McpAuthorizationChanged:
+  // server-built summary only, never text written by the agent), and a key was used from a new network
+  // (McpKeyNewNetwork).
+  MCP_AUTHORIZATION_CHANGED:   'MCP_AUTHORIZATION_CHANGED',
+  MCP_KEY_NEW_NETWORK:         'MCP_KEY_NEW_NETWORK',
+
   // Client → Server
   DEVICE_SUBSCRIBE:       'DEVICE_SUBSCRIBE',
   DEVICE_UNSUBSCRIBE:     'DEVICE_UNSUBSCRIBE',

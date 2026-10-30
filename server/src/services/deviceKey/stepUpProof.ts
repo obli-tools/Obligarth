@@ -419,9 +419,29 @@ function ssoCodeHash(req: Request, userId: number, code: string): string {
   return crypto.createHash('sha256').update(`obli-sso-stepup\n${req.sessionID ?? ''}\n${userId}\n${code}`).digest('hex');
 }
 
+/** Codes of SSO accounts accepted by a strict step before lot O: hash → end of validity (ms). */
+const strictSsoCodes = new Map<string, number>();
+/** A code stays valid ±1 step at Obligate: 90 s covers it. */
+const STRICT_SSO_CODE_MS = 90_000;
+
+/**
+ * Reserves a code for a strict step of a user (synchronously: two approvals racing with the same code cannot both
+ * pass), or null when it was already accepted within its validity. `release` frees it when the code is refused.
+ */
+function reserveStrictSsoCode(userId: number, code: string): { release(): void } | null {
+  const now = Date.now();
+  if (strictSsoCodes.size > 10_000) for (const [k, until] of strictSsoCodes) if (until <= now) strictSsoCodes.delete(k);
+  const key = crypto.createHash('sha256').update(`obli-sso-strict\n${userId}\n${code}`).digest('hex');
+  const until = strictSsoCodes.get(key);
+  if (until !== undefined && until > now) return null;
+  strictSsoCodes.set(key, now + STRICT_SSO_CODE_MS);
+  return { release: () => { strictSsoCodes.delete(key); } };
+}
+
 /**
  * The code of an SSO account, checked by Obligate. Before lot O: as always
- * (no replay guard at Obligate). With lot O (capabilities announced):
+ * (no replay guard at Obligate), except a strict use (requireNewStep), whose
+ * accepted codes are remembered locally and never accepted twice. With lot O (capabilities announced):
  * `consume:true`, so Obligate refuses a step already used anywhere (its own
  * sign-in included, R3) — a replay answers 'used' (not counted). To keep the
  * local 'stepup' semantics (design §7.7: a code typed once serves the next
@@ -439,7 +459,14 @@ async function checkObligateCode(
   // feature on (DEVICE_KEYS_DISABLED / device_keys_enabled=false restore
   // the historical call too).
   if (!deviceKeysEnabled || !(await obligateService.lotOSupported())) {
-    return obligateService.verifyTotpDetailed(foreignId, code);
+    if (!strict) return obligateService.verifyTotpDetailed(foreignId, code);
+    // A strict use (one fresh factor per action: the approval of an MCP authorization) without Obligate's consuming
+    // check: the code accepted is remembered here for its validity, and its reuse by the same user refused.
+    const slot = reserveStrictSsoCode(userId, code);
+    if (!slot) return 'used';
+    const r = await obligateService.verifyTotpDetailed(foreignId, code).catch((err) => { slot.release(); throw err; });
+    if (r !== 'valid') slot.release();
+    return r;
   }
   const hash = ssoCodeHash(req, userId, code);
   const memo = req.session?.ssoStepUpCode;
@@ -466,6 +493,11 @@ export const DEVICE_KEY_REVOKED_BODY = Object.freeze({
 const SSO_REAUTH_WINDOW_MS = 5 * 60 * 1000;
 
 export async function checkSecondFactor(req: Request, o: StepUpOpts): Promise<StepUpOutcome> {
+  // 0. The approval of an MCP authorization (mcp/authorizations/routes.ts) proved a fresh factor for exactly these
+  //    action keys, in this request only (never persisted, never by a trusted IP): the restriction it then runs as
+  //    the human does not ask again a single-use proof it already consumed.
+  const memo = req.stepUpVerified;
+  if (memo && memo.via !== 'trusted_ip' && memo.actionKeys.has(o.actionKey)) return { ok: true, via: memo.via };
   // 1. User: present and active, else the session dies.
   const userId = (req.session as any)?.userId as number | undefined;
   if (!userId) return { ok: false, status: 401, body: { error: 'Unauthenticated' } };
