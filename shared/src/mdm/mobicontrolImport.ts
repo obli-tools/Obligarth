@@ -252,7 +252,8 @@ export function flattenFeatureControls(v: unknown, prefix = '', out: Map<string,
   return out;
 }
 
-/** MobiControl feature (last segment, or a dotted suffix) → Knox field (allowed = false when the feature is disabled). */
+/** MobiControl feature (last segment, or a dotted suffix) → Knox field. Despite their Disable… names, the export carries the
+ *  console's "Allow …" switch: true is allowed, false is the restriction (allowed = false). */
 const FEATURE_MAP: ReadonlyArray<[RegExp, string]> = [
   [/(^|\.)DisableMicrophone$/i, 'microphone'], [/(^|\.)DisableNfc$/i, 'nfc'], [/(^|\.)DisableScreenCapture$/i, 'screenCapture'],
   [/(^|\.)DisableMockLocations?$/i, 'mockLocation'], [/(^|\.)DisableAirplaneMode$/i, 'airplaneMode'], [/(^|\.)DisableSafeMode$/i, 'safeMode'],
@@ -328,7 +329,7 @@ export function profileSettings(profiles: unknown, o: { profile?: string | null;
     const form = obj(pv.FormValue);
     if (kind === 'restrictions') {
       for (const [path, on] of flattenFeatureControls(form.FeatureControlContainer)) {
-        if (!on) continue;
+        if (on) continue;   // allowed in MobiControl (see FEATURE_MAP): nothing to restrict
         if (/(^|\.)DisableCamera$/i.test(path)) { out.knox.camera = false; out.dpm.cameraDisabled = true; continue; }
         if (/(^|\.)Connectivity\.WiFi\.DisableWifi$/i.test(path) || /(^|\.)DisableWifi$/i.test(path)) {
           out.issues.push({ code: 'wifi_parent_review', detail: path.slice(0, 160) });
