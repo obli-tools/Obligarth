@@ -34,5 +34,12 @@ export function registerLegacyAgentAuditActions(): void {
     { name: 'legacy_agent.admin_disabled', criticality: 'standard', label: 'Device administrator disabled on an Android agent' },
     { name: 'legacy_agent.settings_changed', criticality: 'standard', label: 'Android agent settings changed' },
     { name: 'legacy_agent.server_key_exported', criticality: 'critical', label: 'Android agent instance key exported for escrow' },
+    // Lot PONT-POL: the file store of the agent policies, the import of per-device values (keys only, never a value),
+    // a wipe threshold the freeze held back from a delivery (paths only).
+    { name: 'legacy_agent.file_uploaded', criticality: 'standard', label: 'Android agent policy file uploaded' },
+    { name: 'legacy_agent.file_renamed', criticality: 'standard', label: 'Android agent policy file renamed' },
+    { name: 'legacy_agent.file_deleted', criticality: 'standard', label: 'Android agent policy file deleted' },
+    { name: 'legacy_agent.device_values_imported', criticality: 'standard', label: 'Android agent per-device values imported' },
+    { name: 'legacy_agent.wipe_settings_withheld', criticality: 'standard', label: 'Android agent wipe threshold held back by the freeze' },
   ]);
 }

@@ -24,6 +24,10 @@ export * from './integrations';
 export * from './apps';
 // Android bridge agent (agent-pont-android §4, §7): contract vocabulary and views of the console.
 export * from './legacyAgent';
+// Policies of the bridge agent (lot PONT-POL): the section, its keys and rules, the report; the importers.
+export * from './legacyAgentPolicy';
+export * from './deviceValuesImport';
+export * from './mobicontrolImport';
 // Rule language of the inventory (P0-5 §2): dynamic groups, assignment filters, saved views.
 export * from './rules';
 // Saved views of the device list (P0-5 §4.1, §5).

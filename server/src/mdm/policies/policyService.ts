@@ -18,10 +18,12 @@ import {
 import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
 import { androidContributions } from '../android/contributions';
+import { legacyAgentContributions } from '../legacyAgent/contributions';
+import { legacyAgentNodeAt, type LegacyAgentStoreRef } from '../legacyAgent/validate';
 import { FAILED_PASSWORDS_FOR_WIPE } from '../android/overlay';
 import type { AndroidValidationOptions } from '../android/validate';
 import {
-  ANDROID_SECTION_ITEM, androidNodeAt, androidPathText, contentBytes, hasSecretValue, POLICY_MAX_CONTENT_BYTES, RAW_SECRET_PURPOSE,
+  ANDROID_SECTION_ITEM, androidNodeAt, androidPathText, contentBytes, hasSecretValue, LEGACY_AGENT_SECTION_ITEM, POLICY_MAX_CONTENT_BYTES, RAW_SECRET_PURPOSE,
   rawProfilesOf, validatePolicyContent, withSecretRefs,
   type SecretRefSite,
 } from './validate';
@@ -226,11 +228,34 @@ export function validationFailed(issues: PolicyValidationIssue[]): never {
   throw new AppError(422, 'The content of the policy is not valid', 'validationFailed', issues as unknown as Record<string, unknown>);
 }
 
-/** The sections a content holds (policies.sections): apple with items, android with at least one setting key. */
+/** The sections a content holds (policies.sections): apple with items, android with at least one setting key, legacy_agent
+ *  (the content key legacyAgent, lot PONT-POL) with at least one setting key. */
 export function sectionsOf(content: PolicyContentV1 | null | undefined): string[] {
   const out: string[] = [];
   if (content?.sections?.apple?.items.length) out.push('apple');
   if (content?.sections?.android && androidContributions(content.sections.android).length) out.push('android');
+  if (content?.sections?.legacyAgent && legacyAgentContributions(content.sections.legacyAgent).length) out.push('legacy_agent');
+  return out;
+}
+
+/**
+ * The store files a section of the bridge agent references that the tenant's store does not hold as referenced (lot
+ * PONT-POL §4.4): no row, another size (file_not_found), or another kind (file_kind_mismatch: an image for a tile or
+ * the logo, a certificate for a CA, a file for a deposit). In the caller's transaction: the publication runs it under
+ * the configuration lock, which the deletion of a store file takes too (B6).
+ */
+export async function missingFiles(q: Knex | Knex.Transaction, tenantId: number, refs: LegacyAgentStoreRef[]): Promise<PolicyValidationIssue[]> {
+  if (!refs.length) return [];
+  const shas = [...new Set(refs.map((r) => r.sha256))];
+  const rows = await q('legacy_agent_files').where({ tenant_id: tenantId }).whereIn('sha256', shas).select('sha256', 'size_bytes', 'kind') as
+    Array<{ sha256: string; size_bytes: string | number; kind: string }>;
+  const bySha = new Map(rows.map((r) => [String(r.sha256).trim(), r]));
+  const out: PolicyValidationIssue[] = [];
+  for (const r of refs) {
+    const row = bySha.get(r.sha256);
+    if (!row || Number(row.size_bytes) !== r.size) out.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: r.path, code: 'file_not_found' });
+    else if (row.kind !== r.kind) out.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: r.path, code: 'file_kind_mismatch' });
+  }
   return out;
 }
 
@@ -245,12 +270,14 @@ export async function androidValidationOptions(q: Knex | Knex.Transaction, tenan
 
 /** Validates a content for a submission or a publication (no secret typed in; references must exist). */
 export async function validateForSubmission(q: Knex | Knex.Transaction, tenantId: number, policyUuid: string, content: unknown):
-  Promise<{ issues: PolicyValidationIssue[]; content: PolicyContentV1 | null; androidWipeRules: string[] }> {
+  Promise<{ issues: PolicyValidationIssue[]; content: PolicyContentV1 | null; androidWipeRules: string[]; legacyAgentWipeRules: string[];
+    legacyAgentTenantBound: boolean }> {
   const v = validatePolicyContent(content, { catalog: appleCatalog(), policyUuid, allowSecretValues: false, allowRawProfiles: true,
     android: await androidValidationOptions(q, tenantId) });
-  const issues = [...v.issues, ...(await missingSecrets(q, tenantId, v.secretRefs))];
+  const issues = [...v.issues, ...(await missingSecrets(q, tenantId, v.secretRefs)), ...(await missingFiles(q, tenantId, v.legacyAgentStoreRefs))];
   if (!sectionsOf(v.content).length && !issues.length) issues.push({ itemId: null, path: 'sections.apple.items', code: 'invalid_content' });
-  return { issues, content: v.content, androidWipeRules: v.androidWipeRules };
+  return { issues, content: v.content, androidWipeRules: v.androidWipeRules, legacyAgentWipeRules: v.legacyAgentWipeRules,
+    legacyAgentTenantBound: v.legacyAgentTenantBound };
 }
 
 export const policyService = {
@@ -392,7 +419,7 @@ export const policyService = {
         catalog: appleCatalog(), policyUuid: policy.uuid, allowSecretValues: true, keptRawProfiles: rawProfilesOf(stored),
         android: await androidValidationOptions(trx, tenantId),
       });
-      const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs))];
+      const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs)), ...(await missingFiles(trx, tenantId, v.legacyAgentStoreRefs))];
       if (issues.length || !v.content) validationFailed(issues);
       const sites: Array<(typeof v.secretValues)[number] & { id: string }> = [];
       for (const s of v.secretValues) {
@@ -584,6 +611,9 @@ function valueAt(content: PolicyContentV1, itemId: string, path: Array<string | 
   let node: unknown;
   if (itemId === ANDROID_SECTION_ITEM) {
     const at = androidNodeAt(content.sections.android, androidPathText(path));
+    node = at ? at.parent[at.key] : undefined;
+  } else if (itemId === LEGACY_AGENT_SECTION_ITEM) {
+    const at = legacyAgentNodeAt(content.sections.legacyAgent, path);
     node = at ? at.parent[at.key] : undefined;
   } else {
     node = content.sections.apple?.items.find((i) => i.id === itemId);

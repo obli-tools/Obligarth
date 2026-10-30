@@ -5,7 +5,7 @@ import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { permissionService } from '../services/permission.service';
 import type { GateOutcome, RestrictionGate } from '../mcp/gate';
-import { commandSpecOrNull, legacyAgentCommands, type EnqueueOutcome } from './commands';
+import { commandSpecOrNull, legacyAgentCommands, POLICY_COMMAND_TYPES, type EnqueueOutcome } from './commands';
 import { agentsQuery, commandView, consoleCommand, DEVICE_COLUMNS, deviceView, packageView, releaseView } from './routes';
 
 // =============================================================================
@@ -144,6 +144,11 @@ export async function requestCommand(caller: ConsoleCaller, r: CommandRequest, g
   const { spec, params } = await consoleCommand(tenantId, r.type, r.params);
   const without = await lackingCapability(caller, ids, spec.capability);
   if (without.length > 0) throw new AppError(403, `Capability '${spec.capability}' not permitted on some devices`, 'capabilityMissing', { count: without.length });
+  // The commands of the agent policy also need mdm.policies.manage, as on the console (lot PONT-POL §8.5).
+  if (POLICY_COMMAND_TYPES.includes(spec.type) && !caller.isPlatformAdmin
+    && !(await permissionService.userHasTenantCapability(caller.userId, tenantId, 'mdm.policies.manage'))) {
+    throw new AppError(403, "Capability 'mdm.policies.manage' not permitted for your team", 'capabilityMissing');
+  }
   if (spec.restrictionKey) {
     const g = await gate.check({
       tenantId, actionKey: spec.restrictionKey, deviceIds: ids, approvalRequestType: 'legacy_agent_action',

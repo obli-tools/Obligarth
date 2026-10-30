@@ -7,7 +7,10 @@ import { asNone, asTenant } from '../db/context';
 import { raiseInTx } from '../apple/alerts/service';
 import { legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { LEGACY_AGENT_ACTOR } from './actor';
+import { requestGroupEvaluation } from '../mdm/groups/triggers';
+import { requestDeviceResolution } from '../mdm/policies/triggers';
 import { agentConfigFor } from './agentConfig';
+import { markPolicyDelivered } from './policyDelivery';
 import { instanceSettings } from './config';
 import { EnrollBody } from './schemas';
 import { currentServerKey } from './serverKey';
@@ -63,12 +66,15 @@ async function answer(trx: Knex.Transaction, tenantId: number, agentId: string, 
   const s = await instanceSettings();
   const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, agent_id: agentId }).first('poll_seconds', 'device_id') as
     { poll_seconds: number | null; device_id: number } | undefined;
+  // The whole configuration (lot PONT-POL §8.1): the policy of a device enrolled again is delivered here too.
+  const conf = await agentConfigFor(trx, tenantId, sat ? { deviceId: Number(sat.device_id), versionCode } : undefined, null);
+  if (sat && conf.deliveredPolicyHash) await markPolicyDelivered(trx, tenantId, Number(sat.device_id), conf.deliveredPolicyHash);
   return {
     status,
     body: {
       agentId, deviceUuid, serverTime: Math.floor(Date.now() / 1000), pollSeconds: sat?.poll_seconds ?? s.pollSeconds,
       serverKeys: key ? [{ keyId: key.keyId, spki: key.spkiB64url }] : [],
-      config: await agentConfigFor(trx, tenantId, sat ? { deviceId: Number(sat.device_id), versionCode } : undefined),
+      config: conf.config,
     },
   };
 }
@@ -181,6 +187,11 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
         }, ctx, { onFailure: 'spool' });
         await raiseInTx(trx, tenantId, 'legacy_agent.identity_conflict', { discriminant: deviceId, navigateTo: `/legacy-agent?device=${deviceId}` });
       }
+      // The onboarding of the device (lot PONT-POL §5.6, A8): its policies resolved (its artifact agent:policy, delivered
+      // at its first polls) and its dynamic groups evaluated, by the jobs these requests send once this commits. The
+      // channel has no onboarding job of its own: the requests are made here, in the enrollment's transaction.
+      await requestDeviceResolution(trx, tenantId, [deviceId]);
+      await requestGroupEvaluation(trx, tenantId, [deviceId]);
       return answer(trx, tenantId, agentId, String(dev.uuid), 201, b.agent.versionCode);
     }));
     return { reply, tenantId };

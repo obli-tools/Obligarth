@@ -36,11 +36,26 @@ class AgentEngine(
     private val random: Random = Random.Default,
     /** Remote assistance sessions (1.1.0, P0-15); none: remote.open is refused. */
     private val remoteHost: RemoteHost = RemoteHost.None,
+    /** 1.3.0: seals the secrets of the stored policy (AndroidKeyStore on the device); none: they are never stored. */
+    private val sealer: SecretSealer = SecretSealer.None,
+    /** 1.3.0: the policy files (blobs/<sha>): filesDir/policy on the device. */
+    policyDir: File = File(updatesDir.path + "-policy"),
 ) {
     /** Called when a delivered configuration changes (Knox licence, keep-alive...). */
     var onConfigChanged: (() -> Unit)? = null
     /** Called when the identity was erased after a signed agentRevoked. */
     var onRevoked: (() -> Unit)? = null
+    /**
+     * 1.3.0: the policy changed (new policy, kiosk suspended, re-apply asked): the host reconciles soon. Called inside
+     * the engine lock: the host only schedules the work.
+     */
+    var onPolicyChanged: (() -> Unit)? = null
+
+    /** The policy files downloaded and the inline files staged (1.3.0). */
+    val blobCache = DirBlobCache(File(policyDir, "blobs"))
+
+    /** The last policy read, secrets included when they came with this process (a sealing failure keeps them here). */
+    @Volatile private var livePolicy: Policy? = null
 
     private val now get() = client.correctedNow()
 
@@ -233,6 +248,7 @@ class AgentEngine(
     }
 
     private fun applyConfig(c: Map<String, Any?>) {
+        val rebuilt = c.long("version").let { it != null && it != state.configVersion }
         c.long("version")?.let { state.configVersion = it }
         state.configAgentVersion = versionCode
         c.long("inventorySeconds")?.let { if (it in 3600..30L * 86_400) state.inventorySeconds = it }
@@ -241,7 +257,265 @@ class AgentEngine(
         if (c.containsKey("knoxLicenseKey")) state.serverKnoxLicenseKey = c.str("knoxLicenseKey")?.takeIf { it.isNotBlank() }
         // The whole configuration travels each time: no remote object (a server before P0-15) disables it.
         state.remote = RemoteConfig.fromServer(c.obj("remote"), now)
+        // 1.3.0: a server that delivers policies always sends the key (null: no policy); an older one never does, and the
+        // policy held stays in place. Reports and the 1.3.0 events go to a policy server only.
+        state.serverPolicyV1 = c.containsKey("policy")
+        if (c.containsKey("policy")) receivePolicy(c["policy"], rebuilt)
         onConfigChanged?.invoke()
+    }
+
+    // ------------------------------------------------------------------
+    // Policy (1.3.0, lot PONT-POL §8.1, §8.4, §10.3)
+    // ------------------------------------------------------------------
+
+    /** [rebuilt]: the configuration carries a new version (the server built it again: marked delivering on its side). */
+    private fun receivePolicy(raw: Any?, rebuilt: Boolean) {
+        if (raw == null) {
+            if (state.policyHash != null || state.policyRejected != null) {
+                log.info("policy removed by the server")
+                state.policyJson = null
+                state.policyHash = null
+                state.policyRejected = null
+                livePolicy = null
+                onPolicyChanged?.invoke()
+            }
+            return
+        }
+        @Suppress("UNCHECKED_CAST") val m = raw as? Map<String, Any?>
+        // The server keeps the policy held (its desired body could not be compiled): nothing changes, the report goes on.
+        if (m != null && m.bool("keep") == true && m["hash"] == null) {
+            log.info("policy kept as is (server side compilation refused)")
+            return
+        }
+        when (val r = if (m == null) Policy.ParseResult.Malformed else Policy.parse(m)) {
+            is Policy.ParseResult.Ok -> {
+                // A kiosk withheld by the server (its PIN unreadable) or unreadable here: the one applied stays readable.
+                val p = r.policy.keepingKioskOf(policySnapshot().policy)
+                // A new policy: the PIN failures of the previous one are forgotten (D7).
+                if (p.hash != state.policyHash) state.kioskPin = KioskModel.onSuccess()
+                state.policyJson = Json.write(p.toJson(sealer))
+                state.policyHash = p.hash
+                state.policyRejected = null
+                // Delivered again (a configuration of a new version: freeze, Knox key, settings…): the report goes at the
+                // next poll, even unchanged, so the server, which may have marked it delivering, learns the outcome again.
+                // A degraded answer repeated under the same version does not resend it at every poll.
+                if (rebuilt) state.policyReportSentDigest = null
+                livePolicy = p
+                log.info("policy ${p.hash.take(8)} received: ${p.itemKeys.size} items, ${p.invalidKeys.size + p.invalidUnkeyed} unreadable")
+                onPolicyChanged?.invoke()
+            }
+            is Policy.ParseResult.Unsupported -> {
+                // A format this agent does not know: the current policy kept, the refusal reported (A10).
+                log.warn("policy of an unsupported format kept aside")
+                state.policyRejected = r.hash ?: "unknown"
+                onPolicyChanged?.invoke()
+            }
+            Policy.ParseResult.Malformed -> log.warn("policy malformed: ignored, the current one kept")
+        }
+    }
+
+    /** What a reconciliation needs, read at once. */
+    class PolicySnapshot(val policy: Policy?, val ledger: Ledger, val rejected: String?, val kioskSuspendedUntil: Long, val report: PolicyReport?)
+
+    @Synchronized
+    fun policySnapshot(): PolicySnapshot {
+        val hash = state.policyHash
+        val p = if (hash == null) null else livePolicy?.takeIf { it.hash == hash } ?: state.policyJson?.let { Json.parseObjectOrNull(it) }
+            ?.let { (Policy.parse(it, stored = true, sealer = sealer) as? Policy.ParseResult.Ok)?.policy }?.also { livePolicy = it }
+        return PolicySnapshot(p, state.policyLedger, state.policyRejected, state.kioskSuspendedUntil, state.policyReport)
+    }
+
+    /** Keeps the outcome of a reconciliation; true when the report changed (a poll soon carries it). */
+    @Synchronized
+    fun commitReconcile(r: ReconcileResult): Boolean {
+        val before = state.policyReport?.digest()
+        state.policyLedger = r.ledger
+        state.policyReport = r.report
+        if (r.needFullConfig && state.configVersion != 0L) {
+            // A Wi-Fi secret is needed and none is held: the next poll asks for the full configuration (§10.6).
+            log.warn("policy secrets missing: full configuration asked")
+            state.configVersion = 0
+        }
+        return before != r.report.digest()
+    }
+
+    /** A 1.3.0 event, to a server that delivers policies only (an older one would refuse the poll). */
+    @Synchronized
+    fun addPolicyEvent(type: String, detail: Map<String, Any?>) {
+        if (state.serverPolicyV1) state.addEvent(type, now, detail) else log.info("event $type kept local (server without policies)")
+    }
+
+    /** The outcome of [runPolicy]: the report changed (a poll should carry it soon). */
+    class PolicyRun(val reportChanged: Boolean, val report: PolicyReport)
+
+    /**
+     * Downloads what the policy is missing until [downloadUntil], then reconciles until [deadlineLocal] (local seconds),
+     * outside the engine lock (snapshot and commit only take it).
+     */
+    fun runPolicy(deadlineLocal: Long, downloadUntil: Long = deadlineLocal): PolicyRun {
+        val snap = policySnapshot()
+        snap.policy?.let { downloadPolicyBlobs(it, downloadUntil) }
+        val host = actions.policyHost()
+        val local = clock()
+        val result = PolicyReconciler(host, blobCache, clock, log).reconcile(
+            snap.policy, snap.ledger, local, deadlineLocal, now, snap.rejected, KioskModel.suspended(snap.kioskSuspendedUntil, local),
+        )
+        val changed = commitReconcile(result)
+        cleanBlobs(snap.policy)
+        return PolicyRun(changed, result.report)
+    }
+
+    /** The blobs the policy needs and does not hold, by SHA-256 with their size. */
+    fun missingBlobs(p: Policy): Map<String, Long> {
+        val sizes = LinkedHashMap<String, Long>()
+        for (f in p.files) f.blob?.let { sizes[it.sha256] = it.size }
+        p.kiosk?.logo?.let { sizes[it.sha256] = it.size }
+        p.kiosk?.tiles?.forEach { t -> t.image?.let { sizes[it.sha256] = it.size } }
+        return sizes.filterKeys { it in p.blobs && !blobCache.has(it) }
+    }
+
+    /** Downloads the missing blobs until [deadlineLocal]; true when some remain. A 429 stops the round (C10). */
+    fun downloadPolicyBlobs(p: Policy, deadlineLocal: Long): Boolean {
+        for ((sha, size) in missingBlobs(p)) {
+            if (clock() >= deadlineLocal) return true
+            val dir = blobCache.dir
+            dir.mkdirs()
+            if (dir.usableSpace in 1..(size * 2 + FREE_MARGIN_BYTES)) { blobCache.setFailure(sha, PolicyCodes.STORAGE_UNAVAILABLE); continue }
+            when (val r = downloadBlob(sha, size)) {
+                is BlobResult.Ok -> blobCache.setFailure(sha, null)
+                is BlobResult.Limited -> { blobCache.setFailure(sha, PolicyCodes.DOWNLOAD_LIMITED); return true }
+                is BlobResult.Failed -> blobCache.setFailure(sha, r.code)
+            }
+        }
+        return missingBlobs(p).isNotEmpty()
+    }
+
+    sealed class BlobResult {
+        object Ok : BlobResult()
+        /** 429, a network failure or a 5xx: tried again later (pending/download_limited, never an error). */
+        class Limited(val retryAfter: Long?) : BlobResult()
+        class Failed(val code: String) : BlobResult()
+    }
+
+    /** GET /agent/v1/files/<sha> into blobs/<sha>.part, size and SHA-256 checked, then renamed (never under the engine lock). */
+    fun downloadBlob(sha: String, size: Long): BlobResult {
+        if (!Hex.isSha256(sha) || size !in 1..Policy.STORE_FILE_BYTES) return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED)
+        val dir = blobCache.dir
+        val part = File(dir, "$sha.part")
+        val target = File(dir, sha)
+        val reply = try {
+            client.call("GET", "/agent/v1/files/$sha", null, downloadTo = part, maxDownloadBytes = size, timeoutMs = 60_000, expectedDownloadSha256 = sha)
+        } catch (e: IOException) {
+            part.delete()
+            log.warn("policy file download: ${e.message}")
+            return BlobResult.Limited(null)
+        }
+        if (reply.status == 429) { part.delete(); return BlobResult.Limited(reply.retryAfterSeconds) }
+        if (reply.status != 200) {
+            part.delete()
+            return if (reply.status in 400..499) BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) else BlobResult.Limited(reply.retryAfterSeconds)
+        }
+        if (!reply.signed) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) }
+        if (reply.downloadedSha256 != sha || part.length() != size) { part.delete(); return BlobResult.Failed(PolicyCodes.HASH_MISMATCH) }
+        if (!part.renameTo(target)) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) }
+        return BlobResult.Ok
+    }
+
+    /** Removes the blobs the policy no longer names (cleanUpdates never touches them). */
+    private fun cleanBlobs(p: Policy?) {
+        val keep = HashSet<String>()
+        if (p != null) {
+            keep += p.blobs
+            for (f in p.files) keep += f.sha256
+        }
+        try { blobCache.clean(keep) } catch (e: Exception) { log.warn("policy files clean-up: ${e.message}") }
+    }
+
+    /** The report is due: changed since the last one accepted, or [Policy.reportSeconds] passed, and not refused lately. */
+    private fun reportDue(r: PolicyReport): Boolean {
+        val local = clock()
+        val refused = state.policyReportRefusedUntil
+        if (local < refused && refused - local <= DAY_S) return false
+        if (r.digest() != state.policyReportSentDigest) return true
+        val sentAt = state.policyReportSentAt
+        val period = livePolicy?.reportSeconds ?: Policy.REPORT_SECONDS_DEFAULT
+        return local - sentAt >= period || sentAt > local
+    }
+
+    /** kiosk.suspend: the kiosk left for [Params.KioskSuspend.minutes]; kiosk_inactive when no kiosk is enabled. */
+    private fun suspendKiosk(c: Command): CommandResult {
+        val minutes = (c.params as Params.KioskSuspend).minutes
+        if (policySnapshot().policy?.kiosk?.enabled != true) return err(c, Codes.KIOSK_INACTIVE)
+        state.kioskSuspendedUntil = clock() + minutes * 60L
+        addPolicyEvent(EventTypes.KIOSK_EXIT, linkedMapOf("via" to "command", "minutes" to minutes))
+        onPolicyChanged?.invoke()
+        return CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.KIOSK_SUSPENDED, mapOf("until" to now + minutes * 60L), now)
+    }
+
+    /** policy.reapply: the ledger digests forgotten, the full configuration asked (secrets again), the report sent anew. */
+    private fun reapplyPolicy(c: Command): CommandResult {
+        state.policyLedger = state.policyLedger.forget()
+        state.configVersion = 0
+        state.policyReportSentDigest = null
+        onPolicyChanged?.invoke()
+        return ack(c, Codes.DONE)
+    }
+
+    /** The result of a typed exit PIN. */
+    sealed class PinCheck {
+        object Ok : PinCheck()
+        class Wrong(val left: Int) : PinCheck()
+        class Locked(val seconds: Long) : PinCheck()
+        object NoKiosk : PinCheck()
+    }
+
+    /** Checks a typed exit PIN (D7): PBKDF2 outside the lock, failures counted, 5 lock the dialog (event kiosk_pin_lockout). */
+    fun checkKioskPin(pin: String): PinCheck {
+        val (record, attempts) = synchronized(this) { policySnapshot().policy?.kiosk?.exitPin to state.kioskPin }
+        if (record == null) return PinCheck.NoKiosk
+        val locked = KioskModel.lockedFor(attempts, clock())
+        if (locked > 0) return PinCheck.Locked(locked)
+        val ok = try { record.verify(pin) } catch (e: Exception) { false }
+        return synchronized(this) {
+            if (ok) {
+                state.kioskPin = KioskModel.onSuccess()
+                PinCheck.Ok
+            } else {
+                val (next, lockedOut) = KioskModel.onFailure(state.kioskPin, clock())
+                state.kioskPin = next
+                if (lockedOut) {
+                    addPolicyEvent(EventTypes.KIOSK_PIN_LOCKOUT, linkedMapOf("failures" to KioskModel.MAX_FAILURES))
+                    PinCheck.Locked(KioskModel.lockedFor(next, clock()))
+                } else PinCheck.Wrong(KioskModel.MAX_FAILURES - next.failures)
+            }
+        }
+    }
+
+    /** The kiosk left from the device (the PIN panel): suspended for [minutes], event kiosk_exit {via: pin}. */
+    @Synchronized
+    fun suspendKioskByPin(minutes: Int) {
+        state.kioskSuspendedUntil = clock() + minutes * 60L
+        addPolicyEvent(EventTypes.KIOSK_EXIT, linkedMapOf("via" to "pin", "minutes" to minutes))
+        onPolicyChanged?.invoke()
+    }
+
+    /** The undo of the policy before the identity erase (A9): bounded, what is left goes to the local log only. */
+    private fun undoPolicyBeforeErase() {
+        val ledger = state.policyLedger
+        if (ledger.entries.isNotEmpty()) {
+            try {
+                val host = actions.policyHost()
+                try { host.kioskApply(null, false) } catch (e: Throwable) { log.warn("kiosk removal: ${e.javaClass.simpleName}") }
+                val r = PolicyReconciler(host, blobCache, clock, log).reconcile(null, ledger, clock(), clock() + REVOKE_UNDO_S, now)
+                if (r.undoLeft > 0) log.warn("policy undo before the erase unfinished: done=${r.undoDone} left=${r.undoLeft}")
+                else log.info("policy undone before the erase: ${r.undoDone} items")
+            } catch (e: Throwable) {
+                log.warn("policy undo before the erase: ${e.javaClass.simpleName}")
+            }
+        }
+        livePolicy = null
+        try { blobCache.clean(emptySet(), Long.MAX_VALUE) } catch (e: Exception) { log.warn("policy files erase: ${e.message}") }
+        try { sealer.erase() } catch (e: Exception) { log.warn("policy key erase: ${e.javaClass.simpleName}") }
     }
 
     // ------------------------------------------------------------------
@@ -298,6 +572,9 @@ class AgentEngine(
             "results" to outbox.map { it.toJson() },
             "events" to events,
         )
+        // 1.3.0: the policy report, to a server that delivers policies, when it changed or its period passed (§8.4).
+        val report = if (state.serverPolicyV1) state.policyReport?.takeIf { reportDue(it) } else null
+        if (report != null) body["policy"] = report.toJson()
         val reply = client.call("POST", "/agent/v1/poll", Json.bytes(body), timeoutMs = timeoutMs)
         state.lastPollAt = clock()
         val j = reply.json
@@ -314,6 +591,17 @@ class AgentEngine(
             state.outbox = state.outbox.filter { it.commandId !in accepted }
             if (events.isNotEmpty()) state.dropEvents(events.size)
             if (j.bool("inventoryDue") == true) state.inventoryRequested = true
+            if (report != null) when (j.str("policyReport")) {
+                "accepted" -> {
+                    state.policyReportSentDigest = report.digest()
+                    state.policyReportSentAt = clock()
+                }
+                // Refused (never the poll itself): no report for a day, the rest of the poll went through.
+                "rejected" -> {
+                    log.warn("policy report refused by the server: paused for a day")
+                    state.policyReportRefusedUntil = clock() + DAY_S
+                }
+            }
             j.obj("config")?.let { applyConfig(it) }
             return PollResult(null, j.list("commands").orEmpty())
         }
@@ -352,6 +640,8 @@ class AgentEngine(
 
     private fun revoke() {
         log.warn("signed agentRevoked: identity erased")
+        // 1.3.0 (A9): what the policy set is undone first (30 s at most), then the identity erased.
+        undoPolicyBeforeErase()
         state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.RevokedSigned).next
         state.eraseIdentity()
         try { signer.erase() } catch (e: Exception) { log.warn("key erase: ${e.message}") }
@@ -451,6 +741,8 @@ class AgentEngine(
                     null
                 }
                 CommandType.REMOTE_OPEN -> openRemote(c)
+                CommandType.KIOSK_SUSPEND -> suspendKiosk(c)
+                CommandType.POLICY_REAPPLY -> reapplyPolicy(c)
                 else -> err(c, Codes.INTERNAL)
             }
         } catch (e: Exception) {
@@ -876,5 +1168,9 @@ class AgentEngine(
         const val CLOCK_EVENT_S = 120L
         const val BACKOFF_MIN_S = 30L
         const val BACKOFF_MAX_S = 1_800L
+        /** 1.3.0: the undo of the policy before a revocation's erase (A9). */
+        const val REVOKE_UNDO_S = 30L
+        /** 1.3.0: the free space a policy file download leaves (usable > size * 2 + this, else storage_unavailable). */
+        const val FREE_MARGIN_BYTES = 50L * 1024 * 1024
     }
 }

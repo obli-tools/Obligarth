@@ -21,6 +21,8 @@ import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { InfoTip } from '@/components/common/Tip';
 import { SegmentedTabs } from '@/components/common/SegmentedTabs';
+import { FilesTab } from '@/components/legacyAgentPolicy/FilesTab';
+import { DeviceValuesTab } from '@/components/legacyAgentPolicy/DeviceValuesTab';
 import { ToggleSwitch } from '@/components/common/ToggleSwitch';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
@@ -39,7 +41,7 @@ import { saveBlob } from '@/utils/download';
 // included; the version embedded in the server image is shown with its image, lot AGENT-RU). Lock and erase go
 // through the dialog of the guard engine.
 
-type Tab = 'devices' | 'tokens' | 'packages' | 'platform';
+type Tab = 'devices' | 'tokens' | 'packages' | 'files' | 'deviceValues' | 'platform';
 // The look of the suite (the inventory of /devices): fields and cards without borders, lists without separators whose
 // rows light up on hover, filters as chips.
 const fieldCls = 'mt-1 w-full rounded-md bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50 coarse:min-h-10';
@@ -84,11 +86,13 @@ export function LegacyAgentPage() {
   const tenantId = useTenantStore((s) => s.currentTenantId);
   const platform = admin && isMasterTenant(tenantId);
   const [tab, setTab] = useState<Tab>('devices');
-  const tabs: Tab[] = platform ? ['devices', 'tokens', 'packages', 'platform'] : ['devices', 'tokens', 'packages'];
+  const tabs: Tab[] = platform ? ['devices', 'tokens', 'packages', 'files', 'deviceValues', 'platform'] : ['devices', 'tokens', 'packages', 'files', 'deviceValues'];
   const label = (k: Tab) => (k === 'devices' ? (t('legacyAgent.tabs.devices') || 'Devices')
     : k === 'tokens' ? (t('legacyAgent.tabs.tokens') || 'Enrollment tokens')
       : k === 'packages' ? (t('legacyAgent.tabs.packages') || 'Packages')
-        : (t('legacyAgent.tabs.platform') || 'Platform'));
+        : k === 'files' ? (t('legacyAgent.tabs.files') || 'Files')
+          : k === 'deviceValues' ? (t('legacyAgent.tabs.deviceValues') || 'Device values')
+            : (t('legacyAgent.tabs.platform') || 'Platform'));
   return (
     <PageContainer className="space-y-5">
       <div>
@@ -101,6 +105,8 @@ export function LegacyAgentPage() {
       {tab === 'devices' && <DevicesTab />}
       {tab === 'tokens' && <TokensTab />}
       {tab === 'packages' && <PackagesTab />}
+      {tab === 'files' && <FilesTab />}
+      {tab === 'deviceValues' && <DeviceValuesTab />}
       {tab === 'platform' && platform && <PlatformTab />}
     </PageContainer>
   );
@@ -114,7 +120,10 @@ type Pending = { kind: 'message' | 'install' | 'uninstall' | 'update' } | null;
 // (revoked agents included) and filtered and sorted here, so that the tiles and the chips count the fleet (not the
 // filtered view) and react at once. A tile, or a chip, toggles its filter; a column header sorts.
 
-type SortKey = 'name' | 'model' | 'android' | 'agent' | 'admin' | 'knox' | 'src' | 'battery' | 'lastPoll';
+type SortKey = 'name' | 'model' | 'android' | 'agent' | 'admin' | 'knox' | 'src' | 'battery' | 'lastPoll' | 'policy';
+/** The order of the states of the agent policy in the list (lot PONT-POL): the worst first. */
+const POLICY_RANK: Record<string, number> = { error: 0, partial: 1, too_old: 2, pending: 3, none: 4, applied: 5 };
+const POLICY_TONE: Record<string, 'green' | 'red' | 'amber' | 'gray'> = { applied: 'green', partial: 'amber', pending: 'gray', error: 'red', none: 'gray', too_old: 'amber' };
 type Sort = { key: SortKey; dir: 'asc' | 'desc' };
 type SrcValue = 'yes' | 'no' | 'unknown';
 interface DeviceFilters {
@@ -264,6 +273,7 @@ function DevicesTab() {
         case 'src': return d.unknownSources === null ? -1 : d.unknownSources ? 1 : 0;
         case 'battery': return d.batteryLevel ?? -1;
         case 'lastPoll': return poll(d);
+        case 'policy': return d.policyState ? POLICY_RANK[d.policyState] ?? 9 : 99;
         default: return 0;
       }
     };
@@ -488,6 +498,7 @@ function DevicesTab() {
                 <SortTh label={t('legacyAgent.cols.unknownSources') || 'Unknown sources'} k="src" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.battery') || 'Battery'} k="battery" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.lastPoll') || 'Last interrogation'} k="lastPoll" sort={sort} onSort={onSort} />
+                <SortTh label={t('legacyAgentPolicy.column') || 'Policy'} k="policy" sort={sort} onSort={onSort} />
                 <th className="w-12" />
               </tr>
             </thead>
@@ -524,6 +535,7 @@ function DevicesTab() {
                     <td className={clsx(tdCls, 'whitespace-nowrap text-xs')}>
                       {d.revokedAt ? <span className="text-text-muted">{t('legacyAgent.revokedState') || 'Revoked'}</span> : <PollAge at={d.lastPollAt} now={now} />}
                     </td>
+                    <td className={tdCls}>{d.policyState ? <Flag tone={POLICY_TONE[d.policyState] ?? 'gray'} text={t(`legacyAgentPolicy.fleetStates.${d.policyState}`) || d.policyState} /> : <span className="text-text-muted">—</span>}</td>
                     <td className="py-2.5 pr-3 text-right" onClick={(e) => e.stopPropagation()}>
                       {!d.revokedAt && (
                         <button type="button" title={t('legacyAgent.actions.revoke') || 'Revoke'} aria-label={t('legacyAgent.actions.revoke') || 'Revoke'} onClick={() => void revoke(d)}
@@ -535,7 +547,7 @@ function DevicesTab() {
                   </tr>
                 );
               })}
-              {!all && <tr><td colSpan={11} className="p-8 text-center text-text-muted">{t('common.loading') || 'Loading…'}</td></tr>}
+              {!all && <tr><td colSpan={12} className="p-8 text-center text-text-muted">{t('common.loading') || 'Loading…'}</td></tr>}
             </tbody>
           </table>
         </div>

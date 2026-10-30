@@ -36,6 +36,101 @@ object Codes {
     const val PULLED = "pulled"
     const val NOT_INSTALLED = "not_installed"
     const val UPLOAD_FAILED = "upload_failed"
+    // kiosk.suspend (1.3.0, lot PONT-POL): the kiosk left for some minutes, or no kiosk enabled to leave.
+    const val KIOSK_SUSPENDED = "kiosk_suspended"
+    const val KIOSK_INACTIVE = "kiosk_inactive"
+}
+
+/** Event types an interrogation carries (shared LEGACY_AGENT_EVENT_TYPES); the 1.3.0 ones go to a policy server only. */
+object EventTypes {
+    const val BOOT = "boot"
+    const val ADMIN_ENABLED = "admin_enabled"
+    const val ADMIN_DISABLED = "admin_disabled"
+    const val ADMIN_DISABLE_REQUESTED = "admin_disable_requested"
+    const val KNOX_LICENSE = "knox_license"
+    const val CONFIG_IMPORTED = "config_imported"
+    const val UPDATE_INSTALLED = "update_installed"
+    const val CLOCK_CORRECTED = "clock_corrected"
+    /** 1.3.0: the kiosk left, detail {via: pin|command, minutes}. */
+    const val KIOSK_EXIT = "kiosk_exit"
+    /** 1.3.0: the exit PIN locked out after failures, detail {failures}. */
+    const val KIOSK_PIN_LOCKOUT = "kiosk_pin_lockout"
+    /** 1.3.0: the undo of a revoked policy left unfinished, detail {done, left}. */
+    const val POLICY_REVOKE_UNDO = "policy_revoke_undo"
+
+    /** The events only a server that delivers policies knows (an older one would answer 400). */
+    val POLICY_ONLY = setOf(KIOSK_EXIT, KIOSK_PIN_LOCKOUT, POLICY_REVOKE_UNDO)
+}
+
+/**
+ * Item codes of the policy report (1.3.0, shared AGENT_POLICY_ITEM_CODES; T354 checks the parity). The server stores
+ * any code of [a-z_]{1,48}, and the console shows an unknown one as is.
+ */
+object PolicyCodes {
+    const val OK = "ok"
+    const val UNCHANGED = "unchanged"
+    const val APPLIED = "applied"
+    const val UNDONE = "undone"
+    const val FILE_WRITTEN = "file_written"
+    const val FILE_UNCHANGED = "file_unchanged"
+    const val FILE_PRESENT = "file_present"
+    const val FILE_DELETED = "file_deleted"
+    const val PERMISSION_MISSING = "permission_missing"
+    const val PATH_FORBIDDEN = "path_forbidden"
+    const val DOWNLOAD_FAILED = "download_failed"
+    const val DOWNLOAD_LIMITED = "download_limited"
+    const val HASH_MISMATCH = "hash_mismatch"
+    const val STORAGE_UNAVAILABLE = "storage_unavailable"
+    const val IO_ERROR = "io_error"
+    const val WIFI_ADDED = "wifi_added"
+    const val WIFI_UPDATED = "wifi_updated"
+    const val WIFI_DISABLED = "wifi_disabled"
+    const val WIFI_FOREIGN_PROFILE = "wifi_foreign_profile"
+    const val WIFI_ADD_FAILED = "wifi_add_failed"
+    const val WIFI_REMOVED = "wifi_removed"
+    const val WIFI_PREFERRED = "wifi_preferred"
+    const val ADMIN_INACTIVE = "admin_inactive"
+    const val ADMIN_POLICY_MISSING = "admin_policy_missing"
+    const val PASSWORD_INSUFFICIENT = "password_insufficient"
+    const val ENCRYPTION_MISSING = "encryption_missing"
+    const val KNOX_REQUIRED = "knox_required"
+    const val KNOX_ERROR = "knox_error"
+    const val KNOX_REFUSED = "knox_refused"
+    const val KNOX_METHOD_MISSING = "knox_method_missing"
+    const val BLOCKED_BY_ORDER = "blocked_by_order"
+    const val HOME_NOT_DEFAULT = "home_not_default"
+    const val KIOSK_FOREIGN_LOCKDOWN = "kiosk_foreign_lockdown"
+    const val KIOSK_ACTIVE = "kiosk_active"
+    const val KIOSK_SUSPENDED = "kiosk_suspended"
+    const val KIOSK_DISABLED = "kiosk_disabled"
+    const val IMAGE_UNREADABLE = "image_unreadable"
+    const val APP_MISSING = "app_missing"
+    const val INTENT_INVALID = "intent_invalid"
+    const val CERT_INSTALLED = "cert_installed"
+    const val POLICY_VERSION_UNSUPPORTED = "policy_version_unsupported"
+    const val INVALID_ITEM = "invalid_item"
+    const val UNDELIVERABLE = "undeliverable"
+    const val INTERNAL = "internal"
+    // Drops of the server's compilation (body.dropped), reported as error/<code>; wipe_withheld as pending.
+    const val PATH_CONFLICT = "path_conflict"
+    const val INLINE_TOO_LARGE = "inline_too_large"
+    const val TEMPLATE_TOO_LARGE = "template_too_large"
+    const val INVALID_JSON = "invalid_json"
+    const val WIPE_WITHOUT_PASSWORD = "wipe_without_password"
+    const val FOREIGN_TENANT_RESOURCE = "foreign_tenant_resource"
+    const val WIPE_WITHHELD = "wipe_withheld"
+}
+
+/** States of a report item and of a whole report (shared AGENT_POLICY_ITEM_STATES, AGENT_POLICY_REPORT_STATES). */
+object PolicyStates {
+    const val COMPLIANT = "compliant"
+    const val NON_COMPLIANT = "non_compliant"
+    const val PENDING = "pending"
+    const val PENDING_LICENCE = "pending_licence"
+    const val UNSUPPORTED = "unsupported"
+    const val ERROR = "error"
+    val ITEM = listOf(COMPLIANT, NON_COMPLIANT, PENDING, PENDING_LICENCE, UNSUPPORTED, ERROR)
+    val REPORT = listOf("applied", "partial", "pending", "error", "none")
 }
 
 /** Result status of the contract (§4.5). */
@@ -78,7 +173,11 @@ enum class CommandType(val wire: String, val immediate: Boolean) {
     /** 1.1.0 (P0-15 §4.3, §0.1): a remote assistance session, opened at once and told to the user. */
     REMOTE_OPEN("remote.open", true),
     /** 1.2.0: the APK of an installed app sent back by chunks (POST /agent/v1/pull/<id>), in the install queue. */
-    APP_PULL("app.pull", false);
+    APP_PULL("app.pull", false),
+    /** 1.3.0 (lot PONT-POL): the kiosk of the policy left for 1 to 240 minutes. */
+    KIOSK_SUSPEND("kiosk.suspend", true),
+    /** 1.3.0: the policy ledger forgotten, a full configuration asked, everything reconciled and reported again. */
+    POLICY_REAPPLY("policy.reapply", true);
 
     companion object {
         fun of(wire: String?): CommandType? = values().firstOrNull { it.wire == wire }
@@ -106,6 +205,10 @@ sealed class Params {
         val sessionId: String, val mode: RemoteMode, val operator: String, val operatorOrg: String,
         val controllerName: String?, val reason: String?, val maxMinutes: Int,
     ) : Params()
+    /** kiosk.suspend (1.3.0): 1 to 240 minutes. */
+    data class KioskSuspend(val minutes: Int) : Params()
+    /** policy.reapply (1.3.0): no parameter. */
+    object PolicyReapply : Params()
 }
 
 data class Command(
@@ -200,7 +303,12 @@ object CommandParser {
             if (sessionId == null || mode == null || operator == null || org == null || controller == null || reason == null || minutes == null) null
             else Params.RemoteOpen(sessionId, mode, operator, org, controller.value, reason.value, minutes)
         }
+        CommandType.KIOSK_SUSPEND -> p.int("minutes")?.takeIf { it in 1..MAX_SUSPEND_MINUTES }?.let { Params.KioskSuspend(it) }
+        CommandType.POLICY_REAPPLY -> Params.PolicyReapply
     }
+
+    /** kiosk.suspend: the longest suspension (shared suspendMinutesMax). */
+    const val MAX_SUSPEND_MINUTES = 240
 
     /**
      * A non-blank string of [min]..[max] UTF-16 units (zod's count, the server's bounds: one value refused here would

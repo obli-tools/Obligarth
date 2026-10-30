@@ -16,6 +16,7 @@ import tools.obli.obligarth.agent.core.DeviceActions
 import tools.obli.obligarth.agent.core.InstallOutcome
 import tools.obli.obligarth.agent.core.InstalledApk
 import tools.obli.obligarth.agent.core.JarSigners
+import tools.obli.obligarth.agent.core.PolicyHost
 import tools.obli.obligarth.agent.core.Sha256
 import java.io.File
 import java.io.FileInputStream
@@ -35,6 +36,11 @@ class AndroidActions(
     private val dpm get() = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
 
     private fun knoxLicensed() = knox.state() == "licensed"
+
+    /** 1.3.0 (lot PONT-POL): the device side of the policy, set once by AgentRuntime. */
+    @Volatile var policyApplier: PolicyHost? = null
+
+    override fun policyHost(): PolicyHost = policyApplier ?: super.policyHost()
 
     override fun isAdminActive(): Boolean = facts.adminActive()
 

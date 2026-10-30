@@ -9,6 +9,7 @@ import tools.obli.obligarth.agent.core.AgentState
 import tools.obli.obligarth.agent.core.AgentTls
 import tools.obli.obligarth.agent.core.CycleReport
 import tools.obli.obligarth.agent.core.Phase
+import tools.obli.obligarth.agent.core.PolicyCodes
 import tools.obli.obligarth.agent.core.RemoteApi
 import tools.obli.obligarth.agent.core.RemoteSessions
 import tools.obli.obligarth.agent.core.TlsSocketConnector
@@ -16,6 +17,7 @@ import tools.obli.obligarth.agent.core.TrustPolicy
 import tools.obli.obligarth.agent.core.UrlConnectionTransport
 import tools.obli.obligarth.agent.core.WaitClient
 import java.io.File
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.net.ssl.HttpsURLConnection
 
 /** Wires the pure engine to the Android implementations; one per process. */
@@ -58,16 +60,89 @@ class AgentRuntime private constructor(context: Context) {
     val remoteUi = AndroidRemoteUi(app, log)
     val remoteSessions = RemoteSessions({ remoteApi }, remoteUi, { client.correctedNow() }, log, clockMs = { SystemClock.elapsedRealtime() })
 
+    /** 1.3.0 (lot PONT-POL): the device side of the policy, and the key that seals its secrets at rest. */
+    val policyApplier = PolicyApplier(app, facts, knox, log).also { actions.policyApplier = it }
+    private val sealer = KeystoreSealer(log)
+
     val engine = AgentEngine(
         state, client, key, facts, actions, policy, app.packageName, facts.versionCode(), pinnedSigners,
-        File(app.filesDir, "updates"), clock, log, remoteHost = remoteSessions,
+        File(app.filesDir, "updates"), clock, log, remoteHost = remoteSessions, sealer = sealer, policyDir = File(app.filesDir, "policy"),
     ).also { e ->
         remoteSessions.report = { id, status, code -> e.onRemoteOutcome(id, status, code) }
         e.onConfigChanged = { applyKnoxAndKeepAlive() }
         e.onRevoked = {
             Notifications.status(app, app.getString(R.string.status_revoked))
             KeepAliveService.stop(app)
+            for (need in listOf(Notifications.NEED_STORAGE, Notifications.NEED_HOME, Notifications.NEED_ADMIN_POLICIES)) Notifications.cancelPolicy(app, need)
         }
+        e.onPolicyChanged = { requestReconcile() }
+    }
+
+    private val reconciling = AtomicBoolean(false)
+    /** A reconciliation was asked while one ran (a PIN exit, kiosk.suspend, a new policy): the running one goes again. */
+    private val reconcileAgain = AtomicBoolean(false)
+
+    /**
+     * Reconciles the policy (1.3.0, §10.4): the missing files downloaded for 90 s at most, then every item applied until
+     * [deadlineLocal]; the rest of the downloads goes to the install job. A changed report asks a poll in 15 s. One run
+     * at a time; never inside the engine lock. A request that comes while one runs is never lost: the running one takes
+     * a fresh snapshot and goes again (a few times at most), and a request made just as it ends starts it again here.
+     */
+    fun reconcile(deadlineLocal: Long): AgentEngine.PolicyRun? {
+        if (state.phase != Phase.ENROLLED) return null
+        reconcileAgain.set(true)
+        var last: AgentEngine.PolicyRun? = null
+        while (reconcileAgain.get()) {
+            // Another thread runs: it sees the flag and goes again.
+            if (!reconciling.compareAndSet(false, true)) return last
+            try {
+                var runs = 0
+                while (reconcileAgain.getAndSet(false) && runs < MAX_RECONCILE_RUNS) {
+                    last = reconcileOnce(if (runs == 0) deadlineLocal else maxOf(deadlineLocal, clock() + RERUN_S)) ?: last
+                    runs++
+                }
+            } finally {
+                reconciling.set(false)
+            }
+        }
+        return last
+    }
+
+    private fun reconcileOnce(deadlineLocal: Long): AgentEngine.PolicyRun? = try {
+        val local = clock()
+        val run = engine.runPolicy(deadlineLocal, downloadUntil = minOf(deadlineLocal, local + DOWNLOAD_IN_CYCLE_S))
+        val snap = engine.policySnapshot()
+        snap.policy?.let { if (engine.missingBlobs(it).isNotEmpty()) PollScheduler.scheduleInstall(app) }
+        notifyNeeds(run.report)
+        if (run.reportChanged && state.serverPolicyV1) PollScheduler.scheduleNext(app, REPORT_FOLLOW_UP_S)
+        // A suspended kiosk is restored at its expiry (§10.5), not at the next cycle only.
+        val now = clock()
+        if (snap.kioskSuspendedUntil > now && snap.policy?.kiosk != null) PollScheduler.scheduleKioskResume(app, snap.kioskSuspendedUntil - now + 2)
+        run
+    } catch (e: Throwable) {
+        log.warn("policy reconciliation failed: ${e.javaClass.simpleName}")
+        null
+    }
+
+    /** Downloads the missing policy files (install job); true when some remain. */
+    fun downloadPolicyBlobs(deadlineLocal: Long): Boolean {
+        val p = engine.policySnapshot().policy ?: return false
+        return engine.downloadPolicyBlobs(p, deadlineLocal)
+    }
+
+    fun policyBlobsMissing(): Boolean = engine.policySnapshot().policy?.let { engine.missingBlobs(it).isNotEmpty() } == true
+
+    /** A reconciliation soon, on a worker thread (a new policy, a suspension, a permission granted). */
+    fun requestReconcile() {
+        Thread({ reconcile(clock() + RECONCILE_S) }, "obligarth-policy").start()
+    }
+
+    /** The notifications of what the policy needs from the person holding the device (they open the status screen). */
+    private fun notifyNeeds(report: tools.obli.obligarth.agent.core.PolicyReport) {
+        val codes = report.items.filter { it.state != "compliant" }.map { it.code }.toSet()
+        fun need(id: Int, on: Boolean, text: Int) = if (on) Notifications.policy(app, id, text) else Notifications.cancelPolicy(app, id)
+        need(Notifications.NEED_STORAGE, PolicyCodes.PERMISSION_MISSING in codes, R.string.policy_need_storage)
+        need(Notifications.NEED_ADMIN_POLICIES, PolicyCodes.ADMIN_POLICY_MISSING in codes, R.string.policy_need_admin_policies)
     }
 
     /** Imports a configuration then starts the enrollment at once. Null when accepted. */
@@ -116,6 +191,14 @@ class AgentRuntime private constructor(context: Context) {
     companion object {
         @SuppressLint("StaticFieldLeak") // holds the application context only
         @Volatile private var instance: AgentRuntime? = null
+        /** Downloads inside a cycle (§10.6): the rest goes to the install job. */
+        private const val DOWNLOAD_IN_CYCLE_S = 90L
+        /** A reconciliation outside a cycle (new policy, permission granted). */
+        const val RECONCILE_S = 120L
+        private const val REPORT_FOLLOW_UP_S = 15L
+        /** The runs of one reconciliation when requests keep coming meanwhile, and the time each further run gets. */
+        private const val MAX_RECONCILE_RUNS = 4
+        private const val RERUN_S = 60L
 
         fun get(context: Context): AgentRuntime =
             instance ?: synchronized(this) { instance ?: AgentRuntime(context).also { instance = it } }

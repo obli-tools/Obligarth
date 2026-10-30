@@ -37,6 +37,8 @@ import { requireTargetableGroup } from '../groups/smartGroupService';
 import { executeDeviceFactsChange, executeSmartGroupChange } from '../groups/governance';
 import { androidContributions } from '../android/contributions';
 import { validateAndroidSection } from '../android/validate';
+import { legacyAgentContributions } from '../legacyAgent/contributions';
+import { validateLegacyAgentSection } from '../legacyAgent/validate';
 import { checkAndroidAppAssignment, holdsSecretValue, sealAndroidAppOptions } from '../../android/apps/assignments';
 
 // =============================================================================
@@ -164,12 +166,17 @@ async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policy
     { content: unknown; content_sha256: string } | undefined;
   if (!row) throw new AppError(404, 'Policy version not found');
   const contentSha256 = String(row.content_sha256).trim();
-  const { issues, content, androidWipeRules } = await validateForSubmission(q, tenantId, policy.uuid, typeof row.content === 'string' ? JSON.parse(row.content) : row.content);
+  const { issues, content, androidWipeRules, legacyAgentWipeRules, legacyAgentTenantBound } = await validateForSubmission(q, tenantId, policy.uuid, typeof row.content === 'string' ? JSON.parse(row.content) : row.content);
+  // A version whose bridge-agent section is bound to the tenant (a secret, a store file, a CA file, a kiosk) is not
+  // published on a library policy already assigned in another tenant (lot PONT-POL §4.5): publishing it would share it.
+  if (legacyAgentTenantBound && await assignedOutsideTenant(q, tenantId, policyId)) {
+    issues.push({ itemId: 'legacyAgent', path: '', code: 'shared_policy_resource' });
+  }
   const result = await computeImpact(q, tenantId, { kind: 'version', policyId, versionId },
     { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: o.visibleDeviceIds ?? 'all' });
   // Android (android-amapi §22.4, lot AN-A2): a version that adds, removes or changes a wipe-capable setting is
   // published at the restricted level (a second approver), whatever the thresholds.
-  if (!issues.length && await wipeSettingsChanged(q, tenantId, policyId, content, androidWipeRules)) {
+  if (!issues.length && await wipeSettingsChanged(q, tenantId, policyId, content, androidWipeRules, legacyAgentWipeRules)) {
     result.impact.approval.required = true;
     if (!result.impact.approval.reasons.includes('wipe_settings')) result.impact.approval.reasons.push('wipe_settings');
   }
@@ -179,23 +186,52 @@ async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policy
 }
 
 /** Does a version add, remove or change a wipe-capable Android setting against the policy's published version
- *  (android-amapi §22.4)? Compared by setting key and value hash. */
+ *  (android-amapi §22.4)? Compared by setting key and value hash. The bridge agent's wipe threshold
+ *  (agent:dpm.maxFailedPasswordsForWipe, lot PONT-POL §5.7, A2) the same way: added, changed, lowered or removed. */
 async function wipeSettingsChanged(q: Knex | Knex.Transaction, tenantId: number, policyId: number,
-  content: PolicyContentV1 | null, wipeRules: string[]): Promise<boolean> {
+  content: PolicyContentV1 | null, wipeRules: string[], agentWipeRules: string[] = []): Promise<boolean> {
   const current = await q('policies as p').join('policy_versions as v', function joinVersion() {
     this.on('v.id', '=', 'p.current_version_id').andOn('v.tenant_id', '=', 'p.tenant_id');
   }).where({ 'p.tenant_id': tenantId, 'p.id': policyId }).first('v.content') as { content: unknown } | undefined;
   const before = current ? (typeof current.content === 'string' ? JSON.parse(current.content) : current.content) as PolicyContentV1 : null;
   const beforeWipe = before?.sections?.android ? validateAndroidSection(before.sections.android).wipeRules : [];
-  if (!wipeRules.length && !beforeWipe.length) return false;
-  const hashes = (c: PolicyContentV1 | null): Map<string, string> =>
-    new Map(androidContributions(c?.sections?.android).map((x) => [x.settingKey, x.valueHash]));
-  const now = hashes(content);
-  const was = hashes(before);
-  for (const key of new Set([...wipeRules, ...beforeWipe])) {
-    if (!wipeRules.includes(key) || !beforeWipe.includes(key) || now.get(key) !== was.get(key)) return true;
+  // The floor is not what is compared here: a version below it was refused at its own validation.
+  const beforeAgentWipe = before?.sections?.legacyAgent ? validateLegacyAgentSection(before.sections.legacyAgent, { minFailedPasswordsForWipe: 0 }).wipeRules : [];
+  const hashes = (c: PolicyContentV1 | null): Map<string, string> => new Map([
+    ...androidContributions(c?.sections?.android).map((x) => [x.settingKey, x.valueHash] as [string, string]),
+    ...legacyAgentContributions(c?.sections?.legacyAgent).map((x) => [x.settingKey, x.valueHash] as [string, string]),
+  ]);
+  const after = [...wipeRules, ...agentWipeRules];
+  const was = [...beforeWipe, ...beforeAgentWipe];
+  if (!after.length && !was.length) return false;
+  const nowHashes = hashes(content);
+  const wasHashes = hashes(before);
+  for (const key of new Set([...after, ...was])) {
+    if (!after.includes(key) || !was.includes(key) || nowHashes.get(key) !== wasHashes.get(key)) return true;
   }
   return false;
+}
+
+/** Is a policy of the tenant included by an assignment of another tenant (the master's library shared)? As far as the
+ *  context of the tenant reads the assignments; the compile-time drop (foreign_tenant_resource) stays the last guard. */
+async function assignedOutsideTenant(q: Knex | Knex.Transaction, tenantId: number, policyId: number): Promise<boolean> {
+  const row = await q('assignments').where({ resource_type: 'policy', resource_tenant_id: tenantId, resource_id: policyId, mode: 'include' })
+    .whereNot('tenant_id', tenantId).first('id');
+  return Boolean(row);
+}
+
+/** Does the current version of a policy carry a bridge-agent section bound to its tenant (a secret, a store file, a CA
+ *  file, a kiosk: lot PONT-POL §4.5)? A version that cannot be read counts as bound (fail closed): a policy never
+ *  published (no current version) or whose version the context cannot see is not assigned outside its tenant. */
+async function holdsTenantBoundAgentSection(q: Knex | Knex.Transaction, policyTenantId: number, policyId: number): Promise<boolean> {
+  const row = await q('policies as p').join('policy_versions as v', function joinVersion() {
+    this.on('v.id', '=', 'p.current_version_id').andOn('v.tenant_id', '=', 'p.tenant_id');
+  }).where({ 'p.tenant_id': policyTenantId, 'p.id': policyId }).first('v.content') as { content: unknown } | undefined;
+  if (!row) return true;
+  let content: PolicyContentV1 | null = null;
+  try { content = (typeof row.content === 'string' ? JSON.parse(row.content) : row.content) as PolicyContentV1; } catch { return true; }
+  const section = content?.sections?.legacyAgent;
+  return section !== undefined && validateLegacyAgentSection(section, { minFailedPasswordsForWipe: 0 }).tenantBound;
 }
 
 /** POST /api/mdm/policies/:id/versions/:v/submit (section 7.12). */
@@ -354,6 +390,11 @@ export async function normalizeChanges(q: Knex | Knex.Transaction, tenantId: num
         const policy = await q('policies').where({ id: ch.resourceId, tenant_id: resourceTenantId }).first('id', 'state') as { id: number; state: string } | undefined;
         if (!policy) throw new AppError(404, 'Policy not found');
         if (policy.state === 'archived') throw new AppError(409, 'An archived policy is not assigned', 'policyArchived');
+        // A policy of another tenant (the master's library) whose bridge-agent section holds a secret, a store file or a
+        // kiosk is never assigned outside its tenant (lot PONT-POL §4.5, B2).
+        if (resourceTenantId !== tenantId && await holdsTenantBoundAgentSection(q, resourceTenantId, ch.resourceId!)) {
+          validationFailed([{ itemId: 'legacyAgent', path: '', code: 'shared_policy_resource' }]);
+        }
       } else {
         const app = await assignableApp(q, tenantId, resourceTenantId, ch.resourceId!);
         if (app.platformFamily === 'android') androidApps.add(app.id);

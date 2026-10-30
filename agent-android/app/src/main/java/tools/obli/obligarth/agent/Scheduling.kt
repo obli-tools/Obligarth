@@ -63,9 +63,22 @@ object PollScheduler {
 
     fun scheduleNext(ctx: Context, delaySeconds: Long) {
         ensurePeriodic(ctx)
+        alarm(ctx, ALARM_CYCLE, delaySeconds)
+    }
+
+    /**
+     * The end of a kiosk suspension (1.3.0, §10.5: restored at expiry): a cycle at that time (its reconciliation puts the
+     * Knox kiosk back), on an alarm of its own so the poll chain is left as it is.
+     */
+    fun scheduleKioskResume(ctx: Context, delaySeconds: Long) = alarm(ctx, ALARM_KIOSK_RESUME, delaySeconds)
+
+    private const val ALARM_CYCLE = 0
+    private const val ALARM_KIOSK_RESUME = 1
+
+    private fun alarm(ctx: Context, requestCode: Int, delaySeconds: Long) {
         val am = ctx.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val pi = PendingIntent.getBroadcast(
-            ctx, 0, Intent(ctx, AlarmReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            ctx, requestCode, Intent(ctx, AlarmReceiver::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         // Elapsed time, not wall time: store clocks can be far off and corrected later
         // (F-6); an RTC alarm would then fire years late (or at once in a loop).
@@ -109,6 +122,8 @@ object CycleRunner {
                 val rt = AgentRuntime.get(app)
                 ConfigFile.importIfPresent(rt)
                 rt.cycle()
+                // 1.3.0: the policy reconciled after each cycle, within the wake lock (2 minutes at most).
+                rt.reconcile(System.currentTimeMillis() / 1000 + AgentRuntime.RECONCILE_S)
             } catch (e: Throwable) {
                 AgentRuntime.get(app).log.warn("cycle failed: ${e.javaClass.simpleName}: ${e.message}")
                 // Keep the alarm chain alive: an unexpected failure must not wait for the 15 min job alone.
@@ -131,7 +146,7 @@ class PollJobService : JobService() {
     override fun onStopJob(params: JobParameters): Boolean = false
 }
 
-/** Downloads and installs (F-7): a dedicated job of 9 minutes at most. */
+/** Downloads and installs (F-7), then the policy files left by a cycle (1.3.0): a dedicated job of 9 minutes at most. */
 class InstallJobService : JobService() {
     override fun onStartJob(params: JobParameters): Boolean {
         if (!running.compareAndSet(false, true)) return false
@@ -139,7 +154,12 @@ class InstallJobService : JobService() {
             var again = false
             val rt = AgentRuntime.get(applicationContext)
             try {
-                again = rt.engine.runInstallQueue(System.currentTimeMillis() / 1000 + 540)
+                val deadline = System.currentTimeMillis() / 1000 + 540
+                again = rt.engine.runInstallQueue(deadline)
+                if (rt.policyBlobsMissing()) {
+                    again = rt.downloadPolicyBlobs(deadline) || again
+                    rt.reconcile(deadline)
+                }
             } catch (e: Throwable) {
                 rt.log.warn("install queue failed: ${e.javaClass.simpleName}: ${e.message}")
                 again = true

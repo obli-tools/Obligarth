@@ -52,6 +52,8 @@ export interface ArtifactRow {
 export interface DeliveryContext {
   devices: ResolutionDevice[];
   tenant: { name: string; slug: string };
+  /** The tenant of the devices (set by writeArtifacts): a provider tells its own settings from a library's. */
+  tenantId?: number;
 }
 
 /** One artifact a device wants, as a provider compiled it. */
@@ -237,7 +239,7 @@ export async function writeArtifacts(trx: Knex.Transaction, tenantId: number, ou
     const keys = new Map<number, string[]>();
     wantedByProvider.set(p, keys);
     if (!list.length) continue;
-    const compiled = p.compile(list, ctx);
+    const compiled = p.compile(list, { ...ctx, tenantId });
     for (const [deviceId, artifacts] of compiled) {
       const mine = wanted.get(deviceId);
       if (!mine) continue;

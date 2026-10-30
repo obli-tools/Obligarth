@@ -1,11 +1,12 @@
 import type { Knex } from 'knex';
 import {
-  PUBLISH_APPROVAL_THRESHOLDS,
+  AGENT_KIOSK_KEY, PUBLISH_APPROVAL_THRESHOLDS,
   type AssignmentTargetScope, type ImpactApprovalReason, type PolicyContentV1, type PolicyImpact, type RuleNode,
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
 import type { DevicePatch } from '../registry/devicePatch';
 import { validateAndroidSection } from '../android/validate';
+import { validateLegacyAgentSection } from '../legacyAgent/validate';
 import { androidKioskLockArtifact } from '../android/kiosk';
 import { appleCatalog, type AppleCatalogView } from '../apple/catalog';
 import { fleetShareFloor } from '../settings';
@@ -301,7 +302,12 @@ async function reachesWipeSettings(q: Knex | Knex.Transaction, set: Array<{ vers
     let content: PolicyContentV1 | null = null;
     try { content = (typeof r.content === 'string' ? JSON.parse(r.content) : r.content) as PolicyContentV1; } catch { content = null; }
     const android = content?.sections?.android;
-    wipe.set(Number(r.id), new Set(android ? validateAndroidSection(android).wipeRules : []));
+    const agent = content?.sections?.legacyAgent;
+    wipe.set(Number(r.id), new Set([
+      ...(android ? validateAndroidSection(android).wipeRules : []),
+      // The bridge agent's wipe threshold (lot PONT-POL §5.7): the floor is the validation's, not this check's.
+      ...(agent ? validateLegacyAgentSection(agent, { minFailedPasswordsForWipe: 0 }).wipeRules : []),
+    ]));
   }
   // A version that cannot be read counts as wipe-capable (fail closed: a second approver rather than none).
   return set.some((x) => !wipe.has(x.versionId) || wipe.get(x.versionId)!.has(x.settingKey));
@@ -356,7 +362,7 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       const differs = !!p && settingState(p) !== settingState(s);
       if (!p) { added.push(k); keyStat(k).added++; } else if (differs) { changed.push(k); keyStat(k).changed++; }
       if (!p || differs) mark(`S|${k}|${s.valueHash}|${s.removed ? 1 : 0}`, k);
-      if ((!p || differs) && s.kind === 'android' && !s.removed && s.availability.status === 'available'
+      if ((!p || differs) && (s.kind === 'android' || s.kind === 'agent') && !s.removed && s.availability.status === 'available'
         && s.source.type === 'policy' && s.source.versionId !== null) {
         const seen = `${s.source.versionId}|${k}`;
         if (!androidSeen.has(seen)) { androidSeen.add(seen); androidSet.push({ versionId: Number(s.source.versionId), settingKey: k }); }
@@ -407,6 +413,12 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     // the KIOSK role, Google's launcher, the customization) is compared as a whole: set or changed, a kiosk lock
     // change; lifted, a removal too. An app that leaves the device's applications[] or becomes BLOCKED is uninstalled
     // by Google (playStoreMode WHITELIST): an app removal.
+    // The bridge agent's kiosk (agent:kiosk, lot PONT-POL §5.7): added, changed or removed where it applies.
+    const bAgentKiosk = bm.get(AGENT_KIOSK_KEY);
+    const aAgentKiosk = am.get(AGENT_KIOSK_KEY);
+    const kioskSig = (s: ResolvedSetting | undefined): string | null =>
+      (s && !s.removed && s.availability.status === 'available' ? s.valueHash : null);
+    if (kioskSig(bAgentKiosk) !== kioskSig(aAgentKiosk)) artifacts.kioskLockChanges++;
     const bk = androidKioskLockArtifact(b);
     const ak = androidKioskLockArtifact(a);
     if ((bk?.sig ?? null) !== (ak?.sig ?? null)) {

@@ -37,6 +37,28 @@ export async function handlePackage(who: AgentIdentity, ex: Exchange, sha: strin
   return { size };
 }
 
+/**
+ * GET /agent/v1/files/<sha256> (lot PONT-POL §8.3): 200 only when the body of the device's desired artifact agent:policy
+ * lists this SHA-256 among its blobs and the tenant's store holds it; else 404 notFound, the same for another device,
+ * another tenant, an unknown file or a file of an older policy. The sequence number is consumed.
+ */
+export async function handleFile(who: AgentIdentity, ex: Exchange, sha: string): Promise<PackageReply> {
+  let size = 0;
+  const reply = await withAgentTransaction(who, ex, async (trx) => {
+    const row = await trx('device_artifacts as x')
+      .join('mdm_artifacts as m', function j() { this.on('m.tenant_id', '=', 'x.tenant_id').andOn('m.hash', '=', 'x.desired_hash'); })
+      .join('legacy_agent_files as f', function j() { this.on('f.tenant_id', '=', 'x.tenant_id').andOnVal('f.sha256', '=', sha); })
+      .where({ 'x.tenant_id': who.tenantId, 'x.device_id': who.deviceId, 'x.artifact_key': 'agent:policy' })
+      .whereRaw("m.body -> 'blobs' @> jsonb_build_array(?::text)", [sha])
+      .first('f.size_bytes') as { size_bytes: string | number } | undefined;
+    if (!row) return errorReply(404, 'notFound', 'Not found');
+    size = Number(row.size_bytes);
+    return { status: 200, body: {} };
+  });
+  if (reply.status !== 200) return { reply };
+  return { size };
+}
+
 /** Receives an APK upload (raw body, application/vnd.android.package-archive): stored by content, its SHA-256 and
  *  size computed here. A file already stored with the same content is kept as is. */
 export async function receiveApk(req: Request): Promise<{ sha256: string; size: number }> {

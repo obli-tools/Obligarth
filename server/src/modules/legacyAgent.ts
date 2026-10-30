@@ -16,6 +16,11 @@ import { registerLegacyAgentGuardedActions } from '../legacyAgent/guarded';
 import { registerLegacyAgentJobs } from '../legacyAgent/jobs';
 import { executeLegacyAgentAction } from '../legacyAgent/routes';
 import { ensureServerKey, registerServerKeySecretName } from '../legacyAgent/serverKey';
+import { registerArtifactChannel } from '../mdm/policies/artifacts';
+import { collectPolicyFiles, ensureFilesDir } from '../legacyAgent/files';
+import { registerLegacyAgentMinuteStep } from '../legacyAgent/jobs';
+import { agentArtifactProvider } from '../legacyAgent/policyChannel';
+import { executeDeviceValuesImport } from '../legacyAgent/policyRoutes';
 
 // =============================================================================
 // ANDROID BRIDGE AGENT (channel legacy_agent; docs: agent-pont-android §6):
@@ -33,6 +38,8 @@ export const LEGACY_AGENT_RESTRICTABLE_ACTIONS = [
   { key: 'legacy_agent.apps', label: 'Install or remove apps on Android agent devices', category: 'Android agent' },
   { key: 'legacy_agent.update', label: 'Update the Android agent', category: 'Android agent' },
   { key: 'legacy_agent.revoke', label: 'Revoke an Android agent', category: 'Android agent' },
+  // Lot PONT-POL (B4, D18): the import of per-device values changes the files the policies deposit, without a publication.
+  { key: 'legacy_agent.device_values_import', label: 'Import per-device values of Android agent policies', category: 'Android agent' },
 ] as const;
 
 let registered = false;
@@ -53,7 +60,18 @@ export function registerLegacyAgentModule(): void {
   registerLegacyAgentJobs();
   // Guarded actions first: their keys open the category of the matrix.
   registerLegacyAgentGuardedActions();
-  registerRestrictableActions(LEGACY_AGENT_RESTRICTABLE_ACTIONS, {}, { 'legacy_agent.revoke': { level: 'sensitive' } });
+  registerRestrictableActions(LEGACY_AGENT_RESTRICTABLE_ACTIONS, {}, {
+    'legacy_agent.revoke': { level: 'sensitive' }, 'legacy_agent.device_values_import': { level: 'sensitive' },
+  });
+  // The policies of the bridge agent (lot PONT-POL): the provider of the channel agent (agent:policy per device), the
+  // hourly collection of the file store, its root created at start.
+  registerArtifactChannel(agentArtifactProvider);
+  registerLegacyAgentMinuteStep('policy-files-gc', collectPolicyFiles);
+  registerBootTask('legacy-agent.policy-files', async () => {
+    try { await ensureFilesDir(); } catch (err) { logger.error({ code: (err as { code?: unknown })?.code }, 'legacy agent: the policy file store cannot be created'); }
+  });
+  // An approved import of per-device values (D18) is executed again as its requester.
+  registerApprovalRequestType('legacy_agent_device_values', executeDeviceValuesImport, { expiryMinutes: 240 });
   // A command the matrix holds at 'restricted': a second person approves it (the guard's examination policy), with
   // a strict step-up of the reviewer, like apple_action.
   registerApprovalRequestType('legacy_agent_action', executeLegacyAgentAction, { expiryMinutes: 240, reviewerPolicy: guardReviewerPolicy, reviewerStepUp: 'strict' });

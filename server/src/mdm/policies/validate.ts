@@ -9,6 +9,10 @@ import { canonicalJson } from '../../audit/canonical';
 import type { AppleCatalogView } from '../apple/catalog';
 import { androidContributions } from '../android/contributions';
 import { validateAndroidSection, type AndroidValidationOptions } from '../android/validate';
+import { legacyAgentContributions } from '../legacyAgent/contributions';
+import {
+  LEGACY_AGENT_SECTION_ITEM, legacyAgentNodeAt, validateLegacyAgentSection, type LegacyAgentStoreRef, type LegacyAgentValidationOptions,
+} from '../legacyAgent/validate';
 
 // =============================================================================
 // Validation of the content of a policy version (docs: modele-donnees-mdm
@@ -46,6 +50,8 @@ export interface ValidateOptions {
   /** The Android section (lot AN-A2): the tenant's guards (domain of its enterprise, floor of
    *  maximumFailedPasswordsForWipe); absent: no domain bound, the default floor. */
   android?: AndroidValidationOptions;
+  /** The section of the bridge agent (lot PONT-POL): the floor of its wipe threshold; absent: the Android default floor. */
+  legacyAgent?: LegacyAgentValidationOptions;
 }
 
 /** What identifies a stored raw profile item: the canonical JSON of the item (its note apart). */
@@ -85,6 +91,12 @@ export interface ValidationOutcome {
   /** The setting keys of the wipe-capable settings the Android section sets (android-amapi §22.4): impact preview
    *  (wipeRules) and publication at the restricted level. */
   androidWipeRules: string[];
+  /** The same for the section of the bridge agent (agent:dpm.maxFailedPasswordsForWipe, lot PONT-POL §5.7). */
+  legacyAgentWipeRules: string[];
+  /** The store files the section of the bridge agent references (checked against the tenant's store by the caller). */
+  legacyAgentStoreRefs: LegacyAgentStoreRef[];
+  /** The section of the bridge agent holds what belongs to its tenant only (B2: never shared nor assigned elsewhere). */
+  legacyAgentTenantBound: boolean;
 }
 
 const ITEM_PROPS = new Set(['id', 'type', 'instance', 'remove', 'values', 'note']);
@@ -336,9 +348,11 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
   const done = (content: PolicyContentV1 | null): ValidationOutcome => {
     summary.secretRefs = c.secretRefs.length + c.secretValues.length;
     summary.variables = c.variables;
-    return { issues: c.issues, content, secretValues: c.secretValues, secretRefs: c.secretRefs, summary, androidWipeRules };
+    return { issues: c.issues, content, secretValues: c.secretValues, secretRefs: c.secretRefs, summary, androidWipeRules,
+      legacyAgentWipeRules: agent.wipeRules, legacyAgentStoreRefs: agent.storeRefs, legacyAgentTenantBound: agent.tenantBound };
   };
   let androidWipeRules: string[] = [];
+  let agent: { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; tenantBound: boolean } = { wipeRules: [], storeRefs: [], tenantBound: false };
   if (!isPlainObject(raw)) { c.add(null, '', 'invalid_content'); return done(null); }
   // Before anything serialises or hashes the content: sections, items, values and their own nesting.
   if (nestedDeeperThan(raw, MAX_DEPTH + 8)) { c.add(null, '', 'invalid_content'); return done(null); }
@@ -347,8 +361,9 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
   const sections = raw.sections;
   if (!isPlainObject(sections)) { c.add(null, 'sections', 'invalid_content'); return done(null); }
   for (const k of Object.keys(sections)) {
-    // The apple section, and the android section since the junction AN-A2 (android-amapi §9.2).
-    if (k !== 'apple' && k !== 'android') c.add(null, `sections.${k}`, 'invalid_content');
+    // The apple section, the android section since the junction AN-A2 (android-amapi §9.2), the bridge agent's since
+    // lot PONT-POL.
+    if (k !== 'apple' && k !== 'android' && k !== 'legacyAgent') c.add(null, `sections.${k}`, 'invalid_content');
   }
   if (c.issues.length) return done(null);
   // A guard before anything heavy (the stored content is measured again once the secrets are replaced).
@@ -356,6 +371,7 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
 
   const content: PolicyContentV1 = { format: 1, sections: {} };
   if (sections.android !== undefined) androidWipeRules = validateAndroid(c, sections.android, o, content, summary);
+  if (sections.legacyAgent !== undefined) agent = validateLegacyAgent(c, sections.legacyAgent, o, content, summary);
   if (sections.apple === undefined) return done(c.issues.length ? null : content);
   const apple = sections.apple;
   if (!isPlainObject(apple) || Object.keys(apple).some((k) => k !== 'items') || !Array.isArray(apple.items)) {
@@ -513,6 +529,32 @@ function validateAndroid(c: Collector, raw: unknown, o: ValidateOptions, content
   return r.wipeRules;
 }
 
+// ── The section of the bridge agent (lot PONT-POL §5.1) ────────────────────
+
+/** Validates the section legacyAgent into the collector, as validateAndroid does: issues on the pseudo item
+ *  'legacyAgent', secrets with their purpose (sites by tokens from the section), one summary item per setting key. */
+function validateLegacyAgent(c: Collector, raw: unknown, o: ValidateOptions, content: PolicyContentV1, summary: PolicyVersionSummary):
+  { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; tenantBound: boolean } {
+  const r = validateLegacyAgentSection(raw, o.legacyAgent ?? { minFailedPasswordsForWipe: o.android?.minFailedPasswordsForWipe ?? 10 });
+  const codes: ReadonlySet<string> = ANDROID_CODES;
+  for (const x of r.issues) c.add(LEGACY_AGENT_SECTION_ITEM, x.path, (codes.has(x.code) ? x.code : 'invalid_content') as PolicyValidationCode);
+  const out = { wipeRules: r.wipeRules, storeRefs: r.storeRefs, tenantBound: r.tenantBound };
+  if (r.issues.length || !r.section) return out;
+  for (const s of r.secrets) {
+    if (s.kind === 'ref') c.secretRefs.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: s.path, id: s.id!, purpose: s.purpose });
+    else if (!o.allowSecretValues) c.add(LEGACY_AGENT_SECTION_ITEM, s.path, 'secret_expected');
+    else c.secretValues.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: s.tokens, purpose: s.purpose });
+  }
+  const keys = legacyAgentContributions(r.section);
+  for (const k of keys) {
+    summary.items++;
+    c.variables += k.variables.length;
+  }
+  if (keys.length) summary.types.legacyAgent = keys.length;
+  content.sections.legacyAgent = r.section;
+  return out;
+}
+
 /** A content whose `$secretValue` markers (sites of validatePolicyContent) are replaced by references. */
 export function withSecretRefs(content: PolicyContentV1, sites: Array<SecretValueSite & { id: string }>): PolicyContentV1 {
   const copy = JSON.parse(JSON.stringify(content)) as PolicyContentV1;
@@ -521,6 +563,13 @@ export function withSecretRefs(content: PolicyContentV1, sites: Array<SecretValu
     if (s.itemId === ANDROID_SECTION_ITEM) {
       // The Android section: the path of its validation, apps named by their package.
       const at = androidNodeAt(copy.sections.android, androidPathText(s.path));
+      if (!at || !isSecretValue(at.parent[at.key])) throw new Error('secret site without a secret value');
+      at.parent[at.key] = { $secret: s.id };
+      continue;
+    }
+    if (s.itemId === LEGACY_AGENT_SECTION_ITEM) {
+      // The section of the bridge agent: the tokens of its validation, from the section.
+      const at = legacyAgentNodeAt(copy.sections.legacyAgent, s.path);
       if (!at || !isSecretValue(at.parent[at.key])) throw new Error('secret site without a secret value');
       at.parent[at.key] = { $secret: s.id };
       continue;
@@ -556,4 +605,4 @@ export function androidPathText(tokens: Array<string | number>): string {
   return out;
 }
 
-export { POLICY_MAX_CONTENT_BYTES };
+export { POLICY_MAX_CONTENT_BYTES, LEGACY_AGENT_SECTION_ITEM };

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_EVENT_TYPES, LEGACY_AGENT_KEY_STORAGES, LEGACY_AGENT_KNOX_STATES, REMOTE_AGENT_END_REASONS, REMOTE_MODES,
+  AGENT_POLICY_ITEM_STATES, AGENT_POLICY_REPORT_STATES, LEGACY_AGENT_EVENT_TYPES, LEGACY_AGENT_KEY_STORAGES, LEGACY_AGENT_KNOX_STATES, REMOTE_AGENT_END_REASONS, REMOTE_MODES,
 } from '@obligarth/shared';
 
 // =============================================================================
@@ -76,8 +76,28 @@ export const PollBody = z.object({
     at: UNIX,
     detail: smallDetail.optional(),
   }).strict()).max(20).optional().default([]),
+  // Agent 1.3.0 (lot PONT-POL §8.4): the compliance report of its policy, parsed apart (PolicyReport): a report the server
+  // refuses never costs the poll.
+  policy: z.unknown().optional(),
 }).strict();
 export type PollBody = z.infer<typeof PollBody>;
+
+/** The compliance report of an agent policy (lot PONT-POL §8.4), in the poll body of an agent 1.3.0 or later. */
+export const PolicyReport = z.object({
+  /** null: the agent holds no policy. */
+  hash: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  state: z.enum(AGENT_POLICY_REPORT_STATES),
+  appliedAt: UNIX,
+  knoxState: z.enum(LEGACY_AGENT_KNOX_STATES),
+  items: z.array(z.object({
+    // UTF-8 SSIDs and spaces admitted, no control character.
+    key: z.string().max(160).regex(/^agent:[^\u0000-\u001f\u007f]{1,154}$/u),
+    state: z.enum(AGENT_POLICY_ITEM_STATES),
+    code: z.string().regex(/^[a-z_]{1,48}$/),
+    detail: z.string().max(160).optional(),
+  }).strict()).max(200),
+}).strict();
+export type PolicyReport = z.infer<typeof PolicyReport>;
 
 export const InventoryBody = z.object({
   collectedAt: UNIX,

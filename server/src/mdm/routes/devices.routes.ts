@@ -281,7 +281,8 @@ router.patch('/devices/:id', resolveDevice(true), async (req, res, next) => {
     if (!device) throw new AppError(404, 'Device not found');
     deviceService.emitChanged(tenantId, [id], hasGlobalView(req) && tenantId !== req.tenantId ? req.tenantId! : null);
     // The name of the device is a variable of the policies ({{device.name}}): what is rendered with it follows.
-    if (patch.displayName !== undefined) await asTargetTenant(req, tenantId, () => requestDeviceResolution(null, tenantId, [id]));
+    // The name and the custom fields are variables of the policies (custom fields: the bridge agent's templates, lot PONT-POL).
+  if (patch.displayName !== undefined || patch.customFields !== undefined) await asTargetTenant(req, tenantId, () => requestDeviceResolution(null, tenantId, [id]));
     // The dynamic groups: the name, the tags, the custom fields and the asset statuses the base marked (P0-5 T5).
     await asTargetTenant(req, tenantId, () => requestGroupEvaluation(null, tenantId, [id]));
     // Filed in the device's tenant (from the global view: the client's log, rls-tenant EX-08): the fields

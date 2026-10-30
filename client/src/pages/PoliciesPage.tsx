@@ -139,6 +139,8 @@ function PolicyList() {
                     <td className="px-4 py-2.5">
                       <Link to={`/policies/${p.id}`} onClick={(e) => e.stopPropagation()} className="font-medium text-text-primary hover:text-accent">{p.name}</Link>
                       {p.shared && <span className="ml-2 text-[10px] uppercase px-1.5 py-0.5 rounded bg-violet-400/10 text-violet-400">{t('policies.shared') || 'library'}</span>}
+                      {/* The section of the bridge agent (lot PONT-POL). */}
+                      {p.sections.includes('legacy_agent') && <span className="ml-2 text-[10px] uppercase px-1.5 py-0.5 rounded bg-accent/10 text-accent">{t('legacyAgentPolicy.sectionChip') || 'Agent'}</span>}
                       {p.description && <span className="block text-xs text-text-muted truncate max-w-md">{p.description}</span>}
                     </td>
                     <td className="px-3 py-2.5 text-text-secondary">{categoryLabel(p.category)}</td>

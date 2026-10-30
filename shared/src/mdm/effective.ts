@@ -15,6 +15,8 @@ export const UNAVAILABLE_REASONS = [
   'schema_unknown', 'platform_unsupported', 'enrollment_type_unsupported', 'supervision_required', 'os_removed',
   'os_too_old', 'ownership_forbidden', 'client_unsupported', 'asset_not_supported', 'variable_unresolved',
   'license_unavailable',
+  // The bridge agent revoked: its agent:* keys stop applying (lot PONT-POL, D5).
+  'device_revoked',
 ] as const;
 export type UnavailableReason = typeof UNAVAILABLE_REASONS[number];
 
