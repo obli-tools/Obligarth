@@ -838,6 +838,14 @@ function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
   }, [id]);
   useEffect(() => { load(); }, [load]);
   const cancel = async (c: LegacyAgentCommandView) => { try { await legacyAgentApi.cancel(c.id); load(); } catch (err) { fail(err); } };
+  /** app.pull (agent 1.2.0): the APK comes back to the Packages tab. */
+  const pull = async (packageName: string) => {
+    try {
+      await legacyAgentApi.send(id, 'app.pull', { packageName });
+      toast.success(t('legacyAgent.pull.queued') || 'Requested: the APK will appear in Packages once the device sent it.');
+      load();
+    } catch (err) { if (!isStepUpHandled(err)) fail(err); }
+  };
   const row = (k: string, v: ReactNode) => <div key={k} className="flex justify-between gap-4 rounded-md px-3 py-1.5 transition-colors hover:bg-bg-tertiary"><span className="text-text-muted">{k}</span><span className="break-all text-right text-text-primary">{v}</span></div>;
   return (
     <Modal open onClose={onClose} size="2xl" title={d?.name ?? `#${id}`}>
@@ -886,7 +894,20 @@ function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
           <div>
             <h3 className={cardTitleCls}>{t('legacyAgent.detail.apps', { count: d.apps.length }) || `Apps (${d.apps.length})`}</h3>
             <div className="max-h-64 overflow-y-auto rounded-xl bg-bg-secondary py-1 text-xs">
-              {d.apps.map((a) => <div key={a.packageName} className="flex justify-between gap-3 px-3 py-1 transition-colors hover:bg-bg-tertiary"><span>{a.label ?? a.packageName}<span className="text-text-muted"> {a.packageName}</span></span><span>{a.versionName ?? ''}{a.managed ? ' ●' : ''}</span></div>)}
+              {d.apps.map((a) => (
+                <div key={a.packageName} className="group flex items-center justify-between gap-3 px-3 py-1 transition-colors hover:bg-bg-tertiary">
+                  <span>{a.label ?? a.packageName}<span className="text-text-muted"> {a.packageName}</span></span>
+                  <span className="flex items-center gap-2">
+                    {a.versionName ?? ''}{a.managed ? ' ●' : ''}
+                    {!a.system && (
+                      <button type="button" className="rounded p-0.5 text-text-muted opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                        title={t('legacyAgent.pull.button') || 'Get the APK from this device'} onClick={() => void pull(a.packageName)}>
+                        <Download className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

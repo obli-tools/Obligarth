@@ -2,6 +2,7 @@ package tools.obli.obligarth.agent.core
 
 import java.io.File
 import java.io.IOException
+import java.io.RandomAccessFile
 import kotlin.random.Random
 
 /** What a cycle asks the scheduler for. */
@@ -648,8 +649,57 @@ class AgentEngine(
             is Params.Uninstall -> uninstall(c, p)
             is Params.Install -> installApp(c, p)
             is Params.AgentUpdate -> updateSelf(c, p)
+            is Params.Pull -> pullApp(c, p)
             else -> rej(c, Codes.BAD_PARAMS)
         }
+    }
+
+    /**
+     * app.pull (1.2.0): the installed APK sent by chunks of [PULL_CHUNK] bytes to POST /agent/v1/pull/<id>, each one
+     * signed; the server answers how much it holds and the agent goes on from there (a new attempt starts at 0). A
+     * network failure keeps the item for the next job (IOException); a refusal of the server ends it (upload_failed).
+     */
+    private fun pullApp(c: Command, p: Params.Pull): CommandResult {
+        if (p.packageName == ownPackage) return rej(c, Codes.FORBIDDEN_PACKAGE)
+        val apk = actions.installedApk(p.packageName) ?: return err(c, Codes.NOT_INSTALLED)
+        val size = apk.file.length()
+        if (size <= 0 || size > CommandParser.MAX_APK_SIZE) return err(c, Codes.UPLOAD_FAILED, "size $size")
+        val sha = ApkChecks.sha256(apk.file)
+        val signer = apk.signers.singleOrNull()
+        val buf = ByteArray(PULL_CHUNK)
+        var offset = 0L
+        var requests = 0
+        RandomAccessFile(apk.file, "r").use { raf ->
+            while (true) {
+                if (++requests > 4 * (size / PULL_CHUNK + 2)) return err(c, Codes.UPLOAD_FAILED, "too many requests")
+                raf.seek(offset)
+                val n = raf.read(buf, 0, minOf(PULL_CHUNK.toLong(), size - offset).toInt())
+                if (n <= 0) return err(c, Codes.UPLOAD_FAILED, "read")
+                val body = Json.bytes(linkedMapOf(
+                    "offset" to offset, "total" to size, "sha256" to sha, "versionCode" to apk.versionCode,
+                    "versionName" to apk.versionName?.take(64), "signerSha256" to signer, "data" to B64.encodeStd(buf.copyOf(n)),
+                ))
+                val reply = client.call("POST", "/agent/v1/pull/${c.id}", body, timeoutMs = 60_000)
+                if (reply.status == 429) {
+                    Thread.sleep((reply.retryAfterSeconds ?: 2L).coerceAtMost(30) * 1000)
+                    continue
+                }
+                if (reply.status != 200 || !reply.signed) {
+                    if (reply.status in 400..499) return err(c, Codes.UPLOAD_FAILED, "http ${reply.status} ${reply.code ?: ""}".trim())
+                    throw IOException("pull ${reply.status}")
+                }
+                val json = reply.json ?: return err(c, Codes.UPLOAD_FAILED, "no body")
+                if (json["complete"] == true) {
+                    return CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.PULLED,
+                        mapOf("sha256" to sha, "size" to size, "versionCode" to apk.versionCode, "packageId" to json.str("packageId")), now)
+                }
+                val received = json.long("received") ?: return err(c, Codes.UPLOAD_FAILED, "no received")
+                if (received < 0 || received > size) return err(c, Codes.UPLOAD_FAILED, "received $received")
+                offset = received
+            }
+        }
+        @Suppress("UNREACHABLE_CODE")
+        return err(c, Codes.UPLOAD_FAILED)
     }
 
     private fun uninstall(c: Command, p: Params.Uninstall): CommandResult? {
@@ -812,6 +862,8 @@ class AgentEngine(
     companion object {
         /** Connect + read: the acknowledgement of a wipe or reboot waits 15 s at most (§5.3). */
         const val ACK_TIMEOUT_MS = 7_500
+        /** app.pull: raw bytes per request (shared LEGACY_AGENT_PULL_CHUNK_BYTES). */
+        const val PULL_CHUNK = 1_048_576
         const val MAX_RESULTS = 100
         const val MAX_EVENTS = 20
         const val FOLLOW_UP_S = 10L

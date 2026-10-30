@@ -13,13 +13,16 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.SystemClock
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Robust periodic work (spec §8.4): an exact alarm chained at pollSeconds (the
- * receiver only schedules a job, it never does network), a persisted 15 min
- * job as a safety net, and an optional foreground service (keepAlive).
+ * Robust periodic work (spec §8.4): an exact alarm chained at pollSeconds, a
+ * persisted 15 min job as a safety net, and the foreground service (keepAlive,
+ * on by default). Since 1.2.0 the alarm hands its cycle to the foreground
+ * service (CycleRunner, under a wake lock) instead of a job the system may
+ * defer for hours; the job stays the path without the service.
  */
 object PollScheduler {
     private const val JOB_POLL_NOW = 1001
@@ -76,36 +79,56 @@ object PollScheduler {
     }
 }
 
+/**
+ * The alarm runs the cycle itself (1.2.0): through the foreground service when it runs (keepAlive), under a wake lock,
+ * without waiting for the job scheduler, which Android defers (idle, battery saving) for hours. Without the service,
+ * the job as before.
+ */
 class AlarmReceiver : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent) = PollScheduler.pollNow(context)
+    override fun onReceive(context: Context, intent: Intent) {
+        val rt = AgentRuntime.get(context)
+        if (rt.state.keepAlive && KeepAliveService.poll(context)) return
+        PollScheduler.pollNow(context)
+    }
 }
 
-/** Runs one interrogation cycle on a worker thread (a job lasts 60 s at most in practice: request time-outs). */
-class PollJobService : JobService() {
-    override fun onStartJob(params: JobParameters): Boolean {
+/** One interrogation cycle at a time, on a worker thread under a partial wake lock (the job and the alarm share it). */
+object CycleRunner {
+    private val running = AtomicBoolean(false)
+    private const val WAKE_MS = 3 * 60 * 1000L
+
+    /** Starts a cycle; false when one already runs ([onDone] is then not called). */
+    fun start(ctx: Context, onDone: () -> Unit = {}): Boolean {
         if (!running.compareAndSet(false, true)) return false
+        val app = ctx.applicationContext
+        val wake = (app.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "obligarth:cycle").apply { setReferenceCounted(false) }
         Thread({
             try {
-                val rt = AgentRuntime.get(applicationContext)
+                wake.acquire(WAKE_MS)
+                val rt = AgentRuntime.get(app)
                 ConfigFile.importIfPresent(rt)
                 rt.cycle()
             } catch (e: Throwable) {
-                AgentRuntime.get(applicationContext).log.warn("cycle failed: ${e.javaClass.simpleName}: ${e.message}")
+                AgentRuntime.get(app).log.warn("cycle failed: ${e.javaClass.simpleName}: ${e.message}")
                 // Keep the alarm chain alive: an unexpected failure must not wait for the 15 min job alone.
-                try { PollScheduler.scheduleNext(applicationContext, 300) } catch (ignored: Throwable) { }
+                try { PollScheduler.scheduleNext(app, 120) } catch (ignored: Throwable) { }
             } finally {
                 running.set(false)
-                jobFinished(params, false)
+                try { if (wake.isHeld) wake.release() } catch (ignored: Throwable) { }
+                onDone()
             }
         }, "obligarth-poll").start()
         return true
     }
+}
+
+/** Runs one interrogation cycle on a worker thread (a job lasts 60 s at most in practice: request time-outs). */
+class PollJobService : JobService() {
+    override fun onStartJob(params: JobParameters): Boolean =
+        CycleRunner.start(applicationContext) { jobFinished(params, false) }
 
     override fun onStopJob(params: JobParameters): Boolean = false
-
-    companion object {
-        private val running = AtomicBoolean(false)
-    }
 }
 
 /** Downloads and installs (F-7): a dedicated job of 9 minutes at most. */
@@ -143,10 +166,22 @@ class KeepAliveService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val n: Notification = Notifications.keepAlive(this)
         startForeground(Notifications.ID_KEEPALIVE, n)
+        // 1.2.0: the alarm's cycle, run here (a foreground service is never deferred); a cycle already running is enough.
+        if (intent?.action == ACTION_POLL) CycleRunner.start(this)
         return START_STICKY
     }
 
     companion object {
+        private const val ACTION_POLL = "tools.obli.obligarth.agent.action.POLL"
+
+        /** Asks the service for a cycle now; false when it cannot be started (the caller falls back to the job). */
+        fun poll(ctx: Context): Boolean = try {
+            ctx.startService(Intent(ctx, KeepAliveService::class.java).setAction(ACTION_POLL)) != null
+        } catch (e: Exception) {
+            AgentRuntime.get(ctx).log.warn("keep-alive poll: ${e.message}")
+            false
+        }
+
         fun start(ctx: Context) {
             try {
                 ctx.startService(Intent(ctx, KeepAliveService::class.java))

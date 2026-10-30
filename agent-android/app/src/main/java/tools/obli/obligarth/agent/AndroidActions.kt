@@ -14,6 +14,7 @@ import tools.obli.obligarth.agent.core.ArchiveInfo
 import tools.obli.obligarth.agent.core.Codes
 import tools.obli.obligarth.agent.core.DeviceActions
 import tools.obli.obligarth.agent.core.InstallOutcome
+import tools.obli.obligarth.agent.core.InstalledApk
 import tools.obli.obligarth.agent.core.JarSigners
 import tools.obli.obligarth.agent.core.Sha256
 import java.io.File
@@ -164,6 +165,23 @@ class AndroidActions(
             signers = JarSigners.signerSha256(apk) ?: emptyList()
         }
         return ArchiveInfo(info.packageName, versionCode, signers)
+    }
+
+    @SuppressLint("PackageManagerGetSignatures")
+    @Suppress("DEPRECATION")
+    override fun installedApk(packageName: String): InstalledApk? = try {
+        val p = pm.getPackageInfo(packageName, PackageManager.GET_SIGNATURES)
+        val ai = p.applicationInfo
+        val file = ai?.sourceDir?.let { File(it) }
+        if (ai == null || file == null || !file.isFile || !file.canRead() || !ai.splitSourceDirs.isNullOrEmpty()) null
+        else InstalledApk(
+            file,
+            if (Build.VERSION.SDK_INT >= 28) p.longVersionCode else p.versionCode.toLong(),
+            p.versionName,
+            p.signatures?.map { Sha256.hex(it.toByteArray()) }.orEmpty(),
+        )
+    } catch (e: PackageManager.NameNotFoundException) {
+        null
     }
 
     companion object {

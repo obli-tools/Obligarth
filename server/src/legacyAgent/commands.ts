@@ -121,6 +121,13 @@ const SPECS: Record<LegacyAgentCommandType, CommandSpec> = {
     }).strict(),
     capability: 'mdm:remote_view', restrictionKey: null, guardedBy: null, lifetimeSeconds: 600,
   },
+  // Agent 1.2.0: the APK of an installed app sent back by chunks to POST /agent/v1/pull/<commandId> (pull.ts), stored as a
+  // package of the tenant. The agent's own package is refused (it has its versions).
+  'app.pull': {
+    type: 'app.pull',
+    params: z.object({ packageName: z.string().max(255).regex(PACKAGE_RE).refine(notAgent, 'the agent package is refused') }).strict(),
+    capability: 'mdm:apps', restrictionKey: 'legacy_agent.apps', guardedBy: null, lifetimeSeconds: DAY,
+  },
 };
 
 /** The request of a remote assistance session (P0-15 §4.3): never a console command. */

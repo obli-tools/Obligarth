@@ -124,4 +124,9 @@ interface DeviceActions {
     /** SHA-256 of the signing certificates of an installed package. */
     fun installedSigners(packageName: String): List<String>?
     fun inspectArchive(apk: File): ArchiveInfo?
+    /** 1.2.0 (app.pull): the base APK of an installed package, null when absent or split (several APKs). */
+    fun installedApk(packageName: String): InstalledApk? = null
 }
+
+/** The installed APK of a package (app.pull): its file (readable by any app up to Android 10) and its identity. */
+data class InstalledApk(val file: File, val versionCode: Long, val versionName: String?, val signers: List<String>)

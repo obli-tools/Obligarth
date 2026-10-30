@@ -6,10 +6,12 @@
 // =============================================================================
 
 /** Command types of v0 (§5.1). agent.retire is v1 (§15.4). remote.open (P0-15 §4.3): the request of a remote
- *  assistance session, enqueued by server/src/remote only (origin 'remote'), never by a console request. */
+ *  assistance session, enqueued by server/src/remote only (origin 'remote'), never by a console request. app.pull
+ *  (agent 1.2.0): the APK of an installed app sent back to the server by chunks (POST /agent/v1/pull/<commandId>),
+ *  stored as a package of the tenant. */
 export const LEGACY_AGENT_COMMAND_TYPES = [
   'inventory.refresh', 'device.message', 'device.lock', 'device.wipe', 'device.reboot',
-  'app.install', 'app.uninstall', 'agent.update', 'remote.open',
+  'app.install', 'app.uninstall', 'agent.update', 'remote.open', 'app.pull',
 ] as const;
 export type LegacyAgentCommandType = typeof LEGACY_AGENT_COMMAND_TYPES[number];
 
@@ -18,7 +20,7 @@ export const LEGACY_AGENT_GUARDED_TYPES = ['device.wipe', 'device.lock'] as cons
 
 /** The types a console request enqueues directly (each behind its restriction, §5.4). */
 export const LEGACY_AGENT_CONSOLE_TYPES = [
-  'inventory.refresh', 'device.message', 'device.reboot', 'app.install', 'app.uninstall', 'agent.update',
+  'inventory.refresh', 'device.message', 'device.reboot', 'app.install', 'app.uninstall', 'agent.update', 'app.pull',
 ] as const;
 export type LegacyAgentConsoleType = typeof LEGACY_AGENT_CONSOLE_TYPES[number];
 
@@ -36,6 +38,7 @@ export const LEGACY_AGENT_RESULT_CODES = [
   'version_not_higher', 'install_failed', 'user_declined', 'user_timeout', 'forbidden_package', 'unsupported',
   'expired_on_device', 'bad_params', 'internal',
   'projection_denied', 'remote_injection_unavailable', 'session_gone', 'agent_busy',
+  'pulled', 'not_installed', 'upload_failed',
 ] as const;
 export type LegacyAgentResultCode = typeof LEGACY_AGENT_RESULT_CODES[number];
 
@@ -105,8 +108,11 @@ export const LEGACY_AGENT_TOKEN_RE = /^OLE1\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43
 /** Bounds of a token (§3.2, §7). */
 export const LEGACY_AGENT_TOKEN_BOUNDS = { maxUsesMax: 2000, maxUsesDefault: 50, daysMax: 30, daysDefault: 7 } as const;
 
-/** Poll interval bounds and default, seconds (PB10). */
-export const LEGACY_AGENT_POLL_BOUNDS = { min: 60, max: 3600, default: 300 } as const;
+/** Poll interval bounds and default, seconds (PB10; 120 by default since agent 1.2.0). */
+export const LEGACY_AGENT_POLL_BOUNDS = { min: 60, max: 3600, default: 120 } as const;
+
+/** app.pull (agent 1.2.0): the APK travels in base64 chunks of at most this many raw bytes, each one a signed request. */
+export const LEGACY_AGENT_PULL_CHUNK_BYTES = 1_048_576;
 
 /** Automatic update of the fleet to the latest version of the agent (lot AGENT-RU): devices per hour, instance-wide. */
 export const LEGACY_AGENT_AUTO_UPDATE_BOUNDS = { min: 1, max: 5000, default: 500 } as const;
