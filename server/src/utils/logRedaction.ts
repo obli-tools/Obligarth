@@ -22,6 +22,8 @@ export const LOG_REDACT_PATHS: string[] = [
   ...SECRET_KEYS.map((k) => `*.${k}`),
   // deeper in a policy's content (values of an item)
   '*.*.$secretValue', '*.*.*.$secretValue',
+  // the Bearer token of an MCP access key (docs: specs mcp-server §1.1), wherever a request is logged
+  'req.headers.authorization', '*.headers.authorization',
 ];
 
 export const LOG_REDACT_CENSOR = '[redacted]';

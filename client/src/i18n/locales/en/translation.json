@@ -75,7 +75,8 @@
     "apps": "Apps",
     "androidPlatform": "Android",
     "legacyAgent": "Android agent",
-    "privacy": "Privacy"
+    "privacy": "Privacy",
+    "accessKeys": "Access keys"
   },
   "login": {
     "title": "Sign in to your account",
@@ -467,6 +468,72 @@
         "label": "Second approver: share of the fleet counted from",
         "description": "A change of the configuration (publication, assignments, group, devices moved) asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
       }
+    },
+    "mcp": {
+      "title": "MCP server (AI agents)",
+      "intro": "Who may reach /mcp. When every active key lists its addresses, the server is in strict mode: any other address is blocked at once, for good, and reported to Obliguard. As soon as one key accepts any address, it falls back to the rate mode: failed attempts are counted per address, then blocked.",
+      "currentMode": "Current mode",
+      "mode": {
+        "strict": "Strict",
+        "rate": "Counted attempts",
+        "closed": "Closed (no key)"
+      },
+      "keysCount": "{{active}} active key(s), {{open}} without an address list",
+      "forceIp": "Require an address list on every key",
+      "forceIpDesc": "A key without addresses then refuses the tenants concerned; a tenant can be exempted or forced below.",
+      "fields": {
+        "minPrefixV4": "Narrowest IPv4 network of a key (prefix)",
+        "minPrefixV6": "Narrowest IPv6 network of a key (prefix)",
+        "failureThreshold": "Failed attempts before a block (rate mode)",
+        "failureWindowSeconds": "Window of the failed attempts (seconds)",
+        "blockSeconds": "Duration of a block (seconds)",
+        "knownIpDays": "Days an address of a revoked or expired key stays known",
+        "maxNewBlocksPerMinute": "New blocks per minute at most",
+        "prefixBlockThreshold": "Blocked addresses of one IPv6 /64 before the /64 is blocked",
+        "keyRequestsPerMinute": "Requests per minute of one key",
+        "authorizationMinutes": "Validity of an authorization (minutes)",
+        "maxPendingPerKey": "Waiting authorizations per key",
+        "maxPendingPerUser": "Waiting authorizations per user",
+        "maxCreatedPerKeyHour": "Authorizations created per key per hour"
+      },
+      "obliguard": "Report blocks to Obliguard",
+      "obliguardDesc": "Public addresses only. Without an address, Obliguard is found through Obligate.",
+      "obliguardUrl": "Obliguard address (optional)",
+      "urlInvalid": "An http(s) address without credentials.",
+      "test": "Test",
+      "obliguardOk": "Obliguard answered.",
+      "obliguardFailed": "Obliguard could not be reached.",
+      "neverBlock": "Never blocked (addresses or networks, comma separated)",
+      "pendingApproval": "The change waits for its approval.",
+      "tenantPolicies": "Address list per tenant",
+      "policy": {
+        "inherit": "Instance setting",
+        "force": "Required",
+        "exempt": "Exempt"
+      },
+      "blocks": "Blocked addresses",
+      "noBlocks": "No address is blocked.",
+      "source": {
+        "mcp_strict": "Unknown address (strict mode)",
+        "mcp_failures": "Too many failed attempts",
+        "mcp_prefix": "IPv6 /64 network",
+        "manual": "Manual"
+      },
+      "hits_one": "{{count}} attempt",
+      "hits_other": "{{count}} attempts",
+      "until": "until",
+      "permanent": "permanent",
+      "obliguardStatus": {
+        "pending": "Obliguard: pending",
+        "sent": "Obliguard: sent",
+        "failed": "Obliguard: failed",
+        "disabled": "Obliguard: off",
+        "withdrawn": "Obliguard: withdrawn",
+        "skipped": "Obliguard: not reported"
+      },
+      "unblock": "Unblock",
+      "unblockConfirm": "Unblock {{ip}}? Obliguard is told to lift its ban too.",
+      "unblocked": "Address unblocked."
     }
   },
   "profile": {
@@ -1867,7 +1934,8 @@
       "mdm_enrollment_manage": "Enrollment · Profiles, links and invitations",
       "mdm_integrations_manage": "Apple integrations · Push certificate, ADE servers, Apps and Books",
       "mdm_apps_manage": "Apps · Catalog and assignments",
-      "mdm_privacy_manage": "Privacy · Profiles, notice and retention"
+      "mdm_privacy_manage": "Privacy · Profiles, notice and retention",
+      "mcp_access_keys": "MCP · Personal access keys for AI agents"
     }
   },
   "notificationCenter": {
@@ -4089,7 +4157,25 @@
     "smartGroupNotTargetable": "This rule cannot define a dynamic group an assignment targets: compliance, configuration, dates, static groups, applications and the name of the device are not allowed.",
     "smartGroupTargeted": "An assignment now targets this dynamic group: submit the change again to preview its impact.",
     "smartGroupUnknownGroup": "The rule names a static group that no longer exists.",
-    "invalidRule": "The advanced filter is not valid."
+    "invalidRule": "The advanced filter is not valid.",
+    "invalidIpAllow": "An entry of the address list is not an address or a network.",
+    "ipPrefixTooWide": "A network of the address list is too wide.",
+    "twoFactorSetupRequired": "Set up a second factor (authenticator app) on your profile before creating an access key.",
+    "tenantNotAllowed": "A tenant of the key is not one you may give it.",
+    "scopeNotHeld": "You do not hold this right in the chosen tenants: {{scope}}.",
+    "scopeUnknown": "Unknown right.",
+    "invalidPerimeter": "The perimeter of the key is incomplete.",
+    "ipAllowListRequired": "An address list is required by your administrator.",
+    "invalidExpiry": "The expiry must be between 1 and 365 days.",
+    "tooManyKeys": "You already have the maximum number of active keys: revoke one first.",
+    "authorizationClosed": "This authorization is closed.",
+    "perimeterLost": "The action is no longer within your rights or the perimeter of the key: nothing was done.",
+    "tooManyPendingAuthorizations": "Too many authorizations wait for a decision.",
+    "stepUpFactorMissing": "A second factor is required.",
+    "tenantNotInPerimeter": "This tenant is not in the perimeter of the key.",
+    "neverBlock": "This address is never blocked.",
+    "invalidIp": "A single address is expected.",
+    "stepUpRequired": "A second factor is required."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -6297,6 +6383,199 @@
       "request": "Request the change",
       "requested": "Change requested: it waits for its approval.",
       "failed": "The change could not be requested."
+    }
+  },
+  "accessKeys": {
+    "title": "Access keys for AI agents",
+    "intro": "An AI agent such as Claude Code connects to Obligarth's MCP server with one of your keys and acts as you, for diagnosis and remediation: never more than your current rights, limited to the key's rights and perimeter. Sensitive actions always wait for your approval with a second factor.",
+    "new": "New key",
+    "empty": "No active key. Create one to connect an AI agent.",
+    "hideInactive": "Hide revoked and expired keys",
+    "showInactive_one": "Show the revoked or expired key ({{count}})",
+    "showInactive_other": "Show revoked and expired keys ({{count}})",
+    "revokeTitle": "Revoke the key",
+    "revokeConfirm": "The key « {{name}} » stops working at once, and the actions it asked that still wait are cancelled. This cannot be undone.",
+    "revoked": "Key revoked.",
+    "shownOnce": "Copy the key now: it is shown only once. Obligarth keeps only a fingerprint of it and cannot show it again.",
+    "profileHint": "Let an AI agent such as Claude Code act as you, within your rights, through the MCP server.",
+    "tabs": {
+      "keys": "My keys",
+      "authorizations": "Authorizations",
+      "tenant": "Keys of this tenant"
+    },
+    "scopes": {
+      "devices_read": "Read devices, groups and the inventory",
+      "devices_identifiers": "Read device identifiers (IMEI, serial numbers)",
+      "commands_read": "Read the command queues and results",
+      "alerts_read": "Read the live alerts",
+      "apps_read": "Read the app catalog, packages and agent versions",
+      "audit_read": "Read the tenant's audit log",
+      "commands_inventory": "Refresh the inventory",
+      "commands_message": "Show a message on devices",
+      "commands_restart": "Restart devices",
+      "commands_apps": "Install, remove and pull apps, update the agent",
+      "commands_cancel": "Cancel pending commands",
+      "groups_move": "Move devices between groups (always approved by you)"
+    },
+    "state": {
+      "active": "Active",
+      "expired": "Expired",
+      "revoked": "Revoked"
+    },
+    "revokeReason": {
+      "user": "Revoked by you",
+      "admin": "Revoked by a platform administrator",
+      "user_disabled": "Account disabled",
+      "credentials_changed": "Password or second factor changed",
+      "sessions_killed": "Sessions of the account ended",
+      "owner_removed": "Account removed"
+    },
+    "perimeter": {
+      "allTenants": "All my tenants",
+      "allGroups": "All groups",
+      "allDevices": "All devices"
+    },
+    "list": {
+      "key": "Key",
+      "perimeter": "Rights and perimeter",
+      "usage": "Expiry and use",
+      "scopes": "Rights",
+      "noTenantNow": "No tenant reachable now (rights or tenants lost).",
+      "tenants": "Tenants",
+      "groups": "Groups",
+      "devices": "Devices",
+      "excluded": "Excluded",
+      "excludedTenants_one": "{{count}} tenant, by its managers",
+      "excludedTenants_other": "{{count}} tenants, by their managers",
+      "anyIp": "Any IP",
+      "expired": "Expired",
+      "expires": "Expires",
+      "lastUsed": "Last used",
+      "revoked": "Revoked",
+      "revoke": "Revoke"
+    },
+    "create": {
+      "title": "New access key",
+      "intro": "An AI agent (Claude Code…) uses this key to act as you, never with more rights than yours, re-checked at every call. Choose what it may reach and do. Sensitive actions always wait for your approval with a second factor.",
+      "submit": "Create the key",
+      "failed": "The key could not be created.",
+      "needFactor": "Set up a second factor on your profile first.",
+      "needName": "Give the key a name.",
+      "needTenant": "Choose at least one tenant.",
+      "needGroup": "Choose at least one group.",
+      "needDevice": "Choose at least one device.",
+      "needScope": "Choose at least one right.",
+      "needIp": "An IP allow-list is required by your administrator.",
+      "noFactor": "A key needs a second factor (an authenticator app, or your Obligate account) to approve its sensitive actions. Set one up on your profile.",
+      "toProfile": "Profile",
+      "name": "Name",
+      "namePlaceholder": "Claude Code: diagnosis",
+      "expiry": "Expires in",
+      "days_one": "{{count}} day",
+      "days_other": "{{count}} days",
+      "tenants": "Tenants",
+      "thisTenant": "This tenant",
+      "choose": "Choose",
+      "allMyTenants": "All my tenants",
+      "ipForcedShort": "IP list required",
+      "allTenantsAdmin": "As a platform administrator, this means EVERY tenant of the instance, including the tenants created later. The key never gets the global view: each call names one tenant.",
+      "allTenantsHint": "Every tenant you can access at the time of each call, including the tenants you are given later.",
+      "groups": "Groups",
+      "allGroups": "All groups",
+      "groupsHint": "A group includes its sub-groups. Devices outside these groups (or in no group) are outside the key; a tenant of the key without a chosen group shows no device.",
+      "noGroups": "No group listed in this session for the chosen tenants.",
+      "devices": "Devices",
+      "allDevices": "All devices",
+      "deviceSearch": "Search a device",
+      "noDevices": "No device matches.",
+      "pickerHint": "Only the groups and devices this session lists are offered: switch tenant to pick in another tenant. With both groups and devices chosen, the key reaches the chosen devices that are in the chosen groups.",
+      "scopes": "Rights",
+      "scopesHint": "Only the rights you hold in a chosen tenant can be given. In each tenant the key never does more than you can do there.",
+      "scopesRead": "Read",
+      "scopesAct": "Act",
+      "scopeNotHeld": "not held in the chosen tenants",
+      "ipAllow": "Allowed addresses",
+      "ipForced": "Required by your administrator for a chosen tenant.",
+      "removeIp": "Remove",
+      "ipTooWide": "Too wide: at least /{{v4}} (IPv4) or /{{v6}} (IPv6).",
+      "ipInvalid": "Not an address or a network.",
+      "addIp": "Add",
+      "ipOpenNote": "Without an address, the key works from any IP. As long as one such key exists, the server cannot block an unknown address at once: it only counts failed attempts.",
+      "ipListNote": "The key only works from these addresses."
+    },
+    "created": {
+      "title": "Key « {{name}} » created",
+      "done": "I have copied it",
+      "token": "Key",
+      "command": "Connect Claude Code",
+      "commandHint": "Run it in a terminal where Claude Code is installed. The agent then calls whoami to learn what this key lets it see and do."
+    },
+    "tenant": {
+      "intro": "The access keys of the users that can reach this tenant now. Each key acts as its owner, within his rights here.",
+      "empty": "No access key reaches this tenant.",
+      "owner": "Owner and key",
+      "exclude": "Exclude from this tenant",
+      "excludeTitle": "Exclude this tenant from the key",
+      "excludeConfirm": "The key « {{name}} » of {{owner}} will no longer reach this tenant. Its actions waiting here are cancelled. This cannot be undone.",
+      "excluded": "This tenant is excluded from the key."
+    },
+    "newNetwork": {
+      "title": "Your key « {{name}} » was used from a new network",
+      "hint": "If it was not you or your agent, revoke the key."
+    }
+  },
+  "mcpAuthorizations": {
+    "title": "Action asked by an AI agent",
+    "back": "Authorizations",
+    "intro": "A sensitive action asked by one of your AI agents never runs on its own: open it, check it, then approve it with your second factor (a code or your phone), or deny it.",
+    "notice": "An AI agent waits for your approval",
+    "filter": {
+      "pending": "Waiting for me",
+      "all": "All"
+    },
+    "emptyPending": "No action waits for you.",
+    "empty": "No authorization yet.",
+    "notFound": "This authorization does not exist in this tenant.",
+    "key": "Key",
+    "expires": "Expires",
+    "tool": "Tool",
+    "tenant": "Tenant",
+    "agentIp": "Agent address",
+    "asked": "Asked",
+    "timeLeft": "Time left",
+    "approvedWith": "Approved with",
+    "error": "Error",
+    "approvalRequest": "Approval request",
+    "devices_one": "Device ({{count}})",
+    "devices_other": "Devices ({{count}})",
+    "params": "Parameters",
+    "agentText": "Text written by the AI agent",
+    "agentTextHint": "Written by the agent, not by Obligarth: read it as a quote, it may be wrong or misleading.",
+    "agentField": {
+      "reason": "Reason",
+      "title": "Title",
+      "text": "Message",
+      "package_name": "Package"
+    },
+    "preview": "What the move changes",
+    "previewHint": "You approve exactly this effect: if it changes before the approval runs, nothing is moved.",
+    "approveHint": "Approving asks your second factor (a code, or your phone). The action then runs once, as you, with your rights checked again.",
+    "approve": "Approve",
+    "deny": "Deny",
+    "denyConfirm": "Deny this action? Nothing will be done, and the agent is told it was refused.",
+    "denied": "Denied: nothing was done.",
+    "executed": "Approved: the action ran.",
+    "filedToast": "Approved: the action now waits for another approver.",
+    "state": {
+      "pending": "Waiting for you",
+      "executing": "Running",
+      "executed": "Done",
+      "failed": "Failed",
+      "denied": "Denied",
+      "expired": "Expired",
+      "cancelled": "Cancelled",
+      "filed": "Sent for approval",
+      "interrupted": "Interrupted"
     }
   }
 }

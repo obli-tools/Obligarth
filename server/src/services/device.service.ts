@@ -235,7 +235,8 @@ class DeviceService {
     const dir = filters.sortOrder === 'desc' ? 'desc' : 'asc';
     if (sortCol) q.orderByRaw(`${sortCol} ${dir} NULLS LAST, devices.id asc`);
     else q.orderBy('devices.id', 'asc');
-    const rows = await q.select([...SUMMARY_COLUMNS, db.raw(BATTERY_LEVEL_SQL)]).limit(pageSize).offset((page - 1) * pageSize);
+    const start = filters.offset !== undefined ? Math.max(0, Math.floor(filters.offset)) : (page - 1) * pageSize;
+    const rows = await q.select([...SUMMARY_COLUMNS, db.raw(BATTERY_LEVEL_SQL)]).limit(pageSize).offset(start);
     const rules = new RulesCache();
     const now = new Date();
     const items = await Promise.all(rows.map((row: any) => this.toSummary(row, rules, thresholds, now)));

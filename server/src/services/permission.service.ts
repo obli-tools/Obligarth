@@ -224,6 +224,23 @@ export const permissionService = {
   },
 
   /**
+   * Does the user hold `capability` on at least one team permission row with write access, through a team of
+   * `tenantId` (the scopes offered to an MCP access key, and what its `whoami` reports)? A capability of the
+   * device actions is only ever used on a row with write access, so a read-only row never counts. Callers handle
+   * the platform administrator bypass themselves. Stored values outside the shared vocabulary never match.
+   */
+  async userHoldsDeviceCapabilityAnywhere(userId: number, tenantId: number, capability: DeviceCapability): Promise<boolean> {
+    const rows = await db('team_permissions as tp')
+      .join('team_memberships as tm', 'tm.team_id', 'tp.team_id')
+      .join('user_teams as ut', 'ut.id', 'tp.team_id')
+      .where('tm.user_id', userId)
+      .where('ut.tenant_id', Number.isInteger(tenantId) ? tenantId : -1)
+      .where('tp.level', 'rw')
+      .select('tp.capabilities') as Array<{ capabilities: unknown }>;
+    return rows.some((r) => knownDeviceCapabilities(r.capabilities).includes(capability));
+  },
+
+  /**
    * Get effective permission for a user on a group.
    * Checks direct group permissions + ancestor permissions via closure table.
    */

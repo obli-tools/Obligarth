@@ -417,6 +417,15 @@ export function registerApprovalRequestType(requestType: string, run: ApprovalEx
   if (options) typeOptions.set(requestType, Object.freeze({ ...options }));
 }
 
+/** A module's check run by approve() before anything is claimed: it throws (an error with `status`) to refuse. */
+export type ApprovalBeforeApproveCheck = (approval: { id: number; tenantId: number; requestType: string }) => Promise<void>;
+const beforeApproveChecks: ApprovalBeforeApproveCheck[] = [];
+
+/** Registered by a module before anything starts (modules/mcp.ts), so that this service never imports it. */
+export function registerApprovalBeforeApproveCheck(check: ApprovalBeforeApproveCheck): void {
+  beforeApproveChecks.push(check);
+}
+
 interface NewApproval {
   tenantId: number;
   userId: number;
@@ -527,6 +536,8 @@ export const approvalService = {
     description: string;
     payload: BatchCommandPayload | Record<string, unknown>;
     auditCtx: AuditWriteContext;
+    /** Executor-only data, sealed as with create (an approval filed through an MCP access key: the route's own part). */
+    sealed?: Record<string, unknown>;
   }): Promise<PendingApproval> {
     const row = await insertApproval(trx, params);
     await audit.appendInTx(trx, requestedEntry(row, params), params.auditCtx);
@@ -584,6 +595,9 @@ export const approvalService = {
     if (row.requested_by === params.reviewerId) {
       throw Object.assign(new Error('Cannot approve your own request'), { status: 403 });
     }
+    // The modules' checks before an execution (an approval filed through an MCP access key whose key was revoked
+    // meanwhile: 409 authorizationClosed, nothing runs).
+    for (const check of beforeApproveChecks) await check({ id: Number(row.id), tenantId: Number(row.tenant_id), requestType: String(row.request_type) });
     // The examination policy of the request's type (audit-durci §10.4), then
     // its step-up; the audit context is taken after it (actor.stepUp).
     await checkReviewer(row, params.reviewerId, 'approve', params.req);

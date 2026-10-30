@@ -11,6 +11,8 @@ import { useClickOutside } from '@/hooks/useClickOutside';
 import { useNativeBack } from '@/hooks/useNativeBack';
 import { useLayoutMode } from '@/hooks/useMediaQuery';
 import { cn } from '@/utils/cn';
+import { McpNotices } from '@/components/accessKeys/McpNotices';
+import { useMcpAuthorizationsStore, livePending } from '@/store/mcpAuthorizationsStore';
 
 const SEVERITY_STYLES: Record<AlertSeverity, { bar: string; dot: string; title: string }> = {
   down: { bar: 'border-l-red-500', dot: 'bg-red-500', title: 'text-red-400' },
@@ -150,6 +152,11 @@ export function NotificationCenter() {
   } = useLiveAlertsStore();
 
   const { currentTenantId, tenants } = useTenantStore();
+  // The user's own MCP notices (actions of his AI agents waiting for his approval, a key used from a new network):
+  // loaded once, then kept up to date by the socket; counted in the bell.
+  const mcpPending = livePending(useMcpAuthorizationsStore((s) => s.pending)).length;
+  const mcpNotices = useMcpAuthorizationsStore((s) => s.notices).length;
+  useEffect(() => { void useMcpAuthorizationsStore.getState().load(); }, []);
   const navigate = useNavigate();
   const panelRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -162,7 +169,7 @@ export function NotificationCenter() {
   const globalAlerts = alerts; // all tenants (including local)
 
   const tabAlerts = tab === 'global' ? globalAlerts : localAlerts;
-  const totalUnread = countUnread(alerts);
+  const totalUnread = countUnread(alerts) + mcpPending + mcpNotices;
   const localUnread = countUnread(localAlerts);
 
   // If multi-tenant becomes unavailable, fall back to local tab
@@ -367,6 +374,7 @@ export function NotificationCenter() {
 
           {/* Notifications list */}
           <div className="min-h-0 max-h-96 overflow-y-auto overscroll-contain divide-y divide-border/50">
+            <McpNotices onNavigate={() => setOpen(false)} />
             {list}
           </div>
 
@@ -389,6 +397,7 @@ export function NotificationCenter() {
         footerClassName="justify-center p-0"
       >
         <div className="space-y-2 px-4 pb-3">{controls}</div>
+        <McpNotices onNavigate={() => setOpen(false)} />
         <div className="divide-y divide-border/50">{list}</div>
       </Drawer>
     </div>

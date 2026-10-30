@@ -14,6 +14,7 @@ import { anonymize } from '@/utils/anonymize';
 import { SUPPORTED_LANGUAGES, setLanguage } from '@/i18n';
 import toast from 'react-hot-toast';
 import { DeviceKeysSection, TRUSTED_IPS_CHANGED_EVENT } from '@/components/deviceKeys/DeviceKeysSection';
+import { AccessKeysLink } from '@/components/accessKeys/AccessKeysLink';
 import { TotpMobileActions } from '@/components/profile/TotpMobileActions';
 import { PageContainer } from '@/components/common/PageContainer';
 import { useConfirm } from '@/components/common/ConfirmDialog';
@@ -206,6 +207,7 @@ export function ProfilePage() {
  </a>
  </div>
  <DeviceKeysSection ssoAccount />
+ <AccessKeysLink />
  </div>
  );
  }
@@ -714,6 +716,7 @@ export function ProfilePage() {
 
  <TrustedIpsSection />
  <DeviceKeysSection />
+ <AccessKeysLink />
  </PageContainer>
  );
 }

@@ -1,4 +1,4 @@
-import { LogOut, Download, Menu, Settings, UserCircle, MoreHorizontal, ChevronDown } from 'lucide-react';
+import { LogOut, Download, Menu, Settings, UserCircle, MoreHorizontal, ChevronDown, KeyRound } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -67,7 +67,9 @@ const APPS_REFRESH_INTERVAL_MS = 5 * 60_000;
 export function Header() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { user, logout } = useAuthStore();
+  const { user, logout, permissions } = useAuthStore();
+  // The user's access keys of the MCP server (holders of mcp.access_keys; a platform administrator always).
+  const canAccessKeys = user?.role === 'admin' || (permissions?.tenantCapabilities ?? []).includes('mcp.access_keys');
   const { status: socketStatus } = useSocketStore();
   const tenants = useTenantStore((s) => s.tenants);
   const currentTenantId = useTenantStore((s) => s.currentTenantId);
@@ -254,6 +256,12 @@ export function Header() {
       description: `${t('nav.profile') || 'Profile'} · ${user.role}`,
       onClick: () => navigate('/profile'),
     },
+    ...(canAccessKeys ? [{
+      key: 'access-keys',
+      icon: <KeyRound className="w-4 h-4" />,
+      label: t('nav.accessKeys') || 'Access keys',
+      onClick: () => navigate('/access-keys'),
+    } satisfies ActionMenuItem] : []),
     // Phone: the app pills live here.
     ...(isPhone ? otherApps.map((app, i): ActionMenuItem => ({
       key: `app-${appKey(app)}`,

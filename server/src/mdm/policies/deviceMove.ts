@@ -96,9 +96,12 @@ async function journal(tenantId: number, change: DeviceMoveChange, changed: numb
  * (of `tenantId`), the group, devices.manage and write access on the group. `dryRun`: the preview only.
  * Answers: 200 { data: { updated, changed } }; 202 { data: { outcome: 'awaiting_approval', approvalId, status,
  * impact } }; the challenge of the step-up otherwise.
+ * `opts` (the approval of an AI agent's move, mcp/tools/writes.ts): `expectImpact` is checked under the lock of the
+ * configuration against the impact about to apply (409 impactChanged when false), so that what moves is exactly what
+ * the human approved; `descriptionPrefix` names who asked in the description of an approval it files.
  */
 export async function changeDevicesGroup(req: Request, tenantId: number, deviceIds: number[], groupId: number | null,
-  dryRun: boolean): Promise<RouteOutcome> {
+  dryRun: boolean, opts: { expectImpact?: (impact: PolicyImpact) => boolean; descriptionPrefix?: string } = {}): Promise<RouteOutcome> {
   const change: DeviceMoveChange = { kind: 'device_move', deviceIds: [...new Set(deviceIds)].sort((a, b) => a - b), groupId };
   const userId = req.session.userId!;
   const visible = await visibleDevices(req);
@@ -117,10 +120,11 @@ export async function changeDevicesGroup(req: Request, tenantId: number, deviceI
   const ctx = await audit.fromRequest(req, tenantId);
   const done = await withConfigurationLock(tenantId, async (trx): Promise<{ impact: PolicyImpact; approval: PendingApproval | null; changed: number[] }> => {
     const now = await look(trx, tenantId, change, visible);
+    if (opts.expectImpact && !opts.expectImpact(now.impact)) impactChanged();
     if (now.level === 'restricted') {
       const approval = await approvalService.createInTx(trx, {
         tenantId, userId, requestType: POLICY_PUBLISH_REQUEST_TYPE,
-        description: await describe(trx, tenantId, change, now.impact),
+        description: (opts.descriptionPrefix ?? '') + await describe(trx, tenantId, change, now.impact),
         payload: { kind: 'device_move', deviceIds: change.deviceIds, groupId: change.groupId, impact: approvalImpact(now) },
         auditCtx: ctx,
       });
