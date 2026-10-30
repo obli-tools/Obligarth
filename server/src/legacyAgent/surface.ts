@@ -15,6 +15,7 @@ import { handleInventory } from './inventory';
 import { BucketLimiter, ConcurrencyLimiter, ReplayCache, WindowLimiter } from './limits';
 import { handlePackage, type PackageReply } from './packages';
 import { handlePoll } from './poll';
+import { handlePull, MAX_PULL_BODY } from './pull';
 import { legacyAgentRemote } from './remoteBridge';
 import { WaitBody } from './schemas';
 import { currentServerKey, signWith, type ServerKey } from './serverKey';
@@ -35,6 +36,7 @@ import { withAgentTransaction } from './session';
 //   POST /agent/v1/remote/<id>/accept   remote assistance (P0-15 §4.3): the session taken → its stream token
 //   POST /agent/v1/remote/<id>/end      the end of a session from the device's side
 //   POST /agent/v1/wait                 the long wait of the armed window (Obl-Seq 0, never numbered)
+//   POST /agent/v1/pull/<commandId>     a chunk of the APK of an open app.pull (agent 1.2.0, pull.ts)
 // Every request of /poll, /inventory, /icons, /packages and /remote is signed by
 // the agent's key (OBL-AGENT-1) and numbered (seq strictly increasing, written in
 // the transaction of its processing), /wait signed with seq 0 (its signatures
@@ -205,6 +207,8 @@ export const surfaceLimits = {
   remotePerAgent: new WindowLimiter(20, 60_000),
   waitPerAgent: new BucketLimiter(6, 10_000),
   waitReplays: new ReplayCache(2 * CLOCK_WINDOW_SECONDS * 1000),
+  // app.pull (agent 1.2.0): chunks of 1 MiB, a burst then one every second (100 MiB in a few minutes at most).
+  pullPerAgent: new BucketLimiter(20, 1_000),
 };
 
 const limited = (retryAfter: number): Reply => errorReply(429, 'rateLimited', 'Too many requests', {}, { 'Retry-After': String(retryAfter) });
@@ -329,6 +333,19 @@ export function createLegacyAgentSurface(): Router {
       const wait = surfaceLimits.remotePerAgent.hit(who.agentId);
       if (wait) return limited(wait);
       return step === 'accept' ? remote.accept(who, ex, sessionId, body) : remote.end(who, ex, sessionId, body);
+    })(req, res);
+  });
+
+  // POST /agent/v1/pull/<commandId> (agent 1.2.0): a chunk of the APK of an open app.pull of this device (pull.ts).
+  router.post(/^\/pull\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/, (req, res) => {
+    const commandId = String(req.params[0]);
+    void post('POST /agent/v1/pull/:commandId', MAX_PULL_BODY, 'numbered', async (ex, body) => {
+      const who = await authenticated(ex);
+      if (isReply(who)) return who;
+      locals(res).tenantId = who.tenantId;
+      const wait = surfaceLimits.pullPerAgent.take(who.agentId);
+      if (wait) return limited(wait);
+      return handlePull(who, ex, commandId, body);
     })(req, res);
   });
 

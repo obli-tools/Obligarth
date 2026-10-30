@@ -24,6 +24,7 @@ export function registerLegacyAgentAuditActions(): void {
     { name: 'legacy_agent.command_queued', criticality: 'standard', label: 'Android agent command queued' },
     { name: 'legacy_agent.command_cancelled', criticality: 'protective', label: 'Android agent command cancelled' },
     { name: 'legacy_agent.package_uploaded', criticality: 'standard', label: 'Android package uploaded' },
+    { name: 'legacy_agent.package_pulled', criticality: 'standard', label: 'Android package sent back by a device (app.pull)' },
     { name: 'legacy_agent.release_uploaded', criticality: 'critical', label: 'Android agent version uploaded' },
     { name: 'legacy_agent.release_withdrawn', criticality: 'critical', label: 'Android agent version withdrawn' },
     // Lot AGENT-RU: the version embedded in the server image, registered at start (system actor), in the transaction

@@ -4558,7 +4558,8 @@
       "wipe": "Effacer",
       "revoke": "Révoquer",
       "remoteView": "Voir l'écran",
-      "remoteControl": "Prendre la main"
+      "remoteControl": "Prendre la main",
+      "pull": "Récupérer un APK"
     },
     "cols": {
       "name": "Nom",
@@ -4763,6 +4764,10 @@
       "csvHint": "tout tableur",
       "xlsxHint": "filtres prêts",
       "scope": "La liste telle qu'affichée : ses filtres, sa recherche et son tri."
+    },
+    "pull": {
+      "button": "Récupérer l'APK depuis cet appareil",
+      "queued": "Demandé : l'APK apparaîtra dans Paquets dès que l'appareil l'aura envoyé."
     }
   },
   "android": {

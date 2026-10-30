@@ -6,6 +6,7 @@ import { safeErr } from '../jobs/errors';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { AUTO_UPDATE_JOB, autoUpdate } from './autoUpdate';
 import { expireDue } from './commands';
+import { HARVEST_JOB, harvestApks } from './harvest';
 
 // =============================================================================
 // Jobs of the bridge agent (docs: agent-pont-android §6):
@@ -21,6 +22,9 @@ import { expireDue } from './commands';
 //                                 than the latest version not withdrawn get
 //                                 an agent.update, in batches (autoUpdate.ts,
 //                                 lot AGENT-RU)
+//   legacy-agent.apk-harvest      every 15 minutes: the APKs of the fleet the
+//                                 tenant has no package of are asked of one
+//                                 device each (app.pull, harvest.ts)
 // The packages-gc and retention jobs are v1 (§15.4).
 // =============================================================================
 
@@ -126,5 +130,18 @@ export function registerLegacyAgentJobs(): void {
     pollSeconds: 300,
     deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 86_400, keepPendingSeconds: 3_600,
     handler: autoUpdate,
+  });
+  registerJob({
+    name: HARVEST_JOB,
+    scope: 'platform',
+    description: 'Every 15 minutes: the APKs of the fleet the tenant has no package of are asked of one device each (agent 1.2.0)',
+    payload: z.object({}).strict(),
+    policy: 'exclusive',
+    schedule: { cron: '7,22,37,52 * * * *' },
+    retry: { limit: 0, delaySeconds: 0, backoff: false },
+    timeoutSeconds: 300,
+    pollSeconds: 300,
+    deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 86_400, keepPendingSeconds: 3_600,
+    handler: harvestApks,
   });
 }

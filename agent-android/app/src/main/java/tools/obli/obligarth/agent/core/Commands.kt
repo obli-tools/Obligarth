@@ -32,6 +32,10 @@ object Codes {
     const val REMOTE_INJECTION_UNAVAILABLE = "remote_injection_unavailable"
     const val SESSION_GONE = "session_gone"
     const val AGENT_BUSY = "agent_busy"
+    // app.pull (1.2.0): the APK of an installed app sent back to the server.
+    const val PULLED = "pulled"
+    const val NOT_INSTALLED = "not_installed"
+    const val UPLOAD_FAILED = "upload_failed"
 }
 
 /** Result status of the contract (§4.5). */
@@ -72,7 +76,9 @@ enum class CommandType(val wire: String, val immediate: Boolean) {
     APP_UNINSTALL("app.uninstall", false),
     AGENT_UPDATE("agent.update", false),
     /** 1.1.0 (P0-15 §4.3, §0.1): a remote assistance session, opened at once and told to the user. */
-    REMOTE_OPEN("remote.open", true);
+    REMOTE_OPEN("remote.open", true),
+    /** 1.2.0: the APK of an installed app sent back by chunks (POST /agent/v1/pull/<id>), in the install queue. */
+    APP_PULL("app.pull", false);
 
     companion object {
         fun of(wire: String?): CommandType? = values().firstOrNull { it.wire == wire }
@@ -89,6 +95,7 @@ sealed class Params {
         val sha256: String, val size: Long, val signerSha256: String?,
     ) : Params()
     data class Uninstall(val packageName: String) : Params()
+    data class Pull(val packageName: String) : Params()
     data class AgentUpdate(val releaseId: String, val versionCode: Long, val sha256: String, val size: Long) : Params()
     /**
      * remote.open (§4.3): operator and operatorOrg are filled by the server (shown to the user in the notifications);
@@ -172,6 +179,7 @@ object CommandParser {
             ) null else Params.Install(packageId, name!!, vc, sha, size, signer)
         }
         CommandType.APP_UNINSTALL -> p.str("packageName")?.takeIf { isPackageName(it) }?.let { Params.Uninstall(it) }
+        CommandType.APP_PULL -> p.str("packageName")?.takeIf { isPackageName(it) }?.let { Params.Pull(it) }
         CommandType.AGENT_UPDATE -> {
             val releaseId = p.str("releaseId")
             val vc = p.long("versionCode")

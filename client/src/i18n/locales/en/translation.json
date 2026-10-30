@@ -4558,7 +4558,8 @@
       "wipe": "Erase",
       "revoke": "Revoke",
       "remoteView": "See the screen",
-      "remoteControl": "Take control"
+      "remoteControl": "Take control",
+      "pull": "Get an APK back"
     },
     "cols": {
       "name": "Name",
@@ -4763,6 +4764,10 @@
       "csvHint": "any spreadsheet",
       "xlsxHint": "filters ready",
       "scope": "The list as shown: its filters, its search and its sort."
+    },
+    "pull": {
+      "button": "Get the APK from this device",
+      "queued": "Requested: the APK will appear in Packages once the device sent it."
     }
   },
   "android": {
