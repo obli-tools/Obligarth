@@ -94,4 +94,48 @@ object Notifications {
     }
 
     fun cancelInstallPrompt(ctx: Context, commandId: String) = nm(ctx).cancel(TAG_INSTALL, commandId.hashCode())
+
+    // ---- Policy (1.3.0, lot PONT-POL): what the policy needs from the person holding the device ----
+
+    private const val TAG_POLICY = "policy"
+    const val NEED_STORAGE = 1
+    const val NEED_HOME = 2
+    const val NEED_ADMIN_POLICIES = 3
+    const val NEED_PASSWORD = 4
+
+    /** A need of the policy (storage access, default home, new admin permissions): opens the status screen. */
+    fun policy(ctx: Context, need: Int, text: Int) {
+        nm(ctx).notify(
+            TAG_POLICY, need,
+            Notification.Builder(ctx)
+                .setSmallIcon(R.drawable.ic_agent)
+                .setContentTitle(ctx.getString(R.string.policy_need_title))
+                .setContentText(ctx.getString(text))
+                .setStyle(Notification.BigTextStyle().bigText(ctx.getString(text)))
+                .setOngoing(true)
+                .setContentIntent(openSetup(ctx))
+                .build(),
+        )
+    }
+
+    fun cancelPolicy(ctx: Context, need: Int) = nm(ctx).cancel(TAG_POLICY, need)
+
+    /** The password does not meet the policy: opens ACTION_SET_NEW_PASSWORD. */
+    fun passwordChange(ctx: Context) {
+        val pi = PendingIntent.getActivity(
+            ctx, NEED_PASSWORD, Intent(android.app.admin.DevicePolicyManager.ACTION_SET_NEW_PASSWORD).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+        nm(ctx).notify(
+            TAG_POLICY, NEED_PASSWORD,
+            Notification.Builder(ctx)
+                .setSmallIcon(R.drawable.ic_agent)
+                .setContentTitle(ctx.getString(R.string.policy_need_title))
+                .setContentText(ctx.getString(R.string.policy_need_password))
+                .setPriority(Notification.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pi)
+                .build(),
+        )
+    }
 }

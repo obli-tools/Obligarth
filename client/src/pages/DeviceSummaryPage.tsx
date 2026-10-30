@@ -27,6 +27,7 @@ import { DeviceHistoryTab } from '@/components/mdm/DeviceHistoryTab';
 import { DeviceHero } from '@/components/mdm/device/DeviceHero';
 import { DeviceOverview, LOCATION_ANCHOR } from '@/components/mdm/device/DeviceOverview';
 import { LegacyActionsTab, LegacyCommandsTab } from '@/components/mdm/device/LegacyActionsTab';
+import { LegacyPolicyTab } from '@/components/mdm/device/LegacyPolicyTab';
 import { LostModeBanner } from '@/components/mdm/device/LostModeBanner';
 import { DeviceRemoteTab } from '@/components/remote/DeviceRemoteTab';
 import { channelOf, useDeviceActions } from '@/components/mdm/device/useDeviceActions';
@@ -39,14 +40,14 @@ import { apiErrorMessage } from '@/utils/apiError';
 // view, applications, configuration, profiles, certificates, commands (the queue of the channel), history, actions,
 // and the remote assistance sessions of a device of the bridge agent (P0-15).
 
-type Tab = 'overview' | 'android' | 'configuration' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions' | 'remote';
-const TABS: Tab[] = ['overview', 'android', 'configuration', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions', 'remote'];
+type Tab = 'overview' | 'android' | 'configuration' | 'agentPolicy' | 'apps' | 'profiles' | 'certificates' | 'commands' | 'history' | 'actions' | 'remote';
+const TABS: Tab[] = ['overview', 'android', 'configuration', 'agentPolicy', 'apps', 'profiles', 'certificates', 'commands', 'history', 'actions', 'remote'];
 /** The tabs of each channel, in their order. */
 const CHANNEL_TABS: Record<ManagementChannel, Tab[]> = {
   apple_mdm: ['overview', 'apps', 'configuration', 'profiles', 'certificates', 'commands', 'history', 'actions'],
   amapi: ['overview', 'android', 'apps', 'configuration', 'commands', 'history', 'actions'],
   // remote: the remote assistance sessions of the device (P0-15 §7).
-  legacy_agent: ['overview', 'apps', 'commands', 'history', 'actions', 'remote'],
+  legacy_agent: ['overview', 'agentPolicy', 'apps', 'commands', 'history', 'actions', 'remote'],
 };
 
 /** The shape of the record while it loads: header, figures, cards (no spinner in the middle of the page). */
@@ -208,6 +209,7 @@ export function DeviceSummaryPage() {
     overview: { id: 'overview', label: t('deviceSummary.tabs.overview') || 'Overview', icon: <LayoutGrid size={15} /> },
     android: { id: 'android', label: t('deviceSummary.tabs.android') || 'Android', icon: <Smartphone size={15} /> },
     configuration: { id: 'configuration', label: t('deviceSummary.tabs.configuration') || 'Configuration', icon: <SlidersHorizontal size={15} /> },
+    agentPolicy: { id: 'agentPolicy', label: t('deviceSummary.tabs.agentPolicy') || 'Agent policy', icon: <SlidersHorizontal size={15} /> },
     apps: { id: 'apps', label: t('deviceSummary.tabs.apps') || 'Applications', icon: <Package size={15} /> },
     profiles: { id: 'profiles', label: t('deviceSummary.tabs.profiles') || 'Profiles', icon: <ScrollText size={15} /> },
     certificates: { id: 'certificates', label: t('deviceSummary.tabs.certificates') || 'Certificates', icon: <KeyRound size={15} /> },
@@ -255,6 +257,7 @@ export function DeviceSummaryPage() {
         ? <LegacyCommandsTab deviceId={device.id} canAct={canWrite} onChanged={deviceActions.reload} />
         : <DeviceCommandsTab deviceId={device.id} canAct={canWrite} />)}
       {current === 'history' && <DeviceHistoryTab deviceId={device.id} />}
+      {current === 'agentPolicy' && channel === 'legacy_agent' && <LegacyPolicyTab deviceId={device.id} canAct={canWrite} />}
       {current === 'remote' && <DeviceRemoteTab deviceId={device.id} canAct={canWrite} />}
       {current === 'android' && channel === 'amapi' && <AndroidDeviceTab deviceId={device.id} canAct={canWrite} />}
       {current === 'actions' && (channel === 'amapi'

@@ -49,4 +49,34 @@
     <string name="remote_ended_title">Assistance à distance terminée</string>
     <string name="remote_ended_text">%1$s a fermé la session d\'assistance à %2$s (durée %3$s).</string>
     <string name="remote_ended_text_short">La session d\'assistance de %1$s s\'est terminée à %2$s, avant l\'envoi de toute image.</string>
+    <!-- Politiques (1.3.0, lot PONT-POL) : la carte d'état, ce que la politique demande, le kiosque. -->
+    <string name="label_policy">Politique</string>
+    <string name="label_policy_state">État de la politique</string>
+    <string name="label_policy_items">Conformes / non conformes / en attente / licence / erreurs</string>
+    <string name="policy_none">Aucune politique appliquée.</string>
+    <string name="action_storage_permission">Autoriser l\'accès au stockage</string>
+    <string name="action_location_permission">Autoriser la recherche Wi-Fi (localisation)</string>
+    <string name="action_set_home">Définir Obligarth comme écran d\'accueil</string>
+    <string name="action_grant_admin_policies">Accorder les nouvelles autorisations</string>
+    <string name="action_change_password">Changer le mot de passe de verrouillage</string>
+    <string name="admin_policies_explanation">Votre service informatique applique de nouveaux réglages à cet appareil d\'entreprise (mot de passe, appareil photo, verrouillage de l\'écran). Appuyez sur ACTIVER pour les autoriser.</string>
+    <string name="policy_need_title">Action demandée par votre service informatique</string>
+    <string name="policy_need_storage">Touchez pour autoriser l\'Agent Obligarth à déposer des fichiers de l\'entreprise sur cet appareil.</string>
+    <string name="policy_need_home">Touchez pour définir Obligarth comme écran d\'accueil de cet appareil.</string>
+    <string name="policy_need_admin_policies">Touchez pour accorder les nouvelles autorisations de l\'Agent Obligarth.</string>
+    <string name="policy_need_password">Le mot de passe de verrouillage ne respecte pas les règles de l\'entreprise. Touchez pour le changer.</string>
+    <string name="kiosk_suspended_banner">Kiosque suspendu jusqu\'à %1$s</string>
+    <string name="kiosk_tile_settings">Paramètres</string>
+    <string name="kiosk_tile_all_apps">Toutes les applications</string>
+    <string name="kiosk_tile_refused">Cette tuile n\'est pas autorisée.</string>
+    <string name="kiosk_app_missing">Cette application n\'est pas installée.</string>
+    <string name="kiosk_tile_failed">Cette tuile n\'a pas pu s\'ouvrir.</string>
+    <string name="kiosk_pin_title">Accès administrateur</string>
+    <string name="kiosk_pin_hint">Code PIN</string>
+    <string name="kiosk_pin_wrong">PIN incorrect. Essais restants : %1$d</string>
+    <string name="kiosk_pin_locked">Trop d\'essais. Réessayez dans %1$d min.</string>
+    <string name="kiosk_admin_title">Administration</string>
+    <string name="kiosk_admin_leave">Quitter le kiosque pendant %1$d min</string>
+    <string name="kiosk_admin_status">État de l\'agent</string>
+    <string name="kiosk_admin_settings">Paramètres Android</string>
 </resources>

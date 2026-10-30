@@ -1,6 +1,6 @@
 import {
-  ANDROID_MODES, APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
-  type AssignmentTargetScope, type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
+  AGENT_CUSTOM_VARIABLE_PREFIX, AGENT_WIPE_KEY, ANDROID_MODES, APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
+  type AgentTemplateVariable, type AssignmentTargetScope, type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
   type SettingKind, type SourceScope,
 } from '@obligarth/shared';
 import type { AppleCatalogView } from '../apple/catalog';
@@ -64,6 +64,11 @@ export interface ResolutionDevice {
   /** The dynamic groups the device is a member of (smart_group_members, P0-5 T6), by id; absent: none (a fictitious
    *  device, an enrollment policy). */
   smartGroupIds?: number[];
+  /** devices.custom_fields, string values only (64 keys at most): the {{device.custom.<name>}} of the bridge agent's
+   *  file templates (lot PONT-POL); absent: none. */
+  customFields?: Record<string, string>;
+  /** The bridge agent's key withdrawn (legacy_agent_devices.revoked_at): its agent:* keys stop applying (D5). */
+  revoked?: boolean;
 }
 
 export interface ResolutionAssignment {
@@ -107,7 +112,7 @@ export interface ResolutionInput {
 /** A retained setting, with what the writer and the impact preview need besides the stored row. */
 export interface ResolvedSetting extends EffectiveSetting {
   type: string;
-  kind: SettingKind | 'android';
+  kind: SettingKind | 'android' | 'agent';
   key: string | null;
   instance: string | null;
   /** The winning value (secrets as references, variables as templates); absent for a tombstone. For the
@@ -137,8 +142,15 @@ const compareCandidates = (x: Candidate, y: Candidate): number =>
   || (x.res.type < y.res.type ? -1 : x.res.type > y.res.type ? 1 : 0)
   || x.res.tenantId - y.res.tenantId || x.res.id - y.res.id || x.a.id - y.a.id;
 
-/** The value of a variable for a device; null when it has none (absent, or empty). */
-export function variableValue(name: PolicyVariable, d: ResolutionDevice, tenant: { name: string; slug: string }): string | null {
+/** The value of a variable for a device; null when it has none (absent, or empty). A custom field of the device
+ *  ({{device.custom.<name>}}) is read only for a setting of the bridge agent (kind 'agent', lot PONT-POL §5.4). */
+export function variableValue(name: PolicyVariable | AgentTemplateVariable, d: ResolutionDevice, tenant: { name: string; slug: string },
+  kind?: string): string | null {
+  if (name.startsWith(AGENT_CUSTOM_VARIABLE_PREFIX)) {
+    if (kind !== 'agent') return null;
+    const v = d.customFields?.[name.slice(AGENT_CUSTOM_VARIABLE_PREFIX.length)];
+    return typeof v === 'string' && v.trim() !== '' ? v : null;
+  }
   const v = ((): string | null | undefined => {
     switch (name) {
       case 'device.uuid': return d.uuid;
@@ -167,11 +179,19 @@ export function appViaDeclaration(d: ResolutionDevice, app: NonNullable<Contribu
 }
 
 function availabilityOf(input: ResolutionInput, d: ResolutionDevice, c: Contribution): SettingAvailability {
-  const unresolved = c.variables.find((v) => variableValue(v, d, input.tenant) === null) ?? null;
-  // An Android key (lot AN-A2): the devices of the channel amapi only, known by their mode (the bridge agent,
-  // channel legacy_agent, is 'device_admin' and has no policy in v0: agent-pont-android §2, review PONT-R); the
-  // compilation of the Android module checks each field against the device (API level, mode, ownership:
-  // mdm/android/availability.ts).
+  const unresolved = c.variables.find((v) => variableValue(v, d, input.tenant, c.kind) === null) ?? null;
+  // A key of the bridge agent (lot PONT-POL §5.4): the devices of the channel legacy_agent only, their agent not
+  // revoked (D5); the wipe threshold on corporate devices only (B3). Its own section: the android kind stays AMAPI's.
+  if (c.kind === 'agent') {
+    if (d.channel !== 'legacy_agent') return { status: 'not_applicable', reason: 'platform_unsupported' };
+    if (d.revoked) return { status: 'not_applicable', reason: 'device_revoked' };
+    if (c.settingKey === AGENT_WIPE_KEY && d.ownership !== 'corporate') return { status: 'not_applicable', reason: 'ownership_forbidden' };
+    if (unresolved) return { status: 'not_applicable', reason: 'variable_unresolved', detail: unresolved };
+    return { status: 'available' };
+  }
+  // An Android key (lot AN-A2): the devices of the channel amapi only, known by their mode (the bridge agent, channel
+  // legacy_agent, is 'device_admin': its policies are the section legacyAgent above, kind 'agent'); the compilation of
+  // the Android module checks each field against the device (API level, mode, ownership: mdm/android/availability.ts).
   if (c.kind === 'android') {
     if (d.platform !== 'android' || !(ANDROID_MODES as readonly string[]).includes(d.mode)) {
       return { status: 'not_applicable', reason: 'platform_unsupported' };

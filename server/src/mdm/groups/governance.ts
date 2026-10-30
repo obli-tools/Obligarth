@@ -584,7 +584,7 @@ export async function executeDeviceFactsChange(x: ApprovalExecution): Promise<vo
     refuseUnlessAsApproved(approved!, now, 'request the change again');
     if (!(await writeDevicePatch(trx, x.tenantId, deviceId, change.patch))) refuse('The device of this request is no longer in the tenant');
     await requestGroupEvaluation(trx, x.tenantId, [deviceId]);
-    if (change.patch.displayName !== undefined) await requestDeviceResolution(trx, x.tenantId, [deviceId]);
+    if (change.patch.displayName !== undefined || change.patch.customFields !== undefined) await requestDeviceResolution(trx, x.tenantId, [deviceId]);
   }, { unbounded: true });
   await audit.append({
     tenantId: x.tenantId, action: 'device.updated', target: { type: 'device', id: String(deviceId), device: deviceId },

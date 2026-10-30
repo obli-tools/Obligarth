@@ -126,6 +126,8 @@ interface DeviceActions {
     fun inspectArchive(apk: File): ArchiveInfo?
     /** 1.2.0 (app.pull): the base APK of an installed package, null when absent or split (several APKs). */
     fun installedApk(packageName: String): InstalledApk? = null
+    /** 1.3.0 (lot PONT-POL): what the policy applies through; the default supports nothing (fakes written before). */
+    fun policyHost(): PolicyHost = object : PolicyHost {}
 }
 
 /** The installed APK of a package (app.pull): its file (readable by any app up to Android 10) and its identity. */

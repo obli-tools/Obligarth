@@ -14,7 +14,11 @@ import tools.obli.obligarth.agent.core.Phase
 import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** Device administrator (spec §8.2): force-lock and wipe-data only. */
+/**
+ * Device administrator (spec §8.2): force-lock and wipe-data, plus since 1.3.0 (lot PONT-POL, D11) the policies of the
+ * agent policy: limit-password, watch-login, expire-password, encrypted-storage, disable-camera, disable-keyguard-features
+ * (never reset-password). An administrator activated before 1.3.0 holds the new ones only once granted (D12).
+ */
 class AgentAdminReceiver : DeviceAdminReceiver() {
     override fun onEnabled(context: Context, intent: Intent) {
         val rt = AgentRuntime.get(context)
@@ -23,6 +27,8 @@ class AgentAdminReceiver : DeviceAdminReceiver() {
         rt.applyKnoxAndKeepAlive()
         rt.refreshStatusNotification()
         PollScheduler.pollNow(context)
+        // 1.3.0: the policy applied again at once (the administrator's policies may just have been granted).
+        rt.requestReconcile()
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {

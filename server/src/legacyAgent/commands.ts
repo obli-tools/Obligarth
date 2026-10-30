@@ -128,7 +128,22 @@ const SPECS: Record<LegacyAgentCommandType, CommandSpec> = {
     params: z.object({ packageName: z.string().max(255).regex(PACKAGE_RE).refine(notAgent, 'the agent package is refused') }).strict(),
     capability: 'mdm:apps', restrictionKey: 'legacy_agent.apps', guardedBy: null, lifetimeSeconds: DAY,
   },
+  // Agent 1.3.0 (lot PONT-POL §8.5): the kiosk of the agent policy left for some minutes, and the policy applied again
+  // from a full configuration. Both immediate on the device; the console also needs mdm.policies.manage (routes.ts). No
+  // secret: the console lists the queue.
+  'kiosk.suspend': {
+    type: 'kiosk.suspend', params: z.object({ minutes: z.number().int().min(1).max(240) }).strict(),
+    capability: 'mdm:profiles', restrictionKey: null, guardedBy: null, lifetimeSeconds: DAY,
+  },
+  'policy.reapply': {
+    type: 'policy.reapply', params: z.object({}).strict(), capability: 'mdm:profiles', restrictionKey: null, guardedBy: null,
+    lifetimeSeconds: DAY,
+  },
 };
+
+/** The command types of the agent policy (lot PONT-POL): the console also needs mdm.policies.manage, and an agent older
+ *  than 1.3.0 does not know them (the menu greys them: agentTooOld). */
+export const POLICY_COMMAND_TYPES: readonly string[] = ['kiosk.suspend', 'policy.reapply'];
 
 /** The request of a remote assistance session (P0-15 §4.3): never a console command. */
 export const REMOTE_OPEN = 'remote.open';
@@ -237,7 +252,7 @@ async function eligible(trx: Knex.Transaction, tenantId: number, ids: number[]):
 
 /** The wake of the long waits of `deviceIds` once the outermost transaction committed (remoteBridge.ts); never on a
  *  rollback, never throws. */
-function wakeAfterCommit(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): void {
+export function wakeAfterCommit(trx: Knex.Transaction, tenantId: number, deviceIds: number[]): void {
   const bridge = legacyAgentRemote();
   if (!bridge) return;
   let outer = trx as Knex.Transaction & { parentTransaction?: Knex.Transaction };

@@ -7,11 +7,13 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.widget.Button
@@ -22,6 +24,7 @@ import android.widget.TextView
 import android.widget.Toast
 import tools.obli.obligarth.agent.core.KnoxLicence
 import tools.obli.obligarth.agent.core.Phase
+import tools.obli.obligarth.agent.core.PolicyCodes
 import java.text.DateFormat
 import java.util.Date
 
@@ -32,6 +35,12 @@ import java.util.Date
  */
 class SetupActivity : Activity() {
     private lateinit var statusView: TextView
+    private lateinit var policyView: TextView
+    private lateinit var storageButton: Button
+    private lateinit var locationButton: Button
+    private lateinit var homeButton: Button
+    private lateinit var grantButton: Button
+    private lateinit var passwordButton: Button
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -70,6 +79,35 @@ class SetupActivity : Activity() {
             PollScheduler.pollNow(this)
             Toast.makeText(this, R.string.toast_poll_requested, Toast.LENGTH_SHORT).show()
         })
+
+        // 1.3.0 (lot PONT-POL): the policy card, and what the policy needs from the person holding the device.
+        policyView = TextView(this).apply {
+            setTextIsSelectable(true)
+            setPadding(0, pad, 0, pad / 2)
+        }
+        root.addView(policyView)
+        storageButton = button(R.string.action_storage_permission) {
+            requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE, Manifest.permission.READ_EXTERNAL_STORAGE), REQUEST_STORAGE)
+        }.also { root.addView(it) }
+        // preferOver (C2): the Wi-Fi scan needs the location permission (and the location on).
+        locationButton = button(R.string.action_location_permission) {
+            if (checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION), REQUEST_STORAGE)
+            } else try {
+                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            } catch (e: Exception) {
+                rt.log.warn("location settings: ${e.javaClass.simpleName}")
+            }
+        }.also { root.addView(it) }
+        homeButton = button(R.string.action_set_home) { setAsHome() }.also { root.addView(it) }
+        grantButton = button(R.string.action_grant_admin_policies) { grantAdminPolicies() }.also { root.addView(it) }
+        passwordButton = button(R.string.action_change_password) {
+            try {
+                startActivity(Intent(DevicePolicyManager.ACTION_SET_NEW_PASSWORD))
+            } catch (e: Exception) {
+                rt.log.warn("password change screen: ${e.javaClass.simpleName}")
+            }
+        }.also { root.addView(it) }
 
         root.addView(TextView(this).apply {
             text = getString(R.string.manual_config_label)
@@ -185,6 +223,73 @@ class SetupActivity : Activity() {
             getString(R.string.label_last_status) to (s.lastStatus ?: "-"),
             getString(R.string.label_version) to "${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
         ).joinToString("\n") { (k, v) -> "$k : $v" }
+        renderPolicy()
+    }
+
+    /** The policy card (1.3.0): hash, state and counts of the last report; the buttons of what it needs. */
+    private fun renderPolicy() {
+        if (!::policyView.isInitialized) return
+        val rt = AgentRuntime.get(this)
+        val s = rt.state
+        val report = s.policyReport
+        val hash = s.policyHash
+        val codes = report?.items.orEmpty().filter { it.state != "compliant" }.map { it.code }.toSet()
+        val counts = report?.items.orEmpty().groupingBy { it.state }.eachCount()
+        policyView.text = if (hash == null) getString(R.string.policy_none) else listOf(
+            getString(R.string.label_policy) to hash.take(8),
+            getString(R.string.label_policy_state) to (report?.state ?: "-"),
+            getString(R.string.label_policy_items) to listOf("compliant", "non_compliant", "pending", "pending_licence", "error")
+                .joinToString(" / ") { "${counts[it] ?: 0}" },
+        ).joinToString("\n") { (k, v) -> "$k : $v" }
+        val storageMissing = checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        storageButton.visibility = if (hash != null && storageMissing) View.VISIBLE else View.GONE
+        val scanBlocked = report?.items.orEmpty().any { it.detail == WifiApplier.SCAN_UNAVAILABLE || it.detail == WifiApplier.LOCATION_OFF }
+        locationButton.visibility = if (hash != null && scanBlocked) View.VISIBLE else View.GONE
+        homeButton.visibility = if (PolicyCodes.HOME_NOT_DEFAULT in codes) View.VISIBLE else View.GONE
+        grantButton.visibility = if (PolicyCodes.ADMIN_POLICY_MISSING in codes) View.VISIBLE else View.GONE
+        passwordButton.visibility = if (PolicyCodes.PASSWORD_INSUFFICIENT in codes) View.VISIBLE else View.GONE
+    }
+
+    @Deprecated("Activity result API of the platform")
+    @Suppress("DEPRECATION")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_STORAGE) {
+            AgentRuntime.get(this).requestReconcile()
+            render()
+        }
+    }
+
+    /**
+     * The kiosk needs the agent as the default home: the system chooser ("Always"), or, when another launcher holds
+     * the default, its app details so its defaults can be cleared first.
+     */
+    private fun setAsHome() {
+        val rt = AgentRuntime.get(this)
+        val current = rt.policyApplier.kiosk.defaultHome()
+        val i = if (current != null && current != "android" && current != packageName) {
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", current, null))
+        } else Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        try {
+            startActivity(i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        } catch (e: Exception) {
+            rt.log.warn("set as home: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** D12: the policies declared since the activation granted by the system's refresh screen (one tap). */
+    private fun grantAdminPolicies() {
+        val rt = AgentRuntime.get(this)
+        try {
+            startActivity(
+                Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
+                    .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, rt.facts.adminComponent())
+                    .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, getString(R.string.admin_policies_explanation)),
+            )
+        } catch (e: Exception) {
+            rt.log.warn("grant admin policies: ${e.javaClass.simpleName}")
+            openAdminSettings()
+        }
     }
 
     /** The state shown, translated; the code itself goes to the server as is (AndroidFacts). */
@@ -206,6 +311,7 @@ class SetupActivity : Activity() {
 
     companion object {
         const val ACTION_ACTIVATE_ADMIN = "tools.obli.obligarth.agent.action.ACTIVATE_ADMIN"
+        private const val REQUEST_STORAGE = 2
     }
 }
 

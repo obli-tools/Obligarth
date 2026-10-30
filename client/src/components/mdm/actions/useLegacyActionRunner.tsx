@@ -27,6 +27,8 @@ const LABEL: Record<LegacyType, { key: string; fallback: string }> = {
   'inventory.refresh': { key: 'legacyAgent.actions.inventory', fallback: 'Inventory' },
   'remote.view': { key: 'legacyAgent.actions.remoteView', fallback: 'See the screen' },
   'remote.control': { key: 'legacyAgent.actions.remoteControl', fallback: 'Take control' },
+  'kiosk.suspend': { key: 'legacyAgentPolicy.actions.suspendKiosk', fallback: 'Suspend the kiosk' },
+  'policy.reapply': { key: 'legacyAgentPolicy.actions.reapply', fallback: 'Re-apply the policy' },
 };
 /** The guarded action of lock and erase when the menu does not name it. */
 const GUARD_KEY: Partial<Record<LegacyType, string>> = { 'device.lock': 'legacy_agent.device_lock', 'device.wipe': 'legacy_agent.erase_device' };
@@ -51,6 +53,8 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
   const [mode, setMode] = useState<'notification' | 'fullscreen'>('notification');
   const [busy, setBusy] = useState<string | null>(null);
   const [remoteMode, setRemoteMode] = useState<RemoteMode | null>(null);
+  const [suspendOpen, setSuspendOpen] = useState(false);
+  const [minutes, setMinutes] = useState('15');
   // The latest callback (the caller's reload changes with its state).
   const queued = useRef(onQueued);
   useEffect(() => { queued.current = onQueued; }, [onQueued]);
@@ -84,6 +88,18 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
     if (a.type === 'device.message') {
       setTitle(''); setText(''); setMode('notification');
       setMessageOpen(true);
+      return;
+    }
+    // The agent policy (agent 1.3.0, lot PONT-POL): the kiosk left for some minutes; the policy applied again in full.
+    if (a.type === 'kiosk.suspend') {
+      setMinutes('15');
+      setSuspendOpen(true);
+      return;
+    }
+    if (a.type === 'policy.reapply') {
+      void (async () => {
+        if (await confirm({ message: t('legacyAgentPolicy.actions.reapplyConfirm') || 'Apply the whole policy again on this device at its next poll?' })) void send('policy.reapply', {});
+      })();
       return;
     }
     if (a.type === 'device.reboot') {
@@ -145,6 +161,33 @@ export function useLegacyActionRunner({ deviceId, onQueued }: { deviceId: number
           onDone={() => { setGuarded(null); queued.current?.(); }}
         />
       )}
+
+      <Modal
+        open={suspendOpen}
+        onClose={() => setSuspendOpen(false)}
+        size="sm"
+        title={t('legacyAgentPolicy.actions.suspendKiosk') || 'Suspend the kiosk'}
+        footer={(
+          <>
+            <Button variant="secondary" onClick={() => setSuspendOpen(false)}>{t('common.cancel') || 'Cancel'}</Button>
+            <Button
+              disabled={!/^[0-9]{1,3}$/.test(minutes) || Number(minutes) < 1 || Number(minutes) > 240}
+              loading={busy === 'kiosk.suspend'}
+              onClick={async () => { if (await send('kiosk.suspend', { minutes: Number(minutes) })) setSuspendOpen(false); }}
+            >
+              {t('legacyAgent.send') || 'Send'}
+            </Button>
+          </>
+        )}
+      >
+        <div className="space-y-2 text-sm">
+          <p className="text-text-muted">{t('legacyAgentPolicy.actions.suspendHelp') || 'The device leaves its kiosk for this time, then returns to it.'}</p>
+          <label className="block">
+            <span className="text-xs text-text-muted">{t('legacyAgentPolicy.actions.minutes') || 'Minutes (1 to 240)'}</span>
+            <input className={fieldCls} inputMode="numeric" maxLength={3} value={minutes} onChange={(e) => setMinutes(e.target.value.replace(/[^0-9]/g, ''))} />
+          </label>
+        </div>
+      </Modal>
 
       <RemoteOpenDialog deviceId={deviceId} mode={remoteMode} onClose={() => setRemoteMode(null)} />
     </>

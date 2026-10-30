@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
+import { LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
 import { audit } from '../audit';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
@@ -7,8 +7,11 @@ import { LEGACY_AGENT_ACTOR } from './actor';
 import { agentConfigFor } from './agentConfig';
 import { acknowledgeUpdates, applyResults, deliver, REMOTE_OPEN } from './commands';
 import { instanceSettings } from './config';
+import { markPolicyDelivered, markPolicyUndeliverable } from './policyDelivery';
+import { recordPolicyReport } from './policyReport';
 import { legacyAgentRemote } from './remoteBridge';
-import { PollBody } from './schemas';
+import { PolicyReport, PollBody } from './schemas';
+import { logger } from '../utils/logger';
 import { withAgentTransaction, type Satellite } from './session';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
 import { writeStatusItems } from './status';
@@ -27,6 +30,10 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // agent's result of it applied; the configuration follows the agent's version.
 // An agent below legacy_agent_min_version_code gets 426 agentTooOld with the
 // same body, whose commands are agent.update and inventory.refresh only.
+// An agent 1.3.0 or later (lot PONT-POL §8.4): its policy report checked apart
+// (a refused one answers policyReport 'rejected', never a 400), recorded after
+// the events; its policy marked delivered when the answer carries it in full.
+// An older agent's poll writes nothing of the policies.
 // =============================================================================
 
 const TOO_OLD_TYPES = ['agent.update', 'inventory.refresh'] as const;
@@ -101,6 +108,22 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
     if (remote) for (const r of results.applied_rows) if (r.type === REMOTE_OPEN) await remote.resulted(trx, { commandId: r.id, status: r.status, code: r.code });
     await acknowledgeUpdates(trx, who.tenantId, who.deviceId, body.agent.versionCode);
     await applyEvents(trx, who, body, sat);
+    const policyAgent = body.agent.versionCode >= LEGACY_AGENT_POLICY_MIN_VERSION_CODE;
+    let policyReport: 'accepted' | 'rejected' | undefined;
+    if (policyAgent && body.policy !== undefined) {
+      const report = PolicyReport.safeParse(body.policy);
+      const recorded = report.success ? await recordPolicyReport(trx, who.tenantId, who.deviceId, report.data, serverTime - ex.ts) : null;
+      if (recorded !== null) {
+        policyReport = 'accepted';
+      } else if (report.success) {
+        logger.warn({ tenantId: who.tenantId, deviceId: who.deviceId }, 'legacy agent: policy report refused (too large for its table)');
+        policyReport = 'rejected';
+      } else {
+        logger.warn({ tenantId: who.tenantId, deviceId: who.deviceId, path: report.error.issues[0]?.path.join('.').slice(0, 80) ?? '' },
+          'legacy agent: policy report refused');
+        policyReport = 'rejected';
+      }
+    }
 
     // 3. The commands.
     const tooOld = settings.minVersionCode > 0 && body.agent.versionCode < settings.minVersionCode;
@@ -111,10 +134,16 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
     });
     const inventoryDue = !sat.last_inventory_at || sat.inventory_requested_at !== null
       || now.getTime() - new Date(sat.last_inventory_at).getTime() > settings.inventorySeconds * 1000;
-    const config = await agentConfigFor(trx, who.tenantId, { deviceId: who.deviceId, versionCode: body.agent.versionCode });
+    const conf = await agentConfigFor(trx, who.tenantId, { deviceId: who.deviceId, versionCode: body.agent.versionCode },
+      body.agent.configVersion ?? null);
+    if (policyAgent && conf.config) {
+      if (conf.deliveredPolicyHash) await markPolicyDelivered(trx, who.tenantId, who.deviceId, conf.deliveredPolicyHash);
+      // Only a secret of the policy itself: the Knox key alone never touches the policy's state.
+      if (conf.policyDegraded) await markPolicyUndeliverable(trx, who.tenantId, who.deviceId);
+    }
     const out = {
-      serverTime, pollSeconds, resultsAccepted: results.accepted, inventoryDue, commands,
-      config: body.agent.configVersion === config.version ? null : config,
+      serverTime, pollSeconds, resultsAccepted: results.accepted, inventoryDue, commands, config: conf.config,
+      ...(policyReport ? { policyReport } : {}),
     };
     if (tooOld) return { status: 426, body: { success: false, error: 'This version of the agent is too old: update it', code: 'agentTooOld', ...out } };
     return { status: 200, body: out };

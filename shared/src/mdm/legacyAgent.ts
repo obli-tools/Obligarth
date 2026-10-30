@@ -1,9 +1,11 @@
 // =============================================================================
 // Android bridge agent, channel 'legacy_agent' (docs: agent-pont-android §4,
 // §5, §7): the vocabulary of the frozen contract between the agent and the
-// server, and the views of the console. No import: the client and the unit
-// tests load it as is.
+// server, and the views of the console. No import but types: the client and
+// the unit tests load it as is.
 // =============================================================================
+
+import type { AgentPolicyReportItem, AgentPolicyReportState } from './legacyAgentPolicy';
 
 /** Command types of v0 (§5.1). agent.retire is v1 (§15.4). remote.open (P0-15 §4.3): the request of a remote
  *  assistance session, enqueued by server/src/remote only (origin 'remote'), never by a console request. app.pull
@@ -12,8 +14,13 @@
 export const LEGACY_AGENT_COMMAND_TYPES = [
   'inventory.refresh', 'device.message', 'device.lock', 'device.wipe', 'device.reboot',
   'app.install', 'app.uninstall', 'agent.update', 'remote.open', 'app.pull',
+  // Agent 1.3.0 (lot PONT-POL): the kiosk suspended for some minutes; the policy applied again from a full configuration.
+  'kiosk.suspend', 'policy.reapply',
 ] as const;
 export type LegacyAgentCommandType = typeof LEGACY_AGENT_COMMAND_TYPES[number];
+
+/** The command types an agent older than 1.3.0 does not know (the console greys them: agentTooOld). */
+export const LEGACY_AGENT_POLICY_COMMAND_TYPES = ['kiosk.suspend', 'policy.reapply'] as const;
 
 /** The types the guard engine alone enqueues (§5.2, I24). */
 export const LEGACY_AGENT_GUARDED_TYPES = ['device.wipe', 'device.lock'] as const;
@@ -21,6 +28,7 @@ export const LEGACY_AGENT_GUARDED_TYPES = ['device.wipe', 'device.lock'] as cons
 /** The types a console request enqueues directly (each behind its restriction, §5.4). */
 export const LEGACY_AGENT_CONSOLE_TYPES = [
   'inventory.refresh', 'device.message', 'device.reboot', 'app.install', 'app.uninstall', 'agent.update', 'app.pull',
+  'kiosk.suspend', 'policy.reapply',
 ] as const;
 export type LegacyAgentConsoleType = typeof LEGACY_AGENT_CONSOLE_TYPES[number];
 
@@ -39,6 +47,8 @@ export const LEGACY_AGENT_RESULT_CODES = [
   'expired_on_device', 'bad_params', 'internal',
   'projection_denied', 'remote_injection_unavailable', 'session_gone', 'agent_busy',
   'pulled', 'not_installed', 'upload_failed',
+  // Agent 1.3.0 (lot PONT-POL): kiosk.suspend.
+  'kiosk_suspended', 'kiosk_inactive',
 ] as const;
 export type LegacyAgentResultCode = typeof LEGACY_AGENT_RESULT_CODES[number];
 
@@ -46,6 +56,9 @@ export type LegacyAgentResultCode = typeof LEGACY_AGENT_RESULT_CODES[number];
 export const LEGACY_AGENT_EVENT_TYPES = [
   'boot', 'admin_enabled', 'admin_disabled', 'admin_disable_requested', 'knox_license', 'config_imported', 'update_installed',
   'clock_corrected',
+  // Agent 1.3.0 (lot PONT-POL), sent only to a server that delivers policies: the kiosk left (detail {via, minutes}),
+  // the PIN locked out after failures (detail {failures}), the undo of a revoked policy left unfinished (detail {done, left}).
+  'kiosk_exit', 'kiosk_pin_lockout', 'policy_revoke_undo',
 ] as const;
 export type LegacyAgentEventType = typeof LEGACY_AGENT_EVENT_TYPES[number];
 
@@ -154,6 +167,11 @@ export interface LegacyAgentDeviceView {
   revokeReason: string | null;
   enrolledAt: string;
   groupId: number | null;
+  /** The state of the agent policy (lot PONT-POL): the agent's last report, too_old when a policy is desired for an
+   *  agent older than 1.3.0, null when no policy is desired. */
+  policyState?: AgentPolicyReportState | 'too_old' | null;
+  /** The custom fields of the device (string values): the per-device values of the agent's templates. */
+  customFields?: Record<string, string>;
 }
 
 export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
@@ -173,7 +191,8 @@ export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
 export interface LegacyAgentDeviceAction {
   /** remote.view, remote.control (P0-15 §4.2): a remote assistance session, opened through /api/remote-sessions, never
    *  a command of the queue. */
-  type: 'device.lock' | 'device.wipe' | 'device.message' | 'device.reboot' | 'inventory.refresh' | 'remote.view' | 'remote.control';
+  type: 'device.lock' | 'device.wipe' | 'device.message' | 'device.reboot' | 'inventory.refresh' | 'remote.view' | 'remote.control'
+    | 'kiosk.suspend' | 'policy.reapply';
   /** The guarded action (legacy_agent.device_lock, legacy_agent.erase_device) or the restriction key of the type. */
   actionKey: string;
   guarded: boolean;
@@ -330,4 +349,96 @@ export interface LegacyAgentNameImportRow {
 export interface LegacyAgentNameImportResult {
   rows: LegacyAgentNameImportRow[];
   applied: number;
+}
+
+// ── Agent policies (lot PONT-POL): the file store, the state of a device, the import of per-device values ─────
+
+export const LEGACY_AGENT_FILE_KINDS = ['file', 'image', 'certificate'] as const;
+export type LegacyAgentFileKind = typeof LEGACY_AGENT_FILE_KINDS[number];
+
+/** A file of the tenant's store (deposit files, kiosk images, CAs), by content. */
+export interface LegacyAgentFileView {
+  id: string;
+  sha256: string;
+  sizeBytes: number;
+  name: string;
+  contentType: string;
+  kind: LegacyAgentFileKind;
+  origin: 'upload' | 'import';
+  note: string | null;
+  /** Policy versions (draft, submitted, published) and desired artifacts that reference it. */
+  usedBy: number;
+  createdAt: string;
+  createdBy: number | null;
+}
+
+/** GET /api/legacy-agent/devices/:id/policy. */
+export interface LegacyAgentPolicyStatusView {
+  /** The agent reads policies (1.3.0 and later). */
+  supported: boolean;
+  agentVersionCode: number;
+  desiredHash: string | null;
+  deliveredHash: string | null;
+  artifactState: string | null;
+  reasons: string[];
+  /** Items the compilation dropped (path conflict, inline budget…), shown before the agent reports them. */
+  dropped: Array<{ key: string; code: string }>;
+  /** Keys the freeze held back from the last delivery. */
+  withheld: string[];
+  report: {
+    hash: string | null;
+    state: AgentPolicyReportState;
+    reportedAt: string;
+    appliedAt: string | null;
+    knoxState: string | null;
+    counts: { compliant: number; nonCompliant: number; pending: number; pendingLicence: number; unsupported: number; errors: number };
+    items: AgentPolicyReportItem[];
+  } | null;
+}
+
+export const LEGACY_AGENT_DEVICE_VALUES_LIMITS = { rows: 2000, batch: 500, valuesPerRow: 16, valueMax: 1000, nameRegexMax: 200 } as const;
+
+/**
+ * The pattern that extracts a store code from a device name (§12.1), in a restricted form only, so that no pattern
+ * can backtrack on the server's event loop: an optional `^`, a literal prefix, ONE digit group `(\d…)` or `([0-9]…)`
+ * with `+`, `{n}`, `{n,}` or `{n,m}` (n, m ≤ 24), a literal suffix, an optional `$`. Literals are plain characters or
+ * a backslash-escaped punctuation character. Example: `^C01(\d{5})`. Returns null for any other form.
+ */
+export function deviceCodePattern(src: string): RegExp | null {
+  if (typeof src !== 'string' || !src || src.length > LEGACY_AGENT_DEVICE_VALUES_LIMITS.nameRegexMax) return null;
+  const literal = String.raw`(?:[^\\^$.|?*+()[\]{}]|\\[^A-Za-z0-9])*`;
+  const shape = new RegExp(String.raw`^(\^?)(${literal})\((?:\\d|\[0-9\])(\+|\{(\d{1,2})(?:,(\d{1,2})?)?\})\)(${literal})(\$?)$`);
+  const m = shape.exec(src);
+  if (!m) return null;
+  const n = m[4] !== undefined ? Number(m[4]) : 1;
+  const max = m[5] !== undefined ? Number(m[5]) : null;
+  if (n > 24 || (max !== null && (max > 24 || max < n)) || (m[4] !== undefined && n < 1)) return null;
+  try { return new RegExp(src); } catch { return null; }
+}
+
+/** One row of the import of per-device values (a device key and its values). */
+export interface LegacyAgentDeviceValuesImportRow {
+  deviceKey: string;
+  values: Record<string, string>;
+  source?: string;
+}
+
+export type LegacyAgentDeviceValuesMatch = 'exact' | 'code' | 'unmatched' | 'conflict';
+
+export interface LegacyAgentDeviceValuesPreviewRow {
+  index: number;
+  deviceKey: string;
+  match: LegacyAgentDeviceValuesMatch;
+  devices: Array<{ deviceId: number; name: string; changes: Array<{ key: string; from: string | null; to: string }>;
+    status: 'change' | 'unchanged' | 'governed' | 'outOfScope' | 'conflict' }>;
+}
+
+export interface LegacyAgentDeviceValuesImportResult {
+  applied: boolean;
+  rows: LegacyAgentDeviceValuesPreviewRow[];
+  updated: number;
+  unchanged: number;
+  skipped: { unmatched: number; conflict: number; governed: number; outOfScope: number };
+  /** Devices whose agent policy would change (a changed key is read by a template of a published policy). */
+  policyImpact: number;
 }

@@ -18,6 +18,9 @@ import { LEGACY_AGENT_ACTOR } from './actor';
 //   legacy_agent_auto_update_per_hour   app_config (instance), read through a
 //                              30-second cache
 //   CUSTOM_DIR/agent-apk/<sha256>.apk   the APKs, stored by content (PB12)
+//   CUSTOM_DIR/agent-files/<tenant>/<sha256>.bin   the files of the agent
+//                              policies (LEGACY_AGENT_FILES_DIR in the tests;
+//                              files.ts, lot PONT-POL)
 //   agent-release/ (cwd: /app/server in the image)   the version embedded in
 //                              the server image (LEGACY_AGENT_BUNDLE_DIR in
 //                              the tests; bundled.ts)
@@ -45,6 +48,12 @@ export function apkDir(): string {
  *  working directory is the server's, in development as in the image (WORKDIR /app/server), like mobile/release. */
 export function bundleDir(): string {
   return path.resolve(process.env.LEGACY_AGENT_BUNDLE_DIR || path.join(process.cwd(), 'agent-release'));
+}
+
+/** Where the files of the agent policies are kept (lot PONT-POL §8.3): one folder per tenant, a file by its content
+ *  (<tenant>/<sha256>.bin). LEGACY_AGENT_FILES_DIR, else CUSTOM_DIR/agent-files. */
+export function filesDir(): string {
+  return path.resolve(process.env.LEGACY_AGENT_FILES_DIR || path.join(config.customDir, 'agent-files'));
 }
 
 export const MAX_APK_BYTES = 104_857_600;

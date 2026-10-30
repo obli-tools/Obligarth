@@ -79,6 +79,9 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   | 'apple_integration'
   // A command or a revocation of the Android bridge agent the tenant's matrix holds at 'restricted' (agent-pont-android §5.4).
   | 'legacy_agent_action'
+  // An import of per-device values of the bridge agent's policies beyond the publication thresholds, or held at
+  // 'restricted' by the matrix (lot PONT-POL §12.1, D18; legacyAgent/policyRoutes.ts).
+  | 'legacy_agent_device_values'
   // A new version of a privacy profile of the tenant (P0-13 T3, CNF-02, D3): always a second person (privacy/approvals.ts).
   | 'privacy_profile_change'
   // A change of the retention of the tenant (P0-13 T4, CNF-04, D3, D4): always a second person (privacy/retentionPolicy.ts).

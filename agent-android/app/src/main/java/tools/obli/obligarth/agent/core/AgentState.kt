@@ -111,6 +111,35 @@ class AgentState(private val store: KeyValueStore) {
     /** End of the /wait window opened by "Ask for help", local seconds (0: none). */
     var helpArmedUntil: Long get() = s(K_HELP_ARMED)?.toLongOrNull() ?: 0; set(v) = set(K_HELP_ARMED to v.toString())
 
+    // ---- Policy (1.3.0, lot PONT-POL §10.3): app-private preferences only, its secrets sealed (§10.6) ----
+
+    /** The last policy received, in its stored form (Policy.toJson: secrets sealed), null when none. */
+    var policyJson: String? get() = s(K_POLICY); set(v) = set(K_POLICY to v)
+    var policyHash: String? get() = s(K_POLICY_HASH); set(v) = set(K_POLICY_HASH to v)
+    /** The hash of a policy of an unknown format received (reported policy_version_unsupported until a readable one). */
+    var policyRejected: String? get() = s(K_POLICY_REJECTED); set(v) = set(K_POLICY_REJECTED to v)
+    var policyLedger: Ledger
+        get() = Ledger.fromJson(s(K_POLICY_LEDGER)?.let { Json.parseObjectOrNull(it) })
+        set(v) = set(K_POLICY_LEDGER to Json.write(v.toJson()))
+    /** The report of the last reconciliation (sent with a poll when due). */
+    var policyReport: PolicyReport?
+        get() = PolicyReport.fromJson(s(K_POLICY_REPORT)?.let { Json.parseObjectOrNull(it) })
+        set(v) = set(K_POLICY_REPORT to v?.let { Json.write(it.toJson()) })
+    var policyReportSentDigest: String? get() = s(K_POLICY_REPORT_SENT_DIGEST); set(v) = set(K_POLICY_REPORT_SENT_DIGEST to v)
+    var policyReportSentAt: Long get() = s(K_POLICY_REPORT_SENT_AT)?.toLongOrNull() ?: 0; set(v) = set(K_POLICY_REPORT_SENT_AT to v.toString())
+    /** No report before this local time (the server refused one: policyReport 'rejected'). */
+    var policyReportRefusedUntil: Long
+        get() = s(K_POLICY_REPORT_REFUSED_UNTIL)?.toLongOrNull() ?: 0
+        set(v) = set(K_POLICY_REPORT_REFUSED_UNTIL to v.toString())
+    /** The last full configuration carried the key `policy`: the server delivers policies (reports and 1.3.0 events). */
+    var serverPolicyV1: Boolean get() = s(K_SERVER_POLICY_V1)?.toBoolean() ?: false; set(v) = set(K_SERVER_POLICY_V1 to v.toString())
+    /** The kiosk is left until this local time (kiosk.suspend, the PIN panel). */
+    var kioskSuspendedUntil: Long get() = s(K_KIOSK_SUSPENDED_UNTIL)?.toLongOrNull() ?: 0; set(v) = set(K_KIOSK_SUSPENDED_UNTIL to v.toString())
+    /** The exit PIN attempts: failures, lockouts, locked until (D7). */
+    var kioskPin: KioskModel.PinAttempts
+        get() = KioskModel.PinAttempts.fromJson(s(K_KIOSK_PIN_FAILS)?.let { Json.parseObjectOrNull(it) })
+        set(v) = set(K_KIOSK_PIN_FAILS to Json.write(v.toJson()))
+
     // ---- Outbox (results), events, journal, install queue ----
 
     var outbox: List<CommandResult>
@@ -191,12 +220,26 @@ class AgentState(private val store: KeyValueStore) {
         const val K_ICONS_WANTED = "iconsWanted"
         const val K_REMOTE = "remote"
         const val K_HELP_ARMED = "helpArmedUntil"
+        const val K_POLICY = "policy"
+        const val K_POLICY_HASH = "policyHash"
+        const val K_POLICY_REJECTED = "policyRejected"
+        const val K_POLICY_LEDGER = "policyLedger"
+        const val K_POLICY_REPORT = "policyReport"
+        const val K_POLICY_REPORT_SENT_DIGEST = "policyReportSentDigest"
+        const val K_POLICY_REPORT_SENT_AT = "policyReportSentAt"
+        const val K_POLICY_REPORT_REFUSED_UNTIL = "policyReportRefusedUntil"
+        const val K_SERVER_POLICY_V1 = "serverPolicyV1"
+        const val K_KIOSK_SUSPENDED_UNTIL = "kioskSuspendedUntil"
+        const val K_KIOSK_PIN_FAILS = "kioskPinFails"
 
         private val ALL_IDENTITY_KEYS = listOf(
             K_CONFIG, K_AGENT_ID, K_DEVICE_UUID, K_SEQ, K_CLOCK, K_SERVER_KEYS, K_POLL, K_INV_SECONDS, K_KEEPALIVE,
             K_CONFIG_VERSION, K_MIN_VERSION, K_KNOX_KEY, K_LAST_INV, K_INV_REQ, K_AUTH_FAIL, K_NOT_BEFORE, K_BACKOFF,
             K_OUTBOX, K_EVENTS, K_JOURNAL, K_INSTALL_QUEUE, K_AWAITING, K_SERVER_APPS_V2, K_ICONS_BLOCKED, K_ICONS_WANTED,
             K_REMOTE, K_HELP_ARMED, K_CONFIG_AGENT,
+            // 1.3.0: the policy, its ledger and report, the kiosk state (the revocation undoes the policy first).
+            K_POLICY, K_POLICY_HASH, K_POLICY_REJECTED, K_POLICY_LEDGER, K_POLICY_REPORT, K_POLICY_REPORT_SENT_DIGEST,
+            K_POLICY_REPORT_SENT_AT, K_POLICY_REPORT_REFUSED_UNTIL, K_SERVER_POLICY_V1, K_KIOSK_SUSPENDED_UNTIL, K_KIOSK_PIN_FAILS,
         )
 
         private fun configFromStored(m: Map<String, Any?>): AgentConfig? {

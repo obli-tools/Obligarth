@@ -3,7 +3,26 @@ import type {
   LegacyAgentCommandView, LegacyAgentConsoleType, LegacyAgentDeviceAction, LegacyAgentDeviceDetail, LegacyAgentDeviceView,
   LegacyAgentInstanceSettings, LegacyAgentNameImportFormat, LegacyAgentNameImportResult,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
+  LegacyAgentDeviceValuesImportResult, LegacyAgentDeviceValuesImportRow, LegacyAgentFileView, LegacyAgentPolicyStatusView,
 } from '@obligarth/shared';
+
+/** The matching of an import of per-device values (lot PONT-POL §12.1). */
+export interface DeviceValuesMatch { byName: boolean; byCode?: { nameRegex: string; field: string; pad: number } }
+/** An import beyond the thresholds, or held by the matrix: a request for approval. */
+export interface DeviceValuesPending { approvalId: number; status: string; code?: string; policyImpact?: number }
+
+/** The media type a store file travels with: images and certificates by their type, anything else as bytes (the API's
+ *  JSON parser would read a JSON body first). */
+function storeMediaType(file: File): string {
+  const t = (file.type || '').toLowerCase();
+  if (['image/png', 'image/jpeg', 'image/gif', 'image/x-icon', 'image/vnd.microsoft.icon'].includes(t)) return t;
+  if (/\.(png)$/i.test(file.name)) return 'image/png';
+  if (/\.(jpe?g)$/i.test(file.name)) return 'image/jpeg';
+  if (/\.(gif)$/i.test(file.name)) return 'image/gif';
+  if (/\.(ico)$/i.test(file.name)) return 'image/x-icon';
+  if (/\.(crt|pem|cer|der)$/i.test(file.name) || t === 'application/x-x509-ca-cert') return 'application/x-x509-ca-cert';
+  return 'application/octet-stream';
+}
 
 // =============================================================================
 // Console API of the Android bridge agent (/api/legacy-agent and, for the
@@ -110,6 +129,55 @@ export const legacyAgentApi = {
   },
   async setKnoxLicense(licenseKey: string | null): Promise<{ knoxLicenseSet: boolean }> {
     const res = await apiClient.put<ApiResponse<{ knoxLicenseSet: boolean }>>('/legacy-agent/settings/knox', { licenseKey });
+    return res.data.data!;
+  },
+
+  // ── Agent policies (lot PONT-POL §9.2) ──
+  files: {
+    async list(): Promise<LegacyAgentFileView[]> {
+      const res = await apiClient.get<ApiResponse<LegacyAgentFileView[]>>('/legacy-agent/files');
+      return res.data.data ?? [];
+    },
+    /** A raw upload; the server computes the SHA-256, the size and the kind (image, certificate, file). */
+    async upload(file: File, name?: string, note?: string): Promise<LegacyAgentFileView> {
+      const res = await apiClient.post<ApiResponse<LegacyAgentFileView>>('/legacy-agent/files', file, {
+        params: { name: (name ?? file.name).slice(0, 200), ...(note ? { note } : {}) },
+        headers: { 'Content-Type': storeMediaType(file) }, timeout: 15 * 60_000,
+      });
+      return res.data.data!;
+    },
+    async patch(id: string, body: { name?: string; note?: string | null }): Promise<LegacyAgentFileView> {
+      const res = await apiClient.patch<ApiResponse<LegacyAgentFileView>>(`/legacy-agent/files/${id}`, body);
+      return res.data.data!;
+    },
+    async remove(id: string): Promise<void> {
+      await apiClient.delete(`/legacy-agent/files/${id}`);
+    },
+    /** The content of a stored file (images, and files of 64 KiB at most), as a blob: never put in the DOM as HTML. */
+    async content(id: string): Promise<Blob> {
+      const res = await apiClient.get(`/legacy-agent/files/${id}/content`, { responseType: 'blob' });
+      return res.data as Blob;
+    },
+  },
+  async renderPreview(template: string, encoding: 'text' | 'json', deviceId: number): Promise<{ text: string; missing: string[]; jsonValid: boolean | null }> {
+    const res = await apiClient.post<ApiResponse<{ text: string; missing: string[]; jsonValid: boolean | null }>>('/legacy-agent/policy/render-preview', { template, encoding, deviceId });
+    return res.data.data!;
+  },
+  async customKeys(): Promise<string[]> {
+    const res = await apiClient.get<ApiResponse<string[]>>('/legacy-agent/policy/custom-keys');
+    return res.data.data ?? [];
+  },
+  async devicePolicy(deviceId: number): Promise<LegacyAgentPolicyStatusView> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentPolicyStatusView>>(`/legacy-agent/devices/${deviceId}/policy`);
+    return res.data.data!;
+  },
+  /** Per-device values: a preview, or with `apply` the import (a request for approval beyond the thresholds). */
+  async importDeviceValues(rows: LegacyAgentDeviceValuesImportRow[], match: DeviceValuesMatch, apply: boolean): Promise<LegacyAgentDeviceValuesImportResult | DeviceValuesPending> {
+    const res = await apiClient.post<ApiResponse<LegacyAgentDeviceValuesImportResult | DeviceValuesPending>>('/legacy-agent/device-values', { rows, match, apply });
+    return (res.data.data ?? (res.data as unknown as DeviceValuesPending))!;
+  },
+  async importImages(names: Array<{ name: string; sha256: string }>): Promise<{ marked: number }> {
+    const res = await apiClient.post<ApiResponse<{ marked: number }>>('/legacy-agent/policy/import-images', { names });
     return res.data.data!;
   },
 

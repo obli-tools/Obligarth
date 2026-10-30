@@ -9,11 +9,12 @@ import { asNone } from '../db/context';
 import { logger } from '../utils/logger';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { apkDir } from './config';
+import { storedFilePath } from './files';
 import { handleEnroll } from './enroll';
 import { handleIcons } from './icons';
 import { handleInventory } from './inventory';
 import { BucketLimiter, ConcurrencyLimiter, ReplayCache, WindowLimiter } from './limits';
-import { handlePackage, type PackageReply } from './packages';
+import { handleFile, handlePackage, type PackageReply } from './packages';
 import { handlePoll } from './poll';
 import { handlePull, MAX_PULL_BODY } from './pull';
 import { legacyAgentRemote } from './remoteBridge';
@@ -37,6 +38,7 @@ import { withAgentTransaction } from './session';
 //   POST /agent/v1/remote/<id>/end      the end of a session from the device's side
 //   POST /agent/v1/wait                 the long wait of the armed window (Obl-Seq 0, never numbered)
 //   POST /agent/v1/pull/<commandId>     a chunk of the APK of an open app.pull (agent 1.2.0, pull.ts)
+//   GET  /agent/v1/files/<sha256>       a file of the device's desired agent policy (agent 1.3.0, lot PONT-POL §8.3)
 // Every request of /poll, /inventory, /icons, /packages and /remote is signed by
 // the agent's key (OBL-AGENT-1) and numbered (seq strictly increasing, written in
 // the transaction of its processing), /wait signed with seq 0 (its signatures
@@ -201,6 +203,8 @@ export const surfaceLimits = {
   inventoryPerAgent: new WindowLimiter(1, 60_000),
   iconsPerAgent: new WindowLimiter(6, 60_000),
   downloadsPerTenant: new ConcurrencyLimiter(4),
+  // Lot PONT-POL (C10): the files of the policies have their own limiter, so they never starve the updates of the agent.
+  policyFilesPerTenant: new ConcurrencyLimiter(4),
   // P0-15 §4.3: /accept and /end of the remote sessions; the long wait (one held at a time, again at once after its
   // answer: a burst for the wakes, one more every 10 s), and the signatures of the waits already received (its seq 0 is
   // never consumed: a replay inside the clock window is refused, it would take the place of the agent's own wait).
@@ -373,9 +377,12 @@ export function createLegacyAgentSurface(): Router {
   });
 
   // GET /agent/v1/packages/<sha256>: signed, empty body; the file of an open command of this device (§4.7).
-  router.get(/^\/packages\/([0-9a-f]{64})$/, (req, res) => {
+  // GET /agent/v1/files/<sha256> (lot PONT-POL §8.3): the same frame, a file the device's desired policy lists among its
+  // blobs, from the tenant's store, behind its own limiter.
+  router.get(/^\/(packages|files)\/([0-9a-f]{64})$/, (req, res) => {
+    const kind = req.params[0] === 'files' ? 'files' : 'packages';
     void (async () => {
-      locals(res).route = 'GET /agent/v1/packages/:sha256';
+      locals(res).route = `GET /agent/v1/${kind}/:sha256`;
       const key = await currentServerKey();
       let raw: { body: Buffer | null; sha: string; size: number };
       try { raw = await readBody(req, 0); } catch { if (!res.headersSent) res.status(413).end(); return; }
@@ -389,22 +396,22 @@ export function createLegacyAgentSurface(): Router {
         const who = await authenticated(ex);
         if (isReply(who)) { send(res, ex, who, key); return; }
         locals(res).tenantId = who.tenantId;
-        release = surfaceLimits.downloadsPerTenant.acquire(`t:${who.tenantId}`);
+        release = (kind === 'files' ? surfaceLimits.policyFilesPerTenant : surfaceLimits.downloadsPerTenant).acquire(`t:${who.tenantId}`);
         if (!release) { send(res, ex, limited(30), key); return; }
-        const sha = String(req.params[0]);
-        const out: PackageReply = await handlePackage(who, ex, sha);
+        const sha = String(req.params[1]);
+        const out: PackageReply = kind === 'files' ? await handleFile(who, ex, sha) : await handlePackage(who, ex, sha);
         if ('reply' in out) { send(res, ex, out.reply, key); return; }
-        const file = path.join(apkDir(), `${sha}.apk`);
+        const file = kind === 'files' ? storedFilePath(who.tenantId, sha) : path.join(apkDir(), `${sha}.apk`);
         const st = await stat(file).catch(() => null);
         if (!st || !st.isFile() || st.size !== out.size) {
-          logger.error({ surface: 'packages', tenantId: who.tenantId }, 'agent surface: the APK of an open command is missing from the store');
+          logger.error({ surface: kind, tenantId: who.tenantId }, 'agent surface: the file asked for is missing from the store');
           send(res, ex, errorReply(404, 'notFound', 'Not found'), key);
           return;
         }
         // The answer's hash is the file's (known, checked at its upload): the signature goes in the headers before the bytes.
         const message = responseString({ status: 200, agentId: ex.agentId, seq: ex.seq, requestSha256: ex.reqSha, responseSha256: sha });
         res.status(200);
-        res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+        res.setHeader('Content-Type', kind === 'files' ? 'application/octet-stream' : 'application/vnd.android.package-archive');
         res.setHeader('Content-Length', String(st.size));
         res.setHeader('Obl-Server-Key-Id', key.keyId);
         res.setHeader('Obl-Server-Signature', signWith(key, message));
@@ -415,7 +422,7 @@ export function createLegacyAgentSurface(): Router {
         res.on('close', () => { done(); stream.destroy(); });
         stream.pipe(res);
       } catch (err) {
-        logger.error({ surface: 'packages', message: (err as Error)?.message?.slice(0, 200) }, 'agent surface: download failed');
+        logger.error({ surface: kind, message: (err as Error)?.message?.slice(0, 200) }, 'agent surface: download failed');
         send(res, ex, { ...errorReply(503, 'unavailable', 'Service unavailable'), headers: { 'Retry-After': '60' } }, key);
       } finally {
         if (release) release();

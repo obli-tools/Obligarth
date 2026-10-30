@@ -18,13 +18,25 @@ import java.lang.reflect.Method
 @SuppressLint("ApplySharedPref") // licence state written synchronously, read by other threads at once
 class KnoxBridge(private val context: Context, private val log: AgentLog) {
 
-    private class Space(val edmClass: String, val elmClass: String, val klmClass: String?, val label: String)
+    /**
+     * One namespace: its managers, and (1.3.0, lot PONT-POL §10.5) the classes of the kiosk mode, the certificate
+     * provisioning and the app identity of the runtime permissions. Every name is to be confirmed on the J7 (§13.4, D13).
+     */
+    private class Space(
+        val edmClass: String, val elmClass: String, val klmClass: String?, val label: String,
+        val kioskClass: String, val certClass: String, val appIdentityClass: String,
+    )
 
     private val spaces = listOf(
-        Space("android.app.enterprise.EnterpriseDeviceManager", "android.app.enterprise.license.EnterpriseLicenseManager", null, "legacy"),
+        Space(
+            "android.app.enterprise.EnterpriseDeviceManager", "android.app.enterprise.license.EnterpriseLicenseManager", null, "legacy",
+            "android.app.enterprise.kioskmode.KioskMode", "android.app.enterprise.CertificateProvisioning", "android.app.enterprise.AppIdentity",
+        ),
         Space(
             "com.samsung.android.knox.EnterpriseDeviceManager", "com.samsung.android.knox.license.EnterpriseLicenseManager",
             "com.samsung.android.knox.license.KnoxEnterpriseLicenseManager", "knox",
+            "com.samsung.android.knox.kiosk.KioskMode", "com.samsung.android.knox.keystore.CertificateProvisioning",
+            "com.samsung.android.knox.AppIdentity",
         ),
     )
 
@@ -185,6 +197,81 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
             log.warn("Knox $getter: ${describe(t)}")
             if (rootCause(t) is SecurityException) "knox_required" else "knox_error"
         }
+    }
+
+    // ---- Policy objects (1.3.0, lot PONT-POL §10.5): reached by name, never a crash ----
+
+    /** A policy object of the EDM (getRestrictionPolicy, getPhoneRestrictionPolicy, getApplicationPolicy, getWifiPolicy...). */
+    fun policyObject(getter: String): Any? = try {
+        edm()?.let { call(it, getter) }
+    } catch (e: Throwable) {
+        log.warn("Knox $getter: ${describe(e)}")
+        null
+    }
+
+    /** The kiosk mode manager (KioskMode.getInstance(Context)), null when absent. */
+    fun kioskMode(): Any? {
+        val s = space ?: return null
+        return try {
+            Class.forName(s.kioskClass).getMethod("getInstance", Context::class.java).invoke(null, context)
+        } catch (e: Throwable) {
+            log.warn("Knox kiosk mode: ${describe(e)}")
+            null
+        }
+    }
+
+    /** The certificate provisioning (the EDM getter first, else the class's getInstance(Context)), null when absent. */
+    fun certificateProvisioning(): Any? {
+        val s = space ?: return null
+        return try {
+            edm()?.let { e -> invoke(e, listOf("getCertificateProvisioning")).let { (it as? KnoxCall.Ok)?.value } }
+                ?: Class.forName(s.certClass).getMethod("getInstance", Context::class.java).invoke(null, context)
+        } catch (e: Throwable) {
+            log.warn("Knox certificate provisioning: ${describe(e)}")
+            null
+        }
+    }
+
+    /**
+     * D1: with the licence, the storage permissions granted by ApplicationPolicy.applyRuntimePermissions (state 1 =
+     * granted). False when anything is missing (the agent then asks from its status screen).
+     */
+    fun grantRuntimePermissions(permissions: List<String>): Boolean {
+        val s = space ?: return false
+        return try {
+            val app = policyObject("getApplicationPolicy") ?: return false
+            val identity = Class.forName(s.appIdentityClass).getConstructor(String::class.java, String::class.java).newInstance(context.packageName, null)
+            when (val r = invoke(app, listOf("applyRuntimePermissions"), identity, ArrayList(permissions), 1)) {
+                is KnoxCall.Ok -> r.value != false && (r.value as? Int ?: 0) >= 0
+                else -> false
+            }
+        } catch (e: Throwable) {
+            log.warn("Knox runtime permissions: ${describe(e)}")
+            false
+        }
+    }
+
+    /** The outcome of a call tried under several names. */
+    sealed class KnoxCall {
+        class Ok(val value: Any?) : KnoxCall()
+        /** No method of these names accepts these arguments: knox_method_missing. */
+        object Missing : KnoxCall()
+    }
+
+    /**
+     * Tries each name in order with [args] (boxed Integer and Boolean, lists accepted as java.util.List); the first
+     * that exists is called. Its exceptions go up (SecurityException: knox_refused for the caller).
+     */
+    fun invoke(target: Any, names: List<String>, vararg args: Any?): KnoxCall {
+        for (n in names) {
+            val m = findMethod(target.javaClass, n, args) ?: continue
+            return try {
+                KnoxCall.Ok(m.invoke(target, *args))
+            } catch (e: InvocationTargetException) {
+                throw e.targetException ?: e
+            }
+        }
+        return KnoxCall.Missing
     }
 
     private fun intConstant(cls: Class<*>, name: String, fallback: Int): Int = try {

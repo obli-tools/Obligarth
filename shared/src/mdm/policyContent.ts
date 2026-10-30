@@ -9,6 +9,7 @@
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: string]: JsonValue };
 
 import type { AndroidPolicySection } from '../android/policy';
+import type { LegacyAgentPolicySection } from './legacyAgentPolicy';
 
 /** policy_versions.content, format 1. */
 export interface PolicyContentV1 {
@@ -17,6 +18,8 @@ export interface PolicyContentV1 {
     apple?: { items: AppleItem[] };
     /** The Android section (android-amapi §9.2): a fragment of the AMAPI Policy resource and the policy's apps. */
     android?: AndroidPolicySection;
+    /** The section of the Android bridge agent (lot PONT-POL, agent 1.3.0): files, Wi-Fi, kiosk, restrictions, CAs. */
+    legacyAgent?: LegacyAgentPolicySection;
   };
 }
 
@@ -66,13 +69,28 @@ export function isPolicyVariable(name: string): name is PolicyVariable {
   return VARIABLE_SET.has(name);
 }
 
-/** The variables a string names, known or not ('{{ device.name }}' and '{{device.name}}' alike). */
-export function variablesInString(s: string): { known: PolicyVariable[]; unknown: string[] } {
-  const known: PolicyVariable[] = [];
+/** A variable of the templates of the bridge agent (lot PONT-POL): the closed list, or a custom field of the device
+ *  ({{device.custom.<name>}}). Only the agent's file templates accept it: an Apple or Android section keeps
+ *  isPolicyVariable, where {{device.custom.x}} is unknown_variable. */
+export type AgentTemplateVariable = PolicyVariable | `device.custom.${string}`;
+export const AGENT_CUSTOM_VARIABLE_PREFIX = 'device.custom.';
+const CUSTOM_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+
+export function isAgentTemplateVariable(name: string): name is AgentTemplateVariable {
+  if (isPolicyVariable(name)) return true;
+  return name.startsWith(AGENT_CUSTOM_VARIABLE_PREFIX) && CUSTOM_NAME_RE.test(name.slice(AGENT_CUSTOM_VARIABLE_PREFIX.length));
+}
+
+/** The variables a string names, known or not ('{{ device.name }}' and '{{device.name}}' alike); ccept decides what
+ *  is known (the closed list by default). */
+export function variablesInString(s: string): { known: PolicyVariable[]; unknown: string[] };
+export function variablesInString<T extends string>(s: string, accept: (name: string) => name is T): { known: T[]; unknown: string[] };
+export function variablesInString(s: string, accept: (name: string) => boolean = isPolicyVariable): { known: string[]; unknown: string[] } {
+  const known: string[] = [];
   const unknown: string[] = [];
   for (const m of s.matchAll(TOKEN_RE)) {
     const name = m[1].trim();
-    if (isPolicyVariable(name)) { if (!known.includes(name)) known.push(name); } else if (!unknown.includes(name)) unknown.push(name);
+    if (accept(name)) { if (!known.includes(name)) known.push(name); } else if (!unknown.includes(name)) unknown.push(name);
   }
   return { known, unknown };
 }
@@ -148,6 +166,10 @@ export const POLICY_VALIDATION_CODES = [
   'preferred_activities_conflict', 'duplicate_value', 'kiosk_form_ambiguous', 'kiosk_role_install_type', 'role_duplicate',
   'kiosk_home_conflict', 'system_update_window_invalid', 'freeze_period_invalid', 'freeze_period_too_long',
   'freeze_period_gap_too_short', 'freeze_period_overlap', 'freeze_period_without_type', 'too_many_freeze_periods',
+  // The section of the bridge agent (lot PONT-POL): the codes of server/src/mdm/legacyAgent/validate.ts.
+  'path_invalid', 'file_not_found', 'file_kind_mismatch', 'inline_too_large', 'template_too_large', 'ssid_invalid', 'certificate_invalid',
+  'pin_invalid', 'tile_invalid', 'too_many_tiles', 'url_invalid', 'intent_invalid', 'too_many_networks', 'too_many_files', 'psk_invalid',
+  'wipe_without_password', 'variable_not_allowed', 'shared_policy_resource',
 ] as const;
 export type PolicyValidationCode = typeof POLICY_VALIDATION_CODES[number];
 

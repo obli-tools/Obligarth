@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
   artifactOf, settingKeyOf, settingKeysOf, variablesOf,
-  type JsonValue, type MergeDescriptor, type PolicyContentV1, type PolicyVariable, type SchemaEntry, type SettingKind,
+  LEGACY_AGENT_POLICY_ARTIFACT_KEY,
+  type AgentTemplateVariable, type JsonValue, type MergeDescriptor, type PolicyContentV1, type SchemaEntry, type SettingKind,
 } from '@obligarth/shared';
 import { AMAPI_ARTIFACT_KEY } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import type { AppleCatalogView } from '../apple/catalog';
 import { androidContributions } from '../android/contributions';
+import { legacyAgentContributions } from '../legacyAgent/contributions';
 
 // =============================================================================
 // What a resource brings to the resolution (docs: modele-donnees-mdm §7.3,
@@ -22,8 +24,9 @@ export interface Contribution {
   settingKey: string;
   type: string;
   /** 'android': a key of the Android section (android:<field>, android:app[<package>], android:onc[<GUID>]), delivered
-   *  as the artifact amapi:policy by the Android module (lot AN-A2). */
-  kind: SettingKind | 'android';
+   *  as the artifact amapi:policy by the Android module (lot AN-A2). 'agent': a key of the section of the bridge agent
+   *  (agent:*), delivered as the artifact agent:policy by its module (lot PONT-POL). */
+  kind: SettingKind | 'android' | 'agent';
   /** Keyed types: the top-level key. */
   key: string | null;
   /** Collections and raw profiles: the instance. */
@@ -36,8 +39,8 @@ export interface Contribution {
    *  never stored with the effective state, never logged. */
   value?: JsonValue;
   removed: boolean;
-  /** Known variables of the value, resolved per device at rendering. */
-  variables: PolicyVariable[];
+  /** Known variables of the value, resolved per device at rendering (device.custom.<name>: agent templates only). */
+  variables: AgentTemplateVariable[];
   /** A declaration key referencing an asset (refused at the MVP). */
   requiresAsset: boolean;
   /** Apps: the identifier and the options of the assignment. */
@@ -94,6 +97,16 @@ export function policyContributions(content: PolicyContentV1, catalog: AppleCata
     out.push({
       settingKey: a.settingKey, type: 'android', kind: 'android', key: null, instance: null, artifactKey: AMAPI_ARTIFACT_KEY,
       valueHash: a.valueHash, value: a.value, removed: false, variables: a.variables, requiresAsset: false,
+    });
+  }
+  // The section of the bridge agent (lot PONT-POL §5.3): one key per file, network, kiosk, field and CA.
+  for (const a of legacyAgentContributions(content.sections?.legacyAgent)) {
+    if (seen.has(a.settingKey)) continue;
+    seen.add(a.settingKey);
+    out.push({
+      settingKey: a.settingKey, type: 'legacyAgent', kind: 'agent', key: null, instance: null,
+      artifactKey: LEGACY_AGENT_POLICY_ARTIFACT_KEY, valueHash: a.valueHash, value: a.value, removed: false,
+      variables: a.variables, requiresAsset: false,
     });
   }
   return out;

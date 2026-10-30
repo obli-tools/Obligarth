@@ -4,7 +4,8 @@ import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE,
+  LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_POLICY_ARTIFACT_KEY,
+  LEGACY_AGENT_POLICY_MIN_VERSION_CODE,
   LEGACY_AGENT_NAME_IMPORT_FORMATS, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
   type DeviceCapability, type LegacyAgentNameImportResult, type LegacyAgentNameImportRow, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
@@ -27,11 +28,14 @@ import { applyRestriction } from '../services/restriction.service';
 import { vault } from '../vault';
 import { forgetKnoxKey, KNOX_PURPOSE, knoxSecretIdOf } from './agentConfig';
 import {
-  cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommands, LOCK_ACTION, REMOTE_OPEN, type CommandSpec, type EnqueueOutcome,
+  cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommands, LOCK_ACTION, POLICY_COMMAND_TYPES, REMOTE_OPEN, type CommandSpec, type EnqueueOutcome,
 } from './commands';
 import { looksLikeApk, receiveApk } from './packages';
 import { legacyAgentRemote } from './remoteBridge';
 import { currentServerKey } from './serverKey';
+import { requestDeviceResolution } from '../mdm/policies/triggers';
+import { customFieldsOf } from '../mdm/policies/loader';
+import { policyRouter } from './policyRoutes';
 import { sha256Hex } from './signature';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
@@ -72,26 +76,26 @@ const enqueueLimiter = rateLimit({ windowMs: 60_000, max: 60, keyGenerator: keyO
 const bulkLimiter = rateLimit({ windowMs: 60_000, max: 5, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const tokenLimiter = rateLimit({ windowMs: 60_000, max: 20, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const exportLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
-const uploadLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
+export const uploadLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SHA_RE = /^[0-9a-f]{64}$/;
 const iso = (v: unknown): string | null => (v ? new Date(v as string | Date).toISOString() : null);
 const jsonOf = (v: unknown): any => { if (typeof v !== 'string') return v ?? null; try { return JSON.parse(v); } catch { return null; } };
 
-function body<S extends z.ZodTypeAny>(schema: S, req: Request): z.infer<S> {
+export function body<S extends z.ZodTypeAny>(schema: S, req: Request): z.infer<S> {
   const parsed = schema.safeParse(req.body ?? {});
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
   return parsed.data;
 }
 
-const wrap = (fn: (req: Request, res: Response) => Promise<void>) =>
+export const wrap = (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: (err?: unknown) => void): void => { fn(req, res).catch(next); };
 
 // ── Devices and capabilities ───────────────────────────────────────────────
 
 /** The device of a route, in the session's tenant (404 otherwise). */
-async function deviceOf(req: Request): Promise<number> {
+export async function deviceOf(req: Request): Promise<number> {
   const id = parseRequestDeviceId(req.params.id);
   if (id === null) throw new AppError(404, 'Device not found');
   const outcome = await resolveRequestDevice(req, id, {});
@@ -100,7 +104,7 @@ async function deviceOf(req: Request): Promise<number> {
   return id;
 }
 
-async function lacking(req: Request, ids: number[], capability: DeviceCapability): Promise<number[]> {
+export async function lacking(req: Request, ids: number[], capability: DeviceCapability): Promise<number[]> {
   if (req.session.role === 'admin') return [];
   const userId = req.session.userId!;
   const out = new Set(await permissionService.devicesLackingCapability(userId, ids, capability));
@@ -108,7 +112,7 @@ async function lacking(req: Request, ids: number[], capability: DeviceCapability
   return [...out];
 }
 
-async function visible(req: Request): Promise<number[] | 'all'> {
+export async function visible(req: Request): Promise<number[] | 'all'> {
   if (req.session.role === 'admin') return 'all';
   return permissionService.getVisibleDeviceIds(req.session.userId!, false);
 }
@@ -116,10 +120,25 @@ async function visible(req: Request): Promise<number[] | 'all'> {
 export const DEVICE_COLUMNS = [
   'd.id', 'd.uuid', 'd.label', 'd.model', 'd.model_name', 'd.os_version', 'd.serial_number', 'd.enrollment_state', 'd.enrolled_at', 'd.group_id',
   'a.agent_id', 'a.api_level', 'a.security_patch', 'a.agent_version_code', 'a.agent_version_name', 'a.admin_active', 'a.knox_state',
-  'a.key_storage', 'a.identity_conflict', 'a.last_poll_at', 'a.last_inventory_at', 'a.revoked_at', 'a.revoke_reason',
+  'a.key_storage', 'a.identity_conflict', 'a.last_poll_at', 'a.last_inventory_at', 'a.revoked_at', 'a.revoke_reason', 'd.custom_fields',
   db.raw("(SELECT s.value FROM obligarth.device_status_items s WHERE s.tenant_id = d.tenant_id AND s.device_id = d.id AND s.item = 'agent.battery.level') AS battery"),
   db.raw("(SELECT s.value FROM obligarth.device_status_items s WHERE s.tenant_id = d.tenant_id AND s.device_id = d.id AND s.item = 'agent.install.unknown-sources') AS unknown_sources"),
+  // Lot PONT-POL: the state of the agent policy (the desired artifact and the agent's last report).
+  db.raw(`(SELECT x.desired_hash FROM obligarth.device_artifacts x WHERE x.tenant_id = d.tenant_id AND x.device_id = d.id
+           AND x.artifact_key = ?) AS policy_desired`, [LEGACY_AGENT_POLICY_ARTIFACT_KEY]),
+  db.raw('(SELECT r.state FROM obligarth.legacy_agent_policy_reports r WHERE r.tenant_id = d.tenant_id AND r.device_id = d.id) AS policy_report_state'),
+  db.raw('(SELECT r.policy_hash FROM obligarth.legacy_agent_policy_reports r WHERE r.tenant_id = d.tenant_id AND r.device_id = d.id) AS policy_report_hash'),
 ];
+
+/** The fleet column of the agent policy: too_old when a policy is desired for an agent older than 1.3.0, the state of the
+ *  agent's report of the desired version, pending until it reports it, null when none is desired (§9.2). */
+function policyStateOf(r: Record<string, any>): LegacyAgentDeviceView['policyState'] {
+  const desired = r.policy_desired ? String(r.policy_desired).trim() : null;
+  if (!desired) return null;
+  if (Number(r.agent_version_code) < LEGACY_AGENT_POLICY_MIN_VERSION_CODE) return 'too_old';
+  if (r.policy_report_state && r.policy_report_hash && String(r.policy_report_hash).trim() === desired) return r.policy_report_state;
+  return 'pending';
+}
 
 export function agentsQuery(tenantId: number) {
   return db('legacy_agent_devices as a')
@@ -138,7 +157,7 @@ export function deviceView(r: Record<string, any>): LegacyAgentDeviceView {
     knoxState: r.knox_state, keyStorage: r.key_storage, identityConflict: r.identity_conflict === true, enrollmentState: r.enrollment_state,
     lastPollAt: iso(r.last_poll_at), lastInventoryAt: iso(r.last_inventory_at), batteryLevel: typeof battery === 'number' ? battery : null,
     unknownSources: typeof unknown === 'boolean' ? unknown : null, revokedAt: iso(r.revoked_at), revokeReason: r.revoke_reason ?? null,
-    enrolledAt: iso(r.enrolled_at) as string, groupId: r.group_id ?? null,
+    enrolledAt: iso(r.enrolled_at) as string, groupId: r.group_id ?? null, policyState: policyStateOf(r), customFields: customFieldsOf(r.custom_fields),
   };
 }
 
@@ -201,7 +220,7 @@ router.get('/devices/:id/commands', wrap(async (req, res) => {
 }));
 
 /** The menu of a device's record (lock and erase through their guarded action, the rest through the command route). */
-const MENU_TYPES = ['device.lock', 'device.wipe', 'device.message', 'device.reboot', 'inventory.refresh'] as const;
+const MENU_TYPES = ['device.lock', 'device.wipe', 'device.message', 'device.reboot', 'inventory.refresh', 'kiosk.suspend', 'policy.reapply'] as const;
 
 // GET /api/legacy-agent/devices/:id/actions — the menu of a device, with what makes an action unavailable (the capability
 // of the type on the device and write scope; the revoked key; the enrollment; the device administrator, which the lock
@@ -209,20 +228,23 @@ const MENU_TYPES = ['device.lock', 'device.wipe', 'device.message', 'device.rebo
 router.get('/devices/:id/actions', wrap(async (req, res) => {
   const id = await deviceOf(req);
   const tenantId = req.tenantId!;
-  const r = await agentsQuery(tenantId).where('d.id', id).first('d.enrollment_state', 'a.revoked_at', 'a.admin_active', 'a.knox_state') as
+  const r = await agentsQuery(tenantId).where('d.id', id).first('d.enrollment_state', 'a.revoked_at', 'a.admin_active', 'a.knox_state', 'a.agent_version_code') as
     Record<string, any> | undefined;
   if (!r) throw new AppError(404, 'Device not found');
   const frozen = await frozenFor(null, tenantId, 'legacy_agent');
   const isAdmin = req.session.role === 'admin';
   const userId = req.session.userId!;
   const canWrite = isAdmin || await permissionService.canWriteDevice(userId, id, false);
+  const managesPolicies = isAdmin || await permissionService.userHasTenantCapability(userId, tenantId, 'mdm.policies.manage');
   const actions: LegacyAgentDeviceAction[] = [];
   for (const type of MENU_TYPES) {
     const spec = commandSpecOrNull(type)!;
-    const has = canWrite && (isAdmin || await permissionService.canUseCapability(userId, id, false, spec.capability));
+    const policyType = POLICY_COMMAND_TYPES.includes(type);
+    const has = canWrite && (isAdmin || await permissionService.canUseCapability(userId, id, false, spec.capability)) && (!policyType || managesPolicies);
     const unavailable: LegacyAgentDeviceAction['unavailable'] = !has ? 'capabilityMissing'
       : r.revoked_at ? 'revoked'
         : r.enrollment_state !== 'enrolled' ? 'notEnrolled'
+          : policyType && Number(r.agent_version_code) < LEGACY_AGENT_POLICY_MIN_VERSION_CODE ? 'agentTooOld'
           : (type === 'device.lock' || type === 'device.wipe') && r.admin_active !== true ? 'adminInactive'
             : type === 'device.reboot' && r.knox_state !== 'licensed' ? 'knoxRequired'
               : frozen ? 'frozen' : null;
@@ -280,6 +302,14 @@ export async function consoleCommand(tenantId: number, type: string, raw: Record
   return { spec, params: parsed.data };
 }
 
+/** The commands of the agent policy (kiosk.suspend, policy.reapply, lot PONT-POL §8.5) also need mdm.policies.manage. */
+async function requirePolicyManage(req: Request, spec: CommandSpec): Promise<void> {
+  if (!POLICY_COMMAND_TYPES.includes(spec.type) || req.session.role === 'admin') return;
+  if (!(await permissionService.userHasTenantCapability(req.session.userId!, req.tenantId!, 'mdm.policies.manage'))) {
+    throw new AppError(403, "Capability 'mdm.policies.manage' not permitted for your team", 'capabilityMissing');
+  }
+}
+
 const enqueueResult = (o: EnqueueOutcome) => ({ batchId: o.batchId, commandIds: o.commandIds, targets: o.targets, refused: o.refused, held: o.held, replayed: o.replayed });
 
 function idempotencyKey(req: Request): string | undefined {
@@ -296,6 +326,7 @@ router.post('/devices/:id/commands', enqueueLimiter, wrap(async (req, res) => {
   const tenantId = req.tenantId!;
   const { spec, params } = await consoleCommand(tenantId, b.type, b.params);
   if ((await lacking(req, [id], spec.capability)).length > 0) throw new AppError(403, `Capability '${spec.capability}' not permitted for your team`, 'capabilityMissing');
+  await requirePolicyManage(req, spec);
   const key = idempotencyKey(req);
   if (spec.restrictionKey) {
     const ok = await applyRestriction(res, {
@@ -327,6 +358,7 @@ router.post('/commands/bulk', bulkLimiter, wrap(async (req, res) => {
   const { spec, params } = await consoleCommand(tenantId, b.type, b.params);
   const without = await lacking(req, ids, spec.capability);
   if (without.length > 0) throw new AppError(403, 'Capability not permitted on some devices', 'capabilityMissing', { count: without.length });
+  await requirePolicyManage(req, spec);
   const key = idempotencyKey(req);
   if (spec.restrictionKey) {
     const ok = await applyRestriction(res, {
@@ -419,6 +451,8 @@ async function revokeDevice(tenantId: number, deviceId: number, reason: string, 
       tenantId, action: 'legacy_agent.device_revoked', target: { type: 'device', id: String(deviceId), device: deviceId }, reason,
       details: { cancelledCommands: cancelled, by: actorUserId },
     }, auditCtx);
+    // Its agent:* keys stop applying (lot PONT-POL, D5): the device resolved again.
+    await requestDeviceResolution(trx, tenantId, [deviceId]);
     return true;
   });
 }
@@ -830,7 +864,11 @@ router.put('/settings/knox', requireTenantCapability('mdm.enrollment.manage'), w
 }));
 
 /** The console API of the bridge agent, mounted at /api/legacy-agent (routes/index.ts), after requireTenant. */
+let policyRoutesMounted = false;
+
 export function createLegacyAgentRouter(): Router {
+  // The agent policies (lot PONT-POL §9.2): the file store, the templates, the state of a device, the per-device values.
+  if (!policyRoutesMounted) { policyRoutesMounted = true; router.use(policyRouter()); }
   return router;
 }
 

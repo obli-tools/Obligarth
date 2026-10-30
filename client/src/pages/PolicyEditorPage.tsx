@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { AlertTriangle, Archive, ArrowLeft, CheckCircle2, FileUp, Pencil, Plus, RefreshCw, Save, Send, Trash2 } from 'lucide-react';
 import type {
-  AndroidPolicySection as AndroidSectionContent, AppleItem, JsonValue, Policy, PolicyConflict, PolicyContentV1, PolicyValidationIssue, PolicyVersion, SchemaKey,
+  AndroidPolicySection as AndroidSectionContent, AppleItem, JsonValue, LegacyAgentPolicySection as LegacyAgentSectionContent, Policy, PolicyConflict, PolicyContentV1, PolicyValidationIssue, PolicyVersion, SchemaKey,
 } from '@obligarth/shared';
 import { POLICY_CATEGORIES, POLICY_CATEGORY_RE, POLICY_MAX_ITEMS, RAW_PROFILE_TYPE, SocketEvents, shortType } from '@obligarth/shared';
 import { mdmApi, type RawProfileImport, type SchemaCatalogView } from '@/api/mdm.api';
@@ -20,6 +20,7 @@ import { AssignmentsPanel, announceSubmitOutcome } from '@/components/mdm/Assign
 import { ConflictList, ImpactConfirmDialog } from '@/components/mdm/ImpactPreview';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { AndroidPolicySection } from '@/components/android/AndroidPolicySection';
+import { LegacyAgentPolicySection } from '@/components/legacyAgentPolicy/LegacyAgentPolicySection';
 import { VERSION_TONE, categoryLabel, policyStateLabel, versionStateLabel } from '@/pages/PoliciesPage';
 import { apiErrorBody, apiErrorCode, apiErrorMessage, trCode } from '@/utils/apiError';
 
@@ -35,6 +36,8 @@ interface Row { item: AppleItem; text: string; error: string | null }
 const pretty = (v: unknown): string => JSON.stringify(v ?? {}, null, 2);
 /** The item id of the issues of the Android section (server: ANDROID_SECTION_ITEM). */
 const ANDROID_ITEM = 'android';
+/** The item id of the issues of the bridge agent's section (server: LEGACY_AGENT_SECTION_ITEM, lot PONT-POL). */
+const AGENT_ITEM = 'legacyAgent';
 const rowOf = (item: AppleItem): Row => ({ item, text: pretty(item.values ?? {}), error: null });
 const newId = (): string => (typeof crypto.randomUUID === 'function' ? crypto.randomUUID()
   : 'xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx'.replace(/x/g, () => Math.floor(Math.random() * 16).toString(16)));
@@ -55,6 +58,8 @@ export function PolicyEditorPage() {
   const [rows, setRows] = useState<Row[]>([]);
   // The Android section (lot AN-C2): its fragment and apps, edited by the generated forms.
   const [android, setAndroid] = useState<AndroidSectionContent | undefined>(undefined);
+  // The section of the bridge agent (lot PONT-POL): files, Wi-Fi, kiosk, restrictions, CAs.
+  const [legacyAgent, setLegacyAgent] = useState<LegacyAgentSectionContent | undefined>(undefined);
   const [changeNote, setChangeNote] = useState('');
   const [dirty, setDirty] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -95,6 +100,7 @@ export function PolicyEditorPage() {
     setVersion(v);
     setRows((v.content?.sections?.apple?.items ?? []).map(rowOf));
     setAndroid(v.content?.sections?.android);
+    setLegacyAgent(v.content?.sections?.legacyAgent);
     setChangeNote(v.changeNote ?? '');
     setDirty(false);
     setIssues([]);
@@ -142,6 +148,7 @@ export function PolicyEditorPage() {
     if (!ok) return null;
     const sections: PolicyContentV1['sections'] = { ...(version?.content?.sections ?? {}), apple: { items } };
     if (android) sections.android = android; else delete sections.android;
+    if (legacyAgent) sections.legacyAgent = legacyAgent; else delete sections.legacyAgent;
     return { format: 1, sections };
   };
 
@@ -264,7 +271,7 @@ export function PolicyEditorPage() {
   }
 
   const itemIssues = (itemId: string) => issues.filter((i) => i.itemId === itemId);
-  const globalIssues = issues.filter((i) => i.itemId !== ANDROID_ITEM && (i.itemId === null || !rows.some((r) => r.item.id === i.itemId)));
+  const globalIssues = issues.filter((i) => i.itemId !== ANDROID_ITEM && i.itemId !== AGENT_ITEM && (i.itemId === null || !rows.some((r) => r.item.id === i.itemId)));
   const rejected = version?.state === 'rejected';
 
   return (
@@ -350,7 +357,7 @@ export function PolicyEditorPage() {
                 </Button>
               )}
               {editable && (
-                <Button size="sm" disabled={busy || (rows.length === 0 && !android)} onClick={() => { void openPublish(); }}>
+                <Button size="sm" disabled={busy || (rows.length === 0 && !android && !legacyAgent)} onClick={() => { void openPublish(); }}>
                   <Send className="w-3.5 h-3.5 mr-1" />{t('policies.editor.publish') || 'Publish…'}
                 </Button>
               )}
@@ -385,7 +392,7 @@ export function PolicyEditorPage() {
           {!editable && version.changeNote && <p className="text-sm text-text-secondary">{version.changeNote}</p>}
 
           {/* Items of the Apple section (hidden for a version that has only Android settings) */}
-          {(rows.length > 0 || !android) && <section className="space-y-3">
+          {(rows.length > 0 || (!android && !legacyAgent)) && <section className="space-y-3">
             <h2 className="text-sm font-semibold text-text-primary">
               {t('policies.editor.items', { count: rows.length }) || `${rows.length} item(s)`}
             </h2>
@@ -411,6 +418,16 @@ export function PolicyEditorPage() {
           editable={!!editable}
           issues={issues.filter((i) => i.itemId === ANDROID_ITEM)}
           onChange={(next) => { setAndroid(next); setDirty(true); setValidated(false); }}
+        />
+      )}
+
+      {version && (legacyAgent || editable) && (
+        <LegacyAgentPolicySection
+          key={version.id}
+          section={legacyAgent}
+          editable={!!editable}
+          issues={issues.filter((i) => i.itemId === AGENT_ITEM)}
+          onChange={(next) => { setLegacyAgent(next); setDirty(true); setValidated(false); }}
         />
       )}
 

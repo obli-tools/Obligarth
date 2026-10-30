@@ -199,6 +199,20 @@ export function declarationTypesOf(capabilities: unknown): string[] | null {
   return Array.isArray(list) ? list.filter((s): s is string => typeof s === 'string') : null;
 }
 
+/** devices.custom_fields as the templates of the bridge agent read them (lot PONT-POL §5.5): string values only (a
+ *  number or a boolean as its text), 64 keys at most, an unreadable value as none. */
+export function customFieldsOf(v: unknown): Record<string, string> {
+  let o: unknown;
+  try { o = parseJson<unknown>(v); } catch { return {}; }
+  if (!o || typeof o !== 'object' || Array.isArray(o)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, x] of Object.entries(o as Record<string, unknown>).slice(0, 64)) {
+    if (typeof x === 'string') out[k] = x;
+    else if (typeof x === 'number' || typeof x === 'boolean') out[k] = String(x);
+  }
+  return out;
+}
+
 /** The devices under management of a tenant (all, or `deviceIds`), with the facts of their resolution, the dynamic
  *  groups they are members of (whatever the state of the group: the members of a held group or of one in error are
  *  frozen, they stay what applies), and the ancestry of their groups. */
@@ -206,12 +220,14 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
   const query = q('devices as d')
     .leftJoin('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .leftJoin('end_users as u', function joinUser() { this.on('u.id', '=', 'd.end_user_id').andOn('u.tenant_id', '=', 'd.tenant_id'); })
+    .leftJoin('legacy_agent_devices as la', function joinAgent() { this.on('la.device_id', '=', 'd.id').andOn('la.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId)
     .whereNot('d.enrollment_state', 'unenrolled')
     .orderBy('d.id')
     .select('d.id', 'd.uuid', 'd.label', 'd.group_id', 'd.platform', 'd.management_channel', 'd.os_version', 'd.management_mode', 'd.supervised',
       'd.ownership', 'd.serial_number', 'd.model_name', 'a.udid', 'a.ddm_enabled', 'a.ddm_client_capabilities',
       'u.id as end_user_id', 'u.email', 'u.display_name as end_user_name', 'u.managed_apple_account', 'u.external_id',
+      'd.custom_fields', 'la.revoked_at as agent_revoked_at',
       q.raw(`(SELECT array_agg(m.smart_group_id ORDER BY m.smart_group_id) FROM smart_group_members m
                WHERE m.tenant_id = d.tenant_id AND m.device_id = d.id) AS smart_group_ids`));
   if (deviceIds) query.whereIn('d.id', deviceIds);
@@ -237,6 +253,8 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
       externalId: r.external_id ?? null,
     },
     smartGroupIds: Array.isArray(r.smart_group_ids) ? r.smart_group_ids.map(Number) : [],
+    customFields: customFieldsOf(r.custom_fields),
+    revoked: r.agent_revoked_at !== null && r.agent_revoked_at !== undefined,
   }));
   const groupIds = [...new Set(devices.map((d) => d.groupId).filter((g): g is number => g !== null))];
   const groupAncestors = await loadGroupAncestors(q, tenantId, groupIds);
