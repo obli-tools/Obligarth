@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { LEGACY_AGENT_POLICY_ARTIFACT_KEY } from '@obligarth/shared';
+import { LEGACY_AGENT_POLICY_ARTIFACT_KEY, agentReportStateOf, isAgentPolicyWarning } from '@obligarth/shared';
 import { requestComplianceEvaluation } from '../mdm/apple/requests';
 import { isCompileError, lockDeviceRows, REMOVED, rollupConfigState, type ArtifactRow } from '../mdm/policies/artifacts';
 import type { PolicyReport } from './schemas';
@@ -27,15 +27,18 @@ const sameList = (a: string[], b: string[]): boolean => a.length === b.length &&
 
 /** The artifact's state and reasons a report about the desired version gives (null: leave it). */
 export function artifactStateOf(report: PolicyReport, withheld: boolean): { state: 'applied' | 'delivering' | 'error'; reasons: string[] } {
-  const failing = report.items.filter((i) => i.state === 'error' || i.state === 'non_compliant');
+  // A warning (a network added by the user, AGENT_POLICY_WARNING_CODES) is said in the reasons of an applied policy.
+  const items = report.items.filter((i) => !isAgentPolicyWarning(i));
+  const failing = items.filter((i) => i.state === 'error' || i.state === 'non_compliant');
   if (failing.length) {
     const reasons = [...new Set(failing.map((i) => `agent:${i.code}`))].slice(0, 10);
     return { state: 'error', reasons };
   }
-  const pending = report.items.filter((i) => i.state === 'pending' && i.code !== 'wipe_withheld');
+  const pending = items.filter((i) => i.state === 'pending' && i.code !== 'wipe_withheld');
   if (pending.length) return { state: 'delivering', reasons: [] };
   const reasons: string[] = [];
-  if (report.items.some((i) => i.state === 'pending_licence')) reasons.push('agent:knox_pending');
+  if (items.some((i) => i.state === 'pending_licence')) reasons.push('agent:knox_pending');
+  if (report.items.some(isAgentPolicyWarning)) reasons.push('agent:wifi_user_network');
   if (withheld || report.items.some((i) => i.code === 'wipe_withheld')) reasons.push('deliver:wipe_withheld');
   return { state: 'applied', reasons };
 }
@@ -68,7 +71,9 @@ export async function recordPolicyReport(trx: Knex.Transaction, tenantId: number
   const appliedAt = new Date((report.appliedAt + clockOffsetSeconds) * 1000);
   const now = new Date();
   await trx('legacy_agent_policy_reports').insert({
-    tenant_id: tenantId, device_id: deviceId, policy_hash: report.hash, state: report.state, knox_state: report.knoxState,
+    // The fleet column reads this state: a warning (a network added by the user) leaves the policy applied.
+    tenant_id: tenantId, device_id: deviceId, policy_hash: report.hash,
+    state: report.state === 'none' ? 'none' : agentReportStateOf(report.items.filter((i) => !isAgentPolicyWarning(i)), true), knox_state: report.knoxState,
     items: JSON.stringify(items), ...counts, applied_at: Number.isFinite(appliedAt.getTime()) ? appliedAt : null, received_at: now,
   }).onConflict(['tenant_id', 'device_id']).merge();
 

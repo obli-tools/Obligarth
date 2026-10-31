@@ -23,6 +23,9 @@ import { InfoTip } from '@/components/common/Tip';
 import { SegmentedTabs } from '@/components/common/SegmentedTabs';
 import { FilesTab } from '@/components/legacyAgentPolicy/FilesTab';
 import { DeviceValuesTab } from '@/components/legacyAgentPolicy/DeviceValuesTab';
+import { BenchTab } from '@/components/bench/BenchTab';
+import { benchStationsApi } from '@/api/benchStations.api';
+import { useRoleLabel } from '@/components/bench/benchUi';
 import { ToggleSwitch } from '@/components/common/ToggleSwitch';
 import { StyledCheckbox } from '@/components/devices/StyledCheckbox';
 import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
@@ -41,7 +44,7 @@ import { saveBlob } from '@/utils/download';
 // included; the version embedded in the server image is shown with its image, lot AGENT-RU). Lock and erase go
 // through the dialog of the guard engine.
 
-type Tab = 'devices' | 'tokens' | 'packages' | 'files' | 'deviceValues' | 'platform';
+type Tab = 'devices' | 'tokens' | 'packages' | 'files' | 'deviceValues' | 'bench' | 'platform';
 // The look of the suite (the inventory of /devices): fields and cards without borders, lists without separators whose
 // rows light up on hover, filters as chips.
 const fieldCls = 'mt-1 w-full rounded-md bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50 coarse:min-h-10';
@@ -86,13 +89,16 @@ export function LegacyAgentPage() {
   const tenantId = useTenantStore((s) => s.currentTenantId);
   const platform = admin && isMasterTenant(tenantId);
   const [tab, setTab] = useState<Tab>('devices');
-  const tabs: Tab[] = platform ? ['devices', 'tokens', 'packages', 'files', 'deviceValues', 'platform'] : ['devices', 'tokens', 'packages', 'files', 'deviceValues'];
+  // Lot BANC: the Bench tab for the holders of mdm.bench.manage (platform administrators always).
+  const benchManager = useAuthStore((s) => s.isAdmin() || (s.permissions?.tenantCapabilities ?? []).includes('mdm.bench.manage'));
+  const tabs: Tab[] = ['devices', 'tokens', 'packages', 'files', 'deviceValues', ...(benchManager ? ['bench' as const] : []), ...(platform ? ['platform' as const] : [])];
   const label = (k: Tab) => (k === 'devices' ? (t('legacyAgent.tabs.devices') || 'Devices')
     : k === 'tokens' ? (t('legacyAgent.tabs.tokens') || 'Enrollment tokens')
       : k === 'packages' ? (t('legacyAgent.tabs.packages') || 'Packages')
         : k === 'files' ? (t('legacyAgent.tabs.files') || 'Files')
           : k === 'deviceValues' ? (t('legacyAgent.tabs.deviceValues') || 'Device values')
-            : (t('legacyAgent.tabs.platform') || 'Platform'));
+            : k === 'bench' ? (t('legacyAgent.tabs.bench') || 'Bench')
+              : (t('legacyAgent.tabs.platform') || 'Platform'));
   return (
     <PageContainer className="space-y-5">
       <div>
@@ -107,6 +113,7 @@ export function LegacyAgentPage() {
       {tab === 'packages' && <PackagesTab />}
       {tab === 'files' && <FilesTab />}
       {tab === 'deviceValues' && <DeviceValuesTab />}
+      {tab === 'bench' && benchManager && <BenchTab />}
       {tab === 'platform' && platform && <PlatformTab />}
     </PageContainer>
   );
@@ -207,6 +214,7 @@ const KNOX_RANK: Record<LegacyAgentKnoxState, number> = { licensed: 0, present: 
 function DevicesTab() {
   const { t, i18n } = useTranslation();
   const confirm = useConfirm();
+  const roleLabel = useRoleLabel();
   const prompt = usePrompt();
   const now = useMinuteClock();
   const [params, setParams] = useSearchParams();
@@ -309,7 +317,16 @@ function DevicesTab() {
       message: t('legacyAgent.revokeMessage', { name: d.name ?? d.deviceId }) || `The agent of ${d.name ?? d.deviceId} will stop receiving orders and forget its key. Reason:`,
     });
     if (!reason) return;
-    try { await legacyAgentApi.revoke(d.deviceId, reason); toast.success(t('legacyAgent.revoked') || 'Agent revoked'); load(); } catch (err) { fail(err); }
+    // Lot BANC (D3): an owner declared for an agent 1.3.0 stays on the device without a working agent: confirmed apart.
+    let confirmDeclared = false;
+    if (d.benchOwnerDeclared) {
+      confirmDeclared = await confirm({
+        danger: true, confirmLabel: t('legacyAgent.actions.revoke') || 'Revoke',
+        message: t('legacyAgent.ownerDeclaredWarning') || 'The device owner stays set without a working agent: only a reset of the device will remove it.',
+      });
+      if (!confirmDeclared) return;
+    }
+    try { await legacyAgentApi.revoke(d.deviceId, reason, confirmDeclared); toast.success(t('legacyAgent.revoked') || 'Agent revoked'); load(); } catch (err) { fail(err); }
   };
 
   // The export: the view as shown (filters, search, sort), headers in the language of the console.
@@ -493,7 +510,7 @@ function DevicesTab() {
                 <SortTh label={t('legacyAgent.cols.model') || 'Model'} k="model" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.android') || 'Android'} k="android" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.agent') || 'Agent'} k="agent" sort={sort} onSort={onSort} />
-                <SortTh label={t('legacyAgent.cols.admin') || 'Admin mode'} k="admin" sort={sort} onSort={onSort} />
+                <SortTh label={t('legacyAgent.cols.mode') || 'Mode'} k="admin" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.knox') || 'Knox'} k="knox" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.unknownSources') || 'Unknown sources'} k="src" sort={sort} onSort={onSort} />
                 <SortTh label={t('legacyAgent.cols.battery') || 'Battery'} k="battery" sort={sort} onSort={onSort} />
@@ -524,7 +541,11 @@ function DevicesTab() {
                       {d.securityPatch && <div className="text-xs text-text-muted">{d.securityPatch}</div>}
                     </td>
                     <td className={clsx(tdCls, 'whitespace-nowrap text-text-secondary')}>{d.agentVersionName}<span className="text-xs text-text-muted"> ({d.agentVersionCode})</span></td>
-                    <td className={tdCls}>{d.adminActive ? <Flag tone="green" text={t('legacyAgent.adminOn') || 'On'} /> : <Flag tone="red" text={t('legacyAgent.adminOff') || 'Off'} />}</td>
+                    <td className={tdCls}>
+                      {d.role === 'device_owner' ? <Flag tone="green" text={roleLabel('device_owner')} />
+                        : d.adminActive ? <Flag tone="green" text={roleLabel('device_admin')} /> : <Flag tone="red" text={roleLabel('inactive')} />}
+                      {d.benchOwnerDeclared && <div className="text-[11px] text-amber-400">{t('legacyAgent.role.declared') || 'Owner declared, agent 1.3.0'}</div>}
+                    </td>
                     <td className={tdCls}>
                       <Flag tone={d.knoxState === 'licensed' ? 'green' : d.knoxState === 'license_error' ? 'red' : d.knoxState === 'present' ? 'amber' : 'gray'}
                         text={t(`legacyAgent.knox.${d.knoxState}`) || d.knoxState} />
@@ -842,6 +863,7 @@ function CommandDialog({ kind, count, onClose, onSend }: { kind: 'message' | 'in
 
 function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
   const { t } = useTranslation();
+  const roleLabel = useRoleLabel();
   const [d, setD] = useState<LegacyAgentDeviceDetail | null>(null);
   const [cmds, setCmds] = useState<LegacyAgentCommandView[]>([]);
   const load = useCallback(() => {
@@ -866,6 +888,10 @@ function DeviceDetail({ id, onClose }: { id: number; onClose: () => void }) {
           {d.identityConflict && <div className="flex items-start gap-2 rounded-xl bg-amber-500/10 px-3 py-2 text-amber-400"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />{t('legacyAgent.detail.conflict') || 'Identity conflict: the serial number or the IMEI declared by this agent is held by another managed device.'}</div>}
           <div className="rounded-xl bg-bg-secondary py-1">
             {row(t('legacyAgent.detail.agentId') || 'Agent', d.agentId)}
+            {row(t('legacyAgent.detail.role') || 'Role', <>{roleLabel(d.role)}{d.benchOwnerDeclared && <span className="ml-1 text-amber-400">({t('legacyAgent.role.declared') || 'Owner declared, agent 1.3.0'})</span>}</>)}
+            {d.enrolledByStation && row(t('legacyAgent.detail.enrolledBy') || 'Enrolled by the bench station', `${d.enrolledByStation.name ?? '—'} · ${fmt(d.enrolledAt)}`)}
+            {d.identityState && row(t('legacyAgent.identity.title') || 'Identity', <span className={d.identityState === 'confirmed' ? 'text-emerald-400' : 'text-amber-400'}>{t(`legacyAgent.identity.${d.identityState}`) || d.identityState}</span>)}
+            {d.adbEnabled !== null && d.adbEnabled !== undefined && row('ADB', d.adbEnabled ? (t('legacyAgent.adb.on') || 'On') : (t('legacyAgent.adb.off') || 'Off'))}
             {row(t('legacyAgent.cols.model') || 'Model', d.modelName ?? '—')}
             {row(t('legacyAgent.detail.serial') || 'Serial number', d.serialNumber ?? '—')}
             {row(t('legacyAgent.detail.samsungSerial') || 'Samsung serial', d.samsungSerial ?? '—')}
@@ -963,7 +989,9 @@ function TokensTab() {
   const [created, setCreated] = useState<LegacyAgentTokenCreated | null>(null);
   const [knoxSet, setKnoxSet] = useState<boolean | null>(null);
   const [knox, setKnox] = useState('');
-  const load = useCallback(() => { legacyAgentApi.tokens().then(setRows).catch((err) => { setRows([]); fail(err); }); }, []);
+  // Lot BANC: the single-use tokens of the bench stations are left out unless asked for.
+  const [withBench, setWithBench] = useState(false);
+  const load = useCallback(() => { legacyAgentApi.tokens(withBench ? 'all' : 'console').then(setRows).catch((err) => { setRows([]); fail(err); }); }, [withBench]);
   useEffect(() => {
     load();
     groupsApi.list().then(setGroups).catch(() => setGroups([]));
@@ -997,23 +1025,30 @@ function TokensTab() {
         <label className={labelCls}>{t('legacyAgent.tokens.maxUses') || 'Quota'}<input className={fieldCls} type="number" min={1} max={LEGACY_AGENT_TOKEN_BOUNDS.maxUsesMax} value={form.maxUses} onChange={(e) => setForm({ ...form, maxUses: e.target.value })} /></label>
         <div className="flex items-end"><Button onClick={() => void create()} disabled={!form.label.trim()}><Plus className="mr-1 h-4 w-4" />{t('legacyAgent.tokens.create') || 'New token'}</Button></div>
       </div>
+      <div className="flex">
+        <button type="button" aria-pressed={withBench} className={chipCls(withBench)} onClick={() => setWithBench((v) => !v)}>
+          {t('legacyAgent.tokens.showBench') || 'Show the tokens of the bench stations'}
+        </button>
+      </div>
       <div className={listCls}>
       <table className="w-full text-sm">
         <thead className={headCls}><tr>
-          <th className={thCls}>{t('legacyAgent.tokens.label') || 'Label'}</th><th className={thCls}>{t('legacyAgent.tokens.uses') || 'Uses'}</th>
+          <th className={thCls}>{t('legacyAgent.tokens.label') || 'Label'}</th><th className={thCls}>{t('legacyAgent.tokens.origin') || 'Origin'}</th><th className={thCls}>{t('legacyAgent.tokens.uses') || 'Uses'}</th>
           <th className={thCls}>{t('legacyAgent.tokens.expires') || 'Expires'}</th><th className={thCls}>{t('legacyAgent.tokens.state') || 'State'}</th><th className="w-12" />
         </tr></thead>
         <tbody>
           {(rows ?? []).map((r) => (
             <tr key={r.id} className={rowCls}>
-              <td className={clsx(tdCls, 'font-medium text-text-primary')}>{r.label}</td><td className={clsx(tdCls, 'tabular-nums text-text-secondary')}>{r.uses} / {r.maxUses}</td>
+              <td className={clsx(tdCls, 'font-medium text-text-primary')}>{r.label}</td>
+              <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{r.origin === 'bench' ? (t('legacyAgent.tokens.originBench') || 'Bench station') : (t('legacyAgent.tokens.originConsole') || 'Console')}</td>
+              <td className={clsx(tdCls, 'tabular-nums text-text-secondary')}>{r.uses} / {r.maxUses}</td>
               <td className={clsx(tdCls, 'text-text-secondary')}>{fmt(r.expiresAt)}</td>
               <td className={tdCls}><Flag tone={r.state === 'active' ? 'green' : 'gray'} text={t(`legacyAgent.tokens.states.${r.state}`) || r.state} /></td>
               <td className="py-2.5 pr-3 text-right">{r.state === 'active' && (
                 <button type="button" title={t('legacyAgent.tokens.revoke') || 'Revoke'} onClick={() => void revoke(r)} className="rounded p-1 text-text-muted transition-colors hover:bg-bg-hover hover:text-red-400"><Ban className="h-4 w-4" /></button>)}</td>
             </tr>
           ))}
-          {rows && rows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-text-muted">{t('legacyAgent.tokens.empty') || 'No token yet.'}</td></tr>}
+          {rows && rows.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-text-muted">{t('legacyAgent.tokens.empty') || 'No token yet.'}</td></tr>}
         </tbody>
       </table>
       </div>
@@ -1147,8 +1182,20 @@ function PlatformTab() {
     try { setSettings(await legacyAgentApi.admin.saveSettings(patch)); toast.success(t('common.saved') || 'Saved'); } catch (err) { fail(err); }
   };
   const signers = useMemo(() => settings?.signers ?? [], [settings]);
+  // Lot BANC: the installer of the bench station carried by this server image.
+  const [installer, setInstaller] = useState<{ available: boolean; version: string | null; sha256: string | null } | null>(null);
+  useEffect(() => { benchStationsApi.installer().then(setInstaller).catch(() => setInstaller(null)); }, []);
   return (
     <div className="space-y-5 text-sm">
+      {installer?.available && (
+        <section className={cardCls}>
+          <h3 className={cardTitleCls}>{t('bench.stations.installer.title') || 'Installer of the station'}</h3>
+          <a className="text-accent hover:underline" href="/api/bench/download/obligarth-bench.msi">
+            {t('bench.stations.installer.download', { version: installer.version ?? '' }) || `Download the bench station ${installer.version ?? ''}`}
+          </a>
+          <div className="mt-1 break-all font-mono text-xs text-text-muted">SHA-256 : {installer.sha256}</div>
+        </section>
+      )}
       <section className={cardCls}>
         <h3 className={cardTitleCls}>{t('legacyAgent.serverKey.title') || 'Instance key (to pin in the APK)'}</h3>
         {key && (key.missing

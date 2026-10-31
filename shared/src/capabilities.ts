@@ -46,6 +46,12 @@ export const TENANT_CAPABILITIES = [
   // Create and use personal access keys for the MCP server (an AI agent acting as the user); default off. Every key
   // stays within the rights of its owner, re-checked at each call (server/src/mcp).
   'mcp.access_keys',
+  // Bench stations (lot BANC §3.7): the history of the provisionings of the tenant, the stations that target it (no
+  // token, no address), suspend or remove a target of the tenant; held by the sets that hold mdm.enrollment.manage.
+  'mdm.bench.manage',
+  // Open a bench session for a station that targets the tenant; checked again at each enrollment token the station
+  // asks for under the session (lot BANC §3.3 bis).
+  'mdm.bench.operate',
 ] as const;
 
 export type TenantCapability = typeof TENANT_CAPABILITIES[number];
@@ -68,6 +74,8 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'mdm.apps.manage':       'Apps · Catalog and assignments',
   'mdm.privacy.manage':    'Privacy · Profiles, notice and retention',
   'mcp.access_keys':       'MCP · Personal access keys for AI agents',
+  'mdm.bench.manage':      'Enrollment · Bench stations and provisioning history',
+  'mdm.bench.operate':     'Enrollment · Open a bench session',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

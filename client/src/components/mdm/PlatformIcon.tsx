@@ -48,6 +48,7 @@ const MODE_FALLBACK: Record<ManagementMode, string> = {
   device: 'Device', user_enrollment: 'User Enrollment', fully_managed: 'Fully managed', dedicated: 'Dedicated',
   work_profile_corporate: 'Work profile (corporate)', work_profile_personal: 'Work profile (personal)',
   device_admin: 'Device administrator (Android agent)',
+  device_owner: 'Device owner (Android agent)',
 };
 export const managementModeLabel = (t: TFunction, m: ManagementMode | string): string =>
   t(`mdm.managementMode.${m}`) || MODE_FALLBACK[m as ManagementMode] || m;

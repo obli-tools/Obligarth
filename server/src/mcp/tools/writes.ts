@@ -9,6 +9,7 @@ import { AppError } from '../../middleware/errorHandler';
 import { refreshInventoryNow } from '../../apple/commands/inventory';
 import { tenantFrozen } from '../../guard/frozen';
 import { changeDevicesGroup } from '../../mdm/policies/deviceMove';
+import { verifyImpactToken } from '../../mdm/policies/impactToken';
 import { permissionService } from '../../services/permission.service';
 import { cancelCommand, commandOf, lackingCapability, requestCommand, type CommandOutcome, type ConsoleCaller } from '../../legacyAgent/console';
 import { accessKeyDetail, mcpAuditCtx } from '../audit';
@@ -435,11 +436,15 @@ export async function executeLegacy(x: ExecContext): Promise<ExecResult> {
   return gatedResult(out);
 }
 
-/** The digest of the impact of a move, its devicesToken left out (the one the human echoes at approval). */
+/**
+ * The digest of the impact of a move, its devicesToken (the one the human echoes at approval) and its computedAt left
+ * out: both change with every computation, so a digest over them never matched at approval (30/10, impactChanged).
+ */
 function impactDigestOf(raw: unknown): { impact: Record<string, unknown>; devicesToken: string | null; impactDigest: string } {
   const impact = { ...((raw ?? {}) as Record<string, unknown>) };
   const devicesToken = typeof impact.devicesToken === 'string' ? impact.devicesToken : null;
   delete impact.devicesToken;
+  delete impact.computedAt;
   const impactDigest = createHash('sha256').update(canonicalJson(impact as never)).digest('hex');
   return { impact, devicesToken, impactDigest };
 }
@@ -458,8 +463,13 @@ export async function executeMove(x: ExecContext): Promise<ExecResult> {
   if (groupId !== null && !(await db('device_groups').where({ tenant_id: tenant, id: groupId }).first('id'))) return { state: 'failed', errorCode: 'perimeterLost' };
   await checkMoveRights({ userId: x.consoleCaller.userId, isPlatformAdmin: x.consoleCaller.isPlatformAdmin }, tenant, ids, groupId);
   const now = await movePreview(x.req, tenant, ids, groupId);
+  // The token carries its expiry, signed anew each time: the echoed one must be genuine and name the same change.
+  const changeOf = (t: unknown): string | null => {
+    const c = typeof t === 'string' ? verifyImpactToken(t, tenant, x.consoleCaller.userId) : null;
+    return c ? canonicalJson(c as never) : null;
+  };
   if (typeof x.echo?.impactDigest !== 'string' || x.echo.impactDigest !== now.impactDigest
-    || (now.devicesToken !== null && x.echo.devicesToken !== now.devicesToken)) {
+    || (now.devicesToken !== null && changeOf(x.echo.devicesToken) !== changeOf(now.devicesToken))) {
     return { state: 'failed', errorCode: 'impactChanged' };
   }
   // The approved digest is compared again under the lock of the configuration, right before the devices move (or the

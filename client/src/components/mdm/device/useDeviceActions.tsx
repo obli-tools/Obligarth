@@ -98,7 +98,8 @@ const REASON_FALLBACK: Record<string, string> = {
 export function channelOf(d: Pick<DeviceDetail, 'platform' | 'managementMode'> & { managementChannel?: ManagementChannel }): ManagementChannel {
   if (d.managementChannel) return d.managementChannel;
   if (d.platform !== 'android') return 'apple_mdm';
-  return d.managementMode === 'device_admin' ? 'legacy_agent' : 'amapi';
+  // An older server without the field: the two modes of the bridge agent (lot BANC: administrator or owner).
+  return d.managementMode === 'device_admin' || d.managementMode === 'device_owner' ? 'legacy_agent' : 'amapi';
 }
 
 export function useDeviceActions(device: DeviceDetail | null, { canAct, onQueued }: { canAct: boolean; onQueued?: () => void }): DeviceActions {

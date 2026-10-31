@@ -170,14 +170,23 @@ class PolicyReconciler(
 
         // ------------------------------------------------------------------
 
+        /** 1.4.0: the agent owns the device (read once per pass). */
+        val owner: Boolean by lazy { guardedBool { host.isDeviceOwner() } == true }
+
+        /** The items of the owner wait on a device the agent only administers (§7.3: pending_owner). */
+        fun ownerGate(): ItemOutcome? = if (owner) null else ItemOutcome.pending(PolicyCodes.PENDING_OWNER)
+
         fun apply(p: Policy, kioskSuspended: Boolean) {
             for (s in p.dpm) if (timeUp()) skip(s.key) else dpm(s)
+            for (s in p.owner) if (timeUp()) skip(s.key) else ownerRestriction(s)
             val settings = p.knox.filter { it.field != SETTINGS_CHANGES }
             for (s in settings) if (timeUp()) skip(s.key) else knoxSetting(s, p)
             for (c in p.certs) if (timeUp()) skip(c.key) else cert(c)
             for (w in p.wifi) if (timeUp()) skip(w.key) else wifi(w)
             for (r in p.wifiRemove) if (timeUp()) skip(r.key) else wifiRemove(r)
             for (f in p.files.sortedBy { if (it.inline != null) 0 else 1 }) if (timeUp()) skip(f.key) else file(f)
+            for (g in p.grants) if (timeUp()) skip(g.key) else grant(g)
+            p.systemUpdate?.let { u -> if (timeUp()) skip(u.key) else systemUpdate(u) }
             // A kiosk kept from the previous policy (its key withheld: Policy.keepingKioskOf) stays as applied and follows a
             // suspension, without a ledger change; the key is reported below as undeliverable or unreadable.
             p.kiosk?.let { k ->
@@ -262,9 +271,48 @@ class PolicyReconciler(
         }
 
         fun cert(c: Policy.Cert) {
-            val o = knoxGate() ?: if (fresh(c.key, c.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
-            else guarded(ItemOutcome.error(PolicyCodes.KNOX_REFUSED)) { host.knoxCertInstall(c.id, c.name, c.pem) }
-            record(c.key, c.digest, o, checked = o.code != PolicyCodes.UNCHANGED) { e -> if (o.settled) e.copy(value = c.name) else e }
+            // 1.4.0 (§7.3): without the Knox licence, the owner installs the CA itself (installCaCert).
+            val viaOwner = knox != KnoxLicence.LICENSED && owner
+            val o = when {
+                viaOwner -> if (fresh(c.key, c.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+                    else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.ownerCertInstall(c.pem) }
+                else -> knoxGate() ?: if (fresh(c.key, c.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+                    else guarded(ItemOutcome.error(PolicyCodes.KNOX_REFUSED)) { host.knoxCertInstall(c.id, c.name, c.pem) }
+            }
+            record(c.key, c.digest, o, checked = o.code != PolicyCodes.UNCHANGED) { e ->
+                when {
+                    !o.settled || o.code == PolicyCodes.UNCHANGED -> e
+                    viaOwner -> e.copy(value = linkedMapOf(CERT_VIA to CERT_VIA_OWNER, "pem" to c.pem))
+                    else -> e.copy(value = c.name)
+                }
+            }
+        }
+
+        // ---- Owner of the device (1.4.0, lot BANC §7.3) ----
+
+        fun ownerRestriction(s: Policy.Setting) {
+            var checked = false
+            val o = ownerGate() ?: guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) {
+                val v = if (same(s.key, s.digest)) host.ownerRestrictionRead(s.field) else null
+                when {
+                    v != null && v == s.value -> ItemOutcome.compliant(PolicyCodes.UNCHANGED).also { checked = true }
+                    v == null && fresh(s.key, s.digest) -> ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+                    else -> host.ownerRestrictionApply(s.field, s.value == true).also { checked = true }
+                }
+            }
+            record(s.key, s.digest, o, checked)
+        }
+
+        fun grant(g: Policy.Grant) {
+            val o = ownerGate() ?: if (fresh(g.key, g.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+            else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.permissionGrantApply(g.pkg, g.permission, g.state) }
+            record(g.key, g.digest, o, checked = o.code != PolicyCodes.UNCHANGED)
+        }
+
+        fun systemUpdate(u: Policy.SystemUpdate) {
+            val o = ownerGate() ?: if (fresh(u.key, u.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+            else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.systemUpdateApply(u) }
+            record(u.key, u.digest, o, checked = o.code != PolicyCodes.UNCHANGED)
         }
 
         fun wifi(w: Policy.Wifi) {
@@ -306,19 +354,22 @@ class PolicyReconciler(
                 }
             }
             // A foreign profile (a same-SSID network of another app) is never taken as applied: the next pass looks again,
-            // since the read-back cannot tell it from the agent's own network.
-            record(w.key, w.digest, o, checked, keepDigest = o.settled && o.code != PolicyCodes.WIFI_FOREIGN_PROFILE) {
+            // since the read-back cannot tell it from the agent's own network (and its connection may change).
+            record(w.key, w.digest, o, checked, keepDigest = o.settled && o.code !in PolicyCodes.WIFI_FOREIGN) {
                 it.copy(preferAt = preferAt, value = method)
             }
         }
 
         fun wifiRemove(r: Policy.WifiRemove) {
-            val o = knoxGate() ?: if (same(r.key, r.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
+            // 1.4.0 (§7.3): without the Knox licence, the owner removes the network whoever created it.
+            val viaOwner = knox != KnoxLicence.LICENSED && owner
+            val o = (if (viaOwner) null else knoxGate()) ?: if (same(r.key, r.digest)) ItemOutcome.compliant(PolicyCodes.UNCHANGED)
             else guarded(ItemOutcome.error(PolicyCodes.KNOX_REFUSED)) {
                 // Never the network in use while no managed network of the policy is in place (it may be the device's
                 // only way to the server): tried again at the next pass.
                 val connected = host.wifiConnectedSsid()
                 if (connected != null && connected == r.ssid && wifiSettled.isEmpty()) ItemOutcome.pending(PolicyCodes.BLOCKED_BY_ORDER, "kept_connected")
+                else if (viaOwner) host.ownerWifiRemove(r.ssid)
                 else host.knoxWifiRemove(r.ssid)
             }
             record(r.key, r.digest, o, checked = true, keepDigest = o.state == PolicyStates.COMPLIANT)
@@ -335,8 +386,9 @@ class PolicyReconciler(
             } else {
                 blobs.file(f.sha256) ?: run {
                     val failure = blobs.failure(f.sha256) ?: PolicyCodes.DOWNLOAD_LIMITED
-                    val o = if (failure == PolicyCodes.DOWNLOAD_FAILED || failure == PolicyCodes.HASH_MISMATCH) ItemOutcome.error(failure)
-                    else ItemOutcome.pending(failure)
+                    val detail = blobs.failureDetail(f.sha256)
+                    val o = if (failure == PolicyCodes.DOWNLOAD_FAILED || failure == PolicyCodes.HASH_MISMATCH) ItemOutcome.error(failure, detail)
+                    else ItemOutcome.pending(failure, detail)
                     return record(f.key, f.digest, o, false)
                 }
             }
@@ -442,8 +494,30 @@ class PolicyReconciler(
             }
             key.startsWith("agent:cert[") -> {
                 val id = key.removePrefix("agent:cert[").removeSuffix("]")
-                knoxUndoGate() ?: guarded(ItemOutcome.error(PolicyCodes.KNOX_REFUSED)) { host.knoxCertRemove(id, e.value as? String ?: id) }
+                val ownerCa = (e.value as? Map<*, *>)?.takeIf { it[CERT_VIA] == CERT_VIA_OWNER }?.get("pem") as? String
+                when {
+                    // A CA of the owner: gone with the owner already; otherwise uninstalled by it.
+                    ownerCa != null -> if (!owner) ItemOutcome.compliant(PolicyCodes.UNDONE, PolicyCodes.PENDING_OWNER)
+                        else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.ownerCertRemove(ownerCa) }
+                    else -> knoxUndoGate() ?: guarded(ItemOutcome.error(PolicyCodes.KNOX_REFUSED)) { host.knoxCertRemove(id, e.value as? String ?: id) }
+                }
             }
+            // 1.4.0: what the owner set is cleared by the system with the owner; otherwise the owner clears it.
+            key.startsWith("agent:owner.") -> {
+                val field = key.removePrefix("agent:owner.")
+                if (!owner || Policy.OWNER_FIELDS[field] == null) ItemOutcome.compliant(PolicyCodes.UNDONE)
+                else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.ownerRestrictionApply(field, false) }
+            }
+            key.startsWith("agent:grant[") -> {
+                val target = key.removePrefix("agent:grant[").removeSuffix("]")
+                val pkg = target.substringBefore('/')
+                val permission = target.substringAfter('/', "")
+                if (!owner || permission.isEmpty()) ItemOutcome.compliant(PolicyCodes.UNDONE)
+                else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.permissionGrantApply(pkg, permission, "default") }
+            }
+            key == Policy.SYSTEM_UPDATE_KEY ->
+                if (!owner) ItemOutcome.compliant(PolicyCodes.UNDONE)
+                else guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) { host.systemUpdateApply(null) }
             key.startsWith("agent:wifi.remove[") -> ItemOutcome.compliant(PolicyCodes.UNDONE)
             key.startsWith("agent:wifi[") -> guarded(ItemOutcome.error(PolicyCodes.INTERNAL, "SecurityException")) {
                 // The other managed networks: those of the policy in place (§10.5: kept when it is the one in use and
@@ -510,6 +584,9 @@ class PolicyReconciler(
         const val WIFI_VIA_KNOX = "knox"
         const val WIFI_VIA_MANAGER = "wifimanager"
         const val WIFI_VIA_LICENSED_FALLBACK = "wifimanager_licensed"
+        /** 1.4.0: a CA installed by the owner (its ledger value keeps the certificate, public, for the uninstall). */
+        const val CERT_VIA = "via"
+        const val CERT_VIA_OWNER = "owner"
 
         /** Severity of an outcome: the worst path decides a file item, the worst of tiles and kiosk the kiosk. */
         fun rank(o: ItemOutcome): Int = when (o.state) {

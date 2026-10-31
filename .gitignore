@@ -202,6 +202,10 @@ custom/
 # déposée par la mise à jour au moment du build, jamais versionnée.
 /server/agent-release/
 
+# Installateur de la station de banc (obligarth-bench.msi et VERSION) : déposé par la
+# mise à jour au moment du build de l'image serveur, jamais versionné (lot BANC).
+/server/bench-release/
+
 # Données locales du poste : jamais versionnées ni dans un build
 .cache/
 

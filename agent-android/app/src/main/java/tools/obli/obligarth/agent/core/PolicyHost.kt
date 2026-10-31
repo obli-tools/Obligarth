@@ -74,6 +74,23 @@ interface PolicyHost {
     fun appLaunchable(pkg: String): Boolean = true
     /** null: the kiosk removed (alias disabled, Knox kiosk mode off). */
     fun kioskApply(k: Policy.Kiosk?, suspended: Boolean): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.OK)
+
+    // ---- Owner of the device (1.4.0, lot BANC §7.3): every call answers unsupported_api below its API level ----
+
+    /** The agent owns the device: the items of the owner apply (pending/pending_owner otherwise). */
+    fun isDeviceOwner(): Boolean = false
+    /** A user restriction of the owner catalogue (Policy.OWNER_FIELDS) is set; null when unreadable. */
+    fun ownerRestrictionRead(field: String): Boolean? = null
+    fun ownerRestrictionApply(field: String, on: Boolean): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
+    /** state: granted | denied | default. */
+    fun permissionGrantApply(pkg: String, permission: String, state: String): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
+    /** null: the system update policy cleared. */
+    fun systemUpdateApply(u: Policy.SystemUpdate?): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
+    /** A CA certificate installed by the owner (installCaCert, no Knox needed). */
+    fun ownerCertInstall(pem: String): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
+    fun ownerCertRemove(pem: String): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
+    /** A Wi-Fi network removed whoever created it (the owner may, lifting the Knox limit of PONT-POL). */
+    fun ownerWifiRemove(ssid: String): ItemOutcome = ItemOutcome.unsupported(PolicyCodes.UNSUPPORTED_API)
 }
 
 /** The policy files downloaded (GET /agent/v1/files/<sha>) and the inline files staged: by SHA-256. */
@@ -84,6 +101,8 @@ interface BlobCache {
     fun put(sha: String, bytes: ByteArray): File?
     /** The last download failure of [sha] (download_limited, download_failed, hash_mismatch, storage_unavailable). */
     fun failure(sha: String): String? = null
+    /** What the last failure of [sha] saw (the HTTP status and the server code), for the report. */
+    fun failureDetail(sha: String): String? = null
 }
 
 /** A [BlobCache] in a directory (filesDir/policy/blobs on the device, a temporary directory in tests). */
@@ -107,8 +126,14 @@ class DirBlobCache(val dir: File) : BlobCache {
         }
     }
 
+    private val details = java.util.concurrent.ConcurrentHashMap<String, String>()
+
     override fun failure(sha: String): String? = failures[sha]
-    fun setFailure(sha: String, code: String?) { if (code == null) failures.remove(sha) else failures[sha] = code }
+    override fun failureDetail(sha: String): String? = details[sha]
+    fun setFailure(sha: String, code: String?, detail: String? = null) {
+        if (code == null) failures.remove(sha) else failures[sha] = code
+        if (code == null || detail == null) details.remove(sha) else details[sha] = detail
+    }
 
     /** Removes what no SHA of [keep] names, and the .part files left for an hour (a download may be writing one). */
     fun clean(keep: Set<String>, nowMs: Long = System.currentTimeMillis()) {

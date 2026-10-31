@@ -26,6 +26,9 @@ export interface Satellite {
   inventory_requested_at: Date | null;
   security_patch: string | null;
   revoked_at: Date | null;
+  /** Lot BANC: the agent owns the device (as last reported). */
+  device_owner: boolean;
+  adb_enabled: boolean | null;
 }
 
 export function withAgentTransaction(who: AgentIdentity, _ex: Exchange,

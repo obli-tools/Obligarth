@@ -29,6 +29,7 @@
     <string name="label_agent">Agent</string>
     <string name="label_admin">Administration activée</string>
     <string name="label_knox">Knox</string>
+    <string name="label_owner">Propriétaire de l\'appareil</string>
     <string name="knox_state_absent">Absent</string>
     <string name="knox_state_present">Présent</string>
     <string name="knox_state_licensed">Licencié</string>
@@ -79,4 +80,10 @@
     <string name="kiosk_admin_leave">Quitter le kiosque pendant %1$d min</string>
     <string name="kiosk_admin_status">État de l\'agent</string>
     <string name="kiosk_admin_settings">Paramètres Android</string>
+    <string name="home_setup_title">Dernière étape !</string>
+    <string name="home_setup_steps">Pour finir la mise à jour du téléphone :\n\n1. Appuyez sur le gros bouton vert\n2. Choisissez « %1$s »\n\n(Si « TOUJOURS » est proposé, appuyez dessus.)</string>
+    <string name="home_setup_steps_clear">Le téléphone a gardé l\'ancien écran. Sur l\'écran suivant :\n\n1. Choisissez « %1$s » (ou appuyez sur « Effacer les paramètres par défaut »)\n2. Revenez ici et appuyez de nouveau sur le bouton vert</string>
+    <string name="home_setup_button">TERMINER LA MISE À JOUR</string>
+    <string name="home_setup_done">C\'est fini, merci !</string>
+    <string name="home_setup_open">Continuer</string>
 </resources>

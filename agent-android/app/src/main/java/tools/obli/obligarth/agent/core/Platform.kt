@@ -70,6 +70,10 @@ interface DeviceFacts {
      * too large, out of memory). The default renders nothing (fakes written before 1.0.2).
      */
     fun icon(packageName: String, sizePx: Int): IconRender? = null
+    /** 1.4.0 (lot BANC §7.2): the agent is the owner of the device (DevicePolicyManager.isDeviceOwnerApp). */
+    fun deviceOwner(): Boolean = false
+    /** 1.4.0 (§7.4): Settings.Global.ADB_ENABLED, null when unreadable. */
+    fun adbEnabled(): Boolean? = null
 }
 
 /** The rendering of an app icon. */
@@ -128,6 +132,8 @@ interface DeviceActions {
     fun installedApk(packageName: String): InstalledApk? = null
     /** 1.3.0 (lot PONT-POL): what the policy applies through; the default supports nothing (fakes written before). */
     fun policyHost(): PolicyHost = object : PolicyHost {}
+    /** 1.4.0 (lot BANC §7.5): gives the device back (owner, then administrator); null when unsupported (fakes before). */
+    fun releaseOwnership(): ReleaseOutcome? = null
 }
 
 /** The installed APK of a package (app.pull): its file (readable by any app up to Android 10) and its identity. */

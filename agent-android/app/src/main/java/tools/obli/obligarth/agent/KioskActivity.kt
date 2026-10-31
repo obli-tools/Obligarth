@@ -1,6 +1,7 @@
 package tools.obli.obligarth.agent
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
@@ -100,6 +101,7 @@ class KioskActivity : Activity() {
                 if (isFinishing) return@runOnUiThread
                 if (model == null) finish() else {
                     render(model)
+                    syncLockTask(model)
                     launchOnStartOnce(model)
                 }
             }
@@ -110,6 +112,26 @@ class KioskActivity : Activity() {
     private val expiry = Runnable { if (!isFinishing) load() }
 
     private fun suspended(m: Model) = KioskModel.suspended(m.suspendedUntil, System.currentTimeMillis() / 1000)
+
+    /**
+     * 1.4.0 (lot BANC §7.3): the owner of the device pins the kiosk (lock task) while it is not suspended, and leaves the
+     * pin while suspended (its Settings and All apps tiles must open). Nothing for an administrator (soft kiosk).
+     */
+    private fun syncLockTask(m: Model) {
+        val rt = AgentRuntime.get(applicationContext)
+        val permitted = rt.policyApplier.kiosk.lockTaskPermitted()
+        val am = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val pinned = try { am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE } catch (e: Exception) { false }
+        try {
+            when (KioskModel.lockTaskAction(permitted, m.kiosk.enabled, suspended(m))) {
+                KioskModel.LockTask.ENTER -> if (!pinned) startLockTask()
+                KioskModel.LockTask.LEAVE -> if (pinned) stopLockTask()
+                KioskModel.LockTask.NONE -> {}
+            }
+        } catch (e: Exception) {
+            rt.log.warn("kiosk lock task: ${e.javaClass.simpleName}")
+        }
+    }
 
     private fun render(m: Model) {
         root.removeAllViews()
@@ -153,6 +175,17 @@ class KioskActivity : Activity() {
             adapter = TileAdapter(entries, m)
             setOnItemClickListener { _, _, position, _ -> open(entries[position]) }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        // A discreet mark that the device is managed by Obligarth (bottom right, no action).
+        root.addView(TextView(this).apply {
+            text = "G"
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            setTypeface(typeface, Typeface.BOLD)
+            setTextColor(Color.GRAY)
+            alpha = 0.5f
+            gravity = Gravity.END
+            setPadding(pad, 0, pad, pad / 2)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
 
     private inner class TileAdapter(val entries: List<Entry>, val m: Model) : BaseAdapter() {

@@ -43,8 +43,10 @@ class AgentEngine(
 ) {
     /** Called when a delivered configuration changes (Knox licence, keep-alive...). */
     var onConfigChanged: (() -> Unit)? = null
-    /** Called when the identity was erased after a signed agentRevoked. */
+    /** Called when the identity was erased after a signed agentRevoked (or an agent.release, 1.4.0). */
     var onRevoked: (() -> Unit)? = null
+    /** 1.4.0 (lot BANC §7.3): the owner role changed (true: the agent became the owner). Called inside the engine lock. */
+    var onRoleChanged: ((Boolean) -> Unit)? = null
     /**
      * 1.3.0: the policy changed (new policy, kiosk suspended, re-apply asked): the host reconciles soon. Called inside
      * the engine lock: the host only schedules the work.
@@ -53,6 +55,8 @@ class AgentEngine(
 
     /** The policy files downloaded and the inline files staged (1.3.0). */
     val blobCache = DirBlobCache(File(policyDir, "blobs"))
+    /** When a blob was last refused (local seconds): retried after REFUSED_RETRY_S. */
+    private val refusedAt = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /** The last policy read, secrets included when they came with this process (a sealing failure keeps them here). */
     @Volatile private var livePolicy: Policy? = null
@@ -81,6 +85,11 @@ class AgentEngine(
             val reason = t.refusal ?: (parsed as? ConfigResult.Invalid)?.reason ?: "refused"
             log.warn("configuration from $source refused: $reason")
             return if (parsed is ConfigResult.Invalid && t.refusal == "invalid") parsed.reason else reason
+        }
+        // 1.4.0 (lot BANC §7.1): an owner of the device not enrolled takes its configuration from the bench channel only.
+        if (!BenchRules.configSourceAllowed(source, deviceOwner(), state.phase)) {
+            log.warn("configuration from $source refused: $OWNER_BENCH_ONLY")
+            return OWNER_BENCH_ONLY
         }
         val cfg = (parsed as ConfigResult.Valid).config
         state.config = cfg
@@ -176,21 +185,38 @@ class AgentEngine(
     // Enrollment (§4.4)
     // ------------------------------------------------------------------
 
-    private fun enroll(): CycleReport {
-        val cfg = state.config ?: return CycleReport(state.pollSeconds.toLong())
-        val body = linkedMapOf<String, Any?>(
+    /**
+     * The body of /enroll. 1.4.0 (lot BANC §3.4, §7.2): capabilities.deviceOwner always, hints.provisioningId when the
+     * configuration came from a bench station; [legacy]: the body of 1.3.0, without them.
+     */
+    private fun enrollBody(cfg: AgentConfig, legacy: Boolean): ByteArray {
+        val capabilities = LinkedHashMap(facts.capabilities())
+        if (!legacy) capabilities["deviceOwner"] = deviceOwner()
+        val hints = linkedMapOf<String, Any?>("deviceName" to cfg.hints["deviceName"], "serial" to cfg.hints["serial"], "imei" to cfg.hints["imei"])
+        if (!legacy) cfg.hints[AgentConfig.PROVISIONING_ID]?.let { hints[AgentConfig.PROVISIONING_ID] = it }
+        return Json.bytes(linkedMapOf(
             "token" to cfg.token,
             "publicKey" to B64.encodeUrl(signer.spki()),
             "keyStorage" to signer.storage,
             "agent" to facts.agent(),
             "device" to facts.device(),
-            "capabilities" to facts.capabilities(),
-            "hints" to linkedMapOf("deviceName" to cfg.hints["deviceName"], "serial" to cfg.hints["serial"], "imei" to cfg.hints["imei"]),
-        )
-        val reply = client.call(
-            "POST", "/agent/v1/enroll", Json.bytes(body), enrollKeys = { json -> trustedEnrollKeys(cfg, json) },
+            "capabilities" to capabilities,
+            "hints" to hints,
+        ))
+    }
+
+    private fun enroll(): CycleReport {
+        val cfg = state.config ?: return CycleReport(state.pollSeconds.toLong())
+        fun send(legacy: Boolean) = client.call(
+            "POST", "/agent/v1/enroll", enrollBody(cfg, legacy), enrollKeys = { json -> trustedEnrollKeys(cfg, json) },
             enrollKeysPinned = cfg.serverKeySha256 != null || policy.serverKeyPins.isNotEmpty(),
         )
+        var reply = send(legacy = false)
+        // A server without the fields of 1.4.0 (its strict schema refuses them): sent again at once as 1.3.0, once.
+        if (legacyEnrollRetry(reply.status, reply.code, reply.json?.str("error"))) {
+            log.warn("enrollment: the server does not know the 1.4.0 fields, sent again as 1.3.0")
+            reply = send(legacy = true)
+        }
         if ((reply.status == 200 || reply.status == 201) && reply.signed && reply.json != null) {
             val j = reply.json
             val agentId = j.str("agentId")
@@ -212,6 +238,8 @@ class AgentEngine(
             state.authFailingSince = 0
             state.inventoryRequested = true
             state.lastStatus = "enrolled"
+            // The role told at the enrollment: no device_owner_gained at the first poll.
+            state.lastOwner = deviceOwner()
             log.info("enrolled as $agentId")
             return pollAndExecute()
         }
@@ -260,8 +288,88 @@ class AgentEngine(
         // 1.3.0: a server that delivers policies always sends the key (null: no policy); an older one never does, and the
         // policy held stays in place. Reports and the 1.3.0 events go to a policy server only.
         state.serverPolicyV1 = c.containsKey("policy")
+        // 1.4.0 (lot BANC §3.4): the features of the server travel with each full configuration (absent: an older server).
+        state.serverFeatures = c.list("features").orEmpty().filterIsInstance<String>().filter { it.length in 1..64 }.take(MAX_FEATURES)
         if (c.containsKey("policy")) receivePolicy(c["policy"], rebuilt)
         onConfigChanged?.invoke()
+    }
+
+    // ------------------------------------------------------------------
+    // Owner of the device (1.4.0, lot BANC §3.4, §7.2)
+    // ------------------------------------------------------------------
+
+    /** The agent owns the device (false when it cannot be read). */
+    private fun deviceOwner(): Boolean = try { facts.deviceOwner() } catch (e: Throwable) { false }
+
+    /** The server announced device_owner_v1: status.deviceOwner, status.adbEnabled and the device_owner_* events go. */
+    fun ownerFeature(): Boolean = OwnerMode.FEATURE_DEVICE_OWNER_V1 in state.serverFeatures
+
+    /** An event of the owner role, to a server announcing device_owner_v1 only (an older one would refuse the poll). */
+    private fun addOwnerEvent(type: String, detail: Map<String, Any?> = emptyMap()) {
+        if (ownerFeature()) state.addEvent(type, now, detail) else log.info("event $type kept local (server without device_owner_v1)")
+    }
+
+    /**
+     * 1.4.0 (lot BANC §7.4): the shell opened a bench window (the Knox lock of the administrator lifted). Always told to
+     * the server at the next poll (its audit, protective). Before the enrollment the server is not known yet: queued all
+     * the same (the configuration came from a bench station, so from a server of 1.4.0); poll() leaves the owner events
+     * out of the body for a server without device_owner_v1.
+     */
+    fun benchWindowOpened(phase: Phase, uid: Int) {
+        val detail = linkedMapOf<String, Any?>("phase" to phase.name, "uid" to uid)
+        if (phase == Phase.ENROLLED) addOwnerEvent(EventTypes.BENCH_WINDOW_OPENED, detail) else state.addEvent(EventTypes.BENCH_WINDOW_OPENED, now, detail)
+    }
+
+    /** The server allows this ENROLLED agent to open a bench window now (benchConvert of its last poll reply). */
+    fun benchConvertAllowed(): Boolean = state.phase == Phase.ENROLLED && state.benchConvertUntil > clock()
+
+    /** The owner role read at each cycle: a change becomes an event (T389) and tells the host (its protections). */
+    private fun trackRole() {
+        val owner = deviceOwner()
+        val previous = state.lastOwner
+        if (previous == owner) return
+        state.lastOwner = owner
+        if (previous == null && !owner) return
+        log.info("owner role: ${previous ?: "unknown"} -> $owner")
+        for (e in RoleTransitions.events(previous, owner, releasing = false)) addOwnerEvent(e)
+        try { onRoleChanged?.invoke(owner) } catch (e: Throwable) { log.warn("owner role change: ${e.javaClass.simpleName}") }
+    }
+
+    /**
+     * 1.4.0 (lot BANC §6.5): what the device held for the policy was lost (an administrator restored by the bench after a
+     * failed `set-device-owner`: its Knox licence and policies gone). As policy.reapply: every item applied again from a
+     * full configuration, the report sent anew.
+     */
+    @Synchronized
+    fun policyLost() {
+        state.policyLedger = state.policyLedger.forget()
+        state.configVersion = 0
+        state.policyReportSentDigest = null
+        log.info("policy applied again: the device lost what it held")
+        onPolicyChanged?.invoke()
+    }
+
+    /** The bench gave the device back before any enrollment (§7.5): the configuration and the identity forgotten. */
+    @Synchronized
+    fun forgetAfterBenchRelease() {
+        livePolicy = null
+        state.eraseIdentity()
+        state.phase = Phase.NEW
+        state.lastStatus = "released"
+        log.info("released by the bench: configuration erased")
+    }
+
+    /** agent.release (§7.5): the policy undone, the device given back (owner, then administrator), the identity erased. */
+    private fun releaseDevice() {
+        log.warn("agent.release: the device is given back")
+        undoPolicyBeforeErase()
+        val outcome = try { actions.releaseOwnership() } catch (e: Throwable) { log.warn("release: ${e.javaClass.simpleName}"); null }
+        if (outcome == null) log.warn("release: not supported here, only the identity is erased")
+        state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.RevokedSigned).next
+        state.eraseIdentity()
+        try { signer.erase() } catch (e: Exception) { log.warn("key erase: ${e.message}") }
+        state.lastStatus = "released"
+        onRevoked?.invoke()
     }
 
     // ------------------------------------------------------------------
@@ -374,32 +482,44 @@ class AgentEngine(
         return sizes.filterKeys { it in p.blobs && !blobCache.has(it) }
     }
 
-    /** Downloads the missing blobs until [deadlineLocal]; true when some remain. A 429 stops the round (C10). */
+    /**
+     * Downloads the missing blobs until [deadlineLocal]; true when one is worth another try soon (a 429, a network
+     * failure or a 5xx, or the deadline). A 429 stops the round (C10). A refused blob (download_failed, hash_mismatch)
+     * is not: it is tried again by the next reconciliation, never by the job's backoff, which would otherwise grow to
+     * hours and hold the install queue behind it (30/10, on a pilot device: an agent.update never ran).
+     */
     fun downloadPolicyBlobs(p: Policy, deadlineLocal: Long): Boolean {
         for ((sha, size) in missingBlobs(p)) {
             if (clock() >= deadlineLocal) return true
+            // A refused blob waits REFUSED_RETRY_S before another try (each reconciliation schedules the job).
+            refusedAt[sha]?.let { if (clock() - it in 0 until REFUSED_RETRY_S) continue }
             val dir = blobCache.dir
             dir.mkdirs()
             if (dir.usableSpace in 1..(size * 2 + FREE_MARGIN_BYTES)) { blobCache.setFailure(sha, PolicyCodes.STORAGE_UNAVAILABLE); continue }
             when (val r = downloadBlob(sha, size)) {
-                is BlobResult.Ok -> blobCache.setFailure(sha, null)
-                is BlobResult.Limited -> { blobCache.setFailure(sha, PolicyCodes.DOWNLOAD_LIMITED); return true }
-                is BlobResult.Failed -> blobCache.setFailure(sha, r.code)
+                is BlobResult.Ok -> { blobCache.setFailure(sha, null); refusedAt.remove(sha) }
+                is BlobResult.Limited -> { blobCache.setFailure(sha, PolicyCodes.DOWNLOAD_LIMITED, r.detail); return true }
+                is BlobResult.Failed -> {
+                    blobCache.setFailure(sha, r.code, r.detail)
+                    refusedAt[sha] = clock()
+                    log.warn("policy file ${sha.take(12)}: ${r.code} ${r.detail ?: ""}")
+                }
             }
         }
-        return missingBlobs(p).isNotEmpty()
+        return false
     }
 
     sealed class BlobResult {
         object Ok : BlobResult()
         /** 429, a network failure or a 5xx: tried again later (pending/download_limited, never an error). */
-        class Limited(val retryAfter: Long?) : BlobResult()
-        class Failed(val code: String) : BlobResult()
+        class Limited(val retryAfter: Long?, val detail: String? = null) : BlobResult()
+        /** [detail]: what was seen (the HTTP status and the server code), reported with the item. */
+        class Failed(val code: String, val detail: String? = null) : BlobResult()
     }
 
     /** GET /agent/v1/files/<sha> into blobs/<sha>.part, size and SHA-256 checked, then renamed (never under the engine lock). */
     fun downloadBlob(sha: String, size: Long): BlobResult {
-        if (!Hex.isSha256(sha) || size !in 1..Policy.STORE_FILE_BYTES) return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED)
+        if (!Hex.isSha256(sha) || size !in 1..Policy.STORE_FILE_BYTES) return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED, "size $size")
         val dir = blobCache.dir
         val part = File(dir, "$sha.part")
         val target = File(dir, sha)
@@ -408,16 +528,21 @@ class AgentEngine(
         } catch (e: IOException) {
             part.delete()
             log.warn("policy file download: ${e.message}")
-            return BlobResult.Limited(null)
+            return BlobResult.Limited(null, "io ${e.javaClass.simpleName}")
         }
-        if (reply.status == 429) { part.delete(); return BlobResult.Limited(reply.retryAfterSeconds) }
+        val seen = "http ${reply.status}${reply.code?.let { " $it" } ?: ""}"
+        if (reply.status == 429) { part.delete(); return BlobResult.Limited(reply.retryAfterSeconds, seen) }
         if (reply.status != 200) {
             part.delete()
-            return if (reply.status in 400..499) BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) else BlobResult.Limited(reply.retryAfterSeconds)
+            return if (reply.status in 400..499) BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED, seen) else BlobResult.Limited(reply.retryAfterSeconds, seen)
         }
-        if (!reply.signed) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) }
-        if (reply.downloadedSha256 != sha || part.length() != size) { part.delete(); return BlobResult.Failed(PolicyCodes.HASH_MISMATCH) }
-        if (!part.renameTo(target)) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED) }
+        if (!reply.signed) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED, "$seen unsigned") }
+        if (reply.downloadedSha256 != sha || part.length() != size) {
+            val got = part.length()
+            part.delete()
+            return BlobResult.Failed(PolicyCodes.HASH_MISMATCH, "$seen got $got bytes ${reply.downloadedSha256?.take(12)}")
+        }
+        if (!part.renameTo(target)) { part.delete(); return BlobResult.Failed(PolicyCodes.DOWNLOAD_FAILED, "rename") }
         return BlobResult.Ok
     }
 
@@ -558,8 +683,18 @@ class AgentEngine(
     private class PollResult(val report: CycleReport?, val commands: List<Any?>)
 
     private fun poll(timeoutMs: Int = AgentClient.DEFAULT_TIMEOUT_MS): PollResult {
+        trackRole()
         val outbox = state.outbox.take(MAX_RESULTS)
         val events = state.events.take(MAX_EVENTS)
+        // The owner events go to a server announcing device_owner_v1 only (an older one would answer 400); dropped otherwise.
+        val sentEvents = if (ownerFeature()) events else events.filter { it["type"] !in EventTypes.OWNER_ONLY }
+        // 1.4.0: the owner role and ADB, to a server announcing device_owner_v1 only; otherwise the body of 1.3.0 as is.
+        val status = facts.status().let { s ->
+            if (!ownerFeature()) s else LinkedHashMap(s).also {
+                it["deviceOwner"] = deviceOwner()
+                it["adbEnabled"] = try { facts.adbEnabled() } catch (e: Throwable) { null }
+            }
+        }
         val body = linkedMapOf<String, Any?>(
             // The server sends the configuration only when the version announced differs, and its version hashes the
             // content alone: a configuration read by another version of the agent (1.0.x ignored config.remote) is
@@ -568,9 +703,9 @@ class AgentEngine(
                 "versionCode" to versionCode,
                 "configVersion" to if (state.configAgentVersion == versionCode) state.configVersion else 0L,
             ),
-            "status" to facts.status(),
+            "status" to status,
             "results" to outbox.map { it.toJson() },
-            "events" to events,
+            "events" to sentEvents,
         )
         // 1.3.0: the policy report, to a server that delivers policies, when it changed or its period passed (§8.4).
         val report = if (state.serverPolicyV1) state.policyReport?.takeIf { reportDue(it) } else null
@@ -591,6 +726,8 @@ class AgentEngine(
             state.outbox = state.outbox.filter { it.commandId !in accepted }
             if (events.isNotEmpty()) state.dropEvents(events.size)
             if (j.bool("inventoryDue") == true) state.inventoryRequested = true
+            // 1.4.0 (lot BANC §6.5): an open conversion of this device on a bench station allows prepare_owner for 30 min.
+            state.benchConvertUntil = if (reply.status == 200 && j.bool("benchConvert") == true) clock() + BenchRules.WINDOW_S else 0
             if (report != null) when (j.str("policyReport")) {
                 "accepted" -> {
                     state.policyReportSentDigest = report.digest()
@@ -642,6 +779,12 @@ class AgentEngine(
         log.warn("signed agentRevoked: identity erased")
         // 1.3.0 (A9): what the policy set is undone first (30 s at most), then the identity erased.
         undoPolicyBeforeErase()
+        // 1.4.0 (lot BANC §3.8, §7.5): an owner of the device gives it back on its signed revocation (its protections, the
+        // owner, then the administrator), as agent.release does: a revoked agent never stays an orphaned owner.
+        if (deviceOwner()) {
+            val outcome = try { actions.releaseOwnership() } catch (e: Throwable) { log.warn("release: ${e.javaClass.simpleName}"); null }
+            if (outcome == null) log.warn("release on revocation: not supported here")
+        }
         state.phase = EnrollmentMachine.next(state.phase, EnrollEvent.RevokedSigned).next
         state.eraseIdentity()
         try { signer.erase() } catch (e: Exception) { log.warn("key erase: ${e.message}") }
@@ -652,6 +795,8 @@ class AgentEngine(
     private sealed class Terminal {
         data class Wipe(val id: String, val external: Boolean) : Terminal()
         data class Reboot(val id: String) : Terminal()
+        /** 1.4.0: agent.release, after a reboot and before a wipe in priority. */
+        data class Release(val id: String) : Terminal()
     }
 
     /** Executes immediate commands now, queues installs (RS-2). Returns a wipe or reboot to run last. */
@@ -696,6 +841,17 @@ class AgentEngine(
                                 finish(c.id, CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.WIPE_STARTED, emptyMap(), now))
                             }
                         }
+                        CommandType.AGENT_RELEASE -> {
+                            record(JournalEntry(c.id, c.type.wire, "running", null, now))
+                            when (terminal) {
+                                is Terminal.Wipe -> finish(c.id, CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, mapOf("supersededByWipe" to true), now))
+                                is Terminal.Release -> finish(c.id, CommandResult(c.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, emptyMap(), now))
+                                else -> {
+                                    terminal?.let { supersede(it) }
+                                    terminal = Terminal.Release(c.id)
+                                }
+                            }
+                        }
                         CommandType.DEVICE_REBOOT -> {
                             record(JournalEntry(c.id, c.type.wire, "running", null, now))
                             if (!actions.canReboot()) {
@@ -717,6 +873,7 @@ class AgentEngine(
     /** A reboot displaced by a wipe is answered as started (the wipe restarts the device anyway). */
     private fun supersede(t: Terminal) {
         if (t is Terminal.Reboot) finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.REBOOT_STARTED, mapOf("supersededByWipe" to true), now))
+        if (t is Terminal.Release) finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, mapOf("supersededByWipe" to true), now))
     }
 
     private fun resendKnown(known: JournalEntry, outboxIds: Set<String>) {
@@ -792,6 +949,13 @@ class AgentEngine(
                 flushBeforeTerminal()
                 val error = try { actions.reboot() } catch (e: Exception) { e.message ?: Codes.INTERNAL }
                 if (error != null) log.warn("reboot failed after acknowledgement: $error")
+            }
+            is Terminal.Release -> {
+                // §7.5: device_owner_released and the acknowledgement leave before anything is removed.
+                addOwnerEvent(EventTypes.DEVICE_OWNER_RELEASED)
+                finish(t.id, CommandResult(t.id, ResultStatus.ACKNOWLEDGED, Codes.DONE, emptyMap(), now))
+                flushBeforeTerminal()
+                releaseDevice()
             }
         }
     }
@@ -1172,5 +1336,22 @@ class AgentEngine(
         const val REVOKE_UNDO_S = 30L
         /** 1.3.0: the free space a policy file download leaves (usable > size * 2 + this, else storage_unavailable). */
         const val FREE_MARGIN_BYTES = 50L * 1024 * 1024
+        const val REFUSED_RETRY_S = 600L
+        /** 1.4.0: the refusal of a configuration that did not come from the bench, while the agent owns the device. */
+        const val OWNER_BENCH_ONLY = "owner_bench_only"
+        const val MAX_FEATURES = 16
+
+        /**
+         * The messages of a 400 badRequest that name a field of 1.4.0 (§3.4): the server's strict schema reports an unknown
+         * key at the path of its object (zod unrecognized_keys), a wrong value at its own path.
+         */
+        private val LEGACY_RETRY_MESSAGES = setOf(
+            "Invalid body: capabilities", "Invalid body: capabilities.deviceOwner",
+            "Invalid body: hints", "Invalid body: hints.provisioningId",
+        )
+
+        /** An enrollment refused for a field of 1.4.0 only: sent again at once with the body of 1.3.0 (T381). */
+        fun legacyEnrollRetry(status: Int, code: String?, message: String?): Boolean =
+            status == 400 && code == "badRequest" && message?.trim() in LEGACY_RETRY_MESSAGES
     }
 }

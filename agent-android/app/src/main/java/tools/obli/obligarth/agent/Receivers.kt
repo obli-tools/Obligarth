@@ -29,6 +29,15 @@ class AgentAdminReceiver : DeviceAdminReceiver() {
         PollScheduler.pollNow(context)
         // 1.3.0: the policy applied again at once (the administrator's policies may just have been granted).
         rt.requestReconcile()
+        // 1.4.0 (lot BANC §6.5): an administrator restored by the bench lost its Knox licence and the Knox policies tied
+        // to it: the key is sent again and every item applied anew (off the main thread: the engine lock may wait).
+        Thread({
+            if (rt.knox.forgetActivationIfLost()) {
+                rt.engine.policyLost()
+                rt.applyKnoxAndKeepAlive()
+                PollScheduler.pollNow(context.applicationContext)
+            }
+        }, "obligarth-admin-restored").start()
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence {
@@ -59,10 +68,23 @@ class UnlockReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_USER_PRESENT) return
         val rt = AgentRuntime.get(context)
-        if (rt.facts.adminActive()) return
-        if (rt.state.phase != Phase.CONFIGURED && rt.state.phase != Phase.ENROLLED) return
         val prefs = context.getSharedPreferences("unlock", Context.MODE_PRIVATE)
         val now = SystemClock.elapsedRealtime()
+        if (rt.facts.adminActive()) {
+            // 1.4.0: the kiosk waits for its home, the guided choice comes back at each unlock (at most every few minutes).
+            val kiosk = rt.policyApplier.kiosk
+            if (!kiosk.aliasEnabled() || kiosk.homeIsAgent()) return
+            val lastHome = prefs.getLong("lastHomePrompt", 0L)
+            if (lastHome in 1..now && now - lastHome < PROMPT_INTERVAL_MS) return
+            prefs.edit().putLong("lastHomePrompt", now).apply()
+            try {
+                context.startActivity(HomeSetupActivity.intent(context))
+            } catch (e: Exception) {
+                rt.log.warn("home prompt on unlock: ${e.javaClass.simpleName}: ${e.message}")
+            }
+            return
+        }
+        if (rt.state.phase != Phase.CONFIGURED && rt.state.phase != Phase.ENROLLED) return
         val last = prefs.getLong("lastPrompt", 0L)
         if (last in 1..now && now - last < PROMPT_INTERVAL_MS) return
         prefs.edit().putLong("lastPrompt", now).apply()

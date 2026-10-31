@@ -86,8 +86,11 @@ export const legacyAgentApi = {
   async cancel(commandId: string): Promise<void> {
     await apiClient.post(`/legacy-agent/commands/${commandId}/cancel`, {});
   },
-  async revoke(deviceId: number, reason: string): Promise<{ revoked: boolean }> {
-    const res = await apiClient.post<ApiResponse<{ revoked: boolean }>>(`/legacy-agent/devices/${deviceId}/revoke`, { reason });
+  /** confirmOwnerDeclared (lot BANC, D3): the owner of the device declared for an agent older than 1.4.0 stays set; the
+   *  server answers 409 ownerDeclaredConfirm until it is confirmed. */
+  async revoke(deviceId: number, reason: string, confirmOwnerDeclared = false): Promise<{ revoked: boolean }> {
+    const res = await apiClient.post<ApiResponse<{ revoked: boolean }>>(`/legacy-agent/devices/${deviceId}/revoke`,
+      { reason, ...(confirmOwnerDeclared ? { confirmOwnerDeclared: true } : {}) });
     return res.data.data!;
   },
   /** Display names by IMEI or serial number (MobiControl, Omnissa Workspace ONE, any CSV): a preview, or with `apply` the renaming. */
@@ -101,8 +104,9 @@ export const legacyAgentApi = {
     const match = /filename="([^"]+)"/.exec(String(res.headers['content-disposition'] ?? ''));
     return { blob: res.data as Blob, filename: match ? match[1] : `obligarth-android-agents.${format}` };
   },
-  async tokens(): Promise<LegacyAgentTokenView[]> {
-    const res = await apiClient.get<ApiResponse<LegacyAgentTokenView[]>>('/legacy-agent/tokens');
+  /** origin (lot BANC): the console's tokens by default; bench, the single-use tokens of the bench stations; all. */
+  async tokens(origin: 'console' | 'bench' | 'all' = 'console'): Promise<LegacyAgentTokenView[]> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentTokenView[]>>('/legacy-agent/tokens', { params: { origin } });
     return res.data.data ?? [];
   },
   async createToken(body: { label: string; groupId?: number | null; days?: number; maxUses?: number }): Promise<LegacyAgentTokenCreated> {

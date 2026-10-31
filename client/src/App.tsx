@@ -36,6 +36,7 @@ import { SecurityPage } from '@/pages/SecurityPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 import { DownloadPage } from '@/pages/DownloadPage';
 import { LegacyAgentPage } from '@/pages/LegacyAgentPage';
+import { BenchStationsPage } from '@/pages/BenchStationsPage';
 import { RemoteSessionPage } from '@/pages/RemoteSessionPage';
 import { RemoteSessionsPage } from '@/pages/RemoteSessionsPage';
 import { AccessKeysPage } from '@/pages/AccessKeysPage';
@@ -103,6 +104,9 @@ export default function App() {
  {/* Platform > Android (android-amapi §12.1, lot AN-A2): identity and health of the link to Google (the server
      answers the platform administrators of the master tenant only). */}
  <Route path="/admin/android" element={<AndroidPlatformPage />} />
+ {/* Platform > Bench stations (lot BANC §3.12): approval, targets, sessions, version of the agent served (the server
+     answers the platform administrators of the master tenant only). */}
+ <Route path="/manage/bench-stations" element={<BenchStationsPage />} />
  </Route>
 
  {/* Security — the journal for the holders of audit.read (tenant

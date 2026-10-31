@@ -5,11 +5,11 @@ import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
   LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_POLICY_ARTIFACT_KEY,
-  LEGACY_AGENT_POLICY_MIN_VERSION_CODE,
+  LEGACY_AGENT_POLICY_MIN_VERSION_CODE, BENCH_OWNER_MIN_VERSION_CODE,
   LEGACY_AGENT_NAME_IMPORT_FORMATS, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
   type DeviceCapability, type LegacyAgentNameImportResult, type LegacyAgentNameImportRow, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
-  type LegacyAgentTokenView,
+  type LegacyAgentTokenView, type LegacyAgentRole,
 } from '@obligarth/shared';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
 import { audit } from '../audit';
@@ -121,6 +121,8 @@ export const DEVICE_COLUMNS = [
   'd.id', 'd.uuid', 'd.label', 'd.model', 'd.model_name', 'd.os_version', 'd.serial_number', 'd.enrollment_state', 'd.enrolled_at', 'd.group_id',
   'a.agent_id', 'a.api_level', 'a.security_patch', 'a.agent_version_code', 'a.agent_version_name', 'a.admin_active', 'a.knox_state',
   'a.key_storage', 'a.identity_conflict', 'a.last_poll_at', 'a.last_inventory_at', 'a.revoked_at', 'a.revoke_reason', 'd.custom_fields',
+  // Lot BANC: the owner role, the exception D3, the identity of a bench enrollment, ADB, the station that enrolled it.
+  'a.device_owner', 'a.bench_owner_declared', 'a.identity_state', 'a.adb_enabled', 'a.enrolled_by_station_id',
   db.raw("(SELECT s.value FROM obligarth.device_status_items s WHERE s.tenant_id = d.tenant_id AND s.device_id = d.id AND s.item = 'agent.battery.level') AS battery"),
   db.raw("(SELECT s.value FROM obligarth.device_status_items s WHERE s.tenant_id = d.tenant_id AND s.device_id = d.id AND s.item = 'agent.install.unknown-sources') AS unknown_sources"),
   // Lot PONT-POL: the state of the agent policy (the desired artifact and the agent's last report).
@@ -158,7 +160,16 @@ export function deviceView(r: Record<string, any>): LegacyAgentDeviceView {
     lastPollAt: iso(r.last_poll_at), lastInventoryAt: iso(r.last_inventory_at), batteryLevel: typeof battery === 'number' ? battery : null,
     unknownSources: typeof unknown === 'boolean' ? unknown : null, revokedAt: iso(r.revoked_at), revokeReason: r.revoke_reason ?? null,
     enrolledAt: iso(r.enrolled_at) as string, groupId: r.group_id ?? null, policyState: policyStateOf(r), customFields: customFieldsOf(r.custom_fields),
+    role: legacyAgentRoleOf(r), benchOwnerDeclared: r.bench_owner_declared === true, identityState: r.identity_state ?? null,
+    adbEnabled: typeof r.adb_enabled === 'boolean' ? r.adb_enabled : null,
+    enrolledByStation: r.enrolled_by_station_id ? { id: String(r.enrolled_by_station_id), name: r.station_name ?? null } : null,
   };
+}
+
+/** The role of the agent (lot BANC §3.4): the owner of the device, else its administrator when active, else neither. */
+export function legacyAgentRoleOf(r: Record<string, any>): LegacyAgentRole {
+  if (r.device_owner === true) return 'device_owner';
+  return r.admin_active === true ? 'device_admin' : 'inactive';
 }
 
 export function commandView(r: Record<string, any>): LegacyAgentCommandView {
@@ -197,6 +208,11 @@ router.get('/devices/:id', wrap(async (req, res) => {
   const r = await agentsQuery(tenantId).where('d.id', id).first([...DEVICE_COLUMNS, 'a.android_id', 'a.claimed_serial', 'a.samsung_serial', 'a.imeis',
     'a.hints', 'a.knox_info', 'a.poll_seconds', 'a.clock_offset_s']) as Record<string, any> | undefined;
   if (!r) throw new AppError(404, 'Device not found');
+  // The name of the bench station that enrolled it (lot BANC): the stations that target the tenant or enrolled into it.
+  if (r.enrolled_by_station_id) {
+    const st = await db.raw('SELECT id, name FROM obligarth.bench_tenant_stations(?)', [tenantId]) as { rows: Array<{ id: string; name: string }> };
+    r.station_name = st.rows.find((s) => String(s.id) === String(r.enrolled_by_station_id))?.name ?? null;
+  }
   const status = await db('device_status_items').where({ tenant_id: tenantId, device_id: id }).where('item', 'like', 'agent.%').orderBy('item')
     .select('item', 'value', 'observed_at') as Array<{ item: string; value: unknown; observed_at: Date }>;
   const apps = await db('device_apps').where({ tenant_id: tenantId, device_id: id, source: 'agent_report' }).orderBy('identifier').limit(2000)
@@ -228,7 +244,7 @@ const MENU_TYPES = ['device.lock', 'device.wipe', 'device.message', 'device.rebo
 router.get('/devices/:id/actions', wrap(async (req, res) => {
   const id = await deviceOf(req);
   const tenantId = req.tenantId!;
-  const r = await agentsQuery(tenantId).where('d.id', id).first('d.enrollment_state', 'a.revoked_at', 'a.admin_active', 'a.knox_state', 'a.agent_version_code') as
+  const r = await agentsQuery(tenantId).where('d.id', id).first('d.enrollment_state', 'a.revoked_at', 'a.admin_active', 'a.knox_state', 'a.agent_version_code', 'a.device_owner') as
     Record<string, any> | undefined;
   if (!r) throw new AppError(404, 'Device not found');
   const frozen = await frozenFor(null, tenantId, 'legacy_agent');
@@ -246,7 +262,8 @@ router.get('/devices/:id/actions', wrap(async (req, res) => {
         : r.enrollment_state !== 'enrolled' ? 'notEnrolled'
           : policyType && Number(r.agent_version_code) < LEGACY_AGENT_POLICY_MIN_VERSION_CODE ? 'agentTooOld'
           : (type === 'device.lock' || type === 'device.wipe') && r.admin_active !== true ? 'adminInactive'
-            : type === 'device.reboot' && r.knox_state !== 'licensed' ? 'knoxRequired'
+            // The owner of the device reboots it without Knox (lot BANC §3.8: knoxLicensed || deviceOwner).
+            : type === 'device.reboot' && r.knox_state !== 'licensed' && r.device_owner !== true ? 'knoxRequired'
               : frozen ? 'frozen' : null;
     actions.push({ type, actionKey: spec.guardedBy ?? spec.restrictionKey ?? type, guarded: spec.guardedBy !== null, available: unavailable === null, unavailable });
   }
@@ -428,7 +445,7 @@ router.post('/actions', enqueueLimiter, async (req, res, next) => {
 
 // ── Revocation (§5.4) ────────────────────────────────────────────────────────
 
-const RevokeBody = z.object({ reason: z.string().trim().min(3).max(500) }).strict();
+const RevokeBody = z.object({ reason: z.string().trim().min(3).max(500), confirmOwnerDeclared: z.boolean().optional() }).strict();
 
 /** A revocation during a freeze (decision of the owners of 20/10/2026, PONT-R-RV2): once MobiControl is gone, a
  *  revoked agent wipes its key and the device is lost to remote management, like mdm.remove_management, which a
@@ -438,7 +455,8 @@ const frozenRefusal = (): AppError => new AppError(423, 'The tenant is frozen: n
 /** The revocation itself, in one transaction of the tenant: the freeze, the satellite, the open commands, the record. */
 async function revokeDevice(tenantId: number, deviceId: number, reason: string, actorUserId: number, auditCtx: Awaited<ReturnType<typeof audit.fromRequest>>): Promise<boolean> {
   return db.transaction(async (trx) => {
-    const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, device_id: deviceId }).forUpdate().first('revoked_at') as { revoked_at: Date | null } | undefined;
+    const sat = await trx('legacy_agent_devices').where({ tenant_id: tenantId, device_id: deviceId }).forUpdate()
+      .first('revoked_at', 'device_owner', 'agent_version_code') as { revoked_at: Date | null; device_owner: boolean; agent_version_code: number } | undefined;
     if (!sat) throw new AppError(404, 'Device not found');
     if (sat.revoked_at) return false;
     if (await tenantFrozen(trx, tenantId)) throw frozenRefusal();
@@ -449,7 +467,10 @@ async function revokeDevice(tenantId: number, deviceId: number, reason: string, 
       .update({ enrollment_state: 'unenrolled', enrollment_state_at: now, unenrolled_at: now, unenroll_reason: 'agent_revoked', updated_at: now });
     await audit.appendInTx(trx, {
       tenantId, action: 'legacy_agent.device_revoked', target: { type: 'device', id: String(deviceId), device: deviceId }, reason,
-      details: { cancelledCommands: cancelled, by: actorUserId },
+      // Lot BANC §3.8: an agent 1.4.0 that owns the device gives it back when it reads its signed revocation (the owner,
+      // its protections and the administrator removed, AgentEngine.revoke), so a revocation never leaves an orphaned owner.
+      details: { cancelledCommands: cancelled, by: actorUserId,
+        ...(sat.device_owner === true && Number(sat.agent_version_code) >= BENCH_OWNER_MIN_VERSION_CODE ? { ownerReleaseByAgent: true } : {}) },
     }, auditCtx);
     // Its agent:* keys stop applying (lot PONT-POL, D5): the device resolved again.
     await requestDeviceResolution(trx, tenantId, [deviceId]);
@@ -462,6 +483,12 @@ router.post('/devices/:id/revoke', wrap(async (req, res) => {
   const b = body(RevokeBody, req);
   const tenantId = req.tenantId!;
   if ((await lacking(req, [id], 'mdm:remove')).length > 0) throw new AppError(403, "Capability 'mdm:remove' not permitted for your team", 'capabilityMissing');
+  // Lot BANC (D3): an owner declared by a bench station for an agent older than 1.4.0 stays on the device without a working
+  // agent; only a reset removes it. The revocation is blocked until that is explicitly confirmed.
+  const declared = await agentsQuery(tenantId).where('d.id', id).first('a.bench_owner_declared') as { bench_owner_declared: boolean } | undefined;
+  if (declared?.bench_owner_declared === true && b.confirmOwnerDeclared !== true) {
+    throw new AppError(409, 'The owner of this device stays set without a working agent: confirm the revocation explicitly', 'ownerDeclaredConfirm');
+  }
   // Refused during a freeze before anything is asked (no request for approval either): PONT-R-RV2.
   if (await db.transaction((trx) => tenantFrozen(trx, tenantId))) throw frozenRefusal();
   const ok = await applyRestriction(res, {
@@ -606,18 +633,20 @@ const csvText = (v: string): string => (/^[=+\-@\t\r]/.test(v) ? `'${v}` : v);
 const EXPORT_LABELS = {
   en: {
     name: 'Name', serial: 'Serial number', samsungSerial: 'Samsung serial', imei: 'IMEI', imei2: 'IMEI 2', model: 'Model', android: 'Android',
-    api: 'API', patch: 'Security patch', agent: 'Agent', versionCode: 'versionCode', admin: 'Admin mode', knox: 'Knox',
+    api: 'API', patch: 'Security patch', agent: 'Agent', versionCode: 'versionCode', admin: 'Mode', knox: 'Knox',
     unknownSources: 'Unknown sources', battery: 'Battery (%)', lastPoll: 'Last interrogation', daysSilent: 'Days without interrogation',
     lastInventory: 'Last inventory', enrolled: 'Enrolled', group: 'Group', conflict: 'Identity conflict', revoked: 'Revoked', uuid: 'UUID',
     yes: 'Yes', no: 'No', on: 'On', off: 'Off', sheet: 'Android agents',
+    roles: { device_owner: 'Device owner', device_admin: 'Device administrator', inactive: 'Inactive' } as Record<string, string>,
     knoxStates: { absent: 'Absent', present: 'Present', licensed: 'Licensed', license_error: 'Licence error' } as Record<string, string>,
   },
   fr: {
     name: 'Nom', serial: 'N° de série', samsungSerial: 'Série Samsung', imei: 'IMEI', imei2: 'IMEI 2', model: 'Modèle', android: 'Android',
-    api: 'API', patch: 'Correctif de sécurité', agent: 'Agent', versionCode: 'versionCode', admin: 'Mode admin', knox: 'Knox',
+    api: 'API', patch: 'Correctif de sécurité', agent: 'Agent', versionCode: 'versionCode', admin: 'Mode', knox: 'Knox',
     unknownSources: 'Sources inconnues', battery: 'Batterie (%)', lastPoll: 'Dernière interrogation', daysSilent: 'Jours sans interrogation',
     lastInventory: 'Dernier inventaire', enrolled: 'Enrôlé le', group: 'Groupe', conflict: "Conflit d'identité", revoked: 'Révoqué le', uuid: 'UUID',
     yes: 'Oui', no: 'Non', on: 'Actif', off: 'Inactif', sheet: 'Agents Android',
+    roles: { device_owner: "Propriétaire de l'appareil", device_admin: "Administrateur d'appareil", inactive: 'Inactif' } as Record<string, string>,
     knoxStates: { absent: 'Absent', present: 'Présent', licensed: 'Licencié', license_error: 'Erreur de licence' } as Record<string, string>,
   },
 };
@@ -659,7 +688,7 @@ router.post('/devices/export', requireTenantCapability('reports'), exportLimiter
     return {
       name: v.name ?? '', serial: v.serialNumber ?? '', samsungSerial: r.samsung_serial ?? '', imei: imeis[0] ?? '', imei2: imeis[1] ?? '',
       model: v.modelName ?? v.model ?? '', android: v.osVersion ?? '', api: v.apiLevel ?? '', patch: v.securityPatch ?? '',
-      agent: v.agentVersionName, versionCode: v.agentVersionCode, admin: v.adminActive ? L.on : L.off, knox: L.knoxStates[v.knoxState] ?? v.knoxState,
+      agent: v.agentVersionName, versionCode: v.agentVersionCode, admin: L.roles[v.role ?? 'inactive'] ?? (v.adminActive ? L.on : L.off), knox: L.knoxStates[v.knoxState] ?? v.knoxState,
       unknownSources: yn(v.unknownSources), battery: v.batteryLevel ?? '', lastPoll: when(v.lastPollAt),
       daysSilent: v.lastPollAt ? Math.floor((now - new Date(v.lastPollAt).getTime()) / 86_400_000) : '',
       lastInventory: when(v.lastInventoryAt), enrolled: when(v.enrolledAt), group: r.group_name ?? '', conflict: v.identityConflict ? L.yes : '',
@@ -709,13 +738,18 @@ function tokenView(r: Record<string, any>): LegacyAgentTokenView {
   return {
     id: String(r.id), publicId: r.public_id, label: r.label, groupId: r.group_id ?? null, maxUses: Number(r.max_uses), uses: Number(r.uses),
     expiresAt: iso(r.expires_at) as string, revokedAt: iso(r.revoked_at), createdAt: iso(r.created_at) as string, lastUsedAt: iso(r.last_used_at), state,
+    origin: r.origin === 'bench' ? 'bench' : 'console',
   };
 }
 
-const TOKEN_COLUMNS = ['id', 'public_id', 'label', 'group_id', 'max_uses', 'uses', 'expires_at', 'revoked_at', 'created_at', 'last_used_at'];
+const TOKEN_COLUMNS = ['id', 'public_id', 'label', 'group_id', 'max_uses', 'uses', 'expires_at', 'revoked_at', 'created_at', 'last_used_at', 'origin'];
 
+// ?origin=console|bench|all (lot BANC §3.1 f): the tokens of the bench stations, single-use, are left out by default.
 router.get('/tokens', requireTenantCapability('mdm.enrollment.manage'), wrap(async (req, res) => {
-  const rows = await db('legacy_agent_enrollment_tokens').where({ tenant_id: req.tenantId! }).orderBy('created_at', 'desc').limit(500).select(TOKEN_COLUMNS);
+  let q = db('legacy_agent_enrollment_tokens').where({ tenant_id: req.tenantId! });
+  const origin = req.query.origin === 'bench' || req.query.origin === 'all' ? req.query.origin : 'console';
+  if (origin !== 'all') q = q.where('origin', origin);
+  const rows = await q.orderBy('created_at', 'desc').limit(500).select(TOKEN_COLUMNS);
   res.json({ success: true, data: rows.map(tokenView) });
 }));
 
@@ -835,7 +869,7 @@ export function releaseView(r: Record<string, any>): LegacyAgentReleaseView {
   return {
     id: String(r.id), versionCode: Number(r.version_code), versionName: r.version_name, sha256: r.sha256, sizeBytes: Number(r.size_bytes),
     signerSha256: r.signer_sha256, notes: r.notes ?? null, createdAt: iso(r.created_at) as string, withdrawnAt: iso(r.withdrawn_at),
-    origin: r.origin === 'bundled' ? 'bundled' : 'upload', bundledIn: r.bundled_in ?? null,
+    origin: r.origin === 'bundled' ? 'bundled' : 'upload', bundledIn: r.bundled_in ?? null, benchServed: r.bench_served === true,
   };
 }
 

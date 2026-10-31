@@ -129,7 +129,8 @@ export function createLegacyAgentAdminRouter(): Router {
       await audit.appendInTx(trx, {
         tenantId: MASTER_TENANT_ID, action: 'legacy_agent.release_withdrawn', target: { type: 'legacy_agent_release', id }, details: { versionCode: Number(row.version_code) },
       }, ctx);
-      await trx('legacy_agent_releases').where({ id }).whereNull('withdrawn_at').update({ withdrawn_at: new Date() });
+      // A withdrawn version is never served to the bench stations (lot BANC §3.1 h): its mark goes with it.
+      await trx('legacy_agent_releases').where({ id }).whereNull('withdrawn_at').update({ withdrawn_at: new Date(), bench_served: false });
     }));
     res.json({ success: true, data: { withdrawn: true } });
   }));

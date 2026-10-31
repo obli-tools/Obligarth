@@ -411,8 +411,13 @@ export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidatio
     section: x.issues.length ? null : normalise(raw as LegacyAgentPolicySection),
   });
   if (!isObj(raw)) { x.add([], 'invalid_content'); return done([]); }
-  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs'], []);
+  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs', 'confirmBenchLockout'], []);
   noVariables(x, raw, []);
+  // Lot BANC (D16, §7.3): Knox usbDebugging=false cuts ADB, hence the bench station: never without an explicit
+  // confirmation stored with the section. A policy published before keeps being delivered (the publication and the
+  // delivery never validate again); the confirmation is asked at its next change.
+  if (raw.confirmBenchLockout !== undefined && raw.confirmBenchLockout !== true) x.add(['confirmBenchLockout'], 'type_mismatch');
+  if (isObj(raw.knox) && raw.knox.usbDebugging === false && raw.confirmBenchLockout !== true) x.add(['confirmBenchLockout'], 'required');
   const paths = new Map<string, string>();
   if (raw.files !== undefined) validateFiles(x, raw.files, paths);
   validateWifi(x, raw.wifi, raw.wifiRemove);

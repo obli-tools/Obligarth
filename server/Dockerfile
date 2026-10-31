@@ -34,6 +34,12 @@ RUN npm run build --workspace=server
 # removed right after. The production stage takes the folder, empty or not.
 COPY server/package.json server/agent-releas[e] ./agent-release/
 RUN rm ./agent-release/package.json
+# Installer of the bench station (lot BANC §3.9): obligarth-bench.msi and VERSION
+# dropped in server/bench-release/ of the exported commit by the update, the
+# same way; never in the repository. GET /api/bench/version answers
+# available:false when the folder is empty.
+COPY server/package.json server/bench-releas[e] ./bench-release/
+RUN rm ./bench-release/package.json
 
 # ---- Production stage ----
 FROM node:24-alpine AS production
@@ -66,6 +72,8 @@ COPY --from=builder /app/server/dist/ ./server/dist/
 # and release.json, or an empty folder. Registered at start, after the
 # migrations, when its signer is admitted (LEGACY_AGENT_SIGNERS).
 COPY --from=builder /app/agent-release/ ./server/agent-release/
+# Installer of the bench station (see the builder stage), or an empty folder.
+COPY --from=builder /app/bench-release/ ./server/bench-release/
 
 # Obli mobile app (Android): drop zone read by GET /api/mobile/android/
 # {version,download} (manifest.json, optional RELEASE_NOTES.md and

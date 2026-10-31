@@ -2,9 +2,17 @@ package tools.obli.obligarth.agent
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Build
 import android.os.SystemClock
+import android.util.Log
 import tools.obli.obligarth.agent.core.AgentClient
 import tools.obli.obligarth.agent.core.AgentEngine
+import tools.obli.obligarth.agent.core.AgentRole
+import tools.obli.obligarth.agent.core.BenchChannel
+import tools.obli.obligarth.agent.core.BenchDevice
+import tools.obli.obligarth.agent.core.BenchLog
+import tools.obli.obligarth.agent.core.OwnerMode
+import tools.obli.obligarth.agent.core.ReleaseOutcome
 import tools.obli.obligarth.agent.core.AgentState
 import tools.obli.obligarth.agent.core.AgentTls
 import tools.obli.obligarth.agent.core.CycleReport
@@ -64,6 +72,12 @@ class AgentRuntime private constructor(context: Context) {
     val policyApplier = PolicyApplier(app, facts, knox, log).also { actions.policyApplier = it }
     private val sealer = KeystoreSealer(log)
 
+    /** 1.4.0 (lot BANC §7.3, §7.5): the owner of the device (its protections, policy items, release). */
+    val owner = OwnerApplier(app, facts, knox, policyApplier.kiosk, policyApplier.wifi, log).also {
+        actions.owner = it
+        policyApplier.owner = it
+    }
+
     val engine = AgentEngine(
         state, client, key, facts, actions, policy, app.packageName, facts.versionCode(), pinnedSigners,
         File(app.filesDir, "updates"), clock, log, remoteHost = remoteSessions, sealer = sealer, policyDir = File(app.filesDir, "policy"),
@@ -76,6 +90,34 @@ class AgentRuntime private constructor(context: Context) {
             for (need in listOf(Notifications.NEED_STORAGE, Notifications.NEED_HOME, Notifications.NEED_ADMIN_POLICIES)) Notifications.cancelPolicy(app, need)
         }
         e.onPolicyChanged = { requestReconcile() }
+        // 1.4.0: a new owner takes its protections at once and applies the items of the owner; a lost role is reported
+        // by the engine (device_owner_lost) and the policy reconciled again (its owner items go back to pending).
+        e.onRoleChanged = { gained ->
+            Thread({
+                if (gained) owner.upkeep()
+                applyKnoxAndKeepAlive()
+            }, "obligarth-owner").start()
+            requestReconcile()
+        }
+    }
+
+    /**
+     * The bench channel (1.4.0, lot BANC §7.4): BenchProvider hands it the calls of `content call`, from the shell only.
+     * Each call writes the diagnostic line ObligarthBench (codes only).
+     */
+    val bench: BenchChannel by lazy {
+        BenchChannel(engine, state, object : BenchDevice {
+            override fun role(): AgentRole = facts.role()
+            override fun knoxState(): String = knox.state()
+            override fun openBenchWindow(until: Long): Boolean = this@AgentRuntime.openBenchWindow(until)
+            override fun requestCycle() = PollScheduler.pollNow(app)
+            override fun release(): ReleaseOutcome = actions.releaseOwnership() ?: ReleaseOutcome(false, facts.adminActive(), emptyList())
+        }, facts.versionCode(), clock, log) { line -> Log.i(BenchLog.TAG, line) }
+    }
+
+    /** The diagnostic line of the bench after a cycle (§7.4): codes only. */
+    private fun benchLine() {
+        try { Log.i(BenchLog.TAG, BenchLog.line(state.phase, facts.role(), state.lastStatus)) } catch (e: Exception) { /* logcat only */ }
     }
 
     private val reconciling = AtomicBoolean(false)
@@ -151,6 +193,7 @@ class AgentRuntime private constructor(context: Context) {
         if (refusal == null) {
             applyKnoxAndKeepAlive()
             PollScheduler.pollNow(app)
+            benchLine()
         }
         return refusal
     }
@@ -162,25 +205,52 @@ class AgentRuntime private constructor(context: Context) {
         PollScheduler.scheduleNext(app, report.nextDelaySeconds)
         if (report.installWork) PollScheduler.scheduleInstall(app)
         refreshStatusNotification()
+        benchLine()
         return report
     }
 
     /**
      * §8.3: with the administrator active and Knox present, activate the licence;
      * once licensed, the administrator can no longer be removed by the staff.
+     *
+     * 1.4.0 (lot BANC §6.5, §7.3): that lock is for an administrator only, never while a bench window is open
+     * (prepare_owner), never on Android 15+ (refused there to an administrator); the owner of the device lifts it (and
+     * keeps its own protections: OwnerApplier.upkeep).
      */
     @Synchronized
     fun applyKnoxAndKeepAlive() {
         if (state.phase == Phase.ENROLLED && state.keepAlive) KeepAliveService.start(app) else if (!state.keepAlive) KeepAliveService.stop(app)
-        if (!knox.present || !facts.adminActive()) return
+        val role = facts.role()
+        if (role == AgentRole.OWNER) owner.upkeep()
+        if (!knox.present || role == AgentRole.NONE) return
         val licence = state.serverKnoxLicenseKey ?: state.config?.knoxLicenseKey
         // A new key, or the current one refused (or never answered) a while ago and still not licensed.
         if (licence != null && knox.activationDue(licence)) {
             if (knox.activateLicense(licence)) log.info("Knox licence activation requested")
         }
-        if (knox.state() == "licensed" && knox.adminRemovable()) {
+        val windowOpen = state.benchWindowUntil > clock()
+        if (role == AgentRole.ADMIN && !windowOpen && !OwnerMode.knoxRestricted(role, Build.VERSION.SDK_INT) &&
+            knox.state() == "licensed" && knox.adminRemovable()) {
             if (knox.setAdminRemovable(false)) log.info("administrator made non-removable (Knox)")
         }
+    }
+
+    /**
+     * prepare_owner (lot BANC §6.5, §7.4): the bench window opened and the Knox lock of the administrator lifted, under the
+     * same monitor as [applyKnoxAndKeepAlive], so that a cycle running meanwhile (MY_PACKAGE_REPLACED right after
+     * the update by adb install -r) never sets the lock again between the two. Knox is called only when the lock of 1.3.0 is really
+     * there: licensed, not removable, and an administrator allowed to hold it (never on Android 15+, where Knox refuses
+     * the call to an administrator and no lock was ever set). False when Knox refused: the window closed again.
+     */
+    @Synchronized
+    fun openBenchWindow(until: Long): Boolean {
+        state.benchWindowUntil = until
+        val role = facts.role()
+        val locked = knox.present && knox.state() == "licensed" && !OwnerMode.knoxRestricted(role, Build.VERSION.SDK_INT) && !knox.adminRemovable()
+        if (!locked) return true
+        if (knox.setAdminRemovable(true)) return true
+        state.benchWindowUntil = 0
+        return false
     }
 
     fun refreshStatusNotification() {
