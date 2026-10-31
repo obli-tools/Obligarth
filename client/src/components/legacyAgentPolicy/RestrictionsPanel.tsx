@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { AgentDpmFieldSpec, AgentKnoxFieldSpec, JsonValue, PolicyValidationIssue } from '@obligarth/shared';
 import { AGENT_DPM_FIELDS, AGENT_KNOX_FIELDS } from '@obligarth/shared';
+import { ToggleSwitch } from '@/components/common/ToggleSwitch';
 import { ChipChoice, IssueList, fieldCls, issuesUnder } from './ui';
 
 // The restrictions of the bridge agent (lot PONT-POL §11.1): the device administrator's (every agent, API 24) and Knox's
@@ -11,9 +12,11 @@ import { ChipChoice, IssueList, fieldCls, issuesUnder } from './ui';
 
 type Values = Record<string, JsonValue>;
 
-export function RestrictionsPanel({ dpm, knox, editable, issues, onChange }: {
+export function RestrictionsPanel({ dpm, knox, editable, issues, onChange, lockoutConfirmed = false, lockoutIssues = [], onConfirmLockout }: {
   dpm: Values; knox: Values; editable: boolean; issues: PolicyValidationIssue[];
   onChange: (next: { dpm: Values; knox: Values }) => void;
+  /** Lot BANC (D16): Knox usbDebugging=false cuts ADB; the server asks for this explicit confirmation. */
+  lockoutConfirmed?: boolean; lockoutIssues?: PolicyValidationIssue[]; onConfirmLockout?: (on: boolean) => void;
 }) {
   const { t } = useTranslation();
   const setDpm = (field: string, v: JsonValue | undefined) => {
@@ -59,6 +62,14 @@ export function RestrictionsPanel({ dpm, knox, editable, issues, onChange }: {
             <li key={f.field} className="space-y-1.5 px-3 py-2 text-sm hover:bg-bg-tertiary">
               <span className="text-text-primary">{t(`legacyAgentPolicy.knox.${f.field}`) || f.field}</span>
               <KnoxControl spec={f} value={knox[f.field]} editable={editable} onChange={(v) => setKnox(f.field, v)} />
+              {f.field === 'usbDebugging' && knox[f.field] === false && (
+                <div className="space-y-1 rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-400">
+                  <p>{t('legacyAgentPolicy.restrictions.benchLockout') || 'Cuts ADB: the device can no longer go back to a bench station without a bench window or a reset.'}</p>
+                  <ToggleSwitch size="sm" checked={lockoutConfirmed} disabled={!editable} onChange={(on) => onConfirmLockout?.(on)}
+                    label={t('legacyAgentPolicy.restrictions.benchLockoutConfirm') || 'I confirm: cut ADB on these devices'} />
+                  <IssueList issues={lockoutIssues} />
+                </div>
+              )}
               <IssueList issues={issuesUnder(issues, `knox.${f.field}`)} />
             </li>
           ))}

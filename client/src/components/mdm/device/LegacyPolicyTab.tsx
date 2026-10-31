@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, PauseCircle, RefreshCw, RotateCcw } from 'lucide-react';
 import type { AgentPolicyItemState, LegacyAgentDeviceAction, LegacyAgentPolicyStatusView } from '@obligarth/shared';
-import { AGENT_POLICY_ITEM_STATES } from '@obligarth/shared';
+import { AGENT_POLICY_ITEM_STATES, isAgentPolicyWarning } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { Button } from '@/components/common/Button';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
@@ -20,20 +20,23 @@ const ARTIFACT_TONE: Record<string, 'green' | 'gray' | 'blue' | 'amber' | 'red' 
   applied: 'green', delivering: 'blue', pending: 'blue', error: 'red', removing: 'amber', removed: 'gray',
 };
 const short = (h: string | null | undefined): string => (h ? h.slice(0, 12) : '—');
+// A warning item (a network added by the user) is shown and filtered apart from its state.
+type Shown = AgentPolicyItemState | 'warning';
+const shown = (i: { state: AgentPolicyItemState; code: string }): Shown => (isAgentPolicyWarning(i) ? 'warning' : i.state);
 
 export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct: boolean }) {
   const { t } = useTranslation();
   const [view, setView] = useState<LegacyAgentPolicyStatusView | null>(null);
   const [actions, setActions] = useState<LegacyAgentDeviceAction[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<AgentPolicyItemState | 'all'>('all');
+  const [filter, setFilter] = useState<Shown | 'all'>('all');
   const load = useCallback(() => {
     legacyAgentApi.devicePolicy(deviceId).then((v) => { setView(v); setError(null); }).catch((err) => setError(apiErrorMessage(err)));
     legacyAgentApi.actions(deviceId).then(setActions).catch(() => setActions([]));
   }, [deviceId]);
   useEffect(() => { load(); }, [load]);
   const runner = useLegacyActionRunner({ deviceId, onQueued: load });
-  const items = useMemo(() => (view?.report?.items ?? []).filter((i) => filter === 'all' || i.state === filter), [view, filter]);
+  const items = useMemo(() => (view?.report?.items ?? []).filter((i) => filter === 'all' || shown(i) === filter), [view, filter]);
   const act = (type: 'policy.reapply' | 'kiosk.suspend') => actions.find((a) => a.type === type);
 
   if (error) return <p className="text-sm text-red-400">{error}</p>;
@@ -92,13 +95,13 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
       {r && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-1.5">
-            {(['all', ...AGENT_POLICY_ITEM_STATES] as const).map((s) => {
-              const n = s === 'all' ? r.items.length : r.items.filter((i) => i.state === s).length;
+            {(['all', ...AGENT_POLICY_ITEM_STATES, 'warning'] as const).map((s) => {
+              const n = s === 'all' ? r.items.length : r.items.filter((i) => shown(i) === s).length;
               if (s !== 'all' && n === 0) return null;
               return (
                 <button key={s} type="button" onClick={() => setFilter(s)}
                   className={`rounded-full px-2.5 py-1 text-xs ${filter === s ? 'bg-accent/15 text-accent' : 'bg-bg-tertiary text-text-muted hover:text-text-primary'}`}>
-                  {s === 'all' ? (t('common.all') || 'All') : itemStateLabel(s)} · {n}
+                  {s === 'all' ? (t('common.all') || 'All') : s === 'warning' ? (t('legacyAgentPolicy.itemStates.warning') || 'Warning') : itemStateLabel(s)} · {n}
                 </button>
               );
             })}
@@ -107,7 +110,9 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
             {items.map((i) => (
               <li key={i.key} className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm hover:bg-bg-tertiary">
                 <span className="min-w-0 flex-1 break-words text-text-primary">{agentKeyLabel(i.key)}</span>
-                <StateBadge tone={ITEM_STATE_TONE[i.state] ?? 'gray'} label={itemStateLabel(i.state)} />
+                {shown(i) === 'warning'
+                  ? <StateBadge tone="amber" label={t('legacyAgentPolicy.itemStates.warning') || 'Warning'} />
+                  : <StateBadge tone={ITEM_STATE_TONE[i.state] ?? 'gray'} label={itemStateLabel(i.state)} />}
                 <span className="text-xs text-text-secondary">{codeLabel(i.code)}</span>
                 {i.detail && <span className="w-full text-[11px] text-text-muted">{i.detail}</span>}
               </li>

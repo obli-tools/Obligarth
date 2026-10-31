@@ -31,6 +31,7 @@ import approvalRoutes from './approval.routes';
 import auditRoutes from './audit.routes';
 import restrictionRoutes from './restriction.routes';
 import mobileAppRoutes from './mobileApp.routes';
+import { createLegacyAgentPublicRouter } from '../legacyAgent/publicDownload';
 import { createAppleCommandsRouter } from '../apple/commands';
 import { defaultRuntime } from '../jobs';
 import { createJobsAdmin } from '../jobs/admin';
@@ -65,6 +66,10 @@ import { createLegacyAgentAdminRouter } from '../legacyAgent/admin.routes';
 import { createAccessKeysRouter } from '../mcp/keys/routes';
 import { createMcpAuthorizationsRouter } from '../mcp/authorizations/routes';
 import { createMcpAdminRouter } from '../mcp/admin.routes';
+import { createBenchStationRouter } from '../bench/api.routes';
+import { createBenchAdminRouter } from '../bench/admin.routes';
+import { createBenchSessionsRouter } from '../bench/sessions.routes';
+import { createBenchHistoryRouter } from '../bench/history.routes';
 
 const router = Router();
 
@@ -73,10 +78,15 @@ router.use('/auth', authRoutes);
 router.use('/auth', obligateCallbackRoutes);  // sso-config, connected-apps, app-info (under /api/auth)
 router.use('/mobile', mobileAppRoutes);    // Public: Android app version + APK download (/api/mobile/android/*)
 router.use('/repo', repoPublicRoutes);   // script-facing software repo (per-tenant access key auth)
+// The APK of the bridge agent, public: the last resort of a device to put right in the shop (legacyAgent/publicDownload.ts)
+router.use('/legacy-agent/public', createLegacyAgentPublicRouter());
 router.use('/system', systemRoutes);       // system info / about (admin only, no tenant required)
 // Return of Google after the signup of an Android enterprise (android-amapi §6.2, AN48): public and mute, no session
 // (the customer's administrator may have no account here), its own limiter, never logged (client/nginx.conf).
 router.use('/android/signup', createAndroidSignupCallbackRouter());
+// The surface of the bench stations (lot BANC §3.5): Authorization: Bench <token>, no session, its own guard, limiters
+// and JSON 404 (never a fall-through to the console); the installer of the station is public.
+router.use('/bench', createBenchStationRouter());
 
 // ── Authenticated, no tenant required ───────────────────────────────────────
 // Device-bound 2FA (the account's phones) — before /profile. A 404 here tells
@@ -182,6 +192,12 @@ tenantRouter.use('/legacy-agent', createLegacyAgentRouter());
 // The remote assistance sessions (P0-15 §4.2): request, journal, end, escalation, settings (remote/routes.ts).
 tenantRouter.use('/remote-sessions', createRemoteSessionsRouter());
 tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
+// The bench stations (lot BANC §3.2): the platform's (master tenant, platform administrators: approval, targets, sessions,
+// version served), the sessions a technician opens from a tenant (mdm.bench.operate), the history of the provisionings
+// and the stations that target the tenant (mdm.bench.manage).
+tenantRouter.use('/admin/bench-stations', createBenchAdminRouter());
+tenantRouter.use('/bench-sessions', createBenchSessionsRouter());
+tenantRouter.use('/bench-provisionings', createBenchHistoryRouter());
 // The MCP server in the console: the user's personal access keys and the tenant managers' oversight of them, the
 // authorizations an AI agent asked (approved with a second factor), and the platform side (settings, tenant IP
 // policies, blocks, every key; master tenant, platform administrators). /mcp itself is mounted by app.ts.

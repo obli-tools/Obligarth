@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef, createContext, useContext, type FormEvent } from 'react';
+import { announceDeviceDrop, isDeviceDrag } from './deviceDrag';
 import { useNavigate } from 'react-router-dom';
 import {
   ChevronRight, FolderOpen, Search, PanelLeftClose, PanelLeftOpen, Monitor, FolderX,
@@ -203,6 +204,7 @@ function TreeNode({
   const isExpanded = expandedIds.has(node.id);
   const isAncestor = hasSelectedDescendant(node, selectedGroupId);
   const count = countDevicesRecursive(node);
+  const [deviceOver, setDeviceOver] = useState(false);
 
   // Drag is bound ONLY to the explicit grip handle — previously the
   // whole row was draggable, which (a) hid the affordance (no visible
@@ -240,12 +242,16 @@ function TreeNode({
 
       <div
         ref={drop.setNodeRef}
+        // A device row of the table dropped here moves into this group (deviceDrag.ts).
+        onDragOver={(e) => { if (isDeviceDrag(e)) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; if (!deviceOver) setDeviceOver(true); } }}
+        onDragLeave={() => setDeviceOver(false)}
+        onDrop={(e) => { setDeviceOver(false); if (isDeviceDrag(e)) { e.preventDefault(); announceDeviceDrop(e, node.id); } }}
         className={clsx(
           'group/row flex w-full items-center gap-1.5 rounded-md py-1 pr-1 text-left text-sm transition-colors',
           'hover:bg-accent/5 coarse:min-h-10',
           isSelected && 'bg-accent/10 font-medium',
           drag.isDragging && 'opacity-40',
-          drop.isOver && !drag.isDragging && 'ring-1 ring-accent/70 bg-accent/10',
+          ((drop.isOver && !drag.isDragging) || deviceOver) && 'ring-1 ring-accent/70 bg-accent/10',
         )}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
         title={canHover ? node.name : undefined}

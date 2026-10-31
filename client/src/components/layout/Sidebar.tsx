@@ -11,6 +11,7 @@ import {
   ArrowLeftRight,
   Building2,
   Smartphone,
+  Usb,
   ChevronDown,
   ChevronRight,
   ChevronsLeft,
@@ -545,6 +546,10 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
     // Platform > Android (lot AN-A2): identity and health of the link to Google, master tenant only.
     ...(admin && isMasterTenant(currentTenantId)
       ? [{ label: t('nav.androidPlatform', 'Android'), path: '/admin/android', icon: <Smartphone size={18} /> } as NavItem]
+      : []),
+    // Platform > Bench stations (lot BANC): the technicians' stations that enroll Android devices by ADB, master tenant only.
+    ...(admin && isMasterTenant(currentTenantId)
+      ? [{ label: t('nav.benchStations', 'Bench stations'), path: '/manage/bench-stations', icon: <Usb size={18} /> } as NavItem]
       : []),
     ...(admin
       ? [{ label: t('nav.settings'), path: '/settings', icon: <Settings size={18} /> } as NavItem]

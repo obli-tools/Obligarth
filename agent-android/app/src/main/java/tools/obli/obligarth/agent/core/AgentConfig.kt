@@ -35,6 +35,8 @@ data class AgentConfig(
 
     companion object {
         val TOKEN_RE = Regex("^OLE1\\.[A-Za-z0-9_-]{22}\\.[A-Za-z0-9_-]{43}$")
+        /** hints.provisioningId (1.4.0, lot BANC). */
+        const val PROVISIONING_ID = "provisioningId"
         private const val MAX_CONFIG_CHARS = 16 * 1024
 
         /**
@@ -96,6 +98,9 @@ data class AgentConfig(
                     // MobiControl leaves an unexpanded macro (%DEVICENAME%) when it lacks one.
                     hints[name] = v?.trim()?.takeIf { it.isNotEmpty() && it.length <= max && !(it.startsWith("%") && it.endsWith("%")) }
                 }
+                // 1.4.0 (lot BANC §7.2): the provisioning of the bench station, a uuid, sent back at the enrollment. Kept
+                // only when well formed (the key is absent otherwise, as for a configuration of the console).
+                (h["provisioningId"] as? String)?.trim()?.lowercase()?.takeIf { Uuids.isLower(it) }?.let { hints[PROVISIONING_ID] = it }
             }
             return ConfigResult.Valid(AgentConfig(base, host, token, pin, knox, hints))
         }

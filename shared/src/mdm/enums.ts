@@ -22,9 +22,11 @@ export const ENROLLMENT_METHODS = ['ade', 'ota', 'byod_account', 'configurator',
   'android_signin_url', 'agent_token'] as const;
 export type EnrollmentMethod = typeof ENROLLMENT_METHODS[number];
 
-/** Management SCOPE (DM3): device or User Enrollment on Apple; the Android modes are v1. */
+/** Management SCOPE (DM3): device or User Enrollment on Apple; the Android modes are v1. device_admin and device_owner:
+ *  the Android bridge agent (channel legacy_agent) as the administrator or the owner of the device (lot BANC, D1); the
+ *  channel is read from management_channel, never from the mode. */
 export const MANAGEMENT_MODES = ['device', 'user_enrollment', 'fully_managed', 'dedicated',
-  'work_profile_corporate', 'work_profile_personal', 'device_admin'] as const;
+  'work_profile_corporate', 'work_profile_personal', 'device_admin', 'device_owner'] as const;
 export type ManagementMode = typeof MANAGEMENT_MODES[number];
 
 /** Declared use of the device (filters, dynamic groups in v1); never a security rule. */

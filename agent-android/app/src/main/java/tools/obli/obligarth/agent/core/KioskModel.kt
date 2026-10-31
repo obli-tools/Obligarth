@@ -91,4 +91,41 @@ object KioskModel {
 
     /** The kiosk is suspended at [now] (local seconds); a suspension longer than its maximum is ignored (clock moved). */
     fun suspended(until: Long, now: Long): Boolean = until > now && until - now <= CommandParser.MAX_SUSPEND_MINUTES * 60L
+
+    // ---- Lock task of the owner of the device (1.4.0, lot BANC §7.3, T386) ----
+
+    /** The packages a lock task never admits besides the agent: they would open a way out (the system, Settings, Knox). */
+    private val LOCK_TASK_REFUSED_PREFIXES = listOf("com.android.settings", "com.android.systemui", "com.sec.android.app.launcher",
+        "com.samsung.android.knox", "com.sec.enterprise.knox", "com.android.packageinstaller", "com.google.android.packageinstaller")
+
+    /** A tile's package the lock task may admit: a valid name, not the system nor a way out. */
+    fun lockTaskPackageAllowed(pkg: String?): Boolean {
+        if (pkg == null || pkg == "android" || !CommandParser.isPackageName(pkg)) return false
+        val l = pkg.lowercase()
+        return LOCK_TASK_REFUSED_PREFIXES.none { l == it || l.startsWith("$it.") }
+    }
+
+    /** The lock task features of API 28 a policy may ask (none by default: no home, recents, notifications…). */
+    val LOCK_TASK_FEATURES = listOf("home", "notifications", "globalActions", "systemInfo", "keyguard", "overview")
+
+    /** The flags of DevicePolicyManager.setLockTaskFeatures for [features] (unknown names ignored; overview needs home). */
+    fun lockTaskFeatureFlags(features: Collection<String>): Int {
+        var flags = 0
+        if ("systemInfo" in features) flags = flags or 1      // LOCK_TASK_FEATURE_SYSTEM_INFO
+        if ("notifications" in features) flags = flags or 2   // LOCK_TASK_FEATURE_NOTIFICATIONS
+        if ("home" in features) flags = flags or 4            // LOCK_TASK_FEATURE_HOME
+        if ("overview" in features && "home" in features) flags = flags or 8 // LOCK_TASK_FEATURE_OVERVIEW
+        if ("globalActions" in features) flags = flags or 16  // LOCK_TASK_FEATURE_GLOBAL_ACTIONS
+        if ("keyguard" in features) flags = flags or 32       // LOCK_TASK_FEATURE_KEYGUARD
+        return flags
+    }
+
+    /** What the lock task does in a state of the kiosk: entered, left (suspended: the escape tiles must work), or none. */
+    enum class LockTask { ENTER, LEAVE, NONE }
+
+    fun lockTaskAction(owner: Boolean, kioskEnabled: Boolean, suspended: Boolean): LockTask = when {
+        !owner -> LockTask.NONE
+        kioskEnabled && !suspended -> LockTask.ENTER
+        else -> LockTask.LEAVE
+    }
 }

@@ -307,6 +307,8 @@ export const groupService = {
       if (await trx('device_groups').where({ tenant_id: tenantId, parent_id: id }).first('id')) {
         throw new AppError(409, 'A group with subgroups is not deleted: move its subgroups first', 'groupHasSubgroups');
       }
+      // Lot BANC §3.1 d: the bench targets of the group go with it (ON DELETE CASCADE); each one is written down below.
+      const benchTargets = await trx('bench_station_targets').where({ tenant_id: tenantId, group_id: id }).select('station_id') as Array<{ station_id: string }>;
       const count = await trx('device_groups').where({ id, tenant_id: tenantId }).del();
       if (!count) return false;
       // The dynamic groups whose rule names it can no longer be computed: in error, their members frozen (P0-5 T4).
@@ -325,6 +327,12 @@ export const groupService = {
           approvalIds: o.journal.approvalId ? [o.journal.approvalId] : undefined,
           details: { name: group.name, parentId: group.parent_id ?? null, approvalId: o.journal.approvalId ?? null, ...(o.journal.details ?? {}) },
         }, o.journal.ctx);
+        if (benchTargets.length > 0) {
+          await audit.appendManyInTx(trx, benchTargets.map((t) => ({
+            tenantId, action: 'bench.target_removed', target: { type: 'bench_station', id: String(t.station_id) },
+            details: { stationId: String(t.station_id), groupId: id, reason: 'group_deleted' },
+          })), o.journal.ctx, { onFailure: 'spool' });
+        }
       }
       return true;
     };

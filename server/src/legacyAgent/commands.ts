@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_PACKAGE, LEGACY_AGENT_RESULT_CODES, MDM_COMMAND_ORIGINS,
+  BENCH_OWNER_MIN_VERSION_CODE, LEGACY_AGENT_OWNER_COMMAND_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_RESULT_CODES, MDM_COMMAND_ORIGINS,
   type DeviceCapability, type LegacyAgentCommandState, type LegacyAgentCommandType, type MdmCommandOrigin,
 } from '@obligarth/shared';
 import { audit, type AuditWriteContext } from '../audit';
@@ -138,6 +138,13 @@ const SPECS: Record<LegacyAgentCommandType, CommandSpec> = {
   'policy.reapply': {
     type: 'policy.reapply', params: z.object({}).strict(), capability: 'mdm:profiles', restrictionKey: null, guardedBy: null,
     lifetimeSeconds: DAY,
+  },
+  // Agent 1.4.0 (lot BANC §3.8, D15): the device given back by the owner agent (its policies, the owner, then the
+  // administrator removed). Part of the revocation of a device the agent owns (legacy_agent.revoke, already sensitive),
+  // never a console command of its own; refused to an agent older than 1.4.0 (422 agent_too_old).
+  'agent.release': {
+    type: 'agent.release', params: z.object({}).strict(), capability: 'mdm:remove', restrictionKey: 'legacy_agent.revoke', guardedBy: null,
+    lifetimeSeconds: 7 * DAY,
   },
 };
 
@@ -308,6 +315,12 @@ async function enqueue(trx: Knex.Transaction, req: EnqueueRequest): Promise<Enqu
 
   const held = await tenantFrozen(trx, tenantId);
   const { kept, refused } = await eligible(trx, tenantId, ids);
+  // Lot BANC §3.8: the commands of the owner agent are refused to an agent older than 1.4.0.
+  if ((LEGACY_AGENT_OWNER_COMMAND_TYPES as readonly string[]).includes(spec.type) && kept.length > 0) {
+    const old = await trx('legacy_agent_devices').where({ tenant_id: tenantId }).whereRaw('device_id = ANY (?::int[])', [kept])
+      .where('agent_version_code', '<', BENCH_OWNER_MIN_VERSION_CODE).first('device_id');
+    if (old) throw new AppError(422, `${spec.type}: the agent is older than 1.4.0`, 'agent_too_old');
+  }
   const batchId = randomUUID();
   const outcome: EnqueueOutcome = { batchId, commandIds: [], targets: 0, refused, held, replayed: false };
   if (kept.length === 0) return outcome;

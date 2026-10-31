@@ -140,6 +140,24 @@ class AgentState(private val store: KeyValueStore) {
         get() = KioskModel.PinAttempts.fromJson(s(K_KIOSK_PIN_FAILS)?.let { Json.parseObjectOrNull(it) })
         set(v) = set(K_KIOSK_PIN_FAILS to Json.write(v.toJson()))
 
+    // ---- Owner of the device (1.4.0, lot BANC §3.4, §7.2) ----
+
+    /** config.features of the last full configuration (closed list of the server; empty: an older server). */
+    var serverFeatures: List<String>
+        get() = (s(K_FEATURES)?.let { runCatching { Json.parse(it) }.getOrNull() } as? List<*>).orEmpty().filterIsInstance<String>()
+        set(v) = set(K_FEATURES to Json.write(v))
+    /** The owner role seen at the last cycle (null: unknown, as after an update from 1.3.0). */
+    var lastOwner: Boolean?
+        get() = when (s(K_LAST_OWNER)) { "true" -> true; "false" -> false; else -> null }
+        set(v) = set(K_LAST_OWNER to v?.toString())
+    /** End of the bench window opened by prepare_owner (local seconds): the Knox lock of the administrator stays off. */
+    var benchWindowUntil: Long get() = s(K_BENCH_WINDOW)?.toLongOrNull() ?: 0; set(v) = set(K_BENCH_WINDOW to v.toString())
+    /**
+     * Until when (local seconds) the server allows an ENROLLED agent to open a bench window (benchConvert of the signed
+     * poll reply: an open conversion of this device by an approved station). 0: not allowed.
+     */
+    var benchConvertUntil: Long get() = s(K_BENCH_CONVERT)?.toLongOrNull() ?: 0; set(v) = set(K_BENCH_CONVERT to v.toString())
+
     // ---- Outbox (results), events, journal, install queue ----
 
     var outbox: List<CommandResult>
@@ -231,6 +249,10 @@ class AgentState(private val store: KeyValueStore) {
         const val K_SERVER_POLICY_V1 = "serverPolicyV1"
         const val K_KIOSK_SUSPENDED_UNTIL = "kioskSuspendedUntil"
         const val K_KIOSK_PIN_FAILS = "kioskPinFails"
+        const val K_FEATURES = "serverFeatures"
+        const val K_LAST_OWNER = "lastOwner"
+        const val K_BENCH_WINDOW = "benchWindowUntil"
+        const val K_BENCH_CONVERT = "benchConvertUntil"
 
         private val ALL_IDENTITY_KEYS = listOf(
             K_CONFIG, K_AGENT_ID, K_DEVICE_UUID, K_SEQ, K_CLOCK, K_SERVER_KEYS, K_POLL, K_INV_SECONDS, K_KEEPALIVE,
@@ -240,6 +262,8 @@ class AgentState(private val store: KeyValueStore) {
             // 1.3.0: the policy, its ledger and report, the kiosk state (the revocation undoes the policy first).
             K_POLICY, K_POLICY_HASH, K_POLICY_REJECTED, K_POLICY_LEDGER, K_POLICY_REPORT, K_POLICY_REPORT_SENT_DIGEST,
             K_POLICY_REPORT_SENT_AT, K_POLICY_REPORT_REFUSED_UNTIL, K_SERVER_POLICY_V1, K_KIOSK_SUSPENDED_UNTIL, K_KIOSK_PIN_FAILS,
+            // 1.4.0: the features of the server and the role last seen (the bench window is local and kept).
+            K_FEATURES, K_LAST_OWNER, K_BENCH_CONVERT,
         )
 
         private fun configFromStored(m: Map<String, Any?>): AgentConfig? {

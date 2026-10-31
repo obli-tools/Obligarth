@@ -103,8 +103,8 @@ object Notifications {
     const val NEED_ADMIN_POLICIES = 3
     const val NEED_PASSWORD = 4
 
-    /** A need of the policy (storage access, default home, new admin permissions): opens the status screen. */
-    fun policy(ctx: Context, need: Int, text: Int) {
+    /** A need of the policy (storage access, default home, new admin permissions): opens [open], else the status screen. */
+    fun policy(ctx: Context, need: Int, text: Int, open: Intent? = null) {
         nm(ctx).notify(
             TAG_POLICY, need,
             Notification.Builder(ctx)
@@ -113,7 +113,10 @@ object Notifications {
                 .setContentText(ctx.getString(text))
                 .setStyle(Notification.BigTextStyle().bigText(ctx.getString(text)))
                 .setOngoing(true)
-                .setContentIntent(openSetup(ctx))
+                .setContentIntent(
+                    if (open == null) openSetup(ctx)
+                    else PendingIntent.getActivity(ctx, need, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT),
+                )
                 .build(),
         )
     }

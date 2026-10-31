@@ -43,6 +43,12 @@ class Policy(
     val invalidUnkeyed: Int,
     /** A sealed secret of the stored form could not be opened: a Wi-Fi item needs a full configuration again. */
     val secretsMissing: Boolean,
+    /** 1.4.0 (lot BANC §7.3): the user restrictions of the owner of the device (AGENT_OWNER_FIELDS), value true = set. */
+    val owner: List<Setting> = emptyList(),
+    /** 1.4.0: the runtime permissions the owner grants or denies to an app (setPermissionGrantState). */
+    val grants: List<Grant> = emptyList(),
+    /** 1.4.0: the system update policy of the owner (setSystemUpdatePolicy). */
+    val systemUpdate: SystemUpdate? = null,
 ) {
     class BlobRef(val sha256: String, val size: Long)
 
@@ -105,10 +111,20 @@ class Policy(
 
     class Dropped(val key: String, val code: String)
 
+    /** One permission of one app, set by the owner: granted, denied, or back to the user's choice (default). */
+    class Grant(val key: String, val digest: String, val pkg: String, val permission: String, val state: String) {
+        override fun toString() = "Grant($key)"
+    }
+
+    /** The system update policy: automatic, a daily window (minutes of the day), or postponed for 30 days. */
+    class SystemUpdate(val key: String, val digest: String, val type: String, val windowStartMin: Int, val windowEndMin: Int) {
+        override fun toString() = "SystemUpdate($type)"
+    }
+
     /** Every key of the policy the agent applies (items read), in no particular order. */
     val itemKeys: List<String>
         get() = files.map { it.key } + wifi.map { it.key } + wifiRemove.map { it.key } + dpm.map { it.key } + knox.map { it.key } +
-            certs.map { it.key } + listOfNotNull(kiosk?.key)
+            certs.map { it.key } + listOfNotNull(kiosk?.key) + owner.map { it.key } + grants.map { it.key } + listOfNotNull(systemUpdate?.key)
 
     override fun toString() = "Policy(hash=${hash.take(8)}, items=${itemKeys.size}, invalid=${invalidKeys.size})"
 
@@ -125,7 +141,7 @@ class Policy(
         if (kiosk != null || k == null || !kioskWithheld) return this
         val images = listOfNotNull(k.logo?.sha256) + k.tiles.mapNotNull { it.image?.sha256 }
         return Policy(v, hash, reportSeconds, files, wifi, wifiRemove, dpm, knox, certs, k, (blobs + images).distinct(), dropped,
-            undeliverable, withheld, invalidKeys, invalidUnkeyed, secretsMissing)
+            undeliverable, withheld, invalidKeys, invalidUnkeyed, secretsMissing, owner, grants, systemUpdate)
     }
 
     /**
@@ -184,6 +200,17 @@ class Policy(
                         )
                     },
                 )
+            },
+            "owner" to owner.map { o ->
+                linkedMapOf("key" to o.key, DIGEST to o.digest, "field" to o.field, "value" to o.value).also {
+                    if (o.field == DEBUGGING_FEATURES && o.value == true) it["confirmBenchLockout"] = true
+                }
+            },
+            "permissionGrants" to grants.map { g ->
+                linkedMapOf("key" to g.key, DIGEST to g.digest, "package" to g.pkg, "permission" to g.permission, "state" to g.state)
+            },
+            "systemUpdate" to systemUpdate?.let { u ->
+                linkedMapOf("key" to u.key, DIGEST to u.digest, "type" to u.type, "windowStartMin" to u.windowStartMin, "windowEndMin" to u.windowEndMin)
             },
             "blobs" to blobs,
             "dropped" to dropped.map { linkedMapOf("key" to it.key, "code" to it.code) },
@@ -266,6 +293,42 @@ class Policy(
             "statusBarExpansion", "settingsChanges", "multiWindow", "sdCard", "otaUpgrade", "wifiUserProfiles", "appUninstall",
         )
         val KNOX_LISTS = listOf("disabledApps", "uninstallBlocked")
+
+        /**
+         * The user restrictions of the owner of the device (1.4.0, lot BANC §7.3; shared AGENT_OWNER_FIELDS, T385): the
+         * field, the UserManager key it sets, the first API level, and the mark of a restriction that cuts ADB (so the
+         * bench): set only with confirmBenchLockout in the item (the server asks the same, §7.3, D16).
+         */
+        class OwnerSpec(val restriction: String, val minSdk: Int, val dangerous: Boolean = false)
+
+        const val DEBUGGING_FEATURES = "debuggingFeatures"
+
+        val OWNER_FIELDS: Map<String, OwnerSpec> = linkedMapOf(
+            "factoryReset" to OwnerSpec("no_factory_reset", 21),
+            "safeBoot" to OwnerSpec("no_safe_boot", 23),
+            "addUser" to OwnerSpec("no_add_user", 21),
+            "installUnknownSources" to OwnerSpec("no_install_unknown_sources", 21),
+            "uninstallApps" to OwnerSpec("no_uninstall_apps", 21),
+            "usbFileTransfer" to OwnerSpec("no_usb_file_transfer", 21),
+            "mountPhysicalMedia" to OwnerSpec("no_physical_media", 21),
+            "configWifi" to OwnerSpec("no_config_wifi", 21),
+            "configBluetooth" to OwnerSpec("no_config_bluetooth", 21),
+            "bluetooth" to OwnerSpec("no_bluetooth", 26),
+            "sms" to OwnerSpec("no_sms", 21),
+            "outgoingCalls" to OwnerSpec("no_outgoing_calls", 21),
+            "configDateTime" to OwnerSpec("no_config_date_time", 28),
+            "modifyAccounts" to OwnerSpec("no_modify_accounts", 21),
+            "shareLocation" to OwnerSpec("no_share_location", 21),
+            DEBUGGING_FEATURES to OwnerSpec("no_debugging_features", 21, dangerous = true),
+        )
+
+        /** States of a permission grant (shared AGENT_PERMISSION_GRANT_STATES). */
+        val GRANT_STATES = listOf("granted", "denied", "default")
+        /** Types of the system update policy (shared AGENT_SYSTEM_UPDATE_TYPES). */
+        val SYSTEM_UPDATE_TYPES = listOf("automatic", "windowed", "postpone")
+        const val MAX_GRANTS = 64
+        const val SYSTEM_UPDATE_KEY = "agent:systemUpdate"
+        private val PERMISSION_RE = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
 
         /** The value a Knox field gets back when its key leaves the policy: allowed, or an empty list. */
         fun knoxUndo(field: String): Any = if (field in KNOX_LISTS) emptyList<String>() else true
@@ -389,6 +452,30 @@ class Policy(
                 if (key != "agent:kiosk") unkeyed++
                 else kiosk = try { readKiosk(k, key, digestOf(k, stored)) } catch (e: RuntimeException) { null }.also { if (it == null) invalid += key }
             }
+            // 1.4.0 (lot BANC §7.3): the items of the owner of the device (an agent 1.3.0 ignores these keys).
+            val owner = items(m.list("owner"), OWNER_FIELDS.size, "agent:owner.") { o, key, digest ->
+                val field = o.str("field")?.takeIf { key == "agent:owner.$it" } ?: return@items null
+                val spec = OWNER_FIELDS[field] ?: return@items null
+                val value = o.bool("value") ?: return@items null
+                // A restriction that cuts ADB is never set without the confirmation the console asked for (D16).
+                if (spec.dangerous && value && o.bool("confirmBenchLockout") != true) return@items null
+                Setting(key, digest, field, value)
+            }
+            val grants = items(m.list("permissionGrants"), MAX_GRANTS, "agent:grant[") { o, key, digest ->
+                val pkg = o.str("package")?.takeIf { CommandParser.isPackageName(it) && !PathRules.isOwnPackage(it) } ?: return@items null
+                val permission = o.str("permission")?.takeIf { it.length <= 200 && PERMISSION_RE.matches(it) } ?: return@items null
+                if (key != "agent:grant[$pkg/$permission]") return@items null
+                val state = o.str("state")?.takeIf { it in GRANT_STATES } ?: return@items null
+                Grant(key, digest, pkg, permission, state)
+            }
+            var systemUpdate: SystemUpdate? = null
+            @Suppress("UNCHECKED_CAST") val su = m["systemUpdate"] as? Map<String, Any?>
+            if (su != null) {
+                val key = su.str("key")
+                if (key != SYSTEM_UPDATE_KEY) unkeyed++
+                else systemUpdate = try { readSystemUpdate(su, key, digestOf(su, stored)) } catch (e: RuntimeException) { null }
+                    .also { if (it == null) invalid += key }
+            }
             val blobs = m.list("blobs").orEmpty().filterIsInstance<String>().filter { Hex.isSha256(it) }.distinct()
             val dropped = m.list("dropped").orEmpty().mapNotNull { d ->
                 @Suppress("UNCHECKED_CAST") val o = d as? Map<String, Any?> ?: return@mapNotNull null
@@ -401,8 +488,18 @@ class Policy(
             val report = (m.long("reportSeconds") ?: REPORT_SECONDS_DEFAULT).coerceIn(3_600L, 7 * 86_400L)
             return ParseResult.Ok(Policy(
                 FORMAT, hash, report, files, wifi, wifiRemove, dpm, knox, certs, kiosk, blobs, dropped, undeliverable, withheld,
-                invalid.toList(), unkeyed, missing,
+                invalid.toList(), unkeyed, missing, owner, grants, systemUpdate,
             ))
+        }
+
+        /** systemUpdate (§7.3): a type, and for a window its start and end in minutes of the day (0..1439, different). */
+        fun readSystemUpdate(o: Map<String, Any?>, key: String, digest: String): SystemUpdate? {
+            val type = o.str("type")?.takeIf { it in SYSTEM_UPDATE_TYPES } ?: return null
+            if (type != "windowed") return SystemUpdate(key, digest, type, 0, 0)
+            val start = o.long("windowStartMin")?.takeIf { it in 0..1439 }?.toInt() ?: return null
+            val end = o.long("windowEndMin")?.takeIf { it in 0..1439 }?.toInt() ?: return null
+            if (start == end) return null
+            return SystemUpdate(key, digest, type, start, end)
         }
 
         /** The digest of an item: computed from the wire form (secrets in clear), kept as such in the stored form. */

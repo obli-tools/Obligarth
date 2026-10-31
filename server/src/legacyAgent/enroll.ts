@@ -13,6 +13,7 @@ import { agentConfigFor } from './agentConfig';
 import { markPolicyDelivered } from './policyDelivery';
 import { instanceSettings } from './config';
 import { EnrollBody } from './schemas';
+import { checkBenchEnrollment, linkBenchEnrollment, type BenchEnrollmentLink } from '../bench/enrollment';
 import { currentServerKey } from './serverKey';
 import { fromB64url, p256PublicKey, sha256Hex } from './signature';
 import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } from './surface';
@@ -32,6 +33,11 @@ import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } fro
 //     UPDATE … WHERE uses < max_uses), the record (devices), the satellite, the
 //     audit entry; a serial or an IMEI already carried by a managed record of
 //     the tenant: a new record without serial, identity_conflict, an alert.
+//   - lot BANC §3.4: the mode device_owner when the agent (1.4.0) says it owns
+//     the device, device_admin otherwise; a token of a bench station checked
+//     before its use is consumed (its provisioning, hints.provisioningId, the
+//     pairs of serial numbers: bench/enrollment.ts), the provisioning enrolled
+//     in this transaction.
 // =============================================================================
 
 const SERIAL_JUNK = new Set(['', 'unknown', '0', 'null', 'none', '0123456789abcdef', '0123456789ABCDEF']);
@@ -120,6 +126,16 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
         return answer(trx, tenantId, String(existing.agent_id), String(existing.uuid), 200, b.agent.versionCode);
       }
       if (!tok.usable) return tokenInvalid();
+      // A token of a bench station: its provisioning and the identity of the device, BEFORE the use is consumed.
+      const origin = await trx('legacy_agent_enrollment_tokens').where({ tenant_id: tenantId, id: tok.token_id })
+        .first('origin', 'bench_provisioning_id', 'created_by') as { origin: string; bench_provisioning_id: string | null; created_by: number } | undefined;
+      let bench: BenchEnrollmentLink | null = null;
+      if (origin?.origin === 'bench') {
+        const checked = await checkBenchEnrollment(trx, tenantId, { id: tok.token_id, bench_provisioning_id: origin.bench_provisioning_id, created_by: Number(origin.created_by) },
+          { serial: b.device.serial ?? null, samsungSerial: b.device.samsungSerial ?? null, provisioningId: b.hints?.provisioningId });
+        if (checked === 'refused') return tokenInvalid();
+        bench = checked;
+      }
       const used = await trx('legacy_agent_enrollment_tokens')
         .where({ tenant_id: tenantId, id: tok.token_id }).where('uses', '<', trx.raw('max_uses')).whereNull('revoked_at').where('expires_at', '>', trx.fn.now())
         .update({ uses: trx.raw('uses + 1'), last_used_at: trx.fn.now() }).returning(['id', 'group_id']) as Array<{ id: string; group_id: number | null }>;
@@ -150,11 +166,12 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       }
 
       const now = new Date();
+      const owner = b.capabilities.deviceOwner === true;
       const manufacturer = clean(d.manufacturer, 64);
       const model = clean(d.model, 64);
       const [dev] = await trx('devices').insert({
         tenant_id: tenantId, group_id: groupId, platform: 'android', management_channel: 'legacy_agent', ownership: 'corporate',
-        enrollment_type: 'agent_token', management_mode: 'device_admin', supervised: false, usage: 'standard',
+        enrollment_type: 'agent_token', management_mode: owner ? 'device_owner' : 'device_admin', supervised: false, usage: 'standard',
         enrollment_state: 'enrolled', enrollment_state_at: now, enrolled_at: now, last_checkin_at: now,
         serial_number: conflict ? null : serial, model, model_name: [manufacturer, model].filter(Boolean).join(' ').slice(0, 128) || null,
         os_version: clean(d.osVersion, 32), os_build: clean(d.build, 32), device_name: clean(d.deviceName, 255),
@@ -174,12 +191,16 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
           deviceName: clean(b.hints.deviceName, 255), serial: clean(b.hints.serial, 64), imei: keepImei ? clean(b.hints.imei, 32) : null,
         }) : null,
         identity_conflict: conflict, last_poll_at: now, enrolled_at: now,
+        device_owner: owner, device_owner_since: owner ? now : null,
+        ...(bench ? { enrolled_by_station_id: bench.stationId, bench_provisioning_id: bench.provisioningId, identity_state: bench.identityState } : {}),
       });
+      if (bench) await linkBenchEnrollment(trx, tenantId, bench, deviceId);
       const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, tenantId);
       await audit.appendInTx(trx, {
         tenantId, action: 'legacy_agent.device_enrolled', target: { type: 'device', id: String(deviceId), device: deviceId },
         details: { tokenId: tok.token_id, agentVersionCode: b.agent.versionCode, keyStorage: b.keyStorage, adminActive: b.capabilities.adminActive,
-          knoxState: b.capabilities.knox.state, identityConflict: conflict },
+          knoxState: b.capabilities.knox.state, identityConflict: conflict, deviceOwner: owner,
+          ...(bench ? { benchProvisioningId: bench.provisioningId, stationId: bench.stationId, identityState: bench.identityState } : {}) },
       }, ctx, { onFailure: 'spool' });
       if (conflict) {
         await audit.appendInTx(trx, {

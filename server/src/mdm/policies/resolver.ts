@@ -190,7 +190,8 @@ function availabilityOf(input: ResolutionInput, d: ResolutionDevice, c: Contribu
     return { status: 'available' };
   }
   // An Android key (lot AN-A2): the devices of the channel amapi only, known by their mode (the bridge agent, channel
-  // legacy_agent, is 'device_admin': its policies are the section legacyAgent above, kind 'agent'); the compilation of
+  // legacy_agent, is 'device_admin' or 'device_owner' (lot BANC), never an AMAPI mode: its policies are the section
+  // legacyAgent above, kind 'agent', chosen by the channel); the compilation of
   // the Android module checks each field against the device (API level, mode, ownership: mdm/android/availability.ts).
   if (c.kind === 'android') {
     if (d.platform !== 'android' || !(ANDROID_MODES as readonly string[]).includes(d.mode)) {

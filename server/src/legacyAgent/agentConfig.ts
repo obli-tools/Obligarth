@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Knex } from 'knex';
-import { LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LIMITS, type JsonValue, type LegacyAgentRemoteConfig } from '@obligarth/shared';
+import { LEGACY_AGENT_FEATURES, LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LIMITS, type JsonValue, type LegacyAgentFeature, type LegacyAgentRemoteConfig } from '@obligarth/shared';
 import { audit } from '../audit';
 import { tenantFrozen } from '../guard/frozen';
 import { isCompileError } from '../mdm/policies/artifacts';
@@ -46,6 +46,9 @@ export interface AgentConfig {
   remote?: LegacyAgentRemoteConfig;
   /** The agent policy (lot PONT-POL), to an agent of 1.3.0 at least only: null when none is desired. */
   policy?: Record<string, JsonValue> | null;
+  /** The features of this server the agent may use (lot BANC §3.4, closed list): device_owner_v1 lets an agent 1.4.0
+   *  send status.deviceOwner, status.adbEnabled and the device_owner_* events. An older agent ignores the key. */
+  features: LegacyAgentFeature[];
 }
 
 export interface AgentConfigAnswer {
@@ -130,8 +133,9 @@ export async function agentConfigFor(trx: Knex.Transaction, tenantId: number, ag
   // A body the compilation refused (too large) is never delivered: the key carries KEEP_POLICY, so the agent keeps what it applied.
   const fatal = !!row && desired !== null && isCompileError(row);
   const frozen = desired !== null && !fatal ? await tenantFrozen(trx, tenantId, 'legacy_agent') : false;
+  const features = [...LEGACY_AGENT_FEATURES];
   const version = versionOf({
-    inventorySeconds: s.inventorySeconds, keepAlive: true, knoxSecret: knoxId, minAgentVersionCode: s.minVersionCode,
+    inventorySeconds: s.inventorySeconds, keepAlive: true, knoxSecret: knoxId, minAgentVersionCode: s.minVersionCode, features,
     ...(remote ? { remote } : {}),
     ...(policyAgent ? { policy: fatal ? `error:${desired}` : desired, ...(desired !== null && !fatal ? { frozen } : {}) } : {}),
   });
@@ -143,7 +147,7 @@ export async function agentConfigFor(trx: Knex.Transaction, tenantId: number, ag
   if (knox.failed) degraded = true;
   const config: AgentConfig = {
     version, inventorySeconds: s.inventorySeconds, keepAlive: true, ...(knox.failed ? {} : { knoxLicenseKey: knox.value }),
-    minAgentVersionCode: s.minVersionCode, ...(remote ? { remote } : {}),
+    minAgentVersionCode: s.minVersionCode, ...(remote ? { remote } : {}), features,
   };
   let deliveredPolicyHash: string | null = null;
   // A body the compilation refused: the key stays (an agent 1.3.0 reads its presence as a server of policies, §8.1),

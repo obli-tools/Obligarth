@@ -16,8 +16,14 @@ export const LEGACY_AGENT_COMMAND_TYPES = [
   'app.install', 'app.uninstall', 'agent.update', 'remote.open', 'app.pull',
   // Agent 1.3.0 (lot PONT-POL): the kiosk suspended for some minutes; the policy applied again from a full configuration.
   'kiosk.suspend', 'policy.reapply',
+  // Agent 1.4.0 (lot BANC §3.8, D15): the device given back (owner, then administrator, removed); part of the
+  // revocation of a device the agent owns, never a console command of its own; refused to an older agent.
+  'agent.release',
 ] as const;
 export type LegacyAgentCommandType = typeof LEGACY_AGENT_COMMAND_TYPES[number];
+
+/** The command types an agent older than 1.4.0 does not know (lot BANC): refused at the enqueue (agentTooOld). */
+export const LEGACY_AGENT_OWNER_COMMAND_TYPES = ['agent.release'] as const;
 
 /** The command types an agent older than 1.3.0 does not know (the console greys them: agentTooOld). */
 export const LEGACY_AGENT_POLICY_COMMAND_TYPES = ['kiosk.suspend', 'policy.reapply'] as const;
@@ -59,6 +65,12 @@ export const LEGACY_AGENT_EVENT_TYPES = [
   // Agent 1.3.0 (lot PONT-POL), sent only to a server that delivers policies: the kiosk left (detail {via, minutes}),
   // the PIN locked out after failures (detail {failures}), the undo of a revoked policy left unfinished (detail {done, left}).
   'kiosk_exit', 'kiosk_pin_lockout', 'policy_revoke_undo',
+  // Agent 1.4.0 (lot BANC §3.4), sent only to a server that announces the feature device_owner_v1: the agent became the
+  // owner of the device, lost that role, or gave the device back (agent.release).
+  'device_owner_gained', 'device_owner_lost', 'device_owner_released',
+  // The bench window opened by the shell (prepare_owner: the Knox lock of the administrator lifted for 30 minutes),
+  // detail {phase, uid}: an audit entry of its own (protective).
+  'bench_window_opened',
 ] as const;
 export type LegacyAgentEventType = typeof LEGACY_AGENT_EVENT_TYPES[number];
 
@@ -172,7 +184,22 @@ export interface LegacyAgentDeviceView {
   policyState?: AgentPolicyReportState | 'too_old' | null;
   /** The custom fields of the device (string values): the per-device values of the agent's templates. */
   customFields?: Record<string, string>;
+  /** Lot BANC: the role of the agent on the device (owner, administrator, or neither). */
+  role?: LegacyAgentRole;
+  /** The owner of the device declared by a bench station for an agent older than 1.4.0 (exception D3): only a warning
+   *  of the console, never the management mode; the agent cannot give the device back. */
+  benchOwnerDeclared?: boolean;
+  /** The identity of a device enrolled by a bench station (pairs of serial numbers), null otherwise. */
+  identityState?: 'confirmed' | 'unconfirmed' | 'mismatch' | null;
+  /** ADB enabled on the device (agent 1.4.0), null when unknown. */
+  adbEnabled?: boolean | null;
+  /** The bench station that enrolled the device, and when. */
+  enrolledByStation?: { id: string; name: string | null } | null;
 }
+
+/** The role of the bridge agent on its device (lot BANC §3.4). */
+export const LEGACY_AGENT_ROLES = ['device_owner', 'device_admin', 'inactive'] as const;
+export type LegacyAgentRole = typeof LEGACY_AGENT_ROLES[number];
 
 export interface LegacyAgentDeviceDetail extends LegacyAgentDeviceView {
   androidId: string | null;
@@ -239,6 +266,8 @@ export interface LegacyAgentTokenView {
   createdAt: string;
   lastUsedAt: string | null;
   state: 'active' | 'expired' | 'revoked' | 'used_up';
+  /** console: created in the console; bench: a single-use token of a bench station (lot BANC §3.1 f). */
+  origin?: 'console' | 'bench';
 }
 
 /** The creation answer: the token's value, the encoded configuration and the MobiControl script, shown once; with
@@ -278,6 +307,8 @@ export interface LegacyAgentReleaseView {
   origin: LegacyAgentReleaseOrigin;
   /** Version of the server image that first brought a bundled release; null for an upload. */
   bundledIn: string | null;
+  /** The version served to the bench stations (lot BANC §3.1 h): one at most, chosen by a platform administrator. */
+  benchServed?: boolean;
 }
 
 export interface LegacyAgentServerKeyView {

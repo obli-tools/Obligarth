@@ -24,6 +24,8 @@ export * from './integrations';
 export * from './apps';
 // Android bridge agent (agent-pont-android §4, §7): contract vocabulary and views of the console.
 export * from './legacyAgent';
+// Bench station (lot BANC): enrollment by ADB, the agent as the owner of the device.
+export * from './bench';
 // Policies of the bridge agent (lot PONT-POL): the section, its keys and rules, the report; the importers.
 export * from './legacyAgentPolicy';
 export * from './deviceValuesImport';

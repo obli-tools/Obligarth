@@ -45,6 +45,7 @@ import { Button } from '@/components/common/Button';
 import { GuardedActionDialog } from '@/components/guard/GuardedActionDialog';
 import { AssignmentCreateDialog } from '@/components/mdm/Assignments';
 import { useDeviceMove } from '@/components/mdm/DeviceMoveChange';
+import { DEVICE_DROP_EVENT, type DeviceDropDetail } from '@/components/devices/deviceDrag';
 import {
   COMPLIANCE_TONE, CONFIG_TONE, CONTACT_TONE, complianceLabel, configLabel, contactLabel, enrollmentLabel, toneDot,
 } from '@/components/mdm/DeviceStateBadges';
@@ -461,6 +462,20 @@ export function DeviceTable({
   const selectedDevices = useMemo(() => devices.filter((d) => selectedIds.has(d.id)), [devices, selectedIds]);
   const clearSelection = () => setSelectedIds(new Set());
   const deviceMove = useDeviceMove((_m, outcome) => { if (outcome !== 'failed') { clearSelection(); void load(true); } });
+
+  // A row dropped on a group of the side panel (deviceDrag.ts): the selection when the row is part of it, the row alone
+  // otherwise, through the same preview as "Change group".
+  const dropRef = useRef({ selectedIds, request: deviceMove.request });
+  dropRef.current = { selectedIds, request: deviceMove.request };
+  useEffect(() => {
+    const onDrop = (e: Event) => {
+      const { deviceId, groupId } = (e as CustomEvent<DeviceDropDetail>).detail;
+      const { selectedIds: sel, request } = dropRef.current;
+      void request({ deviceIds: sel.has(deviceId) ? Array.from(sel) : [deviceId], groupId });
+    };
+    window.addEventListener(DEVICE_DROP_EVENT, onDrop);
+    return () => window.removeEventListener(DEVICE_DROP_EVENT, onDrop);
+  }, []);
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
     + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0)

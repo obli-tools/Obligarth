@@ -77,7 +77,8 @@
     "androidPlatform": "Android",
     "legacyAgent": "Agent Android",
     "privacy": "Confidentialité",
-    "accessKeys": "Clés d’accès"
+    "accessKeys": "Clés d’accès",
+    "benchStations": "Stations de banc"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -1937,7 +1938,9 @@
       "mdm_integrations_manage": "Intégrations Apple · Certificat push, serveurs ADE, Apps and Books",
       "mdm_apps_manage": "Apps · Catalogue et affectations",
       "mdm_privacy_manage": "Confidentialité · Profils, notice et rétention",
-      "mcp_access_keys": "MCP · Clés d’accès personnelles pour agents IA"
+      "mcp_access_keys": "MCP · Clés d’accès personnelles pour agents IA",
+      "mdm_bench_manage": "Enrôlement · Stations de banc et historique d'intégration",
+      "mdm_bench_operate": "Enrôlement · Ouvrir une session de banc"
     }
   },
   "notificationCenter": {
@@ -3017,6 +3020,10 @@
         "license_error": {
           "title": "Licence Knox refusée",
           "message": "La licence Knox n'a pas pu être activée sur un appareil de l'agent Android : installation silencieuse et redémarrage indisponibles."
+        },
+        "device_owner_lost": {
+          "title": "L'agent Android n'est plus propriétaire de l'appareil",
+          "message": "L'agent Android d'un appareil a perdu son rôle de propriétaire de l'appareil sans qu'on lui ait demandé de le rendre : les protections du propriétaire ont disparu."
         }
       },
       "smart_group": {
@@ -3027,6 +3034,16 @@
         "mass_change": {
           "title": "Groupe dynamique suspendu",
           "message": "L'inventaire changerait les membres du groupe dynamique {{name}} au-delà de {{limit}} entrées et sorties dans l'heure : rien n'a été appliqué, ses changements attendent d'être examinés."
+        }
+      },
+      "bench": {
+        "identity_mismatch": {
+          "title": "Enrôlement par le banc refusé : autre appareil",
+          "message": "Un jeton d'enrôlement d'une station de banc a été utilisé par un appareil dont les numéros de série diffèrent de ceux lus au banc : l'enrôlement est refusé et le jeton révoqué."
+        },
+        "token_quota": {
+          "title": "Station de banc proche de son quota de jetons",
+          "message": "Une station de banc a émis {{count}} jetons d'enrôlement en 24 heures (quota {{quota}})."
         }
       }
     },
@@ -3577,7 +3594,8 @@
       "dedicated": "Dédié",
       "work_profile_corporate": "Profil professionnel (entreprise)",
       "work_profile_personal": "Profil professionnel (personnel)",
-      "device_admin": "Administrateur de l'appareil (agent Android)"
+      "device_admin": "Administrateur de l'appareil (agent Android)",
+      "device_owner": "Propriétaire de l'appareil (agent Android)"
     },
     "unenrollReason": {
       "checkout": "profil de gestion retiré sur l'appareil",
@@ -4196,7 +4214,11 @@
     "tenantNotInPerimeter": "Ce tenant n’est pas dans le périmètre de la clé.",
     "neverBlock": "Cette adresse n’est jamais bloquée.",
     "invalidIp": "Une adresse unique est attendue.",
-    "stepUpRequired": "Un second facteur est requis."
+    "stepUpRequired": "Un second facteur est requis.",
+    "sessionOpen": "Une session de banc est déjà ouverte sur cette station.",
+    "ownerDeclaredConfirm": "Le propriétaire de l'appareil reste posé sans agent fonctionnel : confirmez explicitement la révocation.",
+    "targetExists": "Ce groupe est déjà une cible de la station.",
+    "releaseWithdrawn": "Cette version de l'agent est retirée."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -4609,7 +4631,8 @@
       "packages": "Paquets",
       "platform": "Plateforme",
       "deviceValues": "Valeurs par appareil",
-      "files": "Fichiers"
+      "files": "Fichiers",
+      "bench": "Banc"
     },
     "filters": {
       "conflict": "Conflit d'identité",
@@ -4680,7 +4703,8 @@
       "unknownSources": "Sources inconnues",
       "lastPoll": "Dernière interrogation",
       "battery": "Batterie",
-      "conflict": "Conflit"
+      "conflict": "Conflit",
+      "mode": "Mode"
     },
     "knox": {
       "absent": "Absent",
@@ -4772,7 +4796,9 @@
       "status": "État",
       "queue": "Commandes",
       "apps": "Apps ({{count}})",
-      "noCommand": "Aucune commande."
+      "noCommand": "Aucune commande.",
+      "role": "Rôle",
+      "enrolledBy": "Intégré par la station de banc"
     },
     "tokens": {
       "label": "Libellé",
@@ -4798,7 +4824,11 @@
       "configJson": "Fichier de configuration (obligarth-agent.json)",
       "token": "Jeton",
       "empty": "Aucun jeton pour l'instant.",
-      "revoke": "Révoquer"
+      "revoke": "Révoquer",
+      "origin": "Origine",
+      "originBench": "Station de banc",
+      "originConsole": "Console",
+      "showBench": "Afficher les jetons des stations de banc"
     },
     "adminMode": {
       "title": "Administrateur de l'appareil et verrouillage MobiControl",
@@ -4877,7 +4907,24 @@
     "pull": {
       "button": "Récupérer l'APK depuis cet appareil",
       "queued": "Demandé : l'APK apparaîtra dans Paquets dès que l'appareil l'aura envoyé."
-    }
+    },
+    "role": {
+      "device_owner": "Propriétaire de l'appareil",
+      "device_admin": "Administrateur d'appareil",
+      "inactive": "Inactif",
+      "declared": "DO déclaré, agent 1.3.0"
+    },
+    "identity": {
+      "title": "Identité",
+      "confirmed": "Identité confirmée",
+      "unconfirmed": "Identité non confirmée",
+      "mismatch": "Identité différente"
+    },
+    "adb": {
+      "on": "Actif",
+      "off": "Coupé"
+    },
+    "ownerDeclaredWarning": "Le propriétaire de l'appareil restera posé sans agent fonctionnel : seule une réinitialisation le retirera."
   },
   "android": {
     "device": {
@@ -6762,7 +6809,9 @@
       "notManaged": "Non géré",
       "packagesHint": "Un paquet par ligne (com.example.app)",
       "wipeHint": "Appareils d'entreprise uniquement, avec une qualité de mot de passe définie ; toute publication qui l'ajoute, le change ou le retire exige un second approbateur.",
-      "yes": "Oui"
+      "yes": "Oui",
+      "benchLockout": "Coupe ADB : l'appareil ne pourra plus repasser au banc sans fenêtre de banc ou réinitialisation.",
+      "benchLockoutConfirm": "Je confirme : couper ADB sur ces appareils"
     },
     "dpm": {
       "cameraDisabled": "Appareil photo désactivé",
@@ -6838,7 +6887,8 @@
       "pending": "En attente",
       "pending_licence": "En attente de licence",
       "unsupported": "Non pris en charge",
-      "error": "Erreur"
+      "error": "Erreur",
+      "warning": "Avertissement"
     },
     "fleetStates": {
       "applied": "Appliquée",
@@ -6862,7 +6912,8 @@
       "deliver_vault_unavailable": "Un secret n'a pas pu être lu : nouvel essai à chaque interrogation",
       "compile_body_too_large": "Politique trop volumineuse pour un appareil",
       "agent_policy_version_unsupported": "L'agent ne sait pas lire ce format de politique",
-      "agent_invalid_items": "L'agent a refusé des éléments de la politique"
+      "agent_invalid_items": "L'agent a refusé des éléments de la politique",
+      "agent_wifi_user_network": "Réseau Wi-Fi ajouté par l’utilisateur (non géré par l’agent)"
     },
     "codes": {
       "ok": "OK",
@@ -6883,7 +6934,7 @@
       "wifi_added": "Réseau ajouté",
       "wifi_updated": "Réseau mis à jour",
       "wifi_disabled": "Le Wi-Fi est coupé sur l'appareil",
-      "wifi_foreign_profile": "Réseau créé par une autre application",
+      "wifi_foreign_profile": "Réseau ajouté par l’utilisateur ou une autre application",
       "wifi_add_failed": "Réseau refusé par l'appareil",
       "wifi_removed": "Réseau retiré",
       "wifi_preferred": "Basculé sur ce réseau",
@@ -6915,7 +6966,13 @@
       "invalid_json": "Fichier rendu non valide en JSON",
       "wipe_without_password": "Seuil d'effacement sans qualité de mot de passe",
       "foreign_tenant_resource": "Ressource d'un autre locataire",
-      "wipe_withheld": "Retenu par le gel"
+      "wipe_withheld": "Retenu par le gel",
+      "pending_owner": "Attend que l'agent soit propriétaire de l'appareil",
+      "unsupported_api": "Indisponible sur cette version d'Android",
+      "not_applicable": "Sans effet pour cette application",
+      "wifi_user_profile": "Ajouté par l’utilisateur, connexion vérifiée",
+      "wifi_foreign_unverified": "Ajouté par l’utilisateur, présent, non vérifié",
+      "wifi_foreign_auth_failed": "Ajouté par l’utilisateur, mot de passe refusé"
     },
     "store": {
       "date": "Ajouté le",
@@ -7021,6 +7078,190 @@
       "removeNone": "Aucun.",
       "removeTitle": "Retirer ces réseaux",
       "security": "Sécurité"
+    }
+  },
+  "bench": {
+    "error": {
+      "adb_missing": "ADB n'est pas installé sur la station",
+      "adb_server": "Le serveur ADB de la station ne démarre pas",
+      "adb_conflict": "Un autre outil ADB tient les appareils USB",
+      "device_unauthorized": "Débogage USB non autorisé sur l'appareil",
+      "device_offline": "Appareil hors ligne",
+      "device_gone": "Appareil débranché",
+      "auto_blocker_suspected": "Auto Blocker probablement actif",
+      "adb_blocked_by_policy": "ADB bloqué par une restriction",
+      "unsupported_sdk": "Version Android non prise en charge",
+      "agent_foreign_signer": "Agent installé signé par une autre clé",
+      "agent_downgrade": "Un agent plus récent est installé",
+      "agent_already_enrolled": "L'agent est enrôlé ailleurs",
+      "install_failed": "Échec de l'installation",
+      "install_restricted": "Installation bloquée par une restriction",
+      "apk_mismatch": "L'APK ne correspond pas",
+      "owner_blocked": "Propriétaire de l'appareil impossible",
+      "owner_failed": "Propriétaire de l'appareil refusé",
+      "admin_failed": "Administrateur d'appareil refusé",
+      "admin_lost": "Administrateur d'appareil perdu",
+      "knox_reactivation": "Licence Knox à réactiver",
+      "configure_failed": "Configuration refusée par l'agent",
+      "enroll_timeout": "Délai d'enrôlement dépassé",
+      "token_rejected": "Jeton refusé",
+      "identity_mismatch": "Numéros de série différents",
+      "device_outside_target": "Appareil géré hors du groupe ciblé",
+      "station_refused": "Station refusée",
+      "no_session": "Aucune session de banc ouverte",
+      "server_unreachable": "Serveur injoignable",
+      "redirected": "Redirection refusée",
+      "target_refused": "Cible refusée",
+      "slot_held": "Appareil déjà sur une autre carte",
+      "too_many_cards": "Trop d'appareils à la fois",
+      "internal": "Erreur interne"
+    },
+    "step": {
+      "detect": "Détection",
+      "identify": "Identification",
+      "agent_check": "Agent installé",
+      "preflight": "Préconditions",
+      "install": "Installation",
+      "role": "Rôle",
+      "prepare": "Préparation",
+      "configure": "Configuration",
+      "wait_enroll": "Enrôlement",
+      "verify": "Vérification",
+      "finalize": "Finalisation"
+    },
+    "stepStatus": {
+      "running": "En cours",
+      "ok": "Fait",
+      "warn": "Avertissement",
+      "failed": "Échec",
+      "skipped": "Ignoré"
+    },
+    "session": {
+      "title": "Session de banc",
+      "open": "Ouvrir une session de banc",
+      "close": "Fermer la session",
+      "current": "Session de {{technician}}, jusqu'à {{until}}",
+      "duration": "Durée (minutes)",
+      "hint": "La station n'émet de jetons d'enrôlement que pendant une session ouverte (8 heures au plus), chacun revérifié contre les droits du technicien dans le tenant de la cible."
+    },
+    "tenant": {
+      "stations": "Stations de banc de ce tenant",
+      "noStation": "Aucune station de banc ne cible ce tenant.",
+      "resumeByPlatform": "Reprise par un administrateur de la plateforme uniquement",
+      "removeConfirm": "Retirer le groupe {{group}} de la station {{station}} ?"
+    },
+    "history": {
+      "title": "Historique d'intégration",
+      "date": "Date",
+      "station": "Station",
+      "device": "Appareil",
+      "model": "Modèle",
+      "role": "Rôle visé / obtenu",
+      "stateCol": "État",
+      "error": "Erreur",
+      "technician": "Technicien",
+      "stepsDropped": "{{count}} étape(s) plus ancienne(s) retirée(s)",
+      "noStep": "Aucune étape remontée.",
+      "empty": "Aucune intégration pour le moment.",
+      "state": {
+        "planned": "Planifié",
+        "token_issued": "Jeton émis",
+        "enrolled": "Enrôlé",
+        "completed": "Terminé",
+        "failed": "Échec",
+        "abandoned": "Abandonné",
+        "expired": "Expiré"
+      }
+    },
+    "stations": {
+      "title": "Stations de banc",
+      "subtitle": "Postes Windows des techniciens qui intègrent de nouveaux appareils Android par USB (ADB), l'agent en propriétaire de l'appareil quand c'est possible.",
+      "status": {
+        "pending": "En attente",
+        "approved": "Approuvée",
+        "suspended": "Suspendue",
+        "revoked": "Révoquée"
+      },
+      "filter": {
+        "all": "Toutes"
+      },
+      "rolePolicy": {
+        "owner_required": "Propriétaire de l'appareil exigé",
+        "owner_preferred": "Propriétaire de l'appareil de préférence",
+        "admin_only": "Administrateur d'appareil seulement"
+      },
+      "revokedReason": {
+        "admin": "par un administrateur",
+        "pending_expired": "approbation non donnée sous 24 heures",
+        "idle": "inactive depuis 90 jours"
+      },
+      "name": "Nom",
+      "host": "Hôte",
+      "version": "Version",
+      "state": "État",
+      "lastSeen": "Dernière activité",
+      "targetsCount": "Cibles",
+      "enrolledCount": "Intégrés",
+      "empty": "Aucune station.",
+      "verificationCode": "Code de vérification",
+      "registerIp": "Enregistrée depuis",
+      "createdAt": "Enregistrée le",
+      "approvedAt": "Approuvée le",
+      "revokedAt": "Révoquée le",
+      "approve": "Approuver",
+      "approveTitle": "Approuver {{name}}",
+      "approveHint": "Lisez le code de vérification affiché par la station, puis retapez-le ici. Le second facteur est demandé ensuite.",
+      "approved": "Station approuvée",
+      "verificationMismatch": "Le code de vérification ne correspond pas à cette station.",
+      "suspend": "Suspendre",
+      "suspended": "Station suspendue",
+      "resume": "Reprendre",
+      "revoke": "Révoquer",
+      "revokeTitle": "Révoquer {{name}}",
+      "revoked": "Station révoquée",
+      "revokeConfirm": "Définitif : ses jetons d'enrôlement non consommés sont révoqués, ses intégrations ouvertes abandonnées et sa session fermée. Un second facteur est demandé.",
+      "rename": "Renommer",
+      "theft": {
+        "button": "PC volé",
+        "title": "Le PC d'un technicien est volé",
+        "step1": "Suspendez la station (un clic, sans second facteur) : elle ne peut plus agir.",
+        "step2": "Révoquez-la : ses jetons non consommés sont révoqués, ses intégrations ouvertes abandonnées, sa session fermée.",
+        "step3": "Passez en revue les appareils intégrés par cette station depuis le vol et mettez les appareils douteux en quarantaine d'identité.",
+        "step4": "La station renouvelée crée une nouvelle clé ADB : l'ancienne autorisation expire au bout de 7 jours sur Android 11 et suivants ; sur Android 7 à 9, révoquez les autorisations de débogage USB au prochain passage."
+      },
+      "release": {
+        "title": "Version de l'agent servie au banc",
+        "hint": "Choisie explicitement (second facteur) : une version téléversée, jamais poussée au parc par la mise à jour automatique. La station compare son signataire à l'empreinte épinglée dans son binaire.",
+        "version": "Version",
+        "none": "Aucune (les stations n'obtiennent pas d'APK)",
+        "saved": "Version servie au banc enregistrée",
+        "ownerCapable": "Cette version peut être propriétaire de l'appareil (1.4.0 et suivantes).",
+        "adminOnly": "Cette version est antérieure à 1.4.0 : administrateur d'appareil seulement (sauf dérogation D3 d'une cible).",
+        "signerRefused": "Son signataire n'est plus admis : non servie."
+      },
+      "installer": {
+        "title": "Installateur de la station",
+        "download": "Télécharger la station de banc {{version}}",
+        "unavailable": "Aucun installateur dans cette image serveur."
+      },
+      "targets": {
+        "title": "Cibles",
+        "add": "Ajouter une cible",
+        "remove": "Retirer",
+        "suspended": "Suspendue",
+        "empty": "Aucune cible : la station ne peut rien intégrer.",
+        "removeConfirm": "Retirer la cible {{group}} ?",
+        "disableDevOptions": "Désactiver les options de développement à la fin",
+        "allowLegacyOwner": "Dérogation : DO avec l'agent 1.3.0",
+        "legacyOwnerWarning": "Dérogation : l'agent 1.3.0 posé en propriétaire de l'appareil ne peut pas le rendre ; seule une réinitialisation le retire. Pour une cible d'essai seulement. Un second facteur est demandé.",
+        "namePrefix": "Préfixe de nom",
+        "tenant": "Tenant",
+        "group": "Groupe",
+        "search": "Rechercher un groupe",
+        "noGroup": "Aucun groupe.",
+        "rolePolicy": "Rôle",
+        "addHint": "Un second facteur est demandé. Le tenant voit les stations qui le ciblent et peut suspendre ou retirer une cible."
+      }
     }
   }
 }

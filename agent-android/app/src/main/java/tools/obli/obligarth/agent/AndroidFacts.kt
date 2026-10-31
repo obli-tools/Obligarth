@@ -21,7 +21,9 @@ import android.os.StatFs
 import android.os.SystemClock
 import android.provider.Settings
 import android.telephony.TelephonyManager
+import tools.obli.obligarth.agent.core.AgentRole
 import tools.obli.obligarth.agent.core.Bounds
+import tools.obli.obligarth.agent.core.OwnerMode
 import tools.obli.obligarth.agent.core.DeviceFacts
 import tools.obli.obligarth.agent.core.IconRender
 import tools.obli.obligarth.agent.core.Icons
@@ -45,6 +47,22 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
         (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager).isAdminActive(adminComponent())
     } catch (e: Exception) {
         false
+    }
+
+    /** 1.4.0 (lot BANC §7.2): the agent is the owner of the device (set by `dpm set-device-owner` at the bench). */
+    override fun deviceOwner(): Boolean = try {
+        (context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager).isDeviceOwnerApp(context.packageName)
+    } catch (e: Exception) {
+        false
+    }
+
+    fun role(): AgentRole = OwnerMode.roleOf(adminActive(), deviceOwner())
+
+    /** 1.4.0 (§7.4): ADB enabled on the device (readable by any app), null when unreadable. */
+    override fun adbEnabled(): Boolean? = try {
+        Settings.Global.getInt(context.contentResolver, Settings.Global.ADB_ENABLED) == 1
+    } catch (e: Exception) {
+        null
     }
 
     @Suppress("DEPRECATION")
@@ -82,8 +100,8 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
         "device" to Build.DEVICE?.clip(64),
         "androidId" to safe { Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID) }
             ?.takeIf { ANDROID_ID_RE.matches(it) },
-        // Readable under targetSdk 25 (PB8).
-        "serial" to Build.SERIAL?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }?.clip(64),
+        // Readable under targetSdk 25 (PB8) up to Android 9; the owner reads Build.getSerial() (1.4.0, §7.3).
+        "serial" to serial()?.clip(64),
         "samsungSerial" to (systemProperty("ril.serialnumber") ?: knox.serialNumber())?.clip(64),
         "imeis" to imeis(),
         "apiLevel" to Build.VERSION.SDK_INT,
@@ -248,14 +266,27 @@ class AndroidFacts(private val context: Context, private val knox: KnoxBridge) :
         null
     }
 
+    /**
+     * The serial number of the device (ro.serialno, the series ADB shows): Build.SERIAL, "unknown" from Android 10 under
+     * targetSdk 25; the owner of the device reads Build.getSerial() (API 26) instead (1.4.0, §7.3).
+     */
+    @SuppressLint("MissingPermission", "HardwareIds")
+    @Suppress("DEPRECATION")
+    private fun serial(): String? {
+        val owned = if (Build.VERSION.SDK_INT >= 26 && deviceOwner()) safe { Build.getSerial() } else null
+        return (owned ?: Build.SERIAL)?.takeIf { it.isNotBlank() && it != Build.UNKNOWN }
+    }
+
     @SuppressLint("MissingPermission", "HardwareIds")
     @Suppress("DEPRECATION")
     private fun imeis(): List<String> {
         if (context.checkSelfPermission(Manifest.permission.READ_PHONE_STATE) != PackageManager.PERMISSION_GRANTED) return emptyList()
         val tm = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager ?: return emptyList()
         val count = safe { tm.phoneCount } ?: 1
+        // The owner reads getImei (API 26), the only way from Android 10 (1.4.0, §7.3); getDeviceId otherwise.
+        val owner = Build.VERSION.SDK_INT >= 26 && deviceOwner()
         // IMEI digits only (a CDMA MEID, hexadecimal, is left out: the server schema takes 14 to 16 digits).
-        return Bounds.imeis((0 until count).map { slot -> safe { tm.getDeviceId(slot) } })
+        return Bounds.imeis((0 until count).map { slot -> safe { if (owner) tm.getImei(slot) else tm.getDeviceId(slot) } })
     }
 
     private companion object {

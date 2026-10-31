@@ -30,6 +30,7 @@ import { registerGuardModule } from './guard/module';
 import { registerAppleModule } from './modules/apple';
 import { registerLegacyAgentModule } from './modules/legacyAgent';
 import { registerRemoteModule } from './modules/remote';
+import { registerBenchModule } from './modules/bench';
 import { registerMcpModule } from './modules/mcp';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
@@ -91,6 +92,8 @@ async function main() {
   registerMdmModule();
   registerAppleModule();
   registerLegacyAgentModule();
+  // Bench stations (lot BANC): right after the bridge agent, whose minute job and alerts it uses.
+  registerBenchModule();
   // Remote assistance (P0-15): right after the bridge agent, its first channel.
   registerRemoteModule();
   // MCP server (AI agents through personal access keys): after the bridge agent, whose minute job and console core

@@ -29,6 +29,7 @@
     <string name="label_agent">Agent</string>
     <string name="label_admin">Administration enabled</string>
     <string name="label_knox">Knox</string>
+    <string name="label_owner">Device owner</string>
     <string name="knox_state_absent">Absent</string>
     <string name="knox_state_present">Present</string>
     <string name="knox_state_licensed">Licensed</string>
@@ -79,4 +80,10 @@
     <string name="kiosk_admin_leave">Leave the kiosk for %1$d min</string>
     <string name="kiosk_admin_status">Agent status</string>
     <string name="kiosk_admin_settings">Android settings</string>
+    <string name="home_setup_title">Last step!</string>
+    <string name="home_setup_steps">To finish the update of this phone:\n\n1. Tap the big green button\n2. Choose « %1$s »\n\n(If « ALWAYS » is offered, tap it.)</string>
+    <string name="home_setup_steps_clear">The phone kept the old screen. On the next screen:\n\n1. Choose « %1$s » (or tap « Clear defaults »)\n2. Come back here and tap the green button again</string>
+    <string name="home_setup_button">FINISH THE UPDATE</string>
+    <string name="home_setup_done">Done, thank you!</string>
+    <string name="home_setup_open">Continue</string>
 </resources>

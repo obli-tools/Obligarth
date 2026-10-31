@@ -50,6 +50,20 @@ class PolicyApplier(context: Context, private val facts: AndroidFacts, private v
     override fun appLaunchable(pkg: String): Boolean = kiosk.appLaunchable(pkg)
     override fun kioskApply(k: Policy.Kiosk?, suspended: Boolean): ItemOutcome = kiosk.apply(k, suspended) { files.writable() }
 
+    /** 1.4.0 (lot BANC §7.3): the owner of the device, set once by AgentRuntime. */
+    @Volatile var owner: OwnerApplier? = null
+
+    override fun isDeviceOwner(): Boolean = facts.deviceOwner()
+    override fun ownerRestrictionRead(field: String): Boolean? = owner?.restrictionRead(field)
+    override fun ownerRestrictionApply(field: String, on: Boolean): ItemOutcome =
+        owner?.restrictionApply(field, on) ?: super.ownerRestrictionApply(field, on)
+    override fun permissionGrantApply(pkg: String, permission: String, state: String): ItemOutcome =
+        owner?.permissionGrant(pkg, permission, state) ?: super.permissionGrantApply(pkg, permission, state)
+    override fun systemUpdateApply(u: Policy.SystemUpdate?): ItemOutcome = owner?.systemUpdate(u) ?: super.systemUpdateApply(u)
+    override fun ownerCertInstall(pem: String): ItemOutcome = owner?.certInstall(pem) ?: super.ownerCertInstall(pem)
+    override fun ownerCertRemove(pem: String): ItemOutcome = owner?.certRemove(pem) ?: super.ownerCertRemove(pem)
+    override fun ownerWifiRemove(ssid: String): ItemOutcome = owner?.wifiRemove(ssid) ?: super.ownerWifiRemove(ssid)
+
     companion object {
         /** The codes that ask something of the person holding the device (the status screen shows the matching button). */
         val DEVICE_ACTIONS = setOf(PolicyCodes.PERMISSION_MISSING, PolicyCodes.HOME_NOT_DEFAULT, PolicyCodes.ADMIN_POLICY_MISSING,

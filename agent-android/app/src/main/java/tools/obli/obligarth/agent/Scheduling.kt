@@ -51,8 +51,13 @@ object PollScheduler {
         )
     }
 
+    /**
+     * The install job, at once: a pending one is replaced (its backoff dropped), except while it runs. A job that
+     * finished with work left is rescheduled by the system with a growing backoff (up to hours); kept as is, it held a
+     * received agent.update for hours (30/10, on a pilot device).
+     */
     fun scheduleInstall(ctx: Context) {
-        if (jobs(ctx).allPendingJobs.any { it.id == JOB_INSTALL }) return
+        if (InstallJobService.isRunning()) return
         jobs(ctx).schedule(
             JobInfo.Builder(JOB_INSTALL, ComponentName(ctx, InstallJobService::class.java))
                 .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
@@ -176,6 +181,7 @@ class InstallJobService : JobService() {
 
     companion object {
         private val running = AtomicBoolean(false)
+        fun isRunning(): Boolean = running.get()
     }
 }
 

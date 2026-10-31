@@ -336,6 +336,9 @@ export interface LegacyAgentPolicySection {
   dpm?: Record<AgentDpmField, JsonValue>;
   knox?: Record<AgentKnoxField, JsonValue>;
   certs?: AgentCertItem[];
+  /** Lot BANC (D16): the explicit confirmation a restriction that cuts ADB needs (Knox usbDebugging=false): the device
+   *  can no longer go back to a bench station without a bench window or a reset. */
+  confirmBenchLockout?: true;
 }
 
 /** The purposes of the vault secrets of the section. */
@@ -361,8 +364,55 @@ export const AGENT_POLICY_ITEM_CODES = [
   // Compile-time drops (body.dropped), reported by the agent as error/<code>; wipe_withheld as pending.
   'path_conflict', 'inline_too_large', 'template_too_large', 'invalid_json', 'wipe_without_password',
   'foreign_tenant_resource', 'wipe_withheld',
+  // Agent 1.4.0 (lot BANC §7.3): an item of the owner on a device the agent only administers (pending), an API level too
+  // low for it (unsupported), a permission grant without effect (an app targeting an API below 23).
+  'pending_owner', 'unsupported_api', 'not_applicable',
+  // Agent 1.4.0: a policy network already added by someone else (the user, in the shops): joined (compliant), unverified
+  // (pending), disabled for a wrong password (non-compliant).
+  'wifi_user_profile', 'wifi_foreign_unverified', 'wifi_foreign_auth_failed',
 ] as const;
 export type AgentPolicyItemCode = typeof AGENT_POLICY_ITEM_CODES[number];
+
+/**
+ * Item codes that only warn: the item neither fails the policy nor holds it in delivery. A network added by the user
+ * works without the agent: unverified (1.4.0) or, from an agent before 1.4.0, simply not changeable by it.
+ */
+export const AGENT_POLICY_WARNING_CODES: readonly AgentPolicyItemCode[] = ['wifi_foreign_profile', 'wifi_foreign_unverified'];
+export const isAgentPolicyWarning = (i: { state: string; code: string }): boolean =>
+  (i.state === 'non_compliant' || i.state === 'pending') && (AGENT_POLICY_WARNING_CODES as readonly string[]).includes(i.code);
+
+/**
+ * The user restrictions of the owner of the device (agent 1.4.0, lot BANC §7.3), mirror of the agent's
+ * Policy.OWNER_FIELDS (test T385 of the agent checks the parity): the field of the compiled item
+ * (`owner: [{key: 'agent:owner.<field>', field, value}]`, value true = restriction set), the UserManager key, the first
+ * API level, and `dangerous` for a restriction that cuts ADB (so the bench): the item carries confirmBenchLockout: true,
+ * or the agent refuses it. The validation of the server and the policy editor do not offer them yet ([J+]).
+ */
+export const AGENT_OWNER_FIELDS = [
+  { field: 'factoryReset', restriction: 'no_factory_reset', minSdk: 21 },
+  { field: 'safeBoot', restriction: 'no_safe_boot', minSdk: 23 },
+  { field: 'addUser', restriction: 'no_add_user', minSdk: 21 },
+  { field: 'installUnknownSources', restriction: 'no_install_unknown_sources', minSdk: 21 },
+  { field: 'uninstallApps', restriction: 'no_uninstall_apps', minSdk: 21 },
+  { field: 'usbFileTransfer', restriction: 'no_usb_file_transfer', minSdk: 21 },
+  { field: 'mountPhysicalMedia', restriction: 'no_physical_media', minSdk: 21 },
+  { field: 'configWifi', restriction: 'no_config_wifi', minSdk: 21 },
+  { field: 'configBluetooth', restriction: 'no_config_bluetooth', minSdk: 21 },
+  { field: 'bluetooth', restriction: 'no_bluetooth', minSdk: 26 },
+  { field: 'sms', restriction: 'no_sms', minSdk: 21 },
+  { field: 'outgoingCalls', restriction: 'no_outgoing_calls', minSdk: 21 },
+  { field: 'configDateTime', restriction: 'no_config_date_time', minSdk: 28 },
+  { field: 'modifyAccounts', restriction: 'no_modify_accounts', minSdk: 21 },
+  { field: 'shareLocation', restriction: 'no_share_location', minSdk: 21 },
+  { field: 'debuggingFeatures', restriction: 'no_debugging_features', minSdk: 21, dangerous: true },
+] as const;
+export type AgentOwnerField = typeof AGENT_OWNER_FIELDS[number]['field'];
+
+/** The states of a permission grant of the owner (`permissionGrants: [{key: 'agent:grant[<package>/<permission>]', …}]`). */
+export const AGENT_PERMISSION_GRANT_STATES = ['granted', 'denied', 'default'] as const;
+/** The types of the system update policy of the owner (`systemUpdate: {key: 'agent:systemUpdate', type, windowStartMin,
+ *  windowEndMin}`, minutes of the day 0..1439 for a window). */
+export const AGENT_SYSTEM_UPDATE_TYPES = ['automatic', 'windowed', 'postpone'] as const;
 /** Any code the server stores (robustness: a future agent's code is shown as is). */
 export const AGENT_POLICY_CODE_RE = /^[a-z_]{1,48}$/;
 

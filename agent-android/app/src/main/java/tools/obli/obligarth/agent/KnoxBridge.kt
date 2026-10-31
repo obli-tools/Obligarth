@@ -125,6 +125,19 @@ class KnoxBridge(private val context: Context, private val log: AgentLog) {
 
     fun activatedKeySha(): String? = prefs.getString(K_KEY_SHA, null)
 
+    /**
+     * 1.4.0 (lot BANC §6.5): the administrator enabled again after it was lost (a failed `dpm set-device-owner` at the
+     * bench removes it): the licence bound to the former activation is gone, so a key sent before and no longer
+     * licensed is made due again (sent at the next cycle). True when it was.
+     */
+    @Synchronized
+    fun forgetActivationIfLost(): Boolean {
+        if (!present || activatedKeySha() == null || probeLicensed()) return false
+        prefs.edit().remove(K_STATUS).remove(K_ERROR).putLong(K_SENT_AT, 0L).commit()
+        log.warn("Knox licence lost with the administrator: activation due again")
+        return true
+    }
+
     /** Whether to send [key]: a new key, or one refused or never answered a while ago (KnoxLicence.activationDue). */
     fun activationDue(key: String): Boolean = KnoxLicence.activationDue(
         Sha256.hex(key), activatedKeySha(), prefs.getString(K_STATUS, null), prefs.getLong(K_SENT_AT, 0L), now(),

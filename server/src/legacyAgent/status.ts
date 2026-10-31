@@ -10,7 +10,7 @@ import type { Knex } from 'knex';
 // agent.install.unknown-sources (RC-7) carries a hyphen, not an underscore.
 // =============================================================================
 
-export const HISTORY_ITEMS = new Set(['agent.admin.active', 'agent.knox.state', 'agent.security.patch']);
+export const HISTORY_ITEMS = new Set(['agent.admin.active', 'agent.knox.state', 'agent.security.patch', 'agent.owner.active', 'agent.adb.enabled']);
 
 const sha = (v: unknown): string => createHash('sha256').update(JSON.stringify(v ?? null)).digest('hex');
 

@@ -1,5 +1,5 @@
 import type { Knex } from 'knex';
-import { LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
+import { BENCH_OWNER_MIN_VERSION_CODE, LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
 import { audit } from '../audit';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
@@ -15,6 +15,8 @@ import { logger } from '../utils/logger';
 import { withAgentTransaction, type Satellite } from './session';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
 import { writeStatusItems } from './status';
+import { requestGroupEvaluation } from '../mdm/groups/triggers';
+import { requestDeviceResolution } from '../mdm/policies/triggers';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
 const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
@@ -34,6 +36,10 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // (a refused one answers policyReport 'rejected', never a 400), recorded after
 // the events; its policy marked delivered when the answer carries it in full.
 // An older agent's poll writes nothing of the policies.
+// An agent 1.4.0 (lot BANC §3.4) reports whether it owns the device: a change
+// sets the management mode (device_owner / device_admin), is audited, resolves
+// the device's policies and evaluates its dynamic groups again; a loss that no
+// release explains raises legacy_agent.device_owner_lost. adbEnabled is copied.
 // =============================================================================
 
 const TOO_OLD_TYPES = ['agent.update', 'inventory.refresh'] as const;
@@ -41,6 +47,37 @@ const TOO_OLD_TYPES = ['agent.update', 'inventory.refresh'] as const;
 /** The versionName of an agent build from its versionCode (major × 10000 + minor × 100 + patch, the rule of
  *  agent-android/app/build.gradle.kts): the name set at enrollment would otherwise stay after a self update. */
 export const versionNameOf = (code: number): string => `${Math.floor(code / 10_000)}.${Math.floor(code / 100) % 100}.${code % 100}`;
+
+/** Lot BANC §3.4: the owner role reported by the agent, when it changed. A loss is a release when the agent says so
+ *  (event device_owner_released) or when an agent.release of the device was acknowledged. */
+async function applyOwnerRole(trx: Knex.Transaction, who: AgentIdentity, body: PollBody, sat: Satellite, now: Date): Promise<void> {
+  const owner = body.status.deviceOwner;
+  if (typeof owner !== 'boolean' || owner === (sat.device_owner === true)) return;
+  const target = { type: 'device', id: String(who.deviceId), device: who.deviceId };
+  const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, who.tenantId);
+  await trx('legacy_agent_devices').where({ tenant_id: who.tenantId, device_id: who.deviceId })
+    .update({ device_owner: owner, device_owner_since: owner ? now : null, updated_at: now });
+  await trx('devices').where({ tenant_id: who.tenantId, id: who.deviceId, management_channel: 'legacy_agent' })
+    .update({ management_mode: owner ? 'device_owner' : 'device_admin', updated_at: now });
+  if (owner) {
+    await audit.appendInTx(trx, { tenantId: who.tenantId, action: 'legacy_agent.device_owner_gained', target, details: { agentVersionCode: body.agent.versionCode } },
+      ctx, { onFailure: 'spool' });
+    await resolveInTx(trx, who.tenantId, 'legacy_agent.device_owner_lost', who.deviceId);
+  } else {
+    const released = body.events.some((e) => e.type === 'device_owner_released')
+      || !!(await trx('legacy_agent_commands').where({ tenant_id: who.tenantId, device_id: who.deviceId, request_type: 'agent.release', state: 'acknowledged' }).first('id'));
+    if (released) {
+      await audit.appendInTx(trx, { tenantId: who.tenantId, action: 'legacy_agent.device_owner_released', target, details: {} }, ctx, { onFailure: 'spool' });
+    } else {
+      await audit.appendInTx(trx, { tenantId: who.tenantId, action: 'legacy_agent.device_owner_lost', target, details: { adminActive: body.status.adminActive } },
+        ctx, { onFailure: 'spool' });
+      await raiseInTx(trx, who.tenantId, 'legacy_agent.device_owner_lost', { discriminant: who.deviceId, navigateTo: `/legacy-agent?device=${who.deviceId}` });
+    }
+  }
+  // The policies of the owner become applicable (or not), the dynamic groups on the mode are evaluated again.
+  await requestDeviceResolution(trx, who.tenantId, [who.deviceId]);
+  await requestGroupEvaluation(trx, who.tenantId, [who.deviceId]);
+}
 
 async function applyEvents(trx: Knex.Transaction, who: AgentIdentity, body: PollBody, sat: Satellite): Promise<void> {
   const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, who.tenantId);
@@ -58,6 +95,14 @@ async function applyEvents(trx: Knex.Transaction, who: AgentIdentity, body: Poll
   }
   if (body.status.adminActive && sat.admin_active === false) {
     await resolveInTx(trx, who.tenantId, 'legacy_agent.admin_disabled', who.deviceId);
+  }
+  // Lot BANC §7.4: the shell opened a bench window (the Knox lock of the administrator lifted): always written down.
+  for (const e of body.events.filter((x) => x.type === 'bench_window_opened').slice(0, 3)) {
+    const d = (e.detail ?? {}) as Record<string, unknown>;
+    await audit.appendInTx(trx, {
+      tenantId: who.tenantId, action: 'legacy_agent.bench_window_opened', target,
+      details: { phase: typeof d.phase === 'string' ? d.phase.slice(0, 20) : null, uid: typeof d.uid === 'number' ? d.uid : null, at: e.at ?? null },
+    }, ctx, { onFailure: 'spool' });
   }
   if (body.status.knoxState === 'license_error' && sat.knox_state !== 'license_error') {
     await raiseInTx(trx, who.tenantId, 'legacy_agent.license_error', { discriminant: who.deviceId, navigateTo: `/legacy-agent?device=${who.deviceId}` });
@@ -100,7 +145,14 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
       'agent.knox.state': s.knoxState,
       // P0-15 §8: the measured capability of the control (agent 1.1.0 and later), only when the agent tells it.
       ...(typeof s.remoteInject === 'boolean' ? { [REMOTE_LEGACY_INJECT_ITEM]: s.remoteInject } : {}),
+      // Lot BANC §3.4 (agent 1.4.0, device_owner_v1 announced): the owner role and ADB, only when the agent tells them.
+      ...(typeof s.deviceOwner === 'boolean' ? { 'agent.owner.active': s.deviceOwner } : {}),
+      ...(typeof s.adbEnabled === 'boolean' ? { 'agent.adb.enabled': s.adbEnabled } : {}),
     });
+    if (typeof s.adbEnabled === 'boolean' && s.adbEnabled !== sat.adb_enabled) {
+      await trx('legacy_agent_devices').where({ tenant_id: who.tenantId, device_id: who.deviceId }).update({ adb_enabled: s.adbEnabled });
+    }
+    await applyOwnerRole(trx, who, body, sat, now);
     await remote?.lock(trx);
 
     // 2. The results, then the events.
@@ -141,9 +193,13 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
       // Only a secret of the policy itself: the Knox key alone never touches the policy's state.
       if (conf.policyDegraded) await markPolicyUndeliverable(trx, who.tenantId, who.deviceId);
     }
+    // Lot BANC §6.5, §7.4: an enrolled agent 1.4.0 lifts the Knox lock of its administrator for the bench (prepare_owner)
+    // only while the server allows it: an open conversion of this very device (planned by an approved station).
+    const benchConvert = body.agent.versionCode >= BENCH_OWNER_MIN_VERSION_CODE
+      && !!(await trx('bench_provisionings').where({ tenant_id: who.tenantId, device_id: who.deviceId, kind: 'convert', state: 'enrolled' }).first('id'));
     const out = {
       serverTime, pollSeconds, resultsAccepted: results.accepted, inventoryDue, commands, config: conf.config,
-      ...(policyReport ? { policyReport } : {}),
+      ...(policyReport ? { policyReport } : {}), ...(benchConvert ? { benchConvert: true } : {}),
     };
     if (tooOld) return { status: 426, body: { success: false, error: 'This version of the agent is too old: update it', code: 'agentTooOld', ...out } };
     return { status: 200, body: out };

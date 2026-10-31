@@ -14,7 +14,7 @@ import { PlatformAvatar } from '@/components/mdm/PlatformAvatar';
 import { osLabel, ownershipLabel } from '@/components/mdm/PlatformIcon';
 import { CopyButton } from '@/components/mdm/ui/InfoCard';
 import { anonymize } from '@/utils/anonymize';
-import { ACTION_ICON, CHANNEL_REASONS, type DeviceActions, type UnifiedAction } from './useDeviceActions';
+import { ACTION_ICON, CHANNEL_REASONS, channelOf, type DeviceActions, type UnifiedAction } from './useDeviceActions';
 
 // The header of a device record: who and what it is (platform, name, model, system, serial number, user, ownership,
 // group, tenant), its states and last contact, and the quick actions of a lost or stolen device (locate, lock, lost
@@ -90,7 +90,7 @@ export function DeviceHero({ device, tenantName, actions, canWrite, onEdit }: {
           <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
             <h1 className="min-w-0 flex-1 text-xl sm:text-2xl font-semibold text-text-primary break-words">{title}</h1>
             <div className="flex min-w-0 max-w-full flex-wrap items-center gap-2">
-              {device.managementMode === 'device_admin' && (
+              {channelOf(device) === 'legacy_agent' && (
                 // The Android bridge agent (agent-pont-android §7): its panel, actions and queue live on its own page too.
                 <Link to={`/legacy-agent?device=${device.id}`} className="text-sm text-accent hover:underline coarse:min-h-10 inline-flex items-center">
                   {t('legacyAgent.openPanel') || 'Android agent panel'}

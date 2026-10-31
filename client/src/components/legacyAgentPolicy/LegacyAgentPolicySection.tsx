@@ -29,6 +29,8 @@ function compact(s: Section): Section | undefined {
   if (s.dpm && Object.keys(s.dpm).length) out.dpm = s.dpm;
   if (s.knox && Object.keys(s.knox).length) out.knox = s.knox;
   if (s.certs?.length) out.certs = s.certs;
+  // Lot BANC (D16): the confirmation of a restriction that cuts ADB, kept only while that restriction is set.
+  if (out.knox?.usbDebugging === false && s.confirmBenchLockout === true) out.confirmBenchLockout = true;
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -42,7 +44,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
   const s = section ?? {};
   const set = (patch: Partial<Section>) => onChange(compact({ ...s, ...patch }));
   const under = (prefix: string) => issues.filter((i) => i.path === prefix || i.path.startsWith(`${prefix}.`) || i.path.startsWith(`${prefix}[`));
-  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs)([.[]|$)/.test(i.path));
+  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs|confirmBenchLockout)([.[]|$)/.test(i.path));
 
   if (!section && !present) {
     if (!editable) return null;
@@ -91,7 +93,9 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
           onChange={(k) => set({ kiosk: k })} onImportSettings={mergeImport} />
       )}
       {tab === 'restrictions' && (
-        <RestrictionsPanel dpm={s.dpm ?? {}} knox={s.knox ?? {}} editable={editable} issues={[...under('dpm'), ...under('knox')]} onChange={(n) => set({ dpm: n.dpm, knox: n.knox })} />
+        <RestrictionsPanel dpm={s.dpm ?? {}} knox={s.knox ?? {}} editable={editable} issues={[...under('dpm'), ...under('knox')]} onChange={(n) => set({ dpm: n.dpm, knox: n.knox })}
+          lockoutConfirmed={s.confirmBenchLockout === true} lockoutIssues={under('confirmBenchLockout')}
+          onConfirmLockout={(on) => set({ confirmBenchLockout: on ? true : undefined })} />
       )}
       {tab === 'certs' && <CertsPanel certs={s.certs ?? []} editable={editable} issues={under('certs')} onChange={(certs) => set({ certs })} />}
     </section>

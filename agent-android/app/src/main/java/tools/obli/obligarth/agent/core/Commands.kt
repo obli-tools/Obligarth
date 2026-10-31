@@ -58,8 +58,17 @@ object EventTypes {
     /** 1.3.0: the undo of a revoked policy left unfinished, detail {done, left}. */
     const val POLICY_REVOKE_UNDO = "policy_revoke_undo"
 
+    /** 1.4.0 (lot BANC §3.4): the agent became the owner of the device, lost that role, or gave the device back. */
+    const val DEVICE_OWNER_GAINED = "device_owner_gained"
+    const val DEVICE_OWNER_LOST = "device_owner_lost"
+    const val DEVICE_OWNER_RELEASED = "device_owner_released"
+    /** 1.4.0 (lot BANC §7.4): the shell opened a bench window (prepare_owner), detail {phase, uid}. */
+    const val BENCH_WINDOW_OPENED = "bench_window_opened"
+
     /** The events only a server that delivers policies knows (an older one would answer 400). */
     val POLICY_ONLY = setOf(KIOSK_EXIT, KIOSK_PIN_LOCKOUT, POLICY_REVOKE_UNDO)
+    /** The events only a server announcing device_owner_v1 knows (an older one would answer 400). */
+    val OWNER_ONLY = setOf(DEVICE_OWNER_GAINED, DEVICE_OWNER_LOST, DEVICE_OWNER_RELEASED, BENCH_WINDOW_OPENED)
 }
 
 /**
@@ -119,6 +128,20 @@ object PolicyCodes {
     const val WIPE_WITHOUT_PASSWORD = "wipe_without_password"
     const val FOREIGN_TENANT_RESOURCE = "foreign_tenant_resource"
     const val WIPE_WITHHELD = "wipe_withheld"
+    // 1.4.0 (lot BANC §7.3): an item of the owner on a device the agent administers only (pending), an API level too low
+    // for it (unsupported), a permission grant without effect (an app targeting an API below 23).
+    const val PENDING_OWNER = "pending_owner"
+    const val UNSUPPORTED_API = "unsupported_api"
+    const val NOT_APPLICABLE = "not_applicable"
+    // 1.4.0: a network of the policy already added by someone else (the user, in the shops), which the agent may not
+    // change: compliant once the device joined it (the password is right), pending while unverified, non-compliant when
+    // Android disabled it for a wrong password.
+    const val WIFI_USER_PROFILE = "wifi_user_profile"
+    const val WIFI_FOREIGN_UNVERIFIED = "wifi_foreign_unverified"
+    const val WIFI_FOREIGN_AUTH_FAILED = "wifi_foreign_auth_failed"
+
+    /** The outcomes of a foreign network: never kept as applied, looked at again on every pass. */
+    val WIFI_FOREIGN = setOf(WIFI_FOREIGN_PROFILE, WIFI_USER_PROFILE, WIFI_FOREIGN_UNVERIFIED, WIFI_FOREIGN_AUTH_FAILED)
 }
 
 /** States of a report item and of a whole report (shared AGENT_POLICY_ITEM_STATES, AGENT_POLICY_REPORT_STATES). */
@@ -177,7 +200,12 @@ enum class CommandType(val wire: String, val immediate: Boolean) {
     /** 1.3.0 (lot PONT-POL): the kiosk of the policy left for 1 to 240 minutes. */
     KIOSK_SUSPEND("kiosk.suspend", true),
     /** 1.3.0: the policy ledger forgotten, a full configuration asked, everything reconciled and reported again. */
-    POLICY_REAPPLY("policy.reapply", true);
+    POLICY_REAPPLY("policy.reapply", true),
+    /**
+     * 1.4.0 (lot BANC §3.8, §7.5, D15): the device given back (policies, owner, then administrator removed) and the
+     * identity erased; sent by the server as part of the revocation of a device the agent owns. Run last, like a reboot.
+     */
+    AGENT_RELEASE("agent.release", true);
 
     companion object {
         fun of(wire: String?): CommandType? = values().firstOrNull { it.wire == wire }
@@ -305,6 +333,7 @@ object CommandParser {
         }
         CommandType.KIOSK_SUSPEND -> p.int("minutes")?.takeIf { it in 1..MAX_SUSPEND_MINUTES }?.let { Params.KioskSuspend(it) }
         CommandType.POLICY_REAPPLY -> Params.PolicyReapply
+        CommandType.AGENT_RELEASE -> Params.None
     }
 
     /** kiosk.suspend: the longest suspension (shared suspendMinutesMax). */

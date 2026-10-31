@@ -6,6 +6,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
+import android.net.wifi.SupplicantState
 import android.net.wifi.WifiConfiguration
 import android.net.wifi.WifiEnterpriseConfig
 import android.net.wifi.WifiManager
@@ -71,6 +72,28 @@ class WifiApplier(context: Context, private val knox: KnoxBridge, private val lo
         wm.saveConfiguration()
         log.info("wifi ${w.ssid}: ${outcome.code}")
         return outcome
+    }
+
+    /**
+     * 1.4.0: a network of the same SSID and key management that another app (in the shops, the user through Settings)
+     * created, which Android 7 does not let the agent change. Its password cannot be read, so the connection vouches for
+     * it: joined now or before (NetworkSelectionStatus, hidden API read by reflection) compliant, disabled for a wrong
+     * password non-compliant, otherwise pending until the device meets the network.
+     */
+    private fun foreign(w: Policy.Wifi, cfg: WifiConfiguration): ItemOutcome {
+        val info = try { wm.connectionInfo } catch (e: Exception) { null }
+        if (info != null && info.networkId == cfg.networkId && info.supplicantState == SupplicantState.COMPLETED) {
+            return ItemOutcome.compliant(PolicyCodes.WIFI_USER_PROFILE, "connected")
+        }
+        val status = try { WifiConfiguration::class.java.getMethod("getNetworkSelectionStatus").invoke(cfg) } catch (e: Throwable) { null }
+        fun read(name: String): Any? = try { status?.javaClass?.getMethod(name)?.invoke(status) } catch (e: Throwable) { null }
+        val authFailure = try { status?.javaClass?.getField("DISABLED_AUTHENTICATION_FAILURE")?.getInt(null) } catch (e: Throwable) { null }
+        if (authFailure != null && read("getNetworkSelectionDisableReason") == authFailure) {
+            log.warn("wifi ${w.ssid}: network of another app disabled for a wrong password")
+            return ItemOutcome.nonCompliant(PolicyCodes.WIFI_FOREIGN_AUTH_FAILED)
+        }
+        if (read("getHasEverConnected") == true) return ItemOutcome.compliant(PolicyCodes.WIFI_USER_PROFILE, "has_connected")
+        return ItemOutcome.pending(PolicyCodes.WIFI_FOREIGN_UNVERIFIED)
     }
 
     private fun enable(id: Int, autoConnect: Boolean) {
@@ -199,6 +222,22 @@ class WifiApplier(context: Context, private val knox: KnoxBridge, private val lo
         if (!removed) return ItemOutcome.nonCompliant(PolicyCodes.WIFI_FOREIGN_PROFILE)
         wm.saveConfiguration()
         log.info("wifi $ssid: removed")
+        return ItemOutcome.compliant(PolicyCodes.WIFI_REMOVED)
+    }
+
+    /**
+     * 1.4.0 (lot BANC §7.3): a network of the policy's removals taken out whoever created it (MobiControl included), which
+     * only the owner of the device may do without Knox. Wi-Fi off: pending; absent: removed already.
+     */
+    @SuppressLint("MissingPermission")
+    fun removeAny(ssid: String): ItemOutcome {
+        if (!wm.isWifiEnabled) return ItemOutcome.pending(PolicyCodes.WIFI_DISABLED)
+        val found = try { wm.configuredNetworks?.filter { it.SSID == quoted(ssid) }.orEmpty() } catch (e: SecurityException) { emptyList() }
+        if (found.isEmpty()) return ItemOutcome.compliant(PolicyCodes.WIFI_REMOVED, "absent")
+        val removed = found.count { wm.removeNetwork(it.networkId) }
+        if (removed < found.size) return ItemOutcome.nonCompliant(PolicyCodes.WIFI_FOREIGN_PROFILE)
+        wm.saveConfiguration()
+        log.info("wifi $ssid: removed by the owner")
         return ItemOutcome.compliant(PolicyCodes.WIFI_REMOVED)
     }
 

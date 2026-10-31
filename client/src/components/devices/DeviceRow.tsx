@@ -14,6 +14,7 @@ import { dayIsPast, formatDay, osLabel, ownershipLabel } from '@/components/mdm/
 import { PlatformAvatar } from '@/components/mdm/PlatformAvatar';
 import { BatteryIndicator } from '@/components/mdm/BatteryIndicator';
 import { LastSeenPill } from '@/components/mdm/LastSeenPill';
+import { DEVICE_DRAG_TYPE } from './deviceDrag';
 
 interface DeviceRowProps {
   device: DeviceSummary;
@@ -119,6 +120,9 @@ export const DeviceRow = memo(function DeviceRow({
         !managed && 'opacity-70',
       )}
       onClick={() => (selectionMode ? onSelect(device.id) : onNavigate(device.id))}
+      // With a mouse, the row drags onto a group of the side panel (deviceDrag.ts).
+      draggable={!stacked}
+      onDragStart={(e) => { e.dataTransfer.setData(DEVICE_DRAG_TYPE, String(device.id)); e.dataTransfer.effectAllowed = 'move'; }}
       onMouseDown={handleMouseDown}
       onAuxClick={handleAuxClick}
     >

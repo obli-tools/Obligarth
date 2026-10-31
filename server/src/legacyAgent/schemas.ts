@@ -45,9 +45,14 @@ export const EnrollBody = z.object({
   device: DeviceFacts,
   capabilities: z.object({
     adminActive: z.boolean(),
+    // Agent 1.4.0 (lot BANC §3.4): the agent is the owner of the device. Absent (1.3.0): administrator.
+    deviceOwner: z.boolean().optional(),
     knox: z.object({ state: z.enum(LEGACY_AGENT_KNOX_STATES), version: nstr(64), mdmApiLevel: nstr(64) }).strict(),
   }).strict(),
-  hints: z.object({ deviceName: nstr(255), serial: nstr(64), imei: nstr(32) }).strict().nullable().optional(),
+  // provisioningId (agent 1.4.0, lot BANC): the provisioning of the bench station the configuration came from; it must be
+  // the provisioning of the token, or the enrollment is refused (403 tokenInvalid, the use not consumed).
+  hints: z.object({ deviceName: nstr(255), serial: nstr(64), imei: nstr(32), provisioningId: z.string().uuid().nullable().optional() })
+    .strict().nullable().optional(),
 }).strict();
 export type EnrollBody = z.infer<typeof EnrollBody>;
 
@@ -63,6 +68,10 @@ export const PollBody = z.object({
     // P0-15 §8 (agent 1.1.0 and later): the measured capability of the control, Knox RemoteInjection held and
     // instantiable (status item agent.remote.inject); absent: unchanged.
     remoteInject: z.boolean().nullable().optional(),
+    // Agent 1.4.0 (lot BANC §3.4), only to a server that announces device_owner_v1: the agent owns the device; ADB enabled
+    // on the device (Settings.Global.ADB_ENABLED). Absent: unchanged.
+    deviceOwner: z.boolean().nullable().optional(),
+    adbEnabled: z.boolean().nullable().optional(),
   }).strict(),
   results: z.array(z.object({
     commandId: z.string().uuid(),

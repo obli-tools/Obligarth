@@ -217,6 +217,7 @@ class SetupActivity : Activity() {
             getString(R.string.label_server) to (s.config?.host ?: "-"),
             getString(R.string.label_agent) to (s.agentId ?: "-"),
             getString(R.string.label_admin) to (if (rt.facts.adminActive()) yes else no),
+            getString(R.string.label_owner) to (if (rt.facts.deviceOwner()) yes else no),
             getString(R.string.label_knox) to knoxLabel(rt.knox.state()),
             getString(R.string.label_phone) to (if (phonePerm) yes else no),
             getString(R.string.label_last_poll) to lastPoll,
