@@ -32,6 +32,7 @@ import { registerLegacyAgentModule } from './modules/legacyAgent';
 import { registerRemoteModule } from './modules/remote';
 import { registerBenchModule } from './modules/bench';
 import { registerMcpModule } from './modules/mcp';
+import { registerSitesModule } from './modules/sites';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
 import { registerAndroidModule } from './modules/android';
@@ -99,6 +100,8 @@ async function main() {
   // MCP server (AI agents through personal access keys): after the bridge agent, whose minute job and console core
   // it uses.
   registerMcpModule();
+  // Sites (lot P1-SITE): audit actions and the filter of the device list.
+  registerSitesModule();
   registerPrivacyModule();
   // Android (android-amapi §3.4, lot AN-A2): after the Apple and privacy modules. Without I/O; its queues, handlers,
   // start check of the Google identity and pull loop only when ANDROID_MODE is not off (AN39).

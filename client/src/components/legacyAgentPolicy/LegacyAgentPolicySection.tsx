@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, KeyRound, LayoutGrid, ShieldBan, Trash2, Wifi } from 'lucide-react';
+import { FileText, KeyRound, LayoutGrid, Package, ShieldBan, Trash2, Wifi } from 'lucide-react';
 import type { LegacyAgentPolicySection as Section, PolicyValidationIssue } from '@obligarth/shared';
 import { Button } from '@/components/common/Button';
 import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedTabs';
+import { AppConfigPanel } from './AppConfigPanel';
 import { CertsPanel } from './CertsPanel';
 import { FilesPanel } from './FilesPanel';
 import { KioskPanel } from './KioskPanel';
@@ -13,11 +14,12 @@ import { WifiPanel } from './WifiPanel';
 import { IssueList, useStoreFiles } from './ui';
 
 // The section of the Android bridge agent in the policy editor (lot PONT-POL §11.1): files deposited, Wi-Fi networks,
-// the soft kiosk, the device-administrator and Knox restrictions, the CAs of the system store. It applies to the devices
+// the soft kiosk, the device-administrator and Knox restrictions, the CAs of the system store, the managed configuration
+// of apps (agent 1.4.2 as device owner, lot P1-QR §6 ter). It applies to the devices
 // of the channel legacy_agent with an agent 1.3.0 or later; an older agent ignores it. Secrets are typed write-only and
 // moved to the vault at the save; the server validates everything (issues of the pseudo item 'legacyAgent').
 
-type Tab = 'files' | 'wifi' | 'kiosk' | 'restrictions' | 'certs';
+type Tab = 'files' | 'wifi' | 'kiosk' | 'restrictions' | 'certs' | 'appConfigs';
 
 /** A section without any content is dropped from the version. */
 function compact(s: Section): Section | undefined {
@@ -29,6 +31,7 @@ function compact(s: Section): Section | undefined {
   if (s.dpm && Object.keys(s.dpm).length) out.dpm = s.dpm;
   if (s.knox && Object.keys(s.knox).length) out.knox = s.knox;
   if (s.certs?.length) out.certs = s.certs;
+  if (s.appConfigs?.length) out.appConfigs = s.appConfigs;
   // Lot BANC (D16): the confirmation of a restriction that cuts ADB, kept only while that restriction is set.
   if (out.knox?.usbDebugging === false && s.confirmBenchLockout === true) out.confirmBenchLockout = true;
   return Object.keys(out).length ? out : undefined;
@@ -44,7 +47,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
   const s = section ?? {};
   const set = (patch: Partial<Section>) => onChange(compact({ ...s, ...patch }));
   const under = (prefix: string) => issues.filter((i) => i.path === prefix || i.path.startsWith(`${prefix}.`) || i.path.startsWith(`${prefix}[`));
-  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs|confirmBenchLockout)([.[]|$)/.test(i.path));
+  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs|appConfigs|confirmBenchLockout)([.[]|$)/.test(i.path));
 
   if (!section && !present) {
     if (!editable) return null;
@@ -63,6 +66,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
     { id: 'restrictions', label: t('legacyAgentPolicy.tabs.restrictions') || 'Restrictions', icon: <ShieldBan size={14} />,
       badge: count(Object.keys(s.dpm ?? {}).length + Object.keys(s.knox ?? {}).length) },
     { id: 'certs', label: t('legacyAgentPolicy.tabs.certs') || 'Certificates', icon: <KeyRound size={14} />, badge: count(s.certs?.length ?? 0) },
+    { id: 'appConfigs', label: t('legacyAgentPolicy.tabs.appConfigs') || 'App configuration', icon: <Package size={14} />, badge: count(s.appConfigs?.length ?? 0) },
   ];
   const mergeImport = (r: MobiControlImportResult) => {
     const wifi = [...(s.wifi ?? [])];
@@ -98,6 +102,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
           onConfirmLockout={(on) => set({ confirmBenchLockout: on ? true : undefined })} />
       )}
       {tab === 'certs' && <CertsPanel certs={s.certs ?? []} editable={editable} issues={under('certs')} onChange={(certs) => set({ certs })} />}
+      {tab === 'appConfigs' && <AppConfigPanel items={s.appConfigs ?? []} editable={editable} issues={under('appConfigs')} onChange={(appConfigs) => set({ appConfigs })} />}
     </section>
   );
 }

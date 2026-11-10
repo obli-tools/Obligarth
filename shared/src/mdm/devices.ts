@@ -10,6 +10,7 @@ import type {
 } from './enums';
 import type { SourceScope } from './effective';
 import type { ContactState } from './states';
+import type { DeviceSiteRef } from './sites';
 
 /** A reason of non-compliance (MVP evaluator, §4.4; the Android evaluator, android/inventory/compliance.ts): no
  *  personal data in `detail`. */
@@ -40,6 +41,8 @@ export interface DeviceSummary {
   /** Battery level, integer percent 0-100 (list only): Apple DeviceInformation or the bridge agent's status; absent
    *  without a source (AMAPI). */
   batteryLevel?: number | null;
+  /** The site of the device (lot P1-SITE); null: none. Absent from an answer that does not read it. */
+  site?: DeviceSiteRef | null;
 }
 
 /** What the record shows of DeviceInformation, refiltered with the privacy rules: a field not collected is ABSENT. */

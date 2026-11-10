@@ -4,10 +4,12 @@ import { DevicesPageLayout } from '@/components/devices/DevicesPageLayout';
 import type { InitialDeviceFilters } from '@/components/devices/DeviceTable';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** ?siteId= of a link: a site's uuid, or 'none' (lot P1-SITE). */
+const siteOf = (v: string | null): string | undefined => (v === 'none' ? 'none' : v && UUID_RE.test(v) ? v.toLowerCase() : undefined);
 
 // The inventory (modele-donnees-mdm §11.3). A link may land on a filtered list: the cards of the dashboard
 // (?state=, ?contact=stale, ?compliance=non_compliant, ?config=error, ?platform=ios, ?lost=1), the end users
-// (?endUserId=), the groups (?groupId=), a saved view (?view=<uuid>, P0-5).
+// (?endUserId=), the groups (?groupId=), a saved view (?view=<uuid>, P0-5), a site (?siteId=<uuid>|none, lot P1-SITE).
 export function DeviceListPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const groupIdParam = searchParams.get('groupId');
@@ -27,6 +29,7 @@ export function DeviceListPage() {
       ownership: p.get('ownership') || undefined,
       endUserId: Number.isInteger(endUser) && endUser > 0 ? endUser : undefined,
       lost: p.get('lost') === '1' || p.get('lost') === 'true' ? true : undefined,
+      siteId: siteOf(p.get('siteId')),
     };
   }, [key]);
 

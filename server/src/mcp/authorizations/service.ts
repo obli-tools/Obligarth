@@ -272,7 +272,14 @@ async function cancelOne(r: AuthorizationRow, U: number, why: string, cause: Can
 export const SCOPE_OF_TOOL: Record<string, McpScope> = {
   send_device_message: 'commands.message', reboot_device: 'commands.restart', install_app: 'commands.apps', uninstall_app: 'commands.apps',
   pull_app: 'commands.apps', update_agent: 'commands.apps', refresh_inventory: 'commands.inventory', move_devices_to_group: 'groups.move',
+  // Lot P1-SITE: one authorization per applied batch of site writes.
+  import_sites: 'sites.write', sites_from_devices: 'sites.write', upsert_site: 'sites.write', archive_site: 'sites.write', set_device_site: 'sites.write',
+  // Lot P1-MCP-POL: a submission or a batch of assignments of policies.
+  submit_policy_version: 'policies.publish', change_policy_assignments: 'policies.publish',
 };
+
+/** The tools of an authorization that reach a whole tenant (a publication): their key must still reach all of it. */
+const WHOLE_TENANT_TOOLS = new Set(['submit_policy_version', 'change_policy_assignments']);
 
 /** Why an approval filed through a key may no longer run (§0.1, §1.1), or null. `rows`: its tracking rows. */
 async function filedApprovalClosedReason(T: number, rows: AuthorizationRow[]): Promise<string | null> {
@@ -288,6 +295,7 @@ async function filedApprovalClosedReason(T: number, rows: AuthorizationRow[]): P
   if (!eff.tenants.some((t) => t.id === T)) return 'tenant_outside_perimeter';
   const scope = SCOPE_OF_TOOL[String(r.tool)];
   if (!scope || !subject.key.scopes.includes(scope)) return 'scope_lost';
+  if (WHOLE_TENANT_TOOLS.has(String(r.tool)) && (subject.key.groupMode !== 'all' || subject.key.deviceMode !== 'all')) return 'perimeter_lost';
   const lost = await asTenant(T, userActor(subject.userId), async () => {
     const need = MCP_SCOPES[scope].tenantNeed;
     if (need !== 'membership' && !(await holdsTenantCapability(subject, T, need))) return true;

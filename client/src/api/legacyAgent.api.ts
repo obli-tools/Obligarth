@@ -109,7 +109,7 @@ export const legacyAgentApi = {
     const res = await apiClient.get<ApiResponse<LegacyAgentTokenView[]>>('/legacy-agent/tokens', { params: { origin } });
     return res.data.data ?? [];
   },
-  async createToken(body: { label: string; groupId?: number | null; days?: number; maxUses?: number }): Promise<LegacyAgentTokenCreated> {
+  async createToken(body: { label: string; groupId?: number | null; siteId?: string | null; days?: number; maxUses?: number }): Promise<LegacyAgentTokenCreated> {
     const res = await apiClient.post<ApiResponse<LegacyAgentTokenCreated>>('/legacy-agent/tokens', body);
     return res.data.data!;
   },
@@ -166,6 +166,11 @@ export const legacyAgentApi = {
   async renderPreview(template: string, encoding: 'text' | 'json', deviceId: number): Promise<{ text: string; missing: string[]; jsonValid: boolean | null }> {
     const res = await apiClient.post<ApiResponse<{ text: string; missing: string[]; jsonValid: boolean | null }>>('/legacy-agent/policy/render-preview', { template, encoding, deviceId });
     return res.data.data!;
+  },
+  /** The entries of a managed configuration of an app rendered as text for one device (lot P1-QR §6 ter). */
+  async renderAppConfigPreview(entries: Array<{ key: string; template: string }>, deviceId: number): Promise<Array<{ key: string; text: string; missing: string[] }>> {
+    const res = await apiClient.post<ApiResponse<{ entries: Array<{ key: string; text: string; missing: string[] }> }>>('/legacy-agent/policy/render-appconfig-preview', { entries, deviceId });
+    return res.data.data!.entries;
   },
   async customKeys(): Promise<string[]> {
     const res = await apiClient.get<ApiResponse<string[]>>('/legacy-agent/policy/custom-keys');

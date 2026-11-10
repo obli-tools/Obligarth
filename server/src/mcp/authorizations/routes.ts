@@ -14,6 +14,8 @@ import { assertDevicesInPerimeter, assertGroupTargetInPerimeter } from '../perim
 import { keyInfoOf } from '../keys/service';
 import { targetsOf } from '../perimeter';
 import { APPROVABLE_ARGS, checkMoveRights, executeLegacy, executeMove, movePreview, type ExecContext, type ExecResult } from '../tools/writes';
+import { SITE_APPROVABLE_ARGS, executeSiteBatch, isSiteTool } from '../tools/sites';
+import { POLICY_APPROVABLE_ARGS, executePolicyWrite, isPolicyTool } from '../tools/policies';
 import { MCP_SCOPES } from '@obligarth/shared';
 import { AUTH_COLUMNS, SCOPE_OF_TOOL, auditState, authorizationView, listOwn, notifyOwner, transition, type AuthorizationRow } from './service';
 
@@ -166,14 +168,17 @@ router.post('/:id/approve', wrap(async (req, res) => {
     //    group too (re-parented out of the key's groups meanwhile, or null under a group list: lost).
     if (!lost) {
       try {
-        await assertDevicesInPerimeter(caller, T, deviceIds);
+        // A batch of the sites may name no device (an import): the tenant and the scope are its perimeter.
+        // A publication of policies names no device either: the whole tenant is its perimeter (checked by its executor).
+        if (deviceIds.length || !(isSiteTool(String(row.tool)) || isPolicyTool(String(row.tool)))) await assertDevicesInPerimeter(caller, T, deviceIds);
         if (isMove) {
           const g = (jsonOf(row.args) ?? {}) as { group_id?: unknown };
           await assertGroupTargetInPerimeter(caller, T, g.group_id === null || g.group_id === undefined ? null : Number(g.group_id));
         }
       } catch { lost = true; }
     }
-    const schema = APPROVABLE_ARGS[String(row.tool)];
+    const schema = APPROVABLE_ARGS[String(row.tool)] ?? (isSiteTool(String(row.tool)) ? SITE_APPROVABLE_ARGS[row.tool as keyof typeof SITE_APPROVABLE_ARGS]
+      : isPolicyTool(String(row.tool)) ? POLICY_APPROVABLE_ARGS[row.tool as keyof typeof POLICY_APPROVABLE_ARGS] : undefined);
     const parsedArgs = isMove ? { success: true as const, data: jsonOf(row.args) } : schema?.safeParse(jsonOf(row.args));
     if (lost || !parsedArgs || !parsedArgs.success) {
       await finish({ state: 'failed', errorCode: 'perimeterLost' });
@@ -202,12 +207,19 @@ router.post('/:id/approve', wrap(async (req, res) => {
       },
       echo,
     };
-    const r = isMove ? await executeMove(x) : await executeLegacy(x);
+    const r = isMove ? await executeMove(x) : isSiteTool(String(row.tool)) ? await executeSiteBatch(x)
+      : isPolicyTool(String(row.tool)) ? await executePolicyWrite(x) : await executeLegacy(x);
     if (finishedInTx) {
       const done = await db('mcp_authorizations').where({ id: row.id }).first('*') as AuthorizationRow | undefined;
       if (done) { await auditState(done, 'mcp.authorization.executed', ctx, r.outcome ?? {}); notifyOwner(done); }
     } else {
       await finish(r);
+    }
+    if (r.state === 'failed' && r.errorCode === 'planChanged') {
+      throw new AppError(409, 'The sites or the devices changed since the batch was asked: nothing was applied', 'planChanged');
+    }
+    if (r.state === 'failed' && r.errorCode === 'policyChanged') {
+      throw new AppError(409, 'The policy or the impact of the change changed since it was asked: nothing was published', 'policyChanged');
     }
     if (r.state === 'failed' && r.errorCode === 'impactChanged') {
       throw new AppError(409, 'The impact of the move changed since you saw it: nothing was moved', 'impactChanged');

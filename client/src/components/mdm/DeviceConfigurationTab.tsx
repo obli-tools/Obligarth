@@ -26,6 +26,7 @@ const UNAVAILABLE_FALLBACK: Record<UnavailableReason, string> = {
   os_too_old: 'Needs a newer operating system',
   ownership_forbidden: 'Not allowed for this ownership',
   device_revoked: 'The agent of the device is revoked',
+  agent_too_old: 'Needs a newer version of the agent',
   client_unsupported: 'Not supported by the device',
   asset_not_supported: 'Needs an asset the device cannot receive yet',
   variable_unresolved: 'A variable has no value for this device',

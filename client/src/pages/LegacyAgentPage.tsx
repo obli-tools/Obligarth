@@ -4,17 +4,20 @@ import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
 import {
-  AlertTriangle, Ban, Copy, Download, FileSpreadsheet, FileUp, KeyRound, Layers, Lock, MessageSquare, Package, PackageOpen, PackageX, Plus, RefreshCw,
+  AlertTriangle, Ban, Copy, Download, FileSpreadsheet, FileUp, KeyRound, Layers, Lock, MapPin, MessageSquare, Package, PackageOpen, PackageX, Plus, RefreshCw,
   RotateCw, Search, ShieldAlert, ShieldCheck, ShieldOff, SortAsc, SortDesc, Trash2, Upload, WifiOff, XCircle,
 } from 'lucide-react';
 import {
   isMasterTenant, LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_KNOX_STATES, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_AUTO_UPDATE_BOUNDS, LEGACY_AGENT_TOKEN_BOUNDS,
-  type DeviceGroup, type LegacyAgentCommandView, type LegacyAgentConsoleType, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
+  type DeviceGroup, type SiteView, type LegacyAgentCommandView, type LegacyAgentConsoleType, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
   type LegacyAgentInstanceSettings, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentServerKeyView,
   type LegacyAgentKnoxState, type LegacyAgentNameImportFormat, type LegacyAgentNameImportResult, type LegacyAgentNameImportStatus, type LegacyAgentTokenCreated, type LegacyAgentTokenView,
 } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { groupsApi } from '@/api/groups.api';
+import { sitesApi } from '@/api/sites.api';
+import { SitePickerDialog } from '@/components/sites/siteUi';
+import { anonymize } from '@/utils/anonymize';
 import { isStepUpHandled } from '@/api/client';
 import { PageContainer } from '@/components/common/PageContainer';
 import { Modal } from '@/components/common/Modal';
@@ -985,7 +988,12 @@ function TokensTab() {
   const confirm = useConfirm();
   const [rows, setRows] = useState<LegacyAgentTokenView[] | null>(null);
   const [groups, setGroups] = useState<DeviceGroup[]>([]);
-  const [form, setForm] = useState({ label: '', groupId: '', days: String(LEGACY_AGENT_TOKEN_BOUNDS.daysDefault), maxUses: String(LEGACY_AGENT_TOKEN_BOUNDS.maxUsesDefault) });
+  // Lot P1-QR §3.2: the site its phones are attached to at their enrollment, chosen in the searchable list of the sites
+  // (the ones not archived); `sites`: every site, archived ones included, to name the site of each token.
+  const [sites, setSites] = useState<SiteView[]>([]);
+  const [siteChoice, setSiteChoice] = useState<SiteView | null>(null);
+  const [pickSite, setPickSite] = useState(false);
+  const [form, setForm] = useState({ label: '', groupId: '', siteId: '', days: String(LEGACY_AGENT_TOKEN_BOUNDS.daysDefault), maxUses: String(LEGACY_AGENT_TOKEN_BOUNDS.maxUsesDefault) });
   const [created, setCreated] = useState<LegacyAgentTokenCreated | null>(null);
   const [knoxSet, setKnoxSet] = useState<boolean | null>(null);
   const [knox, setKnox] = useState('');
@@ -995,11 +1003,12 @@ function TokensTab() {
   useEffect(() => {
     load();
     groupsApi.list().then(setGroups).catch(() => setGroups([]));
+    sitesApi.list({ archived: true }).then(setSites).catch(() => setSites([]));
     legacyAgentApi.settings().then((s) => setKnoxSet(s.knoxLicenseSet)).catch(() => setKnoxSet(null));
   }, [load]);
   const create = async () => {
     try {
-      const r = await legacyAgentApi.createToken({ label: form.label, groupId: form.groupId ? Number(form.groupId) : null, days: Number(form.days), maxUses: Number(form.maxUses) });
+      const r = await legacyAgentApi.createToken({ label: form.label, groupId: form.groupId ? Number(form.groupId) : null, siteId: form.siteId || null, days: Number(form.days), maxUses: Number(form.maxUses) });
       setCreated(r);
       setForm((f) => ({ ...f, label: '' }));
       load();
@@ -1009,18 +1018,30 @@ function TokensTab() {
     if (!(await confirm({ message: t('legacyAgent.tokens.confirmRevoke', { label: r.label }) || `Revoke the token ${r.label}?`, danger: true }))) return;
     try { await legacyAgentApi.revokeToken(r.id); load(); } catch (err) { fail(err); }
   };
+  const siteById = useMemo(() => new Map(sites.map((x) => [x.id, x])), [sites]);
   const saveKnox = async (value: string | null) => {
     try { const s = await legacyAgentApi.setKnoxLicense(value); setKnoxSet(s.knoxLicenseSet); setKnox(''); toast.success(t('legacyAgent.knox.saved') || 'Knox licence saved'); } catch (err) { fail(err); }
   };
   return (
     <div className="space-y-4">
-      <div className={clsx(cardCls, 'grid gap-3 text-sm md:grid-cols-5')}>
+      <div className={clsx(cardCls, 'grid gap-3 text-sm md:grid-cols-6')}>
         <label className={labelCls}>{t('legacyAgent.tokens.label') || 'Label'}<input className={fieldCls} maxLength={100} value={form.label} onChange={(e) => setForm({ ...form, label: e.target.value })} placeholder={t('legacyAgent.tokens.labelHint') || 'Wave 1'} /></label>
         <label className={labelCls}>{t('legacyAgent.tokens.group') || 'Group'}
           <select className={fieldCls} value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
             <option value="">—</option>
             {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
           </select></label>
+        <div className={labelCls}>{t('legacyAgent.tokens.site') || 'Site'}
+          <button type="button" className={clsx(fieldCls, 'flex items-center gap-2 text-left')} onClick={() => setPickSite(true)}
+            title={t('legacyAgent.tokens.siteHint') || 'The phones enrolled with this token are attached to the site (and filed in its group when the token names none).'}>
+            <MapPin className="h-3.5 w-3.5 shrink-0 text-text-muted" />
+            {siteChoice
+              ? <span className="truncate"><span className="font-mono text-xs text-text-muted">{anonymize(siteChoice.code)}</span> {anonymize(siteChoice.name)}</span>
+              : <span className="text-text-muted">{t('sites.none') || 'No site'}</span>}
+          </button>
+          <SitePickerDialog open={pickSite} onClose={() => setPickSite(false)} value={siteChoice?.id ?? null}
+            onPick={(s) => { setPickSite(false); setSiteChoice(s); setForm((f) => ({ ...f, siteId: s?.id ?? '' })); }} />
+        </div>
         <label className={labelCls}>{t('legacyAgent.tokens.days') || 'Validity (days)'}<input className={fieldCls} type="number" min={1} max={LEGACY_AGENT_TOKEN_BOUNDS.daysMax} value={form.days} onChange={(e) => setForm({ ...form, days: e.target.value })} /></label>
         <label className={labelCls}>{t('legacyAgent.tokens.maxUses') || 'Quota'}<input className={fieldCls} type="number" min={1} max={LEGACY_AGENT_TOKEN_BOUNDS.maxUsesMax} value={form.maxUses} onChange={(e) => setForm({ ...form, maxUses: e.target.value })} /></label>
         <div className="flex items-end"><Button onClick={() => void create()} disabled={!form.label.trim()}><Plus className="mr-1 h-4 w-4" />{t('legacyAgent.tokens.create') || 'New token'}</Button></div>
@@ -1039,7 +1060,8 @@ function TokensTab() {
         <tbody>
           {(rows ?? []).map((r) => (
             <tr key={r.id} className={rowCls}>
-              <td className={clsx(tdCls, 'font-medium text-text-primary')}>{r.label}</td>
+              <td className={clsx(tdCls, 'font-medium text-text-primary')}>{r.label}
+                {r.siteId && <span className="ml-2 font-mono text-xs font-normal text-text-muted">{anonymize(siteById.get(r.siteId)?.code ?? r.siteId.slice(0, 8))}</span>}</td>
               <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{r.origin === 'bench' ? (t('legacyAgent.tokens.originBench') || 'Bench station') : (t('legacyAgent.tokens.originConsole') || 'Console')}</td>
               <td className={clsx(tdCls, 'tabular-nums text-text-secondary')}>{r.uses} / {r.maxUses}</td>
               <td className={clsx(tdCls, 'text-text-secondary')}>{fmt(r.expiresAt)}</td>
@@ -1074,8 +1096,15 @@ function TokensTab() {
             <ScriptBlock title={t('legacyAgent.tokens.script') || 'MobiControl script (after installation)'} value={created.script} rows={3} />
             <AdminModeNote />
             <ScriptBlock title={t('legacyAgent.adminMode.adminOffScript') || 'Return script (_adminmode off)'} value={created.adminOffScript} rows={1} />
+            <div className="grid gap-3 sm:grid-cols-[1fr_auto]">
+              <ScriptBlock title={t('legacyAgent.tokens.config') || 'Encoded configuration (extra "config")'} value={created.config} rows={6} />
+              <div>
+                <span className="text-xs font-medium text-text-muted">{t('legacyAgent.tokens.qr') || 'Enrollment QR code'}</span>
+                <img src={created.qrPng} alt={t('legacyAgent.tokens.qr') || 'Enrollment QR code'} className="mt-1 h-44 w-44 rounded bg-white p-1" />
+                <p className="mt-1 max-w-[11rem] text-[11px] text-text-muted">{t('legacyAgent.tokens.qrHint') || 'Scanned by the agent: SCAN THE ENROLLMENT QR CODE.'}</p>
+              </div>
+            </div>
             {[
-              [t('legacyAgent.tokens.config') || 'Encoded configuration (extra "config")', created.config],
               [t('legacyAgent.tokens.configJson') || 'Configuration file (obligarth-agent.json)', created.configJson],
               [t('legacyAgent.tokens.token') || 'Token', created.token],
             ].map(([title, value]) => <ScriptBlock key={title} title={title} value={value} rows={value === created.token ? 1 : 3} />)}

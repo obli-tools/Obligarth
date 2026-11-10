@@ -1,5 +1,7 @@
 import type { Knex } from 'knex';
-import { BENCH_OWNER_MIN_VERSION_CODE, LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LEGACY_INJECT_ITEM } from '@obligarth/shared';
+import {
+  BENCH_OWNER_MIN_VERSION_CODE, LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE, LEGACY_AGENT_POLICY_MIN_VERSION_CODE, REMOTE_LEGACY_INJECT_ITEM,
+} from '@obligarth/shared';
 import { audit } from '../audit';
 import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
@@ -153,6 +155,11 @@ export async function handlePoll(who: AgentIdentity, ex: Exchange, raw: Buffer):
       await trx('legacy_agent_devices').where({ tenant_id: who.tenantId, device_id: who.deviceId }).update({ adb_enabled: s.adbEnabled });
     }
     await applyOwnerRole(trx, who, body, sat, now);
+    // An agent updated across the first version of a family (agent:appconfig:<id>, 1.4.2): its settings of that family
+    // apply now (or no longer, after a downgrade), the resolution runs again.
+    if ((Number(sat.agent_version_code) < LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE) !== (body.agent.versionCode < LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE)) {
+      await requestDeviceResolution(trx, who.tenantId, [who.deviceId]);
+    }
     await remote?.lock(trx);
 
     // 2. The results, then the events.

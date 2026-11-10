@@ -53,6 +53,14 @@ export const MCP_SCOPES = {
   'commands.apps': { kind: 'act', tenantNeed: 'membership', deviceCapability: 'mdm:apps', label: 'Install, remove and pull apps, update the agent' },
   'commands.cancel': { kind: 'act', tenantNeed: 'membership', label: 'Cancel pending commands' },
   'groups.move': { kind: 'act', tenantNeed: 'devices.manage', label: 'Move devices between groups (always approved by you)' },
+  // Lot P1-SITE: the dry runs answer at once; every applied batch is an authorization (second factor), one per batch.
+  'sites.write': { kind: 'act', tenantNeed: 'devices.manage', label: 'Create, import and archive sites, attach devices to them (applied batches approved by you)' },
+  // Lot P1-MCP-POL: the policies. Reads as any member (the console's); drafts without a second factor (nothing reaches a
+  // device); a submission or a change of assignments is always an authorization (second factor, or another person
+  // beyond the thresholds). Never a secret value, read or written.
+  'policies.read': { kind: 'read', tenantNeed: 'membership', label: 'Read the policies, their versions, assignments and files, and what a device received' },
+  'policies.write': { kind: 'act', tenantNeed: 'mdm.policies.manage', label: 'Write policy drafts and upload policy files (nothing reaches a device)' },
+  'policies.publish': { kind: 'act', tenantNeed: 'mdm.policies.manage', label: 'Submit policy versions and change their assignments (always approved by you)' },
 } as const satisfies Record<string, McpScopeDef>;
 
 export type McpScope = keyof typeof MCP_SCOPES;

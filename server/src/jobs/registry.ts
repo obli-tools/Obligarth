@@ -18,6 +18,8 @@ export const JOB_MODULES: readonly string[] = [
   'legacy-agent',
   // The observability of the instance (P0-13 T8: ops.watch).
   'ops',
+  // The sites (lot P1-SITE: sites.batches-purge).
+  'sites',
 ];
 
 /** The shared dead letter queue (no worker). */

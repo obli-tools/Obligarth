@@ -133,6 +133,14 @@ export const LEGACY_AGENT_TOKEN_RE = /^OLE1\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43
 /** Bounds of a token (§3.2, §7). */
 export const LEGACY_AGENT_TOKEN_BOUNDS = { maxUsesMax: 2000, maxUsesDefault: 50, daysMax: 30, daysDefault: 7 } as const;
 
+/** The text of an enrollment QR code (lot P1-QR §3.1): this prefix, then the configuration v1 in base64url, exactly the
+ *  one of POST /tokens (no new secret, no new format: the agent reads what follows with AgentConfig.parse). */
+export const LEGACY_AGENT_QR_PREFIX = 'OLQ1:';
+export const legacyAgentQrText = (encodedConfig: string): string => `${LEGACY_AGENT_QR_PREFIX}${encodedConfig}`;
+
+/** The public link of the agent's APK, under the public base of the instance (legacyAgent/publicDownload.ts). */
+export const LEGACY_AGENT_PUBLIC_APK_PATH = '/api/legacy-agent/public/agent.apk';
+
 /** Poll interval bounds and default, seconds (PB10; 120 by default since agent 1.2.0). */
 export const LEGACY_AGENT_POLL_BOUNDS = { min: 60, max: 3600, default: 120 } as const;
 
@@ -268,11 +276,16 @@ export interface LegacyAgentTokenView {
   state: 'active' | 'expired' | 'revoked' | 'used_up';
   /** console: created in the console; bench: a single-use token of a bench station (lot BANC §3.1 f). */
   origin?: 'console' | 'bench';
+  /** The site its devices are attached to at their enrollment (lot P1-QR §3.2), or none. */
+  siteId?: string | null;
+  /** The enrollment sheet of its site ("Enroll a phone"): the next sheet of the site revokes it. */
+  siteSheet?: boolean;
 }
 
 /** The creation answer: the token's value, the encoded configuration and the MobiControl script, shown once; with
  *  the two scripts that hold no secret (lot ADM): the activation of a device already enrolled, and the return
- *  (`_adminmode off`) sent on its own once the administrator is active. */
+ *  (`_adminmode off`) sent on its own once the administrator is active; and its enrollment QR code (lot P1-QR §3.1),
+ *  its text and its image (a PNG data URL the server draws: never a third-party service), shown once as well. */
 export interface LegacyAgentTokenCreated extends LegacyAgentTokenView {
   token: string;
   config: string;
@@ -280,6 +293,8 @@ export interface LegacyAgentTokenCreated extends LegacyAgentTokenView {
   script: string;
   activateScript: string;
   adminOffScript: string;
+  qrText: string;
+  qrPng: string;
 }
 
 export interface LegacyAgentPackageView {

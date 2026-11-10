@@ -3,9 +3,13 @@
 // templates rendered with the device's values, the secrets as vault references (rendered only when the poll delivers it:
 // policyDelivery.ts), the store files as blobs the agent downloads (GET /agent/v1/files/<sha>), and the items the
 // compilation had to drop (`dropped`: a path two files claim, the inline budget, a rendered file too large or not JSON, a
-// wipe threshold without a password, a resource of another tenant), which never make the artifact undeliverable (A1):
+// wipe threshold without a password, a resource of another tenant, a package two managed configurations claim, a managed
+// configuration above its bound or the device's budget), which
+// never make the artifact undeliverable (A1):
 // the agent reports each as error/<code>. Only a body above the size limit is a problem (compile:body_too_large). The
-// hash of the body never derives from a secret. No I/O in compile. A device whose desired state changes has its long
+// hash of the body never derives from a secret. The managed configuration of apps (agent:appconfig:<id>, agent 1.4.2,
+// lot P1-QR §6 ter) goes in appConfigs, each template rendered as text; the key is absent when there is none, so the
+// bodies of the devices without one keep their hash. No I/O in compile. A device whose desired state changes has its long
 // wait woken after the commit; any other takes the change at its next poll.
 import { createHash } from 'node:crypto';
 import {
@@ -69,6 +73,12 @@ export function kioskDeviceName(label: string | null | undefined): string {
 
 interface Candidate { s: ResolvedSetting; value: Obj | JsonValue }
 
+/** The resolution's order of the candidates of one family: rank, priority, key (the first one keeps a contested path or
+ *  package). */
+const byRank = (a: Candidate, b: Candidate): number => a.s.source.rank - b.s.source.rank
+  || ((a.s.source as { priority?: number }).priority ?? 0) - ((b.s.source as { priority?: number }).priority ?? 0)
+  || (a.s.settingKey < b.s.settingKey ? -1 : 1);
+
 /** The artifact agent:policy of one device from its agent:* settings (pure); null when it has none to deliver. */
 export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedSetting[], tenant: { name: string; slug: string },
   tenantId: number | null): ChannelArtifact | null {
@@ -95,9 +105,7 @@ export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedS
   const inline: Array<{ entry: Obj; size: number; key: string }> = [];
 
   // Files: the paths taken by rank (the resolution's order: rank, priority, key); a later file on a taken path is dropped.
-  const fileCands = kept.filter((c) => parseAgentKey(c.s.settingKey)?.family === 'file')
-    .sort((a, b) => a.s.source.rank - b.s.source.rank || ((a.s.source as { priority?: number }).priority ?? 0) - ((b.s.source as { priority?: number }).priority ?? 0)
-      || (a.s.settingKey < b.s.settingKey ? -1 : 1));
+  const fileCands = kept.filter((c) => parseAgentKey(c.s.settingKey)?.family === 'file').sort(byRank);
   const taken = new Set<string>();
   for (const c of fileCands) {
     const v = c.value as Obj;
@@ -138,6 +146,44 @@ export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedS
     drop(x.key, 'inline_too_large');
   }
 
+  // The managed configuration of apps (§6 ter): each entry rendered as text for the device; a variable without a value
+  // leaves the whole instance out (the resolution already said variable_unresolved), a value above the agent's bound
+  // drops it (appconfig_too_large), a package already configured by a winning instance drops the later one.
+  const appConfigs: Obj[] = [];
+  const sized: Array<{ entry: Obj; size: number; key: string }> = [];
+  const configured = new Set<string>();
+  for (const c of kept.filter((x) => parseAgentKey(x.s.settingKey)?.family === 'appconfig').sort(byRank)) {
+    const v = c.value as Obj;
+    const pkg = String(v.package ?? '');
+    if (configured.has(pkg.toLowerCase())) { drop(c.s.settingKey, 'package_conflict'); continue; }
+    const values: Obj = {};
+    let missing = false;
+    let tooLarge = false;
+    for (const e of (Array.isArray(v.entries) ? v.entries : []) as Obj[]) {
+      const text = renderTemplate(String(e?.template ?? ''), 'text', (n) => variableValue(n as never, device, tenant, 'agent'));
+      if (text === null) { missing = true; break; }
+      if (text.length > L.appConfigValueChars) { tooLarge = true; break; }
+      values[String(e.key)] = text;
+    }
+    if (missing) continue;   // unresolved: never configured (the resolution says why)
+    if (tooLarge) { drop(c.s.settingKey, 'appconfig_too_large'); continue; }
+    configured.add(pkg.toLowerCase());
+    const entry: Obj = { key: c.s.settingKey, id: parseAgentKey(c.s.settingKey)!.instance!, package: pkg, values };
+    appConfigs.push(entry);
+    sized.push({ entry, size: Buffer.byteLength(JSON.stringify(values), 'utf8'), key: c.s.settingKey });
+    keys[c.s.settingKey] = c.s.valueHash;
+  }
+  // The budget of the device, as the inline files: the largest configurations leave first, so the body stays deliverable
+  // (A1). The package of a configuration that leaves is not handed to a later instance (the author sees the drop).
+  let appConfigTotal = sized.reduce((n, x) => n + x.size, 0);
+  for (const x of [...sized].sort((a, b) => b.size - a.size || (a.key < b.key ? -1 : 1))) {
+    if (appConfigTotal <= L.appConfigTotalBytes) break;
+    appConfigTotal -= x.size;
+    appConfigs.splice(appConfigs.indexOf(x.entry), 1);
+    delete keys[x.key];
+    drop(x.key, 'appconfig_too_large');
+  }
+
   const dpmValues = new Map<string, JsonValue>();
   for (const c of kept) {
     const k = parseAgentKey(c.s.settingKey);
@@ -145,7 +191,7 @@ export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedS
   }
   for (const c of kept) {
     const k = parseAgentKey(c.s.settingKey);
-    if (!k || k.family === 'file') continue;
+    if (!k || k.family === 'file' || k.family === 'appconfig') continue;
     const v = c.value;
     switch (k.family) {
       case 'wifi': {
@@ -198,6 +244,7 @@ export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedS
     files: files.sort((a, b) => (String(a.id) < String(b.id) ? -1 : 1)),
     wifi: wifi.sort(byKey as never), wifiRemove: wifiRemove.sort(byKey as never), dpm: dpm.sort(byKey as never), knox: knox.sort(byKey as never),
     certs: certs.sort(byKey as never), kiosk, blobs: [...blobs].sort(), dropped: dropped.sort(byKey) as unknown as JsonValue,
+    ...(appConfigs.length ? { appConfigs: appConfigs.sort(byKey as never) } : {}),
   };
   const canonical = canonicalJson(body);
   const hash = sha256Hex(canonicalJson({ channel: 'agent', identifier: 'policy', body }));

@@ -29,6 +29,7 @@ import {
   AppWindow,
   KeyRound,
   X,
+  MapPin,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { anonymize } from '@/utils/anonymize';
@@ -492,6 +493,8 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
   const navItems: NavItem[] = [
     { label: t('nav.dashboard'),                  path: '/',           icon: <LayoutDashboard size={18} /> },
     { label: t('nav.devices'),                    path: '/devices',    icon: <Monitor size={18} /> },
+    // Sites (lot P1-SITE): any member reads them (writing needs devices.manage).
+    { label: t('nav.sites', 'Sites'),             path: '/sites',      icon: <MapPin size={18} /> },
     // Policies: any member reads them (writing needs mdm.policies.manage); the Notifications tab of the page
     // stays for administrators.
     { label: t('nav.policies'),                   path: '/policies',   icon: <ScrollText size={18} /> },

@@ -1,19 +1,17 @@
 import type { Knex } from 'knex';
-import { randomBytes } from 'node:crypto';
 import { Router, type Request, type Response } from 'express';
 import rateLimit from 'express-rate-limit';
 import { z } from 'zod';
 import {
-  LEGACY_AGENT_ACTIVATE_SCRIPT, LEGACY_AGENT_ADMIN_OFF_SCRIPT, LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_POLICY_ARTIFACT_KEY,
+  LEGACY_AGENT_CONSOLE_TYPES, LEGACY_AGENT_PACKAGE, LEGACY_AGENT_POLICY_ARTIFACT_KEY,
   LEGACY_AGENT_POLICY_MIN_VERSION_CODE, BENCH_OWNER_MIN_VERSION_CODE,
-  LEGACY_AGENT_NAME_IMPORT_FORMATS, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS, legacyAgentEnrollmentScript,
+  LEGACY_AGENT_NAME_IMPORT_FORMATS, LEGACY_AGENT_NAME_IMPORT_MAX_ROWS, LEGACY_AGENT_NAME_MAX, LEGACY_AGENT_TOKEN_BOUNDS,
   type DeviceCapability, type LegacyAgentNameImportResult, type LegacyAgentNameImportRow, type LegacyAgentCommandView, type LegacyAgentDeviceDetail, type LegacyAgentDeviceView,
-  type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView, type LegacyAgentTokenCreated,
-  type LegacyAgentTokenView, type LegacyAgentRole,
+  type LegacyAgentDeviceAction, type LegacyAgentPackageView, type LegacyAgentReleaseView,
+  type LegacyAgentRole,
 } from '@obligarth/shared';
 import { tenantFrozen as frozenFor } from '../guard/frozen';
 import { audit } from '../audit';
-import { config } from '../config';
 import { db } from '../db';
 import { userActor } from '../db/context';
 import { guard, GuardStepUpError } from '../guard';
@@ -32,11 +30,10 @@ import {
 } from './commands';
 import { looksLikeApk, receiveApk } from './packages';
 import { legacyAgentRemote } from './remoteBridge';
-import { currentServerKey } from './serverKey';
 import { requestDeviceResolution } from '../mdm/policies/triggers';
 import { customFieldsOf } from '../mdm/policies/loader';
 import { policyRouter } from './policyRoutes';
-import { sha256Hex } from './signature';
+import { issueEnrollmentToken, tokenLimiter, TOKEN_COLUMNS, tokenView } from './tokens';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
 const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
@@ -74,7 +71,6 @@ const keyOfUser = (req: Request): string => `u:${req.session?.userId ?? 'anonymo
 const limitedHandler = (_q: Request, res: Response): void => { res.status(429).json({ success: false, error: 'Too many requests', code: 'rateLimited' }); };
 const enqueueLimiter = rateLimit({ windowMs: 60_000, max: 60, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const bulkLimiter = rateLimit({ windowMs: 60_000, max: 5, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
-const tokenLimiter = rateLimit({ windowMs: 60_000, max: 20, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 const exportLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 export const uploadLimiter = rateLimit({ windowMs: 60_000, max: 10, keyGenerator: keyOfUser, standardHeaders: true, legacyHeaders: false, handler: limitedHandler });
 
@@ -728,21 +724,10 @@ router.post('/devices/export', requireTenantCapability('reports'), exportLimiter
 
 const TokenBody = z.object({
   label: z.string().trim().min(1).max(100), groupId: z.number().int().positive().nullable().optional(),
+  siteId: z.string().uuid().nullable().optional(),
   days: z.number().int().min(1).max(LEGACY_AGENT_TOKEN_BOUNDS.daysMax).optional(),
   maxUses: z.number().int().min(1).max(LEGACY_AGENT_TOKEN_BOUNDS.maxUsesMax).optional(),
 }).strict();
-
-function tokenView(r: Record<string, any>): LegacyAgentTokenView {
-  const now = Date.now();
-  const state = r.revoked_at ? 'revoked' : new Date(r.expires_at).getTime() <= now ? 'expired' : Number(r.uses) >= Number(r.max_uses) ? 'used_up' : 'active';
-  return {
-    id: String(r.id), publicId: r.public_id, label: r.label, groupId: r.group_id ?? null, maxUses: Number(r.max_uses), uses: Number(r.uses),
-    expiresAt: iso(r.expires_at) as string, revokedAt: iso(r.revoked_at), createdAt: iso(r.created_at) as string, lastUsedAt: iso(r.last_used_at), state,
-    origin: r.origin === 'bench' ? 'bench' : 'console',
-  };
-}
-
-const TOKEN_COLUMNS = ['id', 'public_id', 'label', 'group_id', 'max_uses', 'uses', 'expires_at', 'revoked_at', 'created_at', 'last_used_at', 'origin'];
 
 // ?origin=console|bench|all (lot BANC §3.1 f): the tokens of the bench stations, single-use, are left out by default.
 router.get('/tokens', requireTenantCapability('mdm.enrollment.manage'), wrap(async (req, res) => {
@@ -753,44 +738,18 @@ router.get('/tokens', requireTenantCapability('mdm.enrollment.manage'), wrap(asy
   res.json({ success: true, data: rows.map(tokenView) });
 }));
 
+// The token, its configuration and its QR code shown once (legacyAgent/tokens.ts). A site (lot P1-QR §3.2): one of the
+// tenant, not archived; its devices are attached to it at their enrollment.
 router.post('/tokens', requireTenantCapability('mdm.enrollment.manage'), tokenLimiter, wrap(async (req, res) => {
   const b = body(TokenBody, req);
   const tenantId = req.tenantId!;
   if (b.groupId && !(await db('device_groups').where({ tenant_id: tenantId, id: b.groupId }).first('id'))) throw new AppError(404, 'Group not found');
-  const key = await currentServerKey();
-  if (!key) throw new AppError(503, 'The instance key of the Android agents is unavailable', 'serverKeyMissing');
-  const publicId = randomBytes(16).toString('base64url');
-  const secret = randomBytes(32).toString('base64url');
-  const token = `OLE1.${publicId}.${secret}`;
-  const days = b.days ?? LEGACY_AGENT_TOKEN_BOUNDS.daysDefault;
-  const now = new Date();
-  const auditCtx = await audit.fromRequest(req, tenantId);
-  const row = await db.transaction(async (trx) => {
-    const [r] = await trx('legacy_agent_enrollment_tokens').insert({
-      tenant_id: tenantId, public_id: publicId, secret_sha256: sha256Hex(Buffer.from(secret, 'utf8')), label: b.label, group_id: b.groupId ?? null,
-      max_uses: b.maxUses ?? LEGACY_AGENT_TOKEN_BOUNDS.maxUsesDefault, expires_at: new Date(now.getTime() + days * 86_400_000), created_by: req.session.userId!,
-      created_at: now,
-    }).returning(TOKEN_COLUMNS) as Array<Record<string, any>>;
-    await audit.appendInTx(trx, {
-      tenantId, action: 'legacy_agent.token_created', target: { type: 'legacy_agent_token', id: String(r.id) },
-      details: { label: b.label, groupId: b.groupId ?? null, days, maxUses: Number(r.max_uses) },
-    }, auditCtx);
-    return r;
-  });
-  // §4.9: the configuration MobiControl deposits (JSON v1, base64url for the extra 'config'), shown once.
-  const conf = { v: 1, server: config.apple.mdmPublicBase ?? '', token, serverKeySha256: key.sha256, knoxLicenseKey: null, hints: { deviceName: null, serial: null, imei: null } };
-  const configJson = JSON.stringify(conf);
-  const encoded = Buffer.from(configJson, 'utf8').toString('base64url');
-  // `_adminmode on` first (lot ADM): the Lockdown of MobiControl keeps the ACTIVATE button from activating the
-  // administrator. The configuration rides on both sendintent lines (legacyAgentEnrollmentScript). The activation
-  // script of a device already enrolled and the return line (`_adminmode off`, sent on its own once the
-  // administrator is active) hold no secret and come along.
-  const out: LegacyAgentTokenCreated = {
-    ...tokenView(row), token, config: encoded, configJson, script: legacyAgentEnrollmentScript(encoded),
-    activateScript: LEGACY_AGENT_ACTIVATE_SCRIPT, adminOffScript: LEGACY_AGENT_ADMIN_OFF_SCRIPT,
-  };
+  const siteId = b.siteId ? b.siteId.toLowerCase() : null;
+  const { token } = await issueEnrollmentToken(req, tenantId, { label: b.label, groupId: b.groupId ?? null, siteId, siteSheet: false, days: b.days, maxUses: b.maxUses },
+    // Loaded on use: the sites' module reaches the router of the console, which mounts this one.
+    siteId ? async (trx) => { await (await import('../sites/service')).usableSiteInTx(trx, tenantId, siteId); } : undefined);
   res.setHeader('Cache-Control', 'no-store');
-  res.status(201).json({ success: true, data: out });
+  res.status(201).json({ success: true, data: token });
 }));
 
 router.post('/tokens/:tokenId/revoke', requireTenantCapability('mdm.enrollment.manage'), wrap(async (req, res) => {

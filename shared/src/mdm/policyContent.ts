@@ -10,6 +10,7 @@ export type JsonValue = string | number | boolean | null | JsonValue[] | { [k: s
 
 import type { AndroidPolicySection } from '../android/policy';
 import type { LegacyAgentPolicySection } from './legacyAgentPolicy';
+import { isSiteVariable } from './sites';
 
 /** policy_versions.content, format 1. */
 export interface PolicyContentV1 {
@@ -69,15 +70,17 @@ export function isPolicyVariable(name: string): name is PolicyVariable {
   return VARIABLE_SET.has(name);
 }
 
-/** A variable of the templates of the bridge agent (lot PONT-POL): the closed list, or a custom field of the device
- *  ({{device.custom.<name>}}). Only the agent's file templates accept it: an Apple or Android section keeps
- *  isPolicyVariable, where {{device.custom.x}} is unknown_variable. */
-export type AgentTemplateVariable = PolicyVariable | `device.custom.${string}`;
+/** A variable of the templates of the bridge agent (lot PONT-POL): the closed list, a custom field of the device
+ *  ({{device.custom.<name>}}: the device's field, else the value of its site, lot P1-SITE), or the site of the device
+ *  ({{site.code}}, {{site.name}}, {{site.city}}, {{site.<key>}}). Only the agent's file templates accept them: an Apple
+ *  or Android section keeps isPolicyVariable, where {{device.custom.x}} is unknown_variable. */
+export type AgentTemplateVariable = PolicyVariable | `device.custom.${string}` | `site.${string}`;
 export const AGENT_CUSTOM_VARIABLE_PREFIX = 'device.custom.';
 const CUSTOM_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 export function isAgentTemplateVariable(name: string): name is AgentTemplateVariable {
   if (isPolicyVariable(name)) return true;
+  if (isSiteVariable(name)) return true;
   return name.startsWith(AGENT_CUSTOM_VARIABLE_PREFIX) && CUSTOM_NAME_RE.test(name.slice(AGENT_CUSTOM_VARIABLE_PREFIX.length));
 }
 
@@ -170,6 +173,8 @@ export const POLICY_VALIDATION_CODES = [
   'path_invalid', 'file_not_found', 'file_kind_mismatch', 'inline_too_large', 'template_too_large', 'ssid_invalid', 'certificate_invalid',
   'pin_invalid', 'tile_invalid', 'too_many_tiles', 'url_invalid', 'intent_invalid', 'too_many_networks', 'too_many_files', 'psk_invalid',
   'wipe_without_password', 'variable_not_allowed', 'shared_policy_resource',
+  // The managed configuration of apps (lot P1-QR §6 ter): the bounds of its instances and of their entries.
+  'too_many_app_configs', 'too_many_entries',
 ] as const;
 export type PolicyValidationCode = typeof POLICY_VALIDATION_CODES[number];
 

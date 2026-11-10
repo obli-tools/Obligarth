@@ -16,6 +16,8 @@ import { PoliciesPage } from '@/pages/PoliciesPage';
 import { AppsPage } from '@/pages/AppsPage';
 import { PolicyEditorPage } from '@/pages/PolicyEditorPage';
 import { EndUsersPage } from '@/pages/EndUsersPage';
+import { SitesPage } from '@/pages/SitesPage';
+import { SiteDetailPage } from '@/pages/SiteDetailPage';
 import { DeviceEnrollmentPage } from '@/pages/DeviceEnrollmentPage';
 import { PrivacyPage } from '@/pages/PrivacyPage';
 import { IntegrationsPage } from '@/pages/IntegrationsPage';
@@ -69,6 +71,9 @@ export default function App() {
  <Route path="/devices" element={<DeviceListPage />} />
  {/* The record of a device: overview, configuration, inventory, commands, history, actions. */}
  <Route path="/devices/:id" element={<DeviceSummaryPage />} />
+ {/* Sites (lot P1-SITE): any member reads them; writing needs devices.manage (checked by the pages and the server). */}
+ <Route path="/sites" element={<SitesPage />} />
+ <Route path="/sites/:id" element={<SiteDetailPage />} />
  {/* Remote assistance (P0-15): a session and its viewer; the journal of the tenant (the server reads the scope:
      audit.read for every session, else the devices the caller may assist). */}
  <Route path="/devices/:id/remote/:sessionId" element={<RemoteSessionPage />} />

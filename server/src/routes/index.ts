@@ -48,6 +48,7 @@ import { createAppleOperationsRouter } from '../apple/reconcile/routes';
 import { createEnrollmentRouter } from '../apple/enrollment';
 import { createAppleAdminIntegrationsRouter, createAppleIntegrationsRouter } from '../apple/integrations';
 import { createMdmRouter } from '../mdm';
+import { createDeviceSiteRouter, createSitesRouter } from '../sites/routes';
 import { createAndroidAdminRouter } from '../android/routes/admin.routes';
 import { createAndroidAppsRouter } from '../android/routes/apps.routes';
 import { createAndroidByodRouter } from '../android/routes/byod.routes';
@@ -114,7 +115,11 @@ tenantRouter.use(requireAuth, requireTenant);
 
 // The device registry of the MDM (modele-donnees-mdm §10.6): devices, inventory, end users, fleet;
 // /devices keeps the two timeline routes of the change events (Oblidesk's contract).
+// The site of one device (lot P1-SITE), before the registry's router.
+tenantRouter.use('/mdm',         createDeviceSiteRouter());
 tenantRouter.use('/mdm',         createMdmRouter());
+// The sites of the tenant (lot P1-SITE §2.3): list, record, import, the sites from the custom fields.
+tenantRouter.use('/sites',       createSitesRouter());
 tenantRouter.use('/devices',     deviceRoutes);
 tenantRouter.use('/software-repo', softwareRepoRoutes);
 tenantRouter.use('/reports',     reportRoutes);

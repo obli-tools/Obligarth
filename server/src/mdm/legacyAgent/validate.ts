@@ -10,10 +10,11 @@ import {
 // =============================================================================
 // Validation of the section legacyAgent of a policy version (lot PONT-POL §4),
 // the bridge agent's: files deposited, Wi-Fi networks, the soft kiosk, the
-// device-administrator and Knox restrictions, the CAs of the system store.
+// device-administrator and Knox restrictions, the CAs of the system store, the
+// managed configuration of apps (agent 1.4.2, lot P1-QR §6 ter).
 // Pure (it mirrors android/validate.ts): unknown keys and wrong types refused,
-// variables only in the text of a file template ({{device.custom.<name>}}
-// admitted there), secret slots as vault references or typed values (moved to
+// variables only in the text of a file template and in the templates of a
+// managed configuration ({{device.custom.<name>}} admitted there), secret slots as vault references or typed values (moved to
 // the vault by the caller), the store files it references returned for the
 // caller to check against the tenant's store (missingFiles), and the
 // wipe-capable keys it sets (a second approver at publication).
@@ -163,6 +164,7 @@ function noVariables(x: Ctx, v: unknown, at: Array<string | number>, depth = 0):
   if (isObj(v)) {
     for (const [k, e] of Object.entries(v)) {
       if (at.length >= 3 && at[0] === 'files' && at[2] === 'source' && k === 'text') continue;
+      if (at.length >= 4 && at[0] === 'appConfigs' && at[2] === 'entries' && k === 'template') continue;
       noVariables(x, e, [...at, k], depth + 1);
     }
   }
@@ -403,6 +405,48 @@ function validateCerts(x: Ctx, c: unknown): void {
   });
 }
 
+/**
+ * The managed configuration of apps (§6 ter): one instance per app (id as the other instances, a package other than the
+ * agent's, configured by one instance only), 1 to 50 entries whose keys follow the agent's rule (unique) and whose
+ * templates are text (4 096 characters at most, the bound of the rendered value; no control character but line breaks
+ * and tabs; known variables only). Strings only in v1: no secret, no store file.
+ */
+function validateAppConfigs(x: Ctx, raw: unknown): void {
+  if (!Array.isArray(raw)) { x.add(['appConfigs'], 'type_mismatch'); return; }
+  if (raw.length > L.appConfigs) { x.add(['appConfigs'], 'too_many_app_configs'); return; }
+  const ids = new Set<string>();
+  const packages = new Set<string>();
+  raw.forEach((a, i) => {
+    const at: Array<string | number> = ['appConfigs', i];
+    if (!isObj(a)) { x.add(at, 'type_mismatch'); return; }
+    x.keys(a, ['id', 'package', 'entries'], at);
+    if (typeof a.id !== 'string' || !L.idRe.test(a.id)) x.add([...at, 'id'], 'invalid_content');
+    else if (ids.has(a.id)) x.add([...at, 'id'], 'duplicate_value');
+    else ids.add(a.id);
+    if (!isAgentPackageName(a.package)) x.add([...at, 'package'], 'package_invalid');
+    else if (isOwnAgentPackage(a.package)) x.add([...at, 'package'], 'package_reserved');
+    else if (packages.has(a.package.toLowerCase())) x.add([...at, 'package'], 'duplicate_value');
+    else packages.add(a.package.toLowerCase());
+    if (!Array.isArray(a.entries)) { x.add([...at, 'entries'], 'required'); return; }
+    if (a.entries.length < 1) { x.add([...at, 'entries'], 'required'); return; }
+    if (a.entries.length > L.appConfigEntries) { x.add([...at, 'entries'], 'too_many_entries'); return; }
+    const keys = new Set<string>();
+    a.entries.forEach((e, j) => {
+      const ea: Array<string | number> = [...at, 'entries', j];
+      if (!isObj(e)) { x.add(ea, 'type_mismatch'); return; }
+      x.keys(e, ['key', 'template'], ea);
+      if (typeof e.key !== 'string' || !L.appConfigKeyRe.test(e.key)) x.add([...ea, 'key'], 'invalid_content');
+      else if (keys.has(e.key)) x.add([...ea, 'key'], 'duplicate_value');
+      else keys.add(e.key);
+      const tpl = e.template;
+      if (typeof tpl !== 'string') { x.add([...ea, 'template'], 'type_mismatch'); return; }
+      if (tpl.length > L.appConfigValueChars) { x.add([...ea, 'template'], 'template_too_large'); return; }
+      if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(tpl)) { x.add([...ea, 'template'], 'invalid_content'); return; }
+      if (variablesInString(tpl, isAgentTemplateVariable).unknown.length) x.add([...ea, 'template'], 'unknown_variable');
+    });
+  });
+}
+
 /** Validates the section legacyAgent (pure). */
 export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidationOptions): LegacyAgentValidation {
   const x = new Ctx();
@@ -411,7 +455,7 @@ export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidatio
     section: x.issues.length ? null : normalise(raw as LegacyAgentPolicySection),
   });
   if (!isObj(raw)) { x.add([], 'invalid_content'); return done([]); }
-  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs', 'confirmBenchLockout'], []);
+  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs', 'appConfigs', 'confirmBenchLockout'], []);
   noVariables(x, raw, []);
   // Lot BANC (D16, §7.3): Knox usbDebugging=false cuts ADB, hence the bench station: never without an explicit
   // confirmation stored with the section. A policy published before keeps being delivered (the publication and the
@@ -425,6 +469,7 @@ export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidatio
   const wipe = raw.dpm !== undefined ? validateDpm(x, raw.dpm, o) : [];
   if (raw.knox !== undefined) validateKnox(x, raw.knox, raw.kiosk);
   if (raw.certs !== undefined) validateCerts(x, raw.certs);
+  if (raw.appConfigs !== undefined) validateAppConfigs(x, raw.appConfigs);
   return done(wipe);
 }
 

@@ -4,6 +4,7 @@ import { AlertTriangle, Eye, Plus, Trash2 } from 'lucide-react';
 import type { AgentFileItem, LegacyAgentDeviceView, LegacyAgentFileView } from '@obligarth/shared';
 import { LEGACY_AGENT_POLICY_LIMITS, isAgentFilePath } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
+import { sitesApi } from '@/api/sites.api';
 import { Button } from '@/components/common/Button';
 import { Modal } from '@/components/common/Modal';
 import { ToggleSwitch } from '@/components/common/ToggleSwitch';
@@ -16,6 +17,8 @@ import { ChipChoice, Field, StorePicker, fieldCls } from './ui';
 // A template is previewed on one device by the server (never logged); the rendered text is shown as plain text.
 
 const BASE_VARIABLES = ['device.name', 'device.serial_number', 'device.model', 'device.uuid', 'tenant.name'];
+/** The site of the device (lot P1-SITE): {{site.<key>}} names a value of the site; {{device.custom.<key>}} falls back on it. */
+const SITE_VARIABLES = ['site.code', 'site.name', 'site.city'];
 
 export function FileDialog({ open, item, taken, files, onUploaded, onClose, onSave }: {
   open: boolean; item: AgentFileItem | null; taken: string[]; files: LegacyAgentFileView[] | null; onUploaded: () => void;
@@ -24,6 +27,7 @@ export function FileDialog({ open, item, taken, files, onUploaded, onClose, onSa
   const { t } = useTranslation();
   const [draft, setDraft] = useState<AgentFileItem>(() => item ?? emptyFile());
   const [customKeys, setCustomKeys] = useState<string[]>([]);
+  const [siteKeys, setSiteKeys] = useState<string[]>([]);
   const [devices, setDevices] = useState<LegacyAgentDeviceView[]>([]);
   const [deviceQuery, setDeviceQuery] = useState('');
   const [preview, setPreview] = useState<{ text: string; missing: string[]; jsonValid: boolean | null } | null>(null);
@@ -32,6 +36,7 @@ export function FileDialog({ open, item, taken, files, onUploaded, onClose, onSa
   useEffect(() => {
     if (!open) return;
     legacyAgentApi.customKeys().then(setCustomKeys).catch(() => setCustomKeys([]));
+    sitesApi.valueKeys().then(setSiteKeys).catch(() => setSiteKeys([]));
     legacyAgentApi.devices({}).then(setDevices).catch(() => setDevices([]));
   }, [open]);
 
@@ -109,7 +114,7 @@ export function FileDialog({ open, item, taken, files, onUploaded, onClose, onSa
                 onChange={(e) => set({ source: { ...(draft.source as { kind: 'template'; encoding: 'text' | 'json' }), kind: 'template', text: e.target.value } })} />
               <div className="flex flex-wrap gap-1.5">
                 <span className="text-[11px] text-text-muted">{t('legacyAgentPolicy.files.variables') || 'Insert:'}</span>
-                {[...BASE_VARIABLES, ...customKeys.map((k) => `device.custom.${k}`)].map((v) => (
+                {[...BASE_VARIABLES, ...customKeys.map((k) => `device.custom.${k}`), ...SITE_VARIABLES, ...siteKeys.map((k) => `site.${k}`)].map((v) => (
                   <button key={v} type="button" onClick={() => insertVariable(v)} className="rounded-full bg-bg-tertiary px-2 py-0.5 font-mono text-[11px] text-text-muted hover:text-text-primary">{v}</button>
                 ))}
               </div>

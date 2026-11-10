@@ -56,7 +56,7 @@ const slice = <T>(list: T[], o: number, l: number) => page(list.slice(o, o + l),
 // ── Device identifiers (decision D10: scope devices.identifiers, tenant need devices.manage) ──
 
 /** The key carries devices.identifiers and the human holds devices.manage in T: identifiers may be returned. */
-async function identifiersAllowed(caller: McpCaller, tenantId: number): Promise<boolean> {
+export async function identifiersAllowed(caller: McpCaller, tenantId: number): Promise<boolean> {
   return caller.key.scopes.includes('devices.identifiers') && (await holdsTenantCapability(caller, tenantId, 'devices.manage'));
 }
 

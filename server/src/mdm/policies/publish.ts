@@ -235,7 +235,38 @@ async function holdsTenantBoundAgentSection(q: Knex | Knex.Transaction, policyTe
 }
 
 /** POST /api/mdm/policies/:id/versions/:v/submit (section 7.12). */
-export async function submitVersion(req: Request, tenantId: number, policyId: number, version: number): Promise<RouteOutcome> {
+/** The look a submission takes first, without effect (the dry run of the MCP tool submit_policy_version): the issues of
+ *  the content, its preview, the digest of what it sets, the hash of the content and the level it needs. */
+export async function previewSubmission(tenantId: number, policyId: number, versionId: number, visibleDeviceIds: number[] | 'all'):
+  Promise<{ issues: PolicyValidationIssue[]; impact: PolicyImpact; digest: string; contentSha256: string; level: 'none' | 'sensitive' | 'restricted' }> {
+  const check = await checkVersion(db, tenantId, policyId, versionId, { visibleDeviceIds });
+  return { issues: check.issues, impact: check.impact, digest: check.digest, contentSha256: check.contentSha256, level: await requiredLevel(tenantId, check.impact) };
+}
+
+/** The look a batch of assignment changes takes first (the dry run of the MCP tool change_policy_assignments): its
+ *  normalised changes and the policies they name (what the summary of its authorization tells the human), its preview. */
+export async function previewAssignments(tenantId: number, changes: AssignmentChange[], r: Requester, visibleDeviceIds: number[] | 'all'):
+  Promise<{ impact: PolicyImpact; digest: string; level: 'none' | 'sensitive' | 'restricted'; deltas: AssignmentDelta[]; base: PolicyBase[] }> {
+  const deltas = await normalizeChanges(db, tenantId, changes, r);
+  const result = await computeImpact(db, tenantId, { kind: 'assignments', changes: deltas }, { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds });
+  return { impact: result.impact, digest: result.digest, level: await requiredLevel(tenantId, result.impact), deltas, base: await policyBaseOf(db, deltas) };
+}
+
+/**
+ * What an approved MCP authorization (lot P1-MCP-POL, mcp/tools/policies.ts) binds a submission or a batch to: the
+ * content and the digest of the impact the human was shown (compared again under the lock: impactChanged or
+ * policyVersionChanged otherwise, nothing written), the prefix of the description of an approval it files (who asked),
+ * and a step in the transaction of a direct write (the authorization closed with the change, exactly once).
+ */
+export interface GuardedWriteOptions {
+  expectContentSha?: string;
+  expectDigest?: string;
+  descriptionPrefix?: string;
+  inTx?: (trx: Knex.Transaction) => Promise<void>;
+}
+
+export async function submitVersion(req: Request, tenantId: number, policyId: number, version: number,
+  o: GuardedWriteOptions = {}): Promise<RouteOutcome> {
   await policyService.policyRow(db, tenantId, policyId);
   await settleOrphanedPending(db, tenantId, policyId);
   const row = await policyService.versionRow(db, tenantId, policyId, version);
@@ -270,12 +301,14 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
     const check = await checkVersion(trx, tenantId, policyId, versionId, { visibleDeviceIds: visible });
     if (check.issues.length) validationFailed(check.issues);
     const { impact } = check;
+    if (o.expectContentSha !== undefined && check.contentSha256 !== o.expectContentSha) versionChanged();
+    if (o.expectDigest !== undefined && check.digest !== o.expectDigest) impactChanged();
     if (impact.conflicts.length) conflictRefusal(impact.conflicts);
     const level = await requiredLevel(tenantId, impact);
     if (level === 'restricted') {
       const approval = await approvalService.createInTx(trx, {
         tenantId, userId: Number(userId), requestType: POLICY_PUBLISH_REQUEST_TYPE,
-        description: `Publish version ${version} of the policy ${quoted(policy.name)} — ${impact.devicesTouched} device(s) touched, `
+        description: `${o.descriptionPrefix ?? ''}Publish version ${version} of the policy ${quoted(policy.name)} — ${impact.devicesTouched} device(s) touched, `
           + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`,
         payload: { kind: 'version', policyId, versionId, version, impact: approvalImpact(check) },
         auditCtx: ctx,
@@ -288,6 +321,7 @@ export async function submitVersion(req: Request, tenantId: number, policyId: nu
     if (level === 'sensitive' && !proven) impactChanged();
     await publishVersionInTx(trx, tenantId, policyId, versionId, ctx, { from: 'draft', impact, userId, expectedSha: check.contentSha256 });
     await recordDirectChange(trx, tenantId, 'version', { deviceIds: check.touched.map((t) => t.deviceId), removalDeviceIds: check.removalDeviceIds });
+    if (o.inTx) await o.inTx(trx);
     return { impact, approval: null };
   });
   const { impact, approval } = done;
@@ -587,7 +621,8 @@ export async function applyChangesInTx(trx: Knex.Transaction, tenantId: number, 
 }
 
 /** POST /api/mdm/assignments/changes (?dryRun=true for the preview). */
-export async function changeAssignments(req: Request, tenantId: number, rawBody: unknown, dryRun: boolean): Promise<RouteOutcome> {
+export async function changeAssignments(req: Request, tenantId: number, rawBody: unknown, dryRun: boolean,
+  o: GuardedWriteOptions = {}): Promise<RouteOutcome> {
   const parsed = ChangesBody.safeParse(rawBody ?? {});
   if (!parsed.success) throw new AppError(400, parsed.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
   const requester: Requester = { userId: req.session.userId!, isPlatformAdmin: req.session.role === 'admin' };
@@ -623,6 +658,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
   const done = await withConfigurationLock(tenantId, async (trx) => {
     const now = await look(trx);
     const { impact, deltas } = now;
+    if (o.expectDigest !== undefined && now.digest !== o.expectDigest) impactChanged();
     if (impact.conflicts.length) conflictRefusal(impact.conflicts);
     const level = await requiredLevel(tenantId, impact);
     if (level === 'restricted') {
@@ -630,7 +666,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
       const base = await policyBaseOf(trx, deltas);
       const approval = await approvalService.createInTx(trx, {
         tenantId, userId: requester.userId, requestType: POLICY_PUBLISH_REQUEST_TYPE,
-        description: `Change ${changes.length} assignment(s) of ${describePolicies(base)} — ${impact.devicesTouched} device(s) touched, `
+        description: `${o.descriptionPrefix ?? ''}Change ${changes.length} assignment(s) of ${describePolicies(base)} — ${impact.devicesTouched} device(s) touched, `
           + `${impact.artifacts.removals} removal(s) (${impact.approval.reasons.join(', ')}); keys: ${describeKeys(impact)}`,
         payload: {
           kind: 'assignments', changes, impact: approvalImpact(now),
@@ -643,6 +679,7 @@ export async function changeAssignments(req: Request, tenantId: number, rawBody:
     if (level === 'sensitive' && !proven) impactChanged();
     await applyChangesInTx(trx, tenantId, deltas, ctx, { userId: requester.userId, impact });
     await recordDirectChange(trx, tenantId, 'assignments', { deviceIds: now.touched.map((t) => t.deviceId), removalDeviceIds: now.removalDeviceIds });
+    if (o.inTx) await o.inTx(trx);
     return { impact, change: now.change, approval: null, deltas };
   });
   const { impact } = done;

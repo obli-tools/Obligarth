@@ -493,3 +493,14 @@
   z-index: 1;
   background-color: var(--table-sticky-bg, rgb(var(--c-bg-secondary)));
 }
+
+/* The enrollment sheet of a site (lot P1-QR §3.2, SiteSheetDialog): while it is shown, printing hides the console and
+   prints only the A4 sheet mounted beside it. Hidden on screen. */
+.obg-print-root { display: none; }
+@media print {
+  @page { size: A4 portrait; margin: 15mm; }
+  body.obg-print-sheet > :not(.obg-print-root) { display: none !important; }
+  body.obg-print-sheet { background: #fff !important; }
+  body.obg-print-sheet > .obg-print-root { display: block; color: #000; }
+  .obg-print-root .obg-sheet-page { min-height: 260mm; }
+}

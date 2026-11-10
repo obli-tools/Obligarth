@@ -47,7 +47,8 @@
     "policies": "Policies",
     "supervision": "Supervision",
     "pinSidebar": "Pin sidebar",
-    "floatSidebar": "Float sidebar"
+    "floatSidebar": "Float sidebar",
+    "sites": "Sites"
   },
   "login": {
     "title": "Войдите в свой аккаунт",
@@ -320,6 +321,9 @@
       "approved": "{{count}} devices approved",
       "deleted": "{{count}} devices deleted",
       "confirmDelete": "Delete selected devices? This cannot be undone."
+    },
+    "columns": {
+      "site": "Site"
     }
   },
   "settings": {
@@ -630,7 +634,8 @@
     "status": "Статус",
     "lastSeen": "Последний раз виден",
     "os": "ОС",
-    "group": "Группа"
+    "group": "Группа",
+    "site": "Site"
   },
   "fanOut": {
     "label": "Поделиться с (только чтение в целевых тенантах)",
@@ -644,5 +649,300 @@
   },
   "groupPicker": {
     "noGroup": "Без группы"
+  },
+  "accessKeys": {
+    "scopes": {
+      "sites_write": "Create, import and archive sites, attach devices to them (applied batches approved by you)",
+      "policies_read": "Чтение политик, их версий, назначений и файлов, а также того, что получило устройство",
+      "policies_write": "Запись черновиков политик и загрузка файлов политик (ничего не доходит до устройства)",
+      "policies_publish": "Отправка версий политик и изменение их назначений (всегда с вашего одобрения)"
+    }
+  },
+  "audit": {
+    "actions": {
+      "site_created": "Site created",
+      "site_updated": "Site changed",
+      "site_archived": "Site archived",
+      "site_restored": "Site restored",
+      "site_imported": "Sites imported",
+      "device_site_changed": "Site of a device changed"
+    }
+  },
+  "errors": {
+    "siteNotFound": "Site not found.",
+    "siteCodeTaken": "A site of this tenant already has this code.",
+    "siteArchived": "This site is archived.",
+    "siteNotEmpty": "Detach the phones of the site before archiving it.",
+    "invalidSite": "The site is invalid.",
+    "importRefused": "The file cannot be imported.",
+    "importTooLarge": "At most 5,000 lines per import.",
+    "planChanged": "The sites or the phones changed since the batch was asked: nothing was applied. Ask again.",
+    "policyChanged": "Политика или последствия изменения изменились с момента запроса: ничего не опубликовано. Повторите запрос.",
+    "secretValueRefused": "Ключ доступа никогда не записывает секретное значение: укажите ссылку на секрет из хранилища или введите его в консоли.",
+    "tooManySites": "Too many sites in this tenant.",
+    "perimeterTooNarrow": "Only a key that reaches every group and device of the tenant may write its sites.",
+    "batchGone": "This batch no longer exists or was applied already.",
+    "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
+    "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+  },
+  "sites": {
+    "title": "Sites",
+    "subtitle": "Where the phones are, and the values of each site their files are made with.",
+    "kpi": {
+      "ready": "Phones ready",
+      "todo": "Phones to look after",
+      "stale": "Phones not answering",
+      "file": "Sites without the file of the apps"
+    },
+    "searchPlaceholder": "Code, name, city…",
+    "showArchived": "Archived sites",
+    "new": "New site",
+    "empty": "No site yet.",
+    "noneMatch": "No site matches.",
+    "columns": {
+      "site": "Site",
+      "city": "City",
+      "group": "Group",
+      "phones": "Phones",
+      "code": "Code"
+    },
+    "archived": "Archived",
+    "none": "No site",
+    "field": "Site",
+    "change": "Change",
+    "choose": "Choose a site",
+    "state": {
+      "ready": "Ready",
+      "todo": "To do",
+      "stale": "Not answering"
+    },
+    "reason": {
+      "no_contact": "The phone has not contacted the server for more than 24 hours: check that it is switched on and connected to the Wi-Fi.",
+      "agent_too_old": "The Obligarth agent of the phone is too old: update it.",
+      "admin_inactive": "The management of the phone is not active: open Agent Obligarth on the phone and tap \"Activate\".",
+      "low_storage": "The phone has less than 0.5 GB of free storage: delete photos or unused apps.",
+      "file_not_created": "The file of the store apps is not created: a value of the site or of the phone is missing.",
+      "file_not_created_vars": "The file of the store apps is not created: fill in {{vars}} on the site or the phone.",
+      "appconfig_unresolved": "The configuration of a store app is not sent: a value of the site or of the phone is missing.",
+      "appconfig_unresolved_vars": "The configuration of a store app is not sent: fill in {{vars}} on the site or the phone."
+    },
+    "fileNotCreated": "File of the apps not created ({{count}})",
+    "fileNotCreatedHint": "A variable of a file template has no value for these phones: the file is not deposited.",
+    "picker": {
+      "title": "Choose the site"
+    },
+    "attached": "{{count}} phone(s) changed site",
+    "back": "Back to the sites",
+    "archive": "Archive",
+    "restore": "Restore",
+    "restored": "Site restored",
+    "archivedToast": "Site archived",
+    "archiveConfirm": "Archive the site {{name}}? It keeps its values; an archived site takes no phone, and its enrollment sheets stop working.",
+    "detach": "Detach from the site",
+    "detachConfirm": "Detach {{name}} from the site? Its files stop reading the values of the site.",
+    "noGroup": "No group",
+    "enroll": "Enroll a phone",
+    "addExisting": "Add existing phones",
+    "addExistingTitle": "Add phones to {{name}}",
+    "addCount": "Add ({{count}})",
+    "addExistingHint": "Their files are made again with the values of the site. A phone already on another site moves to this one.",
+    "noValues": "No value. The file templates read them as site.<key>.",
+    "phones": "Phones ({{count}})",
+    "noPhones": "No phone on this site yet.",
+    "fileInGroup": "File {{count}} phone(s) in the group of the site",
+    "agentVersion": "Agent {{version}}",
+    "freeStorage": "{{size}} free",
+    "outsideGroup": "Not in the group of the site",
+    "edit": {
+      "title": "Edit the site",
+      "newTitle": "New site"
+    },
+    "fields": {
+      "code": "Code",
+      "name": "Name",
+      "namePlaceholder": "Store Exemple-Nord",
+      "city": "City",
+      "contact": "Contact",
+      "group": "Group of its phones (optional)",
+      "groupHint": "A phone attached to the site is then offered a move into this group (with its usual confirmation).",
+      "noGroup": "No group",
+      "values": "Values of the site",
+      "valuesHint": "Read by the file templates: site.<key>, and device.custom.<key> when the phone has no value of its own.",
+      "addValue": "Add a value"
+    },
+    "import": {
+      "open": "Import a CSV",
+      "title": "Import sites from a CSV file",
+      "choose": "Choose a file",
+      "tooLarge": "The file is larger than 2 MiB.",
+      "hint": "A header line, separator \";\" or \",\". Columns code (or codeMag) and name (or nameMag); city and contact optional; every other column becomes a value of the site. An empty cell keeps the value of the site. Nothing is written before you apply.",
+      "apply": "Apply ({{count}})",
+      "applied": "{{created}} site(s) created, {{updated}} updated",
+      "created": "{{count}} to create",
+      "updated": "{{count}} to update",
+      "unchanged": "{{count}} unchanged",
+      "errors": "{{count}} refused",
+      "columns": "Code: {{code}} · Name: {{name}} · Values: {{values}}",
+      "line": "Line {{line}}",
+      "nothing": "Nothing to change.",
+      "action": {
+        "create": "Create",
+        "update": "Update",
+        "unchanged": "Unchanged",
+        "error": "Refused"
+      }
+    },
+    "importRefused": {
+      "header_missing": "The file has no header line.",
+      "code_column_missing": "The file has no column code (or codeMag).",
+      "name_column_missing": "The file has no column name (or nameMag).",
+      "duplicate_column": "A column appears twice in the header.",
+      "column_invalid": "A column cannot be a value of a site (a letter, then letters, digits or _)."
+    },
+    "issue": {
+      "code_missing": "The code is missing",
+      "code_invalid": "The code is invalid (32 characters at most, no control character)",
+      "name_missing": "The name is missing",
+      "name_invalid": "The name is invalid (200 characters at most)",
+      "city_invalid": "The city is invalid (100 characters at most)",
+      "contact_invalid": "The contact is invalid (200 characters at most)",
+      "value_key_invalid": "A key: a letter, then letters, digits or _ (64 at most); code, name, city and contact are reserved.",
+      "value_key_reserved": "code, name, city and contact are reserved: they are fields of the site",
+      "value_invalid": "A value is invalid (500 characters at most, no line break)",
+      "too_many_values": "More than 50 values",
+      "duplicate_code": "This code appears several times in the file",
+      "columns_mismatch": "The line does not have as many columns as the header",
+      "site_archived": "This site is archived",
+      "group_not_found": "Group not found",
+      "too_many_sites": "Too many sites in this tenant",
+      "values_too_large": "The values of the site exceed 64 KB"
+    },
+    "fromDevices": {
+      "open": "From the phones' fields",
+      "title": "Create the sites from the phones' fields",
+      "hint": "One site per value of the code field of the phones, named after their name field; the phones are attached to it. An existing site keeps its name and values. No phone changes group.",
+      "codeKey": "Code field",
+      "nameKey": "Name field",
+      "valuesKeys": "Other fields to copy (comma-separated)",
+      "preview": "Preview",
+      "apply": "Apply",
+      "applied": "{{sites}} site(s), {{devices}} phone(s) attached",
+      "sitesCount": "{{count}} site(s) to create",
+      "attachCount": "{{count}} phone(s) to attach",
+      "already": "{{count}} already attached",
+      "withoutField": "{{count}} phone(s) without the field",
+      "conflicts": "{{count}} conflict(s)",
+      "conflictsHint": "Several names for one code (the most frequent is kept):",
+      "withoutFieldHint": "Left as they are (no code field):"
+    },
+    "filter": {
+      "hint": "The devices of a site",
+      "label": "Site",
+      "title": "Site",
+      "none": "No site",
+      "one": "One site"
+    },
+    "pendingApproval": "Sent for approval: a second person must approve it ({{count}} phone(s) whose files change).",
+    "planChangedPreview": "The sites changed since the preview: the new preview is shown, check it and apply again.",
+    "impact": "{{count}} phone(s) whose files change",
+    "sortPhones": {
+      "label": "Name",
+      "state": "State",
+      "contact": "Last contact"
+    },
+    "sheet": {
+      "defaultLabel": "Sheet {{code}}",
+      "title": "Enroll a phone at {{name}}",
+      "intro": "A printable sheet with a QR code: the phones that scan it are enrolled, attached to the site and filed in its group.",
+      "label": "Label",
+      "days": "Validity (days)",
+      "maxUses": "Phones (quota)",
+      "replaceWarning": "The previous sheet of the site stops working as soon as this one is created.",
+      "create": "Create the sheet",
+      "replaced_one": "The previous sheet of the site no longer works.",
+      "replaced_other": "The {{count}} previous sheets of the site no longer work.",
+      "readyTitle": "Sheet created: print it now",
+      "onceWarning": "The QR code is shown only once: print the sheet before closing this window. Keep it out of public reach: it enrolls phones into your fleet.",
+      "print": "Print",
+      "heading": "Phone enrollment sheet",
+      "qrAlt": "Enrollment QR code",
+      "apkQrAlt": "QR code of the agent download link",
+      "validUntil_one": "Valid until {{date}}, for {{count}} phone.",
+      "validUntil_other": "Valid until {{date}}, for {{count}} phones.",
+      "step1": "Install Obligarth Agent: on the phone, open Chrome at {{url}} (or scan the small QR code), then install the downloaded file.",
+      "step1NoUrl": "Install Obligarth Agent on the phone (ask your IT department for the link).",
+      "step2": "Open the Obligarth Agent app.",
+      "step3": "Tap \"Scan the enrollment QR code\" and point the camera at the QR code of this sheet.",
+      "step4": "Tap \"Activate\" to allow the management of the phone.",
+      "footer": "Keep this sheet out of public reach: it enrolls phones into the fleet of your company. A new sheet for the site replaces it."
+    },
+    "screen": {
+      "button": "QR code on screen",
+      "defaultLabel": "Screen {{code}}",
+      "title": "QR code on screen for {{name}}",
+      "create": "Show the QR code",
+      "intro": "The enrollment QR code shown on this screen, to scan with the phone: nothing to print. The phones that scan it are enrolled, attached to the site and filed in its group. The printed sheet of the site keeps working.",
+      "readyTitle": "Scan this QR code with the phone",
+      "full": "Full screen",
+      "exitFull": "Leave full screen",
+      "onceWarning": "The QR code is shown only once: once this window is closed, create a new one. Do not show it to anyone outside the company: it enrolls phones into your fleet.",
+      "step": "Tap \"Scan the enrollment QR code\" and point the camera at this screen.",
+      "validUntil_one": "Valid until {{date}}, for {{count}} phone.",
+      "validUntil_other": "Valid until {{date}}, for {{count}} phones."
+    }
+  },
+  "legacyAgent": {
+    "tokens": {
+      "site": "Site",
+      "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
+      "qr": "Enrollment QR code",
+      "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
+    }
+  },
+  "legacyAgentPolicy": {
+    "tabs": {
+      "appConfigs": "App configuration"
+    },
+    "keys": {
+      "appconfig": "App configuration"
+    },
+    "codes": {
+      "appconfig_applied": "Configuration of the app set",
+      "appconfig_not_owner": "Needs the agent as device owner",
+      "appconfig_failed": "Configuration of the app failed",
+      "package_conflict": "App already configured by another policy",
+      "appconfig_too_large": "App configuration too large for this device"
+    },
+    "appConfig": {
+      "intro": "Values handed to apps as their managed configuration (the app reads them through RestrictionsManager).",
+      "ownerOnly": "Device owner, agent 1.4.2",
+      "add": "Configure an app",
+      "edit": "Edit the configuration of an app",
+      "none": "No app configured.",
+      "entryCount_one": "{{count}} value",
+      "entryCount_other": "{{count}} values",
+      "package": "Package of the app",
+      "packageInvalid": "A package name (com.example.app), not the agent's, configured once.",
+      "entries": "Values (key and template, text only)",
+      "key": "Key",
+      "template": "Template",
+      "keyInvalid": "Invalid or repeated key",
+      "keyHint": "A key starts with a letter: letters, digits, _ and . (64 at most).",
+      "addEntry": "Add a value",
+      "insertInto": "Insert into {{key}}:",
+      "missing": "Without a value on this device (the configuration is not sent to it):"
+    }
+  },
+  "mdm": {
+    "unavailable": {
+      "agent_too_old": "Needs a newer version of the agent"
+    },
+    "validation": {
+      "too_many_app_configs": "Too many app configurations (64 at most)",
+      "too_many_entries": "Too many entries (50 at most)",
+      "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
+      "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
   }
 }

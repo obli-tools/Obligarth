@@ -19,6 +19,8 @@ import { registerDeviceTools } from '../mcp/tools/devices';
 import { registerReadTools } from '../mcp/tools/reads';
 import { registerWhoamiTools } from '../mcp/tools/whoami';
 import { registerWriteTools } from '../mcp/tools/writes';
+import { registerSiteTools } from '../mcp/tools/sites';
+import { registerPolicyTools } from '../mcp/tools/policies';
 
 // =============================================================================
 // MCP SERVER (AI agents through personal access keys; docs: specs mcp-server):
@@ -60,6 +62,8 @@ export function registerMcpModule(): void {
   registerDeviceTools();
   registerReadTools();
   registerWriteTools();
+  registerSiteTools();
+  registerPolicyTools();
   registerAuthorizationTools();
 
   // Revoking a key cancels its pending authorizations and its filed approvals (journaled with who caused it).

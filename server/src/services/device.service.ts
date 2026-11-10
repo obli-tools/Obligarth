@@ -68,6 +68,7 @@ const SUMMARY_COLUMNS = [
   'devices.model', 'devices.model_name', 'devices.serial_number', 'devices.end_user_id', 'devices.tags',
   'devices.enrolled_at', 'devices.warranty_expiry', 'device_groups.name as group_name', 'tenants.name as tenant_name',
   'end_users.display_name as end_user_display_name', 'end_users.email as end_user_email',
+  'devices.site_id', 'sites.code as site_code', 'sites.name as site_name',
 ];
 
 /** Columns of the record of one device, on top of the summary's. */
@@ -120,6 +121,7 @@ const SORT_COLUMNS: Record<string, string> = {
   ownership: 'devices.ownership',
   model: 'devices.model_name',
   warranty: 'devices.warranty_expiry',
+  site: 'sites.code',
 };
 
 /** A cache of the privacy rules of a request: one resolution per (tenant, ownership, type). */
@@ -166,6 +168,7 @@ class DeviceService {
       tags: asArray<string>(row.tags).map(String),
       enrolledAt: iso(row.enrolled_at),
       warrantyExpiry: dateOnly(row.warranty_expiry),
+      site: row.site_id ? { id: String(row.site_id), code: String(row.site_code ?? ''), name: String(row.site_name ?? '') } : null,
     };
     if (row.tenant_name) summary.tenantName = row.tenant_name;
     // Absent, never null, when the rules of the device's ownership do not collect it (EX-19).
@@ -184,6 +187,10 @@ class DeviceService {
       .leftJoin('tenants', 'tenants.id', 'devices.tenant_id')
       .leftJoin('end_users', function joinEndUser() {
         this.on('end_users.id', '=', 'devices.end_user_id').andOn('end_users.tenant_id', '=', 'devices.tenant_id');
+      })
+      // The site of the device (lot P1-SITE): its column and filter in the list, the field of the record.
+      .leftJoin('sites', function joinSite() {
+        this.on('sites.id', '=', 'devices.site_id').andOn('sites.tenant_id', '=', 'devices.tenant_id');
       });
   }
 

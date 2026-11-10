@@ -213,6 +213,16 @@ export function customFieldsOf(v: unknown): Record<string, string> {
   return out;
 }
 
+/** The site of a device row as the templates read it (lot P1-SITE): its code, name, city, and its values as text (the
+ *  rules of customFieldsOf). */
+export function siteOf(r: { site_code?: unknown; site_name?: unknown; site_city?: unknown; site_values?: unknown }):
+  NonNullable<ResolutionDevice['site']> {
+  return {
+    code: String(r.site_code ?? ''), name: String(r.site_name ?? ''), city: typeof r.site_city === 'string' ? r.site_city : null,
+    values: customFieldsOf(r.site_values),
+  };
+}
+
 /** The devices under management of a tenant (all, or `deviceIds`), with the facts of their resolution, the dynamic
  *  groups they are members of (whatever the state of the group: the members of a held group or of one in error are
  *  frozen, they stay what applies), and the ancestry of their groups. */
@@ -221,13 +231,15 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
     .leftJoin('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .leftJoin('end_users as u', function joinUser() { this.on('u.id', '=', 'd.end_user_id').andOn('u.tenant_id', '=', 'd.tenant_id'); })
     .leftJoin('legacy_agent_devices as la', function joinAgent() { this.on('la.device_id', '=', 'd.id').andOn('la.tenant_id', '=', 'd.tenant_id'); })
+    .leftJoin('sites as st', function joinSite() { this.on('st.id', '=', 'd.site_id').andOn('st.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId)
     .whereNot('d.enrollment_state', 'unenrolled')
     .orderBy('d.id')
     .select('d.id', 'd.uuid', 'd.label', 'd.group_id', 'd.platform', 'd.management_channel', 'd.os_version', 'd.management_mode', 'd.supervised',
       'd.ownership', 'd.serial_number', 'd.model_name', 'a.udid', 'a.ddm_enabled', 'a.ddm_client_capabilities',
       'u.id as end_user_id', 'u.email', 'u.display_name as end_user_name', 'u.managed_apple_account', 'u.external_id',
-      'd.custom_fields', 'la.revoked_at as agent_revoked_at',
+      'd.custom_fields', 'la.revoked_at as agent_revoked_at', 'la.agent_version_code',
+      'st.id as site_id', 'st.code as site_code', 'st.name as site_name', 'st.city as site_city', 'st.values as site_values',
       q.raw(`(SELECT array_agg(m.smart_group_id ORDER BY m.smart_group_id) FROM smart_group_members m
                WHERE m.tenant_id = d.tenant_id AND m.device_id = d.id) AS smart_group_ids`));
   if (deviceIds) query.whereIn('d.id', deviceIds);
@@ -255,6 +267,8 @@ export async function loadDevices(q: Knex | Knex.Transaction, tenantId: number, 
     smartGroupIds: Array.isArray(r.smart_group_ids) ? r.smart_group_ids.map(Number) : [],
     customFields: customFieldsOf(r.custom_fields),
     revoked: r.agent_revoked_at !== null && r.agent_revoked_at !== undefined,
+    agentVersionCode: r.agent_version_code === null || r.agent_version_code === undefined ? null : Number(r.agent_version_code),
+    site: r.site_id ? siteOf(r) : null,
   }));
   const groupIds = [...new Set(devices.map((d) => d.groupId).filter((g): g is number => g !== null))];
   const groupAncestors = await loadGroupAncestors(q, tenantId, groupIds);

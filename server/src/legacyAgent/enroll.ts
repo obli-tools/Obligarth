@@ -15,6 +15,7 @@ import { instanceSettings } from './config';
 import { EnrollBody } from './schemas';
 import { checkBenchEnrollment, linkBenchEnrollment, type BenchEnrollmentLink } from '../bench/enrollment';
 import { currentServerKey } from './serverKey';
+import { enrollmentPlacement, enrollmentSiteInTx } from './tokens';
 import { fromB64url, p256PublicKey, sha256Hex } from './signature';
 import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } from './surface';
 
@@ -38,6 +39,8 @@ import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } fro
 //     before its use is consumed (its provisioning, hints.provisioningId, the
 //     pairs of serial numbers: bench/enrollment.ts), the provisioning enrolled
 //     in this transaction.
+//   - lot P1-QR §3.2: the device attached to the site of its token (an archived site: none), and filed in the group
+//     of the token, else in the group of that site (a new record: no move to guard), under the sites lock.
 // =============================================================================
 
 const SERIAL_JUNK = new Set(['', 'unknown', '0', 'null', 'none', '0123456789abcdef', '0123456789ABCDEF']);
@@ -128,7 +131,11 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       if (!tok.usable) return tokenInvalid();
       // A token of a bench station: its provisioning and the identity of the device, BEFORE the use is consumed.
       const origin = await trx('legacy_agent_enrollment_tokens').where({ tenant_id: tenantId, id: tok.token_id })
-        .first('origin', 'bench_provisioning_id', 'created_by') as { origin: string; bench_provisioning_id: string | null; created_by: number } | undefined;
+        .first('origin', 'bench_provisioning_id', 'created_by', 'site_id') as
+        { origin: string; bench_provisioning_id: string | null; created_by: number; site_id: string | null } | undefined;
+      // Lot P1-QR §3.2: the site of the token read under the sites lock, BEFORE its use is consumed (the order of an
+      // archive, which revokes the tokens of its site): an archive runs wholly before or after this enrollment.
+      const site = await enrollmentSiteInTx(trx, tenantId, origin?.site_id ? String(origin.site_id) : null);
       let bench: BenchEnrollmentLink | null = null;
       if (origin?.origin === 'bench') {
         const checked = await checkBenchEnrollment(trx, tenantId, { id: tok.token_id, bench_provisioning_id: origin.bench_provisioning_id, created_by: Number(origin.created_by) },
@@ -138,9 +145,13 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       }
       const used = await trx('legacy_agent_enrollment_tokens')
         .where({ tenant_id: tenantId, id: tok.token_id }).where('uses', '<', trx.raw('max_uses')).whereNull('revoked_at').where('expires_at', '>', trx.fn.now())
-        .update({ uses: trx.raw('uses + 1'), last_used_at: trx.fn.now() }).returning(['id', 'group_id']) as Array<{ id: string; group_id: number | null }>;
+        .update({ uses: trx.raw('uses + 1'), last_used_at: trx.fn.now() }).returning(['id', 'group_id', 'site_id']) as
+        Array<{ id: string; group_id: number | null; site_id: string | null }>;
       if (used.length === 0) return tokenInvalid();
-      let groupId = used[0].group_id === null ? null : Number(used[0].group_id);
+      // Lot P1-QR §3.2: the site of the token (not an archived one), then the group of the token, else the site's.
+      const place = enrollmentPlacement(
+        { groupId: used[0].group_id === null ? null : Number(used[0].group_id), siteId: used[0].site_id ? String(used[0].site_id) : null }, site);
+      let groupId = place.groupId;
       if (groupId !== null && !(await trx('device_groups').where({ tenant_id: tenantId, id: groupId }).first('id'))) groupId = null;
 
       const d = b.device;
@@ -170,7 +181,7 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       const manufacturer = clean(d.manufacturer, 64);
       const model = clean(d.model, 64);
       const [dev] = await trx('devices').insert({
-        tenant_id: tenantId, group_id: groupId, platform: 'android', management_channel: 'legacy_agent', ownership: 'corporate',
+        tenant_id: tenantId, group_id: groupId, site_id: place.siteId, platform: 'android', management_channel: 'legacy_agent', ownership: 'corporate',
         enrollment_type: 'agent_token', management_mode: owner ? 'device_owner' : 'device_admin', supervised: false, usage: 'standard',
         enrollment_state: 'enrolled', enrollment_state_at: now, enrolled_at: now, last_checkin_at: now,
         serial_number: conflict ? null : serial, model, model_name: [manufacturer, model].filter(Boolean).join(' ').slice(0, 128) || null,
@@ -199,7 +210,7 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       await audit.appendInTx(trx, {
         tenantId, action: 'legacy_agent.device_enrolled', target: { type: 'device', id: String(deviceId), device: deviceId },
         details: { tokenId: tok.token_id, agentVersionCode: b.agent.versionCode, keyStorage: b.keyStorage, adminActive: b.capabilities.adminActive,
-          knoxState: b.capabilities.knox.state, identityConflict: conflict, deviceOwner: owner,
+          knoxState: b.capabilities.knox.state, identityConflict: conflict, deviceOwner: owner, ...(place.siteId ? { siteId: place.siteId } : {}),
           ...(bench ? { benchProvisioningId: bench.provisioningId, stationId: bench.stationId, identityState: bench.identityState } : {}) },
       }, ctx, { onFailure: 'spool' });
       if (conflict) {

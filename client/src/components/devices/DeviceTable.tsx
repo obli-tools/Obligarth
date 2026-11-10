@@ -5,8 +5,10 @@ import { useSessionState } from '@/hooks/useSessionState';
 import {
   Search, RefreshCw, ChevronRight, ChevronDown, X, Trash2, Download, Loader2, MoreHorizontal, SortAsc, SortDesc,
   FolderOpen, MousePointerClick, Check, FolderX, Tag, Building2, SlidersHorizontal, Columns3, FolderTree,
-  ScrollText, TerminalSquare, ShieldCheck, Siren, ListFilter,
+  ScrollText, TerminalSquare, ShieldCheck, Siren, ListFilter, MapPin,
 } from 'lucide-react';
+import type { SiteView } from '@obligarth/shared';
+import { sitesApi } from '@/api/sites.api';
 import { mdmApi, type ContactFilter, type DeviceListParams, type DeviceSortField } from '@/api/mdm.api';
 import { appleApi, isAwaitingApproval, newIdempotencyKey } from '@/api/apple.api';
 import { isStepUpHandled } from '@/api/client';
@@ -79,11 +81,13 @@ export interface InitialDeviceFilters {
   endUserId?: number;
   /** Only the devices in lost mode (?lost=1). */
   lost?: boolean;
+  /** The devices of a site (?siteId=<uuid>), or of none ('none'; lot P1-SITE). */
+  siteId?: string;
 }
 
 // The session keys of the filters a link carries (dropped when a different link lands on the page; the saved view
 // chosen too: the link's filters are not the view's), and the key of the last link applied.
-const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost', 'view', 'smartGroup']
+const LINK_FILTER_KEYS = ['state', 'contact', 'compliance', 'config', 'platform', 'ownership', 'endUser', 'lost', 'view', 'smartGroup', 'site']
   .map((k) => `obligarth:inventory:${k}`);
 const LINK_SESSION_KEY = 'obligarth:inventory:link';
 /** The tenant of the last opening of the list in this tab: the default view applies at the first opening in a tenant
@@ -91,7 +95,7 @@ const LINK_SESSION_KEY = 'obligarth:inventory:link';
  *  one (a view, the groups of a rule and an end user are a tenant's) and opens on the new tenant's default view. */
 const OPENED_SESSION_KEY = 'obligarth:inventory:opened';
 /** The session keys of the state that belongs to a tenant. */
-const TENANT_SESSION_KEYS = ['view', 'rule', 'endUser', 'smartGroup'].map((k) => `obligarth:inventory:${k}`);
+const TENANT_SESSION_KEYS = ['view', 'rule', 'endUser', 'smartGroup', 'site'].map((k) => `obligarth:inventory:${k}`);
 
 interface DeviceTableProps {
   initialFilters?: InitialDeviceFilters;
@@ -147,6 +151,7 @@ export function DeviceTable({
   const exportBtnRef = useRef<HTMLButtonElement>(null);
   const columnsBtnRef = useRef<HTMLButtonElement>(null);
   const tagsBtnRef = useRef<HTMLButtonElement>(null);
+  const siteBtnRef = useRef<HTMLButtonElement>(null);
   const osBtnRef = useRef<HTMLButtonElement>(null);
   const batchBtnRef = useRef<HTMLButtonElement>(null);
   const { isAdmin, permissions } = useAuthStore();
@@ -220,6 +225,15 @@ export function DeviceTable({
   const [tagFilters, setTagFilters] = useSessionState<Set<string>>('obligarth:inventory:tags', new Set<string>());
   const [tagsMenuOpen, setTagsMenuOpen] = useState(false);
   const [endUserId, setEndUserId] = useSessionState<number | undefined>('obligarth:inventory:endUser', initialFilters?.endUserId);
+  // The site (lot P1-SITE): a site's uuid, or 'none' (the devices of no site); its menu lists the sites of the tenant.
+  const [siteId, setSiteId] = useSessionState<string | undefined>('obligarth:inventory:site', initialFilters?.siteId);
+  const [siteMenuOpen, setSiteMenuOpen] = useState(false);
+  const [siteList, setSiteList] = useState<SiteView[] | null>(null);
+  useEffect(() => {
+    if (!siteMenuOpen && !(siteId && siteId !== 'none' && siteList === null)) return;
+    sitesApi.list().then(setSiteList).catch(() => setSiteList([]));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [siteMenuOpen, siteId]);
   const [tenantFilters, setTenantFilters] = useSessionState<Set<number>>('obligarth:inventory:tenants', new Set<number>());
   const [lostOnly, setLostOnly] = useSessionState<boolean>('obligarth:inventory:lost', () => initialFilters?.lost === true);
   // The advanced filter: a rule of the rule language, sent as ?rule= (ruleParamFits: the builder refuses a longer one, and
@@ -252,6 +266,7 @@ export function DeviceTable({
     setOwnershipFilters(f.ownership ? new Set([f.ownership]) : new Set());
     setEndUserId(f.endUserId);
     setLostOnly(f.lost === true);
+    setSiteId(f.siteId);
     setSmartGroupId(null);
     setActiveViewUuid(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -380,6 +395,7 @@ export function DeviceTable({
     osBelow: osBelow || undefined,
     tags: [...tagFilters],
     endUserId,
+    siteId,
     lostMode: lostOnly ? true : undefined,
     groupId: ungroupedOnly ? undefined : (groupId ?? undefined),
     includeSubgroups: ungroupedOnly ? undefined : (groupId ? true : undefined),
@@ -390,7 +406,7 @@ export function DeviceTable({
     sortOrder: sortBy ? sortOrder : undefined,
   }), [debouncedSearch, stateTab, contactFilters, complianceFilters, configFilters, platformFilters, ownershipFilters,
     supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder,
-    ruleJson, smartGroupId]);
+    ruleJson, smartGroupId, siteId]);
 
   const load = useCallback(async (reset: boolean) => {
     const pageToFetch = reset ? 1 : loadedPagesRef.current + 1;
@@ -479,7 +495,7 @@ export function DeviceTable({
 
   const chipFilterCount = contactFilters.size + complianceFilters.size + configFilters.size + platformFilters.size
     + ownershipFilters.size + tagFilters.size + (supervisedOnly ? 1 : 0) + (osBelow ? 1 : 0) + (endUserId ? 1 : 0)
-    + (lostOnly ? 1 : 0) + (rule ? 1 : 0) + (smartGroupId !== null ? 1 : 0);
+    + (lostOnly ? 1 : 0) + (rule ? 1 : 0) + (smartGroupId !== null ? 1 : 0) + (siteId ? 1 : 0);
   const hasFilters = !!debouncedSearch || chipFilterCount > 0;
   const activeFilterCount = chipFilterCount + (stateTab !== 'managed' ? 1 : 0) + (isMaster ? tenantFilters.size : 0);
   const clearAllFilters = () => {
@@ -489,6 +505,7 @@ export function DeviceTable({
     setSupervisedOnly(false); setOsBelow(''); setOsBelowDraft(''); setEndUserId(undefined); setLostOnly(false);
     setRule(null);
     setSmartGroupId(null);
+    setSiteId(undefined);
   };
 
   // ── Saved views (DeviceViewsBar): the state of the list to and from a view's definition ─────────────────
@@ -515,6 +532,8 @@ export function DeviceTable({
     setPlatformFilters(new Set(s.platform)); setOwnershipFilters(new Set(s.ownership));
     setSupervisedOnly(s.supervisedOnly); setOsBelow(s.osBelow); setOsBelowDraft(s.osBelow);
     setTagFilters(new Set(s.tags)); setEndUserId(s.endUserId); setLostOnly(s.lostOnly);
+    // A saved view does not keep the site (lot P1-SITE): the list of the view, whatever the site chosen before.
+    setSiteId(undefined);
     setRule(s.rule);
     setSmartGroupId(s.smartGroupId);
     setSortBy(s.sortBy); setSortOrder(s.sortOrder);
@@ -735,6 +754,13 @@ export function DeviceTable({
         {t('rules.advancedFilter.chip') || 'Advanced filter'}
         {rule && <span className="text-[10px] text-accent/80">{ruleConditionsOf(rule).length}</span>}
       </button>
+      <button ref={siteBtnRef} onClick={() => setSiteMenuOpen((v) => !v)} className={chipCls(!!siteId)}
+        title={t('sites.filter.hint') || 'The devices of a site'}>
+        <MapPin className="w-3 h-3" />
+        {siteId === 'none' ? (t('sites.filter.none') || 'No site')
+          : siteId ? anonymize(siteList?.find((x) => x.id === siteId)?.code ?? (t('sites.filter.one') || 'One site'))
+            : (t('sites.filter.label') || 'Site')}
+      </button>
       {endUserId !== undefined && (
         <button onClick={() => setEndUserId(undefined)} className={chipCls(true)}>
           {t('devices.filters.endUser') || 'One end user'} <X className="w-3 h-3" />
@@ -792,6 +818,28 @@ export function DeviceTable({
             <span className="flex-1 truncate">{f.value}</span>
             <span className="text-[10px] text-text-muted">{f.count}</span>
           </label>
+        ))}
+      </div>
+    </>
+  );
+  const siteContent = (
+    <>
+      <div className="px-3 py-2 flex items-center justify-between shrink-0">
+        <span className={popHeadCls}>{t('sites.filter.title') || 'Site'}</span>
+        {siteId && <button onClick={() => { setSiteId(undefined); setSiteMenuOpen(false); }} className={popLinkCls}>{t('common.clear', 'Clear')}</button>}
+      </div>
+      <div className="min-h-0 overflow-y-auto">
+        <button type="button" onClick={() => { setSiteId('none'); setSiteMenuOpen(false); }} className={clsx(popRowCls, 'w-full text-left', siteId === 'none' && 'text-accent')}>
+          <span className="flex-1 truncate text-text-muted">{t('sites.filter.none') || 'No site'}</span>
+        </button>
+        {siteList === null && <div className="px-3 py-3 text-[12px] text-text-muted italic">{t('common.loading') || 'Loading…'}</div>}
+        {siteList?.map((x) => (
+          <button key={x.id} type="button" onClick={() => { setSiteId(x.id); setSiteMenuOpen(false); }}
+            className={clsx(popRowCls, 'w-full text-left', siteId === x.id && 'text-accent')}>
+            <span className="font-mono text-[11px] text-text-muted">{anonymize(x.code)}</span>
+            <span className="flex-1 truncate">{anonymize(x.name)}</span>
+            <span className="text-[10px] text-text-muted">{x.counts.devices}</span>
+          </button>
         ))}
       </div>
     </>
@@ -925,6 +973,7 @@ export function DeviceTable({
     { field: 'group', label: t('sort.group', 'Group') },
     { field: 'enrolledAt', label: t('sort.enrolledAt') || 'Enrolled' },
     { field: 'warranty', label: t('sort.warranty') || 'Warranty expiry' },
+    { field: 'site', label: t('sort.site') || 'Site' },
   ];
 
   // The saved views: the inventory page only (a group's page shows one group, the view would move away from it).
@@ -1077,6 +1126,11 @@ export function DeviceTable({
         sheetLabel={t('devices.filters.tagsTitle', 'Applied tags')}
         className="w-64 flex flex-col bg-bg-secondary rounded-lg shadow-xl overflow-hidden">
         {tagsContent}
+      </ToolbarPopover>
+      <ToolbarPopover open={siteMenuOpen} onClose={() => setSiteMenuOpen(false)} anchorRef={siteBtnRef} align="start" maxHeight={360} sheet={compactToolbar}
+        sheetLabel={t('sites.filter.title') || 'Site'}
+        className="w-72 flex flex-col bg-bg-secondary rounded-lg shadow-xl overflow-hidden">
+        {siteContent}
       </ToolbarPopover>
       <ToolbarPopover open={osMenuOpen} onClose={() => setOsMenuOpen(false)} anchorRef={osBtnRef} align="start" sheet={compactToolbar}
         sheetLabel={t('devices.filters.osBelowTitle') || 'Operating system older than'}

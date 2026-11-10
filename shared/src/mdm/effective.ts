@@ -17,6 +17,9 @@ export const UNAVAILABLE_REASONS = [
   'license_unavailable',
   // The bridge agent revoked: its agent:* keys stop applying (lot PONT-POL, D5).
   'device_revoked',
+  // The bridge agent older than the first version of a family (agent:appconfig:<id> before 1.4.2, lot P1-QR §6 ter):
+  // never sent, the detail names the version it needs.
+  'agent_too_old',
 ] as const;
 export type UnavailableReason = typeof UNAVAILABLE_REASONS[number];
 

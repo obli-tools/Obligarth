@@ -37,6 +37,8 @@ export interface DeviceListParams {
   smartGroupId?: number;
   tags?: string[];
   endUserId?: number;
+  /** The devices of a site (its uuid), or of none ('none'; lot P1-SITE). */
+  siteId?: string;
   /** Only the devices whose lost mode is not off (sent as lostMode=true). */
   lostMode?: boolean;
   q?: string;

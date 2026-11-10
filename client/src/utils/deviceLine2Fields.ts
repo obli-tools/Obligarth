@@ -26,6 +26,8 @@ export const LINE2_FIELDS: Line2FieldDef[] = [
   { key: 'warranty',   label: 'Warranty',         defaultVisible: false },
   // On the first line, next to the last contact (Apple inventory, bridge agent; never an AMAPI device).
   { key: 'battery',    label: 'Battery',          defaultVisible: true, addedLater: true },
+  // The site of the device (lot P1-SITE): shown by default, a store sees its phones at a glance.
+  { key: 'site',       label: 'Site',             defaultVisible: true, addedLater: true },
 ];
 
 // A new key: the catalog of the agent era (IP, MAC, last user, geolocation, reboot) no longer applies.

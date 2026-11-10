@@ -12,6 +12,9 @@ import type { JsonValue } from './policyContent';
 /** The first agent that reads a policy (1.3.0): an older one never gets the key `policy` of its configuration. */
 export const LEGACY_AGENT_POLICY_MIN_VERSION_CODE = 10300;
 export const LEGACY_AGENT_POLICY_ARTIFACT_KEY = 'agent:policy';
+/** The first agent that applies the managed configuration of apps (family appconfig, 1.4.2, lot P1-QR §6 ter): an
+ *  older one is never sent appConfigs, the resolution marks the setting agent_too_old. */
+export const LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE = 10402;
 /** policy.v on the wire. */
 export const LEGACY_AGENT_POLICY_FORMAT = 1;
 export const LEGACY_AGENT_SETTING_PREFIX = 'agent:';
@@ -44,11 +47,17 @@ export const LEGACY_AGENT_POLICY_LIMITS = {
   pinIterations: 20_000,
   /** The custom fields of a device read by the templates ({{device.custom.<name>}}). */
   customKeyRe: /^[A-Za-z0-9_-]{1,64}$/,
+  /** The managed configuration of apps (§6 ter): instances (the agent reads 64 at most), entries of one instance, the
+   *  key of an entry (the agent's APP_CONFIG_KEY_RE), the characters of a template and of its rendered value. */
+  appConfigs: 64, appConfigEntries: 50, appConfigKeyRe: /^[A-Za-z][A-Za-z0-9_.]{0,63}$/, appConfigValueChars: 4096,
+  /** All the rendered managed configurations of one device (the UTF-8 bytes of the JSON of their values): with the inline
+   *  files (192 KiB, 256 KiB once in base64) the body stays below compiledBodyBytes. */
+  appConfigTotalBytes: 64 * 1024,
 } as const;
 
 // ── Setting keys (one per inheritable unit) ──────────────────────────────────
 
-export type AgentKeyFamily = 'file' | 'wifi' | 'wifi.remove' | 'kiosk' | 'dpm' | 'knox' | 'cert';
+export type AgentKeyFamily = 'file' | 'wifi' | 'wifi.remove' | 'kiosk' | 'dpm' | 'knox' | 'cert' | 'appconfig';
 
 export const agentFileKey = (id: string): string => `agent:file[${id}]`;
 export const agentWifiKey = (ssid: string): string => `agent:wifi[${ssid}]`;
@@ -58,12 +67,17 @@ export const agentDpmKey = (field: string): string => `agent:dpm.${field}`;
 export const agentKnoxKey = (field: string): string => `agent:knox.${field}`;
 export const agentCertKey = (id: string): string => `agent:cert[${id}]`;
 export const AGENT_WIPE_KEY = 'agent:dpm.maxFailedPasswordsForWipe';
+/** The prefix of the managed configuration of one app (§6 ter, contract with the agent: agent:appconfig:<id>). */
+export const AGENT_APPCONFIG_KEY_PREFIX = 'agent:appconfig:';
+export const agentAppConfigKey = (id: string): string => `${AGENT_APPCONFIG_KEY_PREFIX}${id}`;
 
 /** The family and the instance (or field) of an agent setting key; null when it is not one. */
 export function parseAgentKey(key: string): { family: AgentKeyFamily; instance?: string; field?: string } | null {
   if (typeof key !== 'string' || !key.startsWith(LEGACY_AGENT_SETTING_PREFIX)) return null;
   const rest = key.slice(LEGACY_AGENT_SETTING_PREFIX.length);
   if (rest === 'kiosk') return { family: 'kiosk' };
+  const app = /^appconfig:(.+)$/s.exec(rest);
+  if (app) return { family: 'appconfig', instance: app[1] };
   const inst = /^(file|wifi\.remove|wifi|cert)\[(.+)\]$/s.exec(rest);
   if (inst) return { family: inst[1] as AgentKeyFamily, instance: inst[2] };
   const fld = /^(dpm|knox)\.([A-Za-z][A-Za-z0-9]{0,63})$/.exec(rest);
@@ -327,6 +341,13 @@ export const AGENT_KIOSK_BLOCK_KEYS = ['home', 'recent', 'back', 'menu', 'search
 
 export interface AgentCertItem { id: string; name: string; pem: string }
 
+/** One value of the managed configuration of an app: its key and its template (strings only in v1, §6 ter). */
+export interface AgentAppConfigEntry { key: string; template: string }
+
+/** The managed configuration of one app (agent:appconfig:<id>, §6 ter): the owner of the device sets it with
+ *  DevicePolicyManager.setApplicationRestrictions, each template rendered per device by the server. */
+export interface AgentAppConfigItem { id: string; package: string; entries: AgentAppConfigEntry[] }
+
 export interface LegacyAgentPolicySection {
   files?: AgentFileItem[];
   wifi?: AgentWifiItem[];
@@ -336,6 +357,8 @@ export interface LegacyAgentPolicySection {
   dpm?: Record<AgentDpmField, JsonValue>;
   knox?: Record<AgentKnoxField, JsonValue>;
   certs?: AgentCertItem[];
+  /** The managed configuration of apps (agent 1.4.2, owner of the device only, §6 ter). */
+  appConfigs?: AgentAppConfigItem[];
   /** Lot BANC (D16): the explicit confirmation a restriction that cuts ADB needs (Knox usbDebugging=false): the device
    *  can no longer go back to a bench station without a bench window or a reset. */
   confirmBenchLockout?: true;
@@ -370,6 +393,9 @@ export const AGENT_POLICY_ITEM_CODES = [
   // Agent 1.4.0: a policy network already added by someone else (the user, in the shops): joined (compliant), unverified
   // (pending), disabled for a wrong password (non-compliant).
   'wifi_user_profile', 'wifi_foreign_unverified', 'wifi_foreign_auth_failed',
+  // Agent 1.4.2 (lot P1-QR §6 ter): the managed configuration of an app set (compliant), refused to an agent that only
+  // administers the device (non-compliant), failed (error); app_missing (pending) until the app is installed.
+  'appconfig_applied', 'appconfig_not_owner', 'appconfig_failed',
 ] as const;
 export type AgentPolicyItemCode = typeof AGENT_POLICY_ITEM_CODES[number];
 
@@ -418,7 +444,7 @@ export const AGENT_POLICY_CODE_RE = /^[a-z_]{1,48}$/;
 
 /** The drops of the compilation: the item leaves the body, the artifact stays deliverable. */
 export const AGENT_POLICY_DROP_CODES = ['path_conflict', 'inline_too_large', 'template_too_large', 'invalid_json', 'wipe_without_password',
-  'foreign_tenant_resource'] as const;
+  'foreign_tenant_resource', 'package_conflict', 'appconfig_too_large'] as const;
 export type AgentPolicyDropCode = typeof AGENT_POLICY_DROP_CODES[number];
 
 export interface AgentPolicyReportItem { key: string; state: AgentPolicyItemState; code: string; detail?: string }

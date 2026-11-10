@@ -9,7 +9,7 @@ import {
   type AgentPolicyReportItem, type AgentPolicyReportState, type LegacyAgentDeviceValuesImportResult, type LegacyAgentDeviceValuesPreviewRow,
   type LegacyAgentPolicyStatusView,
 } from '@obligarth/shared';
-import { audit } from '../audit';
+import { audit, type AuditWriteContext } from '../audit';
 import { db } from '../db';
 import { userActor } from '../db/context';
 import { tenantFrozen } from '../guard/frozen';
@@ -42,6 +42,7 @@ import { body, deviceOf, uploadLimiter, visible, wrap } from './routes';
 //   DELETE /files/:id                  under the configuration lock; 409 fileInUse while referenced
 //   GET    /files/:id/content          preview (mdm.policies.manage): images and files of 64 KiB at most
 //   POST   /policy/render-preview      a template rendered with a device's values (never logged)
+//   POST   /policy/render-appconfig-preview  the entries of a managed configuration rendered as text (never logged)
 //   GET    /policy/custom-keys         the custom fields of the bridge devices (variable picker)
 //   POST   /policy/import-images       the store images of a MobiControl import marked origin 'import'
 //   GET    /devices/:id/policy         the state of a device's agent policy
@@ -101,16 +102,120 @@ async function usageOf(tenantId: number, shas: string[]): Promise<Map<string, nu
   return out;
 }
 
+// ── The services of the routes (the MCP tools of the policies call them too, lot P1-MCP-POL) ─────────────
+
+/** The tenant's store, newest first, with what uses each file. */
+export async function listStoreFiles(tenantId: number): Promise<ReturnType<typeof fileView>[]> {
+  const rows = await db('legacy_agent_files').where({ tenant_id: tenantId }).orderBy('created_at', 'desc').limit(1000).select('*') as Array<Record<string, any>>;
+  const usage = await usageOf(tenantId, rows.map((r) => String(r.sha256).trim()));
+  return rows.map((r) => fileView(r, usage.get(String(r.sha256).trim()) ?? 0));
+}
+
+/** The row of a received upload (its kind settled), idempotent by content, within the tenant's quota, journaled. */
+export async function storeReceivedFile(tenantId: number, received: { sha256: string; size: number },
+  o: { name: string; note: string | null; mediaType: string }, userId: number | null, auditCtx: AuditWriteContext): Promise<{ row: Record<string, any>; created: boolean }> {
+  const file = await settleKind(tenantId, received, { name: o.name, mediaType: o.mediaType });
+  return db.transaction(async (trx) => {
+    const existing = await trx('legacy_agent_files').where({ tenant_id: tenantId, sha256: file.sha256 }).first() as Record<string, any> | undefined;
+    if (existing) return { row: existing, created: false };
+    const used = await trx('legacy_agent_files').where({ tenant_id: tenantId }).sum<{ n: string | null }[]>('size_bytes as n').first();
+    if (Number(used?.n ?? 0) + file.size > L.storeTenantBytes) throw new AppError(413, 'The file store of the tenant is full (2 GiB)', 'quotaExceeded');
+    const [r] = await trx('legacy_agent_files').insert({
+      tenant_id: tenantId, sha256: file.sha256, size_bytes: file.size, name: o.name, content_type: file.contentType, kind: file.kind, origin: 'upload',
+      note: o.note, created_by: userId,
+    }).returning('*') as Array<Record<string, any>>;
+    await audit.appendInTx(trx, {
+      tenantId, action: 'legacy_agent.file_uploaded', target: { type: 'legacy_agent_file', id: String(r.id) },
+      details: { sha256: file.sha256, size: file.size, name: o.name, kind: file.kind },
+    }, auditCtx);
+    return { row: r, created: true };
+  });
+}
+
+/** What a masked variable renders as in a preview. */
+export const MASKED_VALUE = '[masked]';
+
+/** A template rendered with the values of a device (visible to the caller: checked by him): the text, the variables
+ *  without a value (unknown ones included), whether a JSON text parses. Never logged. The variables of `mask` render as
+ *  MASKED_VALUE (the MCP without devices.identifiers, decision D10); one without a value is still listed as missing. */
+export async function renderPreviewFor(tenantId: number, deviceId: number, template: string, encoding: 'text' | 'json',
+  mask: ReadonlySet<string> = new Set()): Promise<{ text: string; missing: string[]; jsonValid: boolean | null }> {
+  return (await renderPreviewsFor(tenantId, deviceId, [{ template, encoding }], mask))[0];
+}
+
+/** Several templates rendered with the values of one device, read once (the entries of a managed configuration of an
+ *  app, lot P1-QR §6 ter, each as text): the rules of renderPreviewFor. */
+export async function renderPreviewsFor(tenantId: number, deviceId: number, templates: Array<{ template: string; encoding: 'text' | 'json' }>,
+  mask: ReadonlySet<string> = new Set()): Promise<Array<{ text: string; missing: string[]; jsonValid: boolean | null }>> {
+  const t = await db('tenants').where({ id: tenantId }).first('name', 'slug') as { name: string; slug: string } | undefined;
+  const tenant = { name: t?.name ?? '', slug: t?.slug ?? '' };
+  const set = await loadDevices(db, tenantId, [deviceId]);
+  const device = set.devices[0];
+  if (!device) throw new AppError(404, 'Device not found');
+  return templates.map(({ template, encoding }) => {
+    const vars = variablesInString(template, isAgentTemplateVariable);
+    const missing = [...vars.unknown, ...vars.known.filter((v) => variableValue(v, device, tenant, 'agent') === null)];
+    const text = renderTemplate(template, encoding,
+      (n) => (mask.has(n) ? MASKED_VALUE : variableValue(n as never, device, tenant, 'agent') ?? '')) ?? '';
+    let jsonValid: boolean | null = null;
+    if (encoding === 'json') { try { JSON.parse(text); jsonValid = true; } catch { jsonValid = false; } }
+    return { text, missing, jsonValid };
+  });
+}
+
+/** The custom fields of the bridge devices and the keys of the values of the sites (the variable picker). */
+export async function customKeysOf(tenantId: number): Promise<string[]> {
+  const rows = await db('devices').where({ tenant_id: tenantId, management_channel: 'legacy_agent' })
+    .whereRaw("jsonb_typeof(custom_fields) = 'object'")
+    .distinct(db.raw('jsonb_object_keys(custom_fields) AS k')).limit(200) as Array<{ k: string }>;
+  // The keys of the values of the sites too (lot P1-SITE): {{device.custom.<key>}} falls back on the site's value.
+  const siteKeys = await db('sites').where({ tenant_id: tenantId }).whereNull('archived_at')
+    .whereRaw(`jsonb_typeof("values") = 'object'`)
+    .distinct(db.raw('jsonb_object_keys("values") AS k')).limit(200) as Array<{ k: string }>;
+  const keys = new Set([...rows, ...siteKeys].map((r) => r.k).filter((k) => L.customKeyRe.test(k)));
+  return [...keys].sort();
+}
+
+/** The state of a bridge device's agent policy (a device visible to the caller: checked by him). */
+export async function devicePolicyStatus(tenantId: number, id: number): Promise<LegacyAgentPolicyStatusView> {
+  const sat = await db('legacy_agent_devices').where({ tenant_id: tenantId, device_id: id }).first('agent_version_code') as { agent_version_code: number } | undefined;
+  if (!sat) throw new AppError(404, 'Device not found');
+  const art = await db('device_artifacts').where({ tenant_id: tenantId, device_id: id, artifact_key: LEGACY_AGENT_POLICY_ARTIFACT_KEY }).first() as Record<string, any> | undefined;
+  const desired = art?.desired_hash ? String(art.desired_hash).trim() : null;
+  let dropped: Array<{ key: string; code: string }> = [];
+  let withheld: string[] = [];
+  if (desired) {
+    const m = await db('mdm_artifacts').where({ tenant_id: tenantId, hash: desired }).first('body') as { body: unknown } | undefined;
+    const b = jsonOf(m?.body);
+    if (b && Array.isArray(b.dropped)) dropped = b.dropped.filter((d: any) => d && typeof d.key === 'string' && typeof d.code === 'string');
+    if (b) {
+      withheld = await db.transaction(async (trx) => (await tenantFrozen(trx, tenantId, 'legacy_agent')
+        ? frozenWithhold(trx, tenantId, id, b, { delivered_hash: art?.delivered_hash ?? null, desired_hash: desired }) : []));
+    }
+  }
+  const rep = await db('legacy_agent_policy_reports').where({ tenant_id: tenantId, device_id: id }).first() as Record<string, any> | undefined;
+  const reasons = jsonOf(art?.state_reasons);
+  return {
+    supported: Number(sat.agent_version_code) >= LEGACY_AGENT_POLICY_MIN_VERSION_CODE, agentVersionCode: Number(sat.agent_version_code),
+    desiredHash: desired, deliveredHash: art?.delivered_hash ? String(art.delivered_hash).trim() : null, artifactState: art?.state ?? null,
+    reasons: Array.isArray(reasons) ? reasons.filter((r: unknown) => typeof r === 'string') : [], dropped, withheld,
+    report: rep ? {
+      hash: rep.policy_hash ? String(rep.policy_hash).trim() : null, state: rep.state as AgentPolicyReportState, reportedAt: iso(rep.received_at) as string,
+      appliedAt: iso(rep.applied_at), knoxState: rep.knox_state ?? null,
+      counts: { compliant: rep.compliant, nonCompliant: rep.non_compliant, pending: rep.pending, pendingLicence: rep.pending_licence,
+        unsupported: rep.unsupported, errors: rep.errors },
+      items: (jsonOf(rep.items) ?? []).filter((i: any) => i && typeof i.key === 'string' && (AGENT_POLICY_ITEM_STATES as readonly string[]).includes(i.state)) as AgentPolicyReportItem[],
+    } : null,
+  };
+}
+
 export function policyRouter(): Router {
   const router = Router();
 
   // ── File store ─────────────────────────────────────────────────────────────
 
   router.get('/files', wrap(async (req, res) => {
-    const tenantId = req.tenantId!;
-    const rows = await db('legacy_agent_files').where({ tenant_id: tenantId }).orderBy('created_at', 'desc').limit(1000).select('*') as Array<Record<string, any>>;
-    const usage = await usageOf(tenantId, rows.map((r) => String(r.sha256).trim()));
-    res.json({ success: true, data: rows.map((r) => fileView(r, usage.get(String(r.sha256).trim()) ?? 0)) });
+    res.json({ success: true, data: await listStoreFiles(req.tenantId!) });
   }));
 
   // POST /api/legacy-agent/files?name=&note= (body: the file)
@@ -122,23 +227,7 @@ export function policyRouter(): Router {
     const mediaType = mediaTypeOf(req);
     const max = mediaType.startsWith('image/') ? L.imageBytes : L.storeFileBytes;
     const received = await receiveFile(req, tenantId, max);
-    const file = await settleKind(tenantId, received, { name, mediaType });
-    const auditCtx = await audit.fromRequest(req, tenantId);
-    const { row, created } = await db.transaction(async (trx) => {
-      const existing = await trx('legacy_agent_files').where({ tenant_id: tenantId, sha256: file.sha256 }).first() as Record<string, any> | undefined;
-      if (existing) return { row: existing, created: false };
-      const used = await trx('legacy_agent_files').where({ tenant_id: tenantId }).sum<{ n: string | null }[]>('size_bytes as n').first();
-      if (Number(used?.n ?? 0) + file.size > L.storeTenantBytes) throw new AppError(413, 'The file store of the tenant is full (2 GiB)', 'quotaExceeded');
-      const [r] = await trx('legacy_agent_files').insert({
-        tenant_id: tenantId, sha256: file.sha256, size_bytes: file.size, name, content_type: file.contentType, kind: file.kind, origin: 'upload',
-        note, created_by: req.session.userId ?? null,
-      }).returning('*') as Array<Record<string, any>>;
-      await audit.appendInTx(trx, {
-        tenantId, action: 'legacy_agent.file_uploaded', target: { type: 'legacy_agent_file', id: String(r.id) },
-        details: { sha256: file.sha256, size: file.size, name, kind: file.kind },
-      }, auditCtx);
-      return { row: r, created: true };
-    });
+    const { row, created } = await storeReceivedFile(tenantId, received, { name, note, mediaType }, req.session.userId ?? null, await audit.fromRequest(req, tenantId));
     res.status(created ? 201 : 200).json({ success: true, data: fileView(row) });
   }));
 
@@ -221,26 +310,28 @@ export function policyRouter(): Router {
     const b = body(PreviewBody, req);
     req.params.id = String(b.deviceId);
     const id = await deviceOf(req);
-    const tenantId = req.tenantId!;
-    const t = await db('tenants').where({ id: tenantId }).first('name', 'slug') as { name: string; slug: string } | undefined;
-    const tenant = { name: t?.name ?? '', slug: t?.slug ?? '' };
-    const set = await loadDevices(db, tenantId, [id]);
-    const device = set.devices[0];
-    if (!device) throw new AppError(404, 'Device not found');
-    const vars = variablesInString(b.template, isAgentTemplateVariable);
-    const missing = [...vars.unknown, ...vars.known.filter((v) => variableValue(v, device, tenant, 'agent') === null)];
-    const text = renderTemplate(b.template, b.encoding, (n) => variableValue(n as never, device, tenant, 'agent') ?? '') ?? '';
-    let jsonValid: boolean | null = null;
-    if (b.encoding === 'json') { try { JSON.parse(text); jsonValid = true; } catch { jsonValid = false; } }
+    const data = await renderPreviewFor(req.tenantId!, id, b.template, b.encoding);
     res.setHeader('Cache-Control', 'no-store');
-    res.json({ success: true, data: { text, missing, jsonValid } });
+    res.json({ success: true, data });
+  }));
+
+  // The entries of a managed configuration of an app (lot P1-QR §6 ter), each rendered as text for one device.
+  const AppConfigPreviewBody = z.object({
+    entries: z.array(z.object({ key: z.string().max(64), template: z.string().max(L.appConfigValueChars) }).strict()).min(1).max(L.appConfigEntries),
+    deviceId: z.union([z.number(), z.string()]),
+  }).strict();
+
+  router.post('/policy/render-appconfig-preview', requireTenantCapability(POLICY_MANAGE), wrap(async (req, res) => {
+    const b = body(AppConfigPreviewBody, req);
+    req.params.id = String(b.deviceId);
+    const id = await deviceOf(req);
+    const rendered = await renderPreviewsFor(req.tenantId!, id, b.entries.map((e) => ({ template: e.template, encoding: 'text' as const })));
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ success: true, data: { entries: b.entries.map((e, i) => ({ key: e.key, text: rendered[i].text, missing: rendered[i].missing })) } });
   }));
 
   router.get('/policy/custom-keys', wrap(async (req, res) => {
-    const rows = await db('devices').where({ tenant_id: req.tenantId!, management_channel: 'legacy_agent' })
-      .whereRaw("jsonb_typeof(custom_fields) = 'object'")
-      .distinct(db.raw('jsonb_object_keys(custom_fields) AS k')).limit(200) as Array<{ k: string }>;
-    res.json({ success: true, data: rows.map((r) => r.k).filter((k) => L.customKeyRe.test(k)).sort() });
+    res.json({ success: true, data: await customKeysOf(req.tenantId!) });
   }));
 
   const ImportImagesBody = z.object({
@@ -265,37 +356,7 @@ export function policyRouter(): Router {
 
   router.get('/devices/:id/policy', wrap(async (req, res) => {
     const id = await deviceOf(req);
-    const tenantId = req.tenantId!;
-    const sat = await db('legacy_agent_devices').where({ tenant_id: tenantId, device_id: id }).first('agent_version_code') as { agent_version_code: number } | undefined;
-    if (!sat) throw new AppError(404, 'Device not found');
-    const art = await db('device_artifacts').where({ tenant_id: tenantId, device_id: id, artifact_key: LEGACY_AGENT_POLICY_ARTIFACT_KEY }).first() as Record<string, any> | undefined;
-    const desired = art?.desired_hash ? String(art.desired_hash).trim() : null;
-    let dropped: Array<{ key: string; code: string }> = [];
-    let withheld: string[] = [];
-    if (desired) {
-      const m = await db('mdm_artifacts').where({ tenant_id: tenantId, hash: desired }).first('body') as { body: unknown } | undefined;
-      const b = jsonOf(m?.body);
-      if (b && Array.isArray(b.dropped)) dropped = b.dropped.filter((d: any) => d && typeof d.key === 'string' && typeof d.code === 'string');
-      if (b) {
-        withheld = await db.transaction(async (trx) => (await tenantFrozen(trx, tenantId, 'legacy_agent')
-          ? frozenWithhold(trx, tenantId, id, b, { delivered_hash: art?.delivered_hash ?? null, desired_hash: desired }) : []));
-      }
-    }
-    const rep = await db('legacy_agent_policy_reports').where({ tenant_id: tenantId, device_id: id }).first() as Record<string, any> | undefined;
-    const reasons = jsonOf(art?.state_reasons);
-    const view: LegacyAgentPolicyStatusView = {
-      supported: Number(sat.agent_version_code) >= LEGACY_AGENT_POLICY_MIN_VERSION_CODE, agentVersionCode: Number(sat.agent_version_code),
-      desiredHash: desired, deliveredHash: art?.delivered_hash ? String(art.delivered_hash).trim() : null, artifactState: art?.state ?? null,
-      reasons: Array.isArray(reasons) ? reasons.filter((r: unknown) => typeof r === 'string') : [], dropped, withheld,
-      report: rep ? {
-        hash: rep.policy_hash ? String(rep.policy_hash).trim() : null, state: rep.state as AgentPolicyReportState, reportedAt: iso(rep.received_at) as string,
-        appliedAt: iso(rep.applied_at), knoxState: rep.knox_state ?? null,
-        counts: { compliant: rep.compliant, nonCompliant: rep.non_compliant, pending: rep.pending, pendingLicence: rep.pending_licence,
-          unsupported: rep.unsupported, errors: rep.errors },
-        items: (jsonOf(rep.items) ?? []).filter((i: any) => i && typeof i.key === 'string' && (AGENT_POLICY_ITEM_STATES as readonly string[]).includes(i.state)) as AgentPolicyReportItem[],
-      } : null,
-    };
-    res.json({ success: true, data: view });
+    res.json({ success: true, data: await devicePolicyStatus(req.tenantId!, id) });
   }));
 
   // ── Per-device values ──────────────────────────────────────────────────────
@@ -466,7 +527,7 @@ async function policyImpactOf(q: Knex | Knex.Transaction, tenantId: number, chan
 }
 
 /** Does a policy impact reach the publication thresholds of the tenant (D18)? */
-async function beyondThresholds(q: Knex | Knex.Transaction, tenantId: number, impact: number): Promise<boolean> {
+export async function beyondThresholds(q: Knex | Knex.Transaction, tenantId: number, impact: number): Promise<boolean> {
   if (impact <= 0) return false;
   const T = PUBLISH_APPROVAL_THRESHOLDS;
   if (impact >= T.devicesTouched) return true;

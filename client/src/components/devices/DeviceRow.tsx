@@ -1,10 +1,12 @@
 import { memo, type MouseEvent, type ReactNode } from 'react';
-import { Eye, FolderOpen, User, Building2, Briefcase, Hash, Clock, ShieldCheck } from 'lucide-react';
+import { Eye, FolderOpen, User, Building2, Briefcase, Hash, Clock, ShieldCheck, MapPin } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import type { DeviceSummary } from '@obligarth/shared';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import { useAuthStore } from '@/store/authStore';
 import { anonymize } from '@/utils/anonymize';
+import { useTenantStore } from '@/store/tenantStore';
 import { useCanHover, useMediaQuery } from '@/hooks/useMediaQuery';
 import { Tip } from '@/components/common/Tip';
 import {
@@ -51,6 +53,7 @@ export const DeviceRow = memo(function DeviceRow({
 }: DeviceRowProps) {
   const { t } = useTranslation();
   const { isAdmin } = useAuthStore();
+  const currentTenantId = useTenantStore((s) => s.currentTenantId);
   const stacked = useMediaQuery(STACKED_ROW_QUERY);
   // The tooltips of the row open on hover only: on a touch screen a tap opens the device, as on the rest of the row.
   const canHover = useCanHover();
@@ -260,6 +263,21 @@ export const DeviceRow = memo(function DeviceRow({
                 </button>
               ) : (
                 <span>{'—'}</span>
+              )}
+            </span>
+          ),
+          // The site of the device (lot P1-SITE): a link to its page in the current tenant (the global view lists other
+          // tenants' devices: their site is plain text), none in selection mode (a click selects the row); absent without one.
+          fieldOn('site') && device.site && (
+            <span key="site" className="inline-flex items-center gap-1" title={anonymize(device.site.name)}>
+              <MapPin className="w-3 h-3" />
+              {!selectionMode && device.tenantId === currentTenantId ? (
+                <Link to={`/sites/${device.site.id}`} onClick={(e) => e.stopPropagation()}
+                  className="truncate max-w-[180px] hover:text-accent transition-colors">
+                  {anonymize(device.site.code)} · {anonymize(device.site.name)}
+                </Link>
+              ) : (
+                <span className="truncate max-w-[180px]">{anonymize(device.site.code)} · {anonymize(device.site.name)}</span>
               )}
             </span>
           ),

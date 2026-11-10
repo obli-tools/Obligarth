@@ -78,7 +78,8 @@
     "legacyAgent": "Agent Android",
     "privacy": "Confidentialité",
     "accessKeys": "Clés d’accès",
-    "benchStations": "Stations de banc"
+    "benchStations": "Stations de banc",
+    "sites": "Sites"
   },
   "login": {
     "title": "Connectez-vous à votre compte",
@@ -1011,7 +1012,8 @@
       "serial": "Numéro de série",
       "tags": "Étiquettes",
       "warranty": "Garantie",
-      "battery": "Batterie"
+      "battery": "Batterie",
+      "site": "Site"
     },
     "selection": {
       "exit": "Quitter le mode sélection",
@@ -1493,7 +1495,8 @@
     "model": "Modèle",
     "ownership": "Propriété",
     "enrolledAt": "Enrôlé le",
-    "warranty": "Fin de garantie"
+    "warranty": "Fin de garantie",
+    "site": "Site"
   },
   "fanOut": {
     "label": "Diffuser à (lecture seule sur les tenants ciblés)",
@@ -1882,7 +1885,13 @@
       "android_signin_completed": "Android : jeton d'enrôlement par connexion remis",
       "android_signin_session_used": "Android : appareil enrôlé par la sign-in URL",
       "android_zero_touch_iframe_opened": "Android : portail zero-touch ouvert",
-      "android_kme_configuration_shown": "Android : configuration Knox Mobile Enrollment affichée"
+      "android_kme_configuration_shown": "Android : configuration Knox Mobile Enrollment affichée",
+      "site_created": "Site créé",
+      "site_updated": "Site modifié",
+      "site_archived": "Site archivé",
+      "site_restored": "Site rétabli",
+      "site_imported": "Sites importés",
+      "device_site_changed": "Site d’un appareil changé"
     },
     "families": {
       "auth": "Authentification",
@@ -3646,7 +3655,8 @@
       "asset_not_supported": "Exige une ressource que l'appareil ne peut pas encore recevoir",
       "variable_unresolved": "Une variable n'a pas de valeur pour cet appareil",
       "license_unavailable": "Aucune licence disponible",
-      "device_revoked": "L'agent de l'appareil est révoqué"
+      "device_revoked": "L'agent de l'appareil est révoqué",
+      "agent_too_old": "Demande une version plus récente de l’agent"
     },
     "artifactState": {
       "pending": "En attente",
@@ -3952,7 +3962,7 @@
       "file_not_found": "Fichier introuvable dans le magasin",
       "file_kind_mismatch": "Le fichier du magasin n'est pas du type attendu",
       "inline_too_large": "Trop de fichiers rendus pour un appareil",
-      "template_too_large": "Modèle trop volumineux (32 Kio au plus)",
+      "template_too_large": "Modèle trop volumineux (32 Kio pour un fichier, 4 096 caractères pour une valeur de configuration d’appli)",
       "ssid_invalid": "SSID invalide",
       "certificate_invalid": "Certificat invalide",
       "pin_invalid": "Le code doit compter 8 à 12 chiffres",
@@ -3964,8 +3974,10 @@
       "too_many_files": "Trop de fichiers (64 au plus)",
       "psk_invalid": "8 à 63 caractères, ou 64 chiffres hexadécimaux",
       "wipe_without_password": "Un seuil d'effacement exige une qualité de mot de passe",
-      "variable_not_allowed": "Variables uniquement dans un modèle de fichier",
-      "shared_policy_resource": "Cette politique contient des ressources de son locataire : jamais partagée ni affectée à un autre locataire"
+      "variable_not_allowed": "Variables uniquement dans un modèle (fichier ou configuration d’appli)",
+      "shared_policy_resource": "Cette politique contient des ressources de son locataire : jamais partagée ni affectée à un autre locataire",
+      "too_many_app_configs": "Trop de configurations d’appli (64 au plus)",
+      "too_many_entries": "Trop d’entrées (50 au plus)"
     },
     "rawProfile": {
       "binary_plist": "Un profil binaire n'est pas accepté : exportez-le en XML.",
@@ -4218,7 +4230,23 @@
     "sessionOpen": "Une session de banc est déjà ouverte sur cette station.",
     "ownerDeclaredConfirm": "Le propriétaire de l'appareil reste posé sans agent fonctionnel : confirmez explicitement la révocation.",
     "targetExists": "Ce groupe est déjà une cible de la station.",
-    "releaseWithdrawn": "Cette version de l'agent est retirée."
+    "releaseWithdrawn": "Cette version de l'agent est retirée.",
+    "siteNotFound": "Site introuvable.",
+    "siteCodeTaken": "Un site de ce tenant a déjà ce code.",
+    "siteArchived": "Ce site est archivé.",
+    "siteNotEmpty": "Détachez les téléphones du site avant de l’archiver.",
+    "invalidSite": "Le site est invalide.",
+    "importRefused": "Le fichier ne peut pas être importé.",
+    "importTooLarge": "5 000 lignes au plus par import.",
+    "planChanged": "Les sites ou les téléphones ont changé depuis la demande : rien n’a été appliqué. Refaites la demande.",
+    "policyChanged": "La politique ou l’impact du changement a changé depuis la demande : rien n’a été publié. Refaites la demande.",
+    "secretValueRefused": "Une clé d’accès n’écrit jamais une valeur secrète : référencez un secret du coffre, ou saisissez-la dans la console.",
+    "tooManySites": "Trop de sites dans ce tenant.",
+    "perimeterTooNarrow": "Seule une clé qui atteint tous les groupes et appareils du tenant peut écrire ses sites.",
+    "batchGone": "Ce lot n’existe plus ou a déjà été appliqué.",
+    "siteOutsidePerimeter": "Des téléphones de ce site ({{devices}}) sont hors de vos droits : un administrateur modifie ses valeurs.",
+    "sitePolicyRightMissing": "Modifier les valeurs des sites demande le droit de gérer les politiques.",
+    "importTooLargeBytes": "Ce fichier est trop volumineux une fois encodé : découpez-le en plusieurs imports."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -4828,7 +4856,11 @@
       "origin": "Origine",
       "originBench": "Station de banc",
       "originConsole": "Console",
-      "showBench": "Afficher les jetons des stations de banc"
+      "showBench": "Afficher les jetons des stations de banc",
+      "site": "Site",
+      "siteHint": "Les téléphones inscrits avec ce jeton sont rattachés au site (et rangés dans son groupe quand le jeton n’en nomme aucun).",
+      "qr": "QR code d’inscription",
+      "qrHint": "À scanner par l’agent : SCANNER LE QR CODE D’INSCRIPTION."
     },
     "adminMode": {
       "title": "Administrateur de l'appareil et verrouillage MobiControl",
@@ -6485,7 +6517,11 @@
       "commands_restart": "Redémarrer les appareils",
       "commands_apps": "Installer, désinstaller et récupérer des apps, mettre à jour l’agent",
       "commands_cancel": "Annuler des commandes en attente",
-      "groups_move": "Déplacer des appareils entre groupes (toujours approuvé par vous)"
+      "groups_move": "Déplacer des appareils entre groupes (toujours approuvé par vous)",
+      "sites_write": "Créer, importer et archiver des sites, y rattacher des appareils (lots appliqués approuvés par vous)",
+      "policies_read": "Lire les politiques, leurs versions, affectations et fichiers, et ce qu’un appareil a reçu",
+      "policies_write": "Écrire des brouillons de politiques et déposer des fichiers de politiques (rien n’atteint un appareil)",
+      "policies_publish": "Soumettre des versions de politiques et changer leurs affectations (toujours approuvé par vous)"
     },
     "state": {
       "active": "Active",
@@ -6661,7 +6697,8 @@
       "wifi": "Wi-Fi",
       "kiosk": "Kiosque",
       "restrictions": "Restrictions",
-      "certs": "Certificats"
+      "certs": "Certificats",
+      "appConfigs": "Configuration des applis"
     },
     "actions": {
       "minutes": "Minutes (1 à 240)",
@@ -6879,7 +6916,8 @@
       "kiosk": "Kiosque",
       "dpm": "Administrateur",
       "knox": "Knox",
-      "cert": "Certificat"
+      "cert": "Certificat",
+      "appconfig": "Configuration d’appli"
     },
     "itemStates": {
       "compliant": "Conforme",
@@ -6972,7 +7010,12 @@
       "not_applicable": "Sans effet pour cette application",
       "wifi_user_profile": "Ajouté par l’utilisateur, connexion vérifiée",
       "wifi_foreign_unverified": "Ajouté par l’utilisateur, présent, non vérifié",
-      "wifi_foreign_auth_failed": "Ajouté par l’utilisateur, mot de passe refusé"
+      "wifi_foreign_auth_failed": "Ajouté par l’utilisateur, mot de passe refusé",
+      "appconfig_applied": "Configuration de l’appli appliquée",
+      "appconfig_not_owner": "Demande l’agent propriétaire de l’appareil",
+      "appconfig_failed": "Échec de la configuration de l’appli",
+      "package_conflict": "Appli déjà configurée par une autre politique",
+      "appconfig_too_large": "Configuration de l’appli trop volumineuse pour cet appareil"
     },
     "store": {
       "date": "Ajouté le",
@@ -7078,6 +7121,25 @@
       "removeNone": "Aucun.",
       "removeTitle": "Retirer ces réseaux",
       "security": "Sécurité"
+    },
+    "appConfig": {
+      "intro": "Valeurs remises aux applications comme leur configuration gérée (l’appli les lit par RestrictionsManager).",
+      "ownerOnly": "Propriétaire de l’appareil, agent 1.4.2",
+      "add": "Configurer une appli",
+      "edit": "Modifier la configuration d’une appli",
+      "none": "Aucune appli configurée.",
+      "entryCount_one": "{{count}} valeur",
+      "entryCount_other": "{{count}} valeurs",
+      "package": "Paquet de l’appli",
+      "packageInvalid": "Un nom de paquet (com.example.app), autre que celui de l’agent, configuré une seule fois.",
+      "entries": "Valeurs (clé et modèle, texte seulement)",
+      "key": "Clé",
+      "template": "Modèle",
+      "keyInvalid": "Clé invalide ou en double",
+      "keyHint": "Une clé commence par une lettre : lettres, chiffres, _ et . (64 au plus).",
+      "addEntry": "Ajouter une valeur",
+      "insertInto": "Insérer dans {{key}} :",
+      "missing": "Sans valeur sur cet appareil (la configuration ne lui est pas envoyée) :"
     }
   },
   "bench": {
@@ -7262,6 +7324,212 @@
         "rolePolicy": "Rôle",
         "addHint": "Un second facteur est demandé. Le tenant voit les stations qui le ciblent et peut suspendre ou retirer une cible."
       }
+    }
+  },
+  "sites": {
+    "title": "Sites",
+    "subtitle": "Où sont les téléphones, et les valeurs de chaque site avec lesquelles leurs fichiers sont créés.",
+    "kpi": {
+      "ready": "Téléphones prêts",
+      "todo": "Téléphones à reprendre",
+      "stale": "Téléphones qui ne répondent plus",
+      "file": "Sites sans fichier des applications"
+    },
+    "searchPlaceholder": "Code, nom, ville…",
+    "showArchived": "Sites archivés",
+    "new": "Nouveau site",
+    "empty": "Aucun site pour l’instant.",
+    "noneMatch": "Aucun site ne correspond.",
+    "columns": {
+      "site": "Site",
+      "city": "Ville",
+      "group": "Groupe",
+      "phones": "Téléphones",
+      "code": "Code"
+    },
+    "archived": "Archivé",
+    "none": "Aucun site",
+    "field": "Site",
+    "change": "Changer",
+    "choose": "Choisir un site",
+    "state": {
+      "ready": "Prêt",
+      "todo": "À faire",
+      "stale": "Ne répond plus"
+    },
+    "reason": {
+      "no_contact": "Le téléphone n’a pas contacté le serveur depuis plus de 24 heures : vérifiez qu’il est allumé et connecté au Wi-Fi.",
+      "agent_too_old": "L’agent Obligarth du téléphone est trop ancien : mettez-le à jour.",
+      "admin_inactive": "La gestion du téléphone n’est pas active : ouvrez Agent Obligarth sur le téléphone et touchez « Activer ».",
+      "low_storage": "Le téléphone a moins de 0,5 Go d’espace libre : supprimez des photos ou des applications inutiles.",
+      "file_not_created": "Le fichier des applications du magasin n’est pas créé : une valeur du site ou du téléphone manque.",
+      "file_not_created_vars": "Le fichier des applications du magasin n’est pas créé : renseignez {{vars}} sur le site ou le téléphone.",
+      "appconfig_unresolved": "La configuration d’une application du magasin n’est pas envoyée : une valeur du site ou du téléphone manque.",
+      "appconfig_unresolved_vars": "La configuration d’une application du magasin n’est pas envoyée : renseignez {{vars}} sur le site ou le téléphone."
+    },
+    "fileNotCreated": "Fichier des applications non créé ({{count}})",
+    "fileNotCreatedHint": "Une variable d’un modèle de fichier n’a pas de valeur pour ces téléphones : le fichier n’est pas déposé.",
+    "picker": {
+      "title": "Choisir le site"
+    },
+    "attached": "{{count}} téléphone(s) ont changé de site",
+    "back": "Retour aux sites",
+    "archive": "Archiver",
+    "restore": "Rétablir",
+    "restored": "Site rétabli",
+    "archivedToast": "Site archivé",
+    "archiveConfirm": "Archiver le site {{name}} ? Il garde ses valeurs ; un site archivé ne prend plus de téléphone et ses fiches d’inscription cessent de fonctionner.",
+    "detach": "Détacher du site",
+    "detachConfirm": "Détacher {{name}} du site ? Ses fichiers ne lisent plus les valeurs du site.",
+    "noGroup": "Aucun groupe",
+    "enroll": "Inscrire un téléphone",
+    "addExisting": "Ajouter des téléphones existants",
+    "addExistingTitle": "Ajouter des téléphones à {{name}}",
+    "addCount": "Ajouter ({{count}})",
+    "addExistingHint": "Leurs fichiers sont recréés avec les valeurs du site. Un téléphone déjà sur un autre site passe sur celui-ci.",
+    "noValues": "Aucune valeur. Les modèles de fichiers les lisent sous la forme site.<clé>.",
+    "phones": "Téléphones ({{count}})",
+    "noPhones": "Aucun téléphone sur ce site pour l’instant.",
+    "fileInGroup": "Ranger {{count}} téléphone(s) dans le groupe du site",
+    "agentVersion": "Agent {{version}}",
+    "freeStorage": "{{size}} libres",
+    "outsideGroup": "Pas dans le groupe du site",
+    "edit": {
+      "title": "Modifier le site",
+      "newTitle": "Nouveau site"
+    },
+    "fields": {
+      "code": "Code",
+      "name": "Nom",
+      "namePlaceholder": "Magasin Exemple-Nord",
+      "city": "Ville",
+      "contact": "Contact",
+      "group": "Groupe de ses téléphones (facultatif)",
+      "groupHint": "Un téléphone rattaché au site se voit alors proposer d’être rangé dans ce groupe (avec sa confirmation habituelle).",
+      "noGroup": "Aucun groupe",
+      "values": "Valeurs du site",
+      "valuesHint": "Lues par les modèles de fichiers : site.<clé>, et device.custom.<clé> quand le téléphone n’a pas sa propre valeur.",
+      "addValue": "Ajouter une valeur"
+    },
+    "import": {
+      "open": "Importer un CSV",
+      "title": "Importer des sites depuis un fichier CSV",
+      "choose": "Choisir un fichier",
+      "tooLarge": "Le fichier dépasse 2 Mio.",
+      "hint": "Une ligne d’en-tête, séparateur « ; » ou « , ». Colonnes code (ou codeMag) et name (ou nameMag) ; city et contact facultatives ; toute autre colonne devient une valeur du site. Une cellule vide garde la valeur du site. Rien n’est écrit avant que vous appliquiez.",
+      "apply": "Appliquer ({{count}})",
+      "applied": "{{created}} site(s) créé(s), {{updated}} mis à jour",
+      "created": "{{count}} à créer",
+      "updated": "{{count}} à mettre à jour",
+      "unchanged": "{{count}} inchangé(s)",
+      "errors": "{{count}} refusée(s)",
+      "columns": "Code : {{code}} · Nom : {{name}} · Valeurs : {{values}}",
+      "line": "Ligne {{line}}",
+      "nothing": "Rien à changer.",
+      "action": {
+        "create": "Créer",
+        "update": "Mettre à jour",
+        "unchanged": "Inchangé",
+        "error": "Refusée"
+      }
+    },
+    "importRefused": {
+      "header_missing": "Le fichier n’a pas de ligne d’en-tête.",
+      "code_column_missing": "Le fichier n’a pas de colonne code (ou codeMag).",
+      "name_column_missing": "Le fichier n’a pas de colonne name (ou nameMag).",
+      "duplicate_column": "Une colonne figure deux fois dans l’en-tête.",
+      "column_invalid": "Une colonne ne peut pas être une valeur de site (une lettre, puis des lettres, chiffres ou _)."
+    },
+    "issue": {
+      "code_missing": "Le code manque",
+      "code_invalid": "Le code est invalide (32 caractères au plus, aucun caractère de contrôle)",
+      "name_missing": "Le nom manque",
+      "name_invalid": "Le nom est invalide (200 caractères au plus)",
+      "city_invalid": "La ville est invalide (100 caractères au plus)",
+      "contact_invalid": "Le contact est invalide (200 caractères au plus)",
+      "value_key_invalid": "Une clé : une lettre, puis des lettres, chiffres ou _ (64 au plus) ; code, name, city et contact sont réservés.",
+      "value_key_reserved": "code, name, city et contact sont réservés : ce sont des champs du site",
+      "value_invalid": "Une valeur est invalide (500 caractères au plus, sans retour à la ligne)",
+      "too_many_values": "Plus de 50 valeurs",
+      "duplicate_code": "Ce code figure plusieurs fois dans le fichier",
+      "columns_mismatch": "La ligne n’a pas autant de colonnes que l’en-tête",
+      "site_archived": "Ce site est archivé",
+      "group_not_found": "Groupe introuvable",
+      "too_many_sites": "Trop de sites dans ce tenant",
+      "values_too_large": "Les valeurs du site dépassent 64 Ko"
+    },
+    "fromDevices": {
+      "open": "Depuis les champs des téléphones",
+      "title": "Créer les sites depuis les champs des téléphones",
+      "hint": "Un site par valeur du champ code des téléphones, nommé d’après leur champ nom ; les téléphones y sont rattachés. Un site existant garde son nom et ses valeurs. Aucun téléphone ne change de groupe.",
+      "codeKey": "Champ du code",
+      "nameKey": "Champ du nom",
+      "valuesKeys": "Autres champs à recopier (séparés par des virgules)",
+      "preview": "Aperçu",
+      "apply": "Appliquer",
+      "applied": "{{sites}} site(s), {{devices}} téléphone(s) rattaché(s)",
+      "sitesCount": "{{count}} site(s) à créer",
+      "attachCount": "{{count}} téléphone(s) à rattacher",
+      "already": "{{count}} déjà rattaché(s)",
+      "withoutField": "{{count}} téléphone(s) sans le champ",
+      "conflicts": "{{count}} conflit(s)",
+      "conflictsHint": "Plusieurs noms pour un code (le plus fréquent est gardé) :",
+      "withoutFieldHint": "Laissés tels quels (pas de champ code) :"
+    },
+    "filter": {
+      "hint": "Les appareils d’un site",
+      "label": "Site",
+      "title": "Site",
+      "none": "Sans site",
+      "one": "Un site"
+    },
+    "pendingApproval": "Envoyé pour approbation : une seconde personne doit l’approuver ({{count}} téléphone(s) dont les fichiers changent).",
+    "planChangedPreview": "Les sites ont changé depuis l’aperçu : le nouvel aperçu est affiché, vérifiez-le puis appliquez de nouveau.",
+    "impact": "{{count}} téléphone(s) dont les fichiers changent",
+    "sortPhones": {
+      "label": "Nom",
+      "state": "État",
+      "contact": "Dernier contact"
+    },
+    "sheet": {
+      "defaultLabel": "Fiche {{code}}",
+      "title": "Inscrire un téléphone à {{name}}",
+      "intro": "Une fiche à imprimer avec un QR code : les téléphones qui le scannent sont inscrits, rattachés au site et rangés dans son groupe.",
+      "label": "Libellé",
+      "days": "Validité (jours)",
+      "maxUses": "Téléphones (quota)",
+      "replaceWarning": "La fiche précédente du site cesse de fonctionner dès la création de celle-ci.",
+      "create": "Créer la fiche",
+      "replaced_one": "La fiche précédente du site ne fonctionne plus.",
+      "replaced_other": "Les {{count}} fiches précédentes du site ne fonctionnent plus.",
+      "readyTitle": "Fiche créée : imprimez-la maintenant",
+      "onceWarning": "Le QR code n’est affiché qu’une fois : imprimez la fiche avant de fermer cette fenêtre. Ne la laissez pas en libre accès : elle inscrit des téléphones dans votre parc.",
+      "print": "Imprimer",
+      "heading": "Fiche d’inscription des téléphones",
+      "qrAlt": "QR code d’inscription",
+      "apkQrAlt": "QR code du lien de téléchargement de l’agent",
+      "validUntil_one": "Valable jusqu’au {{date}}, pour {{count}} téléphone.",
+      "validUntil_other": "Valable jusqu’au {{date}}, pour {{count}} téléphones.",
+      "step1": "Installez Agent Obligarth : sur le téléphone, ouvrez Chrome à l’adresse {{url}} (ou scannez le petit QR code), puis installez le fichier téléchargé.",
+      "step1NoUrl": "Installez Agent Obligarth sur le téléphone (demandez le lien à votre service informatique).",
+      "step2": "Ouvrez l’application Agent Obligarth.",
+      "step3": "Touchez « Scanner le QR code d’inscription » et visez le QR code de cette fiche.",
+      "step4": "Touchez « Activer » pour autoriser la gestion du téléphone.",
+      "footer": "Ne laissez pas cette fiche en libre accès : elle inscrit des téléphones dans le parc de votre entreprise. Une nouvelle fiche du site la remplace."
+    },
+    "screen": {
+      "button": "QR code à l’écran",
+      "defaultLabel": "Écran {{code}}",
+      "title": "QR code à l’écran pour {{name}}",
+      "create": "Afficher le QR code",
+      "intro": "Le QR code d’inscription affiché sur cet écran, à scanner avec le téléphone : rien à imprimer. Les téléphones qui le scannent sont inscrits, rattachés au site et rangés dans son groupe. La fiche imprimée du site continue de fonctionner.",
+      "readyTitle": "Scannez ce QR code avec le téléphone",
+      "full": "Plein écran",
+      "exitFull": "Quitter le plein écran",
+      "onceWarning": "Le QR code n’est affiché qu’une fois : une fois cette fenêtre fermée, créez-en un nouveau. Ne le montrez à personne hors de l’entreprise : il inscrit des téléphones dans votre parc.",
+      "step": "Touchez « Scanner le QR code d’inscription » et visez cet écran avec l’appareil photo.",
+      "validUntil_one": "Valable jusqu’au {{date}}, pour {{count}} téléphone.",
+      "validUntil_other": "Valable jusqu’au {{date}}, pour {{count}} téléphones."
     }
   }
 }

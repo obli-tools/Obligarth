@@ -89,7 +89,10 @@ export type ApprovalRequestType = 'batch_command' | 'device_uninstall' | 'vault_
   // A remote assistance session the matrix (or the tenant's setting mspSessionsNeedClientApproval) holds at
   // 'restricted', and a change of the settings of the remote assistance (P0-15 §4.6, D16; remote/approvals.ts).
   | 'remote_session'
-  | 'remote_settings_change';
+  | 'remote_settings_change'
+  // A write of the sites that changes what the bridge agent renders, beyond the publication thresholds or held at
+  // 'restricted' by the matrix (lot P1-SITE, action sites.apply; sites/guard.ts).
+  | 'site_write';
 
 /** Where the executor-only data of a request is sealed (AAD
  *  obligarth.pending_approvals:sealed_payload_enc:<id>:<tenant>). */

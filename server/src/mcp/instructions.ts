@@ -36,7 +36,7 @@ export async function instructionsFor(caller: McpCaller): Promise<string> {
     `Groups: ${caller.key.groupMode === 'all' ? 'all' : `list per tenant (${count('group')})`}   Devices: ${caller.key.deviceMode === 'all' ? 'all' : `list (${count('device')})`}`,
     `Scopes on this key: ${caller.key.scopes.join(', ') || 'none'}`,
     `IP restriction: ${caller.key.ipAllow.length ? caller.key.ipAllow.join(', ') : 'any IP'}     Expires: ${caller.key.expiresAt.toISOString()}`,
-    'Always needs a human: sensitive actions (2FA), restricted actions (another approver), any group move.',
+    'Always needs a human: sensitive actions (2FA), restricted actions (another approver), any group move, any applied batch of site writes (one authorization per batch), any policy submission or assignment change.',
   ];
   return `${FIXED_INSTRUCTIONS}\n\n${lines.join('\n')}`;
 }

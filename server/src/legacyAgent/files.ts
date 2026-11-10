@@ -49,6 +49,30 @@ export function mediaTypeOf(req: Request): string {
   return String(req.headers['content-type'] ?? '').toLowerCase().split(';')[0].trim();
 }
 
+/** Receives the bytes of an upload already in memory (the MCP tool upload_policy_file, lot P1-MCP-POL) as receiveFile
+ *  does a raw body: the same media types, the same bound, the same file named by its SHA-256. */
+export async function receiveBytes(tenantId: number, bytes: Buffer, mediaType: string, maxBytes: number): Promise<{ sha256: string; size: number }> {
+  const ctype = mediaType.toLowerCase().split(';')[0].trim();
+  if (ctype === 'image/svg+xml') throw new AppError(415, 'SVG images are refused', 'unsupportedMediaType');
+  if (!ACCEPTED.has(ctype) && !ctype.startsWith('text/')) throw new AppError(415, 'This media type is not accepted', 'unsupportedMediaType');
+  if (bytes.length === 0) throw new AppError(400, 'Empty upload', 'invalidRequest');
+  if (bytes.length > maxBytes) throw new AppError(413, 'The file is too large', 'tooLarge');
+  const dir = tenantFilesDir(tenantId);
+  await mkdir(dir, { recursive: true });
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const final = path.join(dir, `${sha256}.bin`);
+  if (await stat(final).then((s) => s.isFile() && s.size === bytes.length).catch(() => false)) return { sha256, size: bytes.length };
+  const tmp = path.join(dir, `.upload-${randomUUID()}`);
+  try {
+    await writeFile(tmp, bytes, { flag: 'wx', mode: 0o640 });
+    await rename(tmp, final);
+  } catch (err) {
+    await unlink(tmp).catch(() => undefined);
+    throw err;
+  }
+  return { sha256, size: bytes.length };
+}
+
 /** Receives an upload (raw body) into the tenant's folder: its SHA-256 and size computed here; a file already stored
  *  with the same content is kept as is. */
 export async function receiveFile(req: Request, tenantId: number, maxBytes: number): Promise<{ sha256: string; size: number }> {

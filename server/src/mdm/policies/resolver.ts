@@ -1,5 +1,6 @@
 import {
-  AGENT_CUSTOM_VARIABLE_PREFIX, AGENT_WIPE_KEY, ANDROID_MODES, APP_MANAGED_DECLARATION, appArtifactKey, availability, versionNum,
+  AGENT_APPCONFIG_KEY_PREFIX, AGENT_CUSTOM_VARIABLE_PREFIX, AGENT_WIPE_KEY, ANDROID_MODES, SITE_VARIABLE_PREFIX, APP_MANAGED_DECLARATION,
+  LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE, appArtifactKey, availability, versionNum,
   type AgentTemplateVariable, type AssignmentTargetScope, type EffectiveSetting, type JsonValue, type PolicyVariable, type SettingAvailability, type SettingConflictEntry,
   type SettingKind, type SourceScope,
 } from '@obligarth/shared';
@@ -69,6 +70,11 @@ export interface ResolutionDevice {
   customFields?: Record<string, string>;
   /** The bridge agent's key withdrawn (legacy_agent_devices.revoked_at): its agent:* keys stop applying (D5). */
   revoked?: boolean;
+  /** The version code of the bridge agent (legacy_agent_devices.agent_version_code): a family newer than the agent
+   *  does not apply (agent:appconfig:<id> before 1.4.2, agent_too_old); absent: unknown, as too old. */
+  agentVersionCode?: number | null;
+  /** The site of the device (lot P1-SITE): {{site.…}}, and the fallback of {{device.custom.<name>}}; absent: none. */
+  site?: { code: string; name: string; city: string | null; values: Record<string, string> } | null;
 }
 
 export interface ResolutionAssignment {
@@ -143,13 +149,26 @@ const compareCandidates = (x: Candidate, y: Candidate): number =>
   || x.res.tenantId - y.res.tenantId || x.res.id - y.res.id || x.a.id - y.a.id;
 
 /** The value of a variable for a device; null when it has none (absent, or empty). A custom field of the device
- *  ({{device.custom.<name>}}) is read only for a setting of the bridge agent (kind 'agent', lot PONT-POL §5.4). */
+ *  ({{device.custom.<name>}}) is read only for a setting of the bridge agent (kind 'agent', lot PONT-POL §5.4): the
+ *  device's own field, else the value of the same key of its site (lot P1-SITE §2.2: a device enrolled without the
+ *  MobiControl import has no field, its site has the value). The variables of the site ({{site.code}}, {{site.name}},
+ *  {{site.city}}, {{site.<key>}}) are the bridge agent's only too. */
 export function variableValue(name: PolicyVariable | AgentTemplateVariable, d: ResolutionDevice, tenant: { name: string; slug: string },
   kind?: string): string | null {
+  const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() !== '' ? v : null);
+  const siteValue = (k: string): string | null => (d.site && Object.prototype.hasOwnProperty.call(d.site.values, k) ? text(d.site.values[k]) : null);
   if (name.startsWith(AGENT_CUSTOM_VARIABLE_PREFIX)) {
     if (kind !== 'agent') return null;
-    const v = d.customFields?.[name.slice(AGENT_CUSTOM_VARIABLE_PREFIX.length)];
-    return typeof v === 'string' && v.trim() !== '' ? v : null;
+    const k = name.slice(AGENT_CUSTOM_VARIABLE_PREFIX.length);
+    return text(d.customFields?.[k]) ?? siteValue(k);
+  }
+  if (name.startsWith(SITE_VARIABLE_PREFIX)) {
+    if (kind !== 'agent' || !d.site) return null;
+    const k = name.slice(SITE_VARIABLE_PREFIX.length);
+    if (k === 'code') return text(d.site.code);
+    if (k === 'name') return text(d.site.name);
+    if (k === 'city') return text(d.site.city);
+    return siteValue(k);
   }
   const v = ((): string | null | undefined => {
     switch (name) {
@@ -186,6 +205,10 @@ function availabilityOf(input: ResolutionInput, d: ResolutionDevice, c: Contribu
     if (d.channel !== 'legacy_agent') return { status: 'not_applicable', reason: 'platform_unsupported' };
     if (d.revoked) return { status: 'not_applicable', reason: 'device_revoked' };
     if (c.settingKey === AGENT_WIPE_KEY && d.ownership !== 'corporate') return { status: 'not_applicable', reason: 'ownership_forbidden' };
+    // The managed configuration of apps (lot P1-QR §6 ter): agent 1.4.2 and later; an older one is never sent appConfigs.
+    if (c.settingKey.startsWith(AGENT_APPCONFIG_KEY_PREFIX) && (d.agentVersionCode ?? 0) < LEGACY_AGENT_APPCONFIG_MIN_VERSION_CODE) {
+      return { status: 'not_applicable', reason: 'agent_too_old', detail: '1.4.2' };
+    }
     if (unresolved) return { status: 'not_applicable', reason: 'variable_unresolved', detail: unresolved };
     return { status: 'available' };
   }

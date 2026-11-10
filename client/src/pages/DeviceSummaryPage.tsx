@@ -30,6 +30,7 @@ import { LegacyActionsTab, LegacyCommandsTab } from '@/components/mdm/device/Leg
 import { LegacyPolicyTab } from '@/components/mdm/device/LegacyPolicyTab';
 import { LostModeBanner } from '@/components/mdm/device/LostModeBanner';
 import { DeviceRemoteTab } from '@/components/remote/DeviceRemoteTab';
+import { DeviceSiteBar } from '@/components/sites/DeviceSiteBar';
 import { channelOf, useDeviceActions } from '@/components/mdm/device/useDeviceActions';
 import { anonymize } from '@/utils/anonymize';
 import { apiErrorMessage } from '@/utils/apiError';
@@ -230,6 +231,10 @@ export function DeviceSummaryPage() {
       {backLink}
 
       <DeviceHero device={device} tenantName={tenantName} actions={deviceActions} canWrite={canWrite} onEdit={() => setEditOpen(true)} />
+      {/* The site of the device (lot P1-SITE), in its own tenant. */}
+      {device.tenantId === currentTenantId && (
+        <DeviceSiteBar device={device} canChange={canWrite && canManageDevices} onChanged={reloadQuietly} />
+      )}
       <LostModeBanner device={device} actions={deviceActions} onShowLocation={showLocation} />
 
       <SegmentedTabs tabs={tabs} value={current} onChange={setTab} ariaLabel={t('deviceSummary.tabs.label') || 'Sections of the device'} />

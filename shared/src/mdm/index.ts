@@ -38,3 +38,5 @@ export * from './deviceViews';
 export * from './smartGroups';
 // Remote assistance (P0-15 §6): sessions, limits, messages of the stream.
 export * from './remote';
+// Sites (lot P1-SITE): where a device is, the values its file templates read, the import.
+export * from './sites';

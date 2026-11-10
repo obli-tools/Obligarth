@@ -10,7 +10,7 @@ import type { RuleNode } from './rules';
 
 /** The sort keys of GET /api/mdm/devices (sortBy), the server's whitelist. */
 export const DEVICE_LIST_SORT_KEYS = ['name', 'platform', 'os', 'lastCheckin', 'enrolledAt', 'group', 'state', 'compliance',
-  'ownership', 'model', 'warranty'] as const;
+  'ownership', 'model', 'warranty', 'site'] as const;
 export type DeviceListSortKey = typeof DEVICE_LIST_SORT_KEYS[number];
 
 /** The values of the contact filter of the list. */
