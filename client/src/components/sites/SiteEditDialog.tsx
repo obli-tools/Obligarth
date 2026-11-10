@@ -14,6 +14,7 @@ import { apiErrorBody, apiErrorMessage, trCode } from '@/utils/apiError';
 // A site created or changed (lot P1-SITE §2.4): its code, name, city, contact, the group its phones are filed in, and
 // its values (key → text: the {{site.<key>}} of the file templates, and the fallback of {{device.custom.<key>}}).
 
+const fieldBase = 'rounded-lg bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50';
 const fieldCls = 'mt-1 w-full rounded-lg bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-accent/50';
 
 /** The message of a refused site: its issues translated (invalidSite details.issues). */
@@ -93,9 +94,9 @@ export function SiteEditDialog({ open, site, onClose, onSaved }: {
             {rows.map((r, i) => (
               <div key={i} className="flex items-center gap-2">
                 <input value={r.key} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, key: e.target.value } : x)))} placeholder="codeMag"
-                  className={`${fieldCls} mt-0 w-40 font-mono text-xs ${keyProblem(r.key) ? 'ring-2 ring-red-500/60' : ''}`} autoCapitalize="off" spellCheck={false} maxLength={64} />
+                  className={`${fieldBase} w-40 shrink-0 font-mono text-xs ${keyProblem(r.key) ? 'ring-2 ring-red-500/60' : ''}`} autoCapitalize="off" spellCheck={false} maxLength={64} />
                 <input value={r.value} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
-                  className={`${fieldCls} mt-0 flex-1`} maxLength={SITE_LIMITS.valueMax} />
+                  className={`${fieldBase} min-w-0 flex-1`} placeholder={t('sites.fields.valuePlaceholder') || 'Value'} maxLength={SITE_LIMITS.valueMax} />
                 <button type="button" onClick={() => setRows(rows.filter((_x, j) => j !== i))} aria-label={t('common.delete') || 'Delete'}
                   className="rounded p-1.5 text-text-muted hover:bg-bg-tertiary hover:text-red-400 coarse:min-h-10 coarse:min-w-10">
                   <X className="h-4 w-4" />

@@ -7409,7 +7409,8 @@
       "noGroup": "No group",
       "values": "Values of the site",
       "valuesHint": "Read by the file templates: site.<key>, and device.custom.<key> when the phone has no value of its own.",
-      "addValue": "Add a value"
+      "addValue": "Add a value",
+      "valuePlaceholder": "Value"
     },
     "import": {
       "open": "Import a CSV",
