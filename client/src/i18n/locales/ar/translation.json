@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "لا يمكن أن تتكون كلمة المرور من مسافات فقط. اترك الحقل فارغًا لإزالة كلمة المرور."
+    },
+    "reconcileHold": {
+      "help": "لم تعثر آخر عملية مطابقة لدى Google على {{count}} من أصل {{managed}} جهازًا مُدارًا: لم يُخرج أي منها من الإدارة. تحقق أولًا من المؤسسة لدى Google؛ ولا تؤكد إلا إذا كانت هذه الأجهزة قد اختفت فعلًا.",
+      "confirm": "تأكيد اختفاء {{count}} جهاز…",
+      "confirmTitle": "تأكيد الأجهزة المختفية",
+      "confirmMessage": "إخراج {{count}} جهاز من الإدارة؟ لا تفعل ذلك إلا إذا أُزيلت فعلًا لدى Google: سيُطلب عامل ثانٍ.",
+      "confirmed": "سُجّل التأكيد: تعمل المطابقة خلال دقيقة."
+    }
+  },
   "common": {
     "save": "حفظ",
     "cancel": "إلغاء",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "تعذّر التبديل إلى مساحة العمل هذه.",
+    "roleAdministrator": "مسؤول",
+    "roleMember": "عضو",
+    "confirmRoleChange": "منح {{user}} الدور \"{{role}}\" في مساحة العمل هذه؟",
+    "roleOf": "دور {{user}}",
+    "deleteTitle": "حذف مساحة العمل \"{{name}}\"",
+    "confirmDeleteTyped": "ستُحذف جميع بياناتها نهائيًا، بما في ذلك الأجهزة المُدارة. اكتب \"{{slug}}\" للتأكيد.",
+    "deleted": "تم حذف مساحة العمل \"{{name}}\"",
     "pageTitle": "مساحات العمل",
     "pageDesc": "إدارة مساحات العمل وأعضائها للنشر متعدد المستأجرين.",
     "create": "مساحة عمل جديدة",
@@ -279,6 +299,9 @@
     "switchWorkspace": "تبديل مساحة العمل"
   },
   "devices": {
+    "list": {
+      "otherGroups": "مجموعات أخرى"
+    },
     "tabApiKeys": "مفاتيح API",
     "viewDevice": "عرض الجهاز",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "قيد الاستخدام: إعداد الحماية «عامل ثانٍ لأوامر وكيل Android» مفعّل.",
+      "commandsSensitiveOff": "غير مستخدم: إعداد الحماية «عامل ثانٍ لأوامر وكيل Android» معطّل (الأمان، علامة التبويب «الحمايات»)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "خطأ"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "إعادة تحميل الإصدار المحفوظ على الخادم؟ ستفقد تغييراتك غير المحفوظة.",
+      "noLongerDraft": "لم يعد هذا الإصدار مسودة (تم إرساله أو نشره من مكان آخر): أعد تحميله.",
+      "confirmOverwrite": "عدّل شخص آخر هذه المسودة منذ أن فتحتها. هل تريد حفظ نسختك رغم ذلك؟ ستفقد تغييراته.",
+      "reviewBeforePublish": "عُدّل هذا الإصدار من مكان آخر: يُعرض الآن محتواه الحالي، راجعه قبل النشر.",
+      "changedElsewhere": "عُدّل هذا الإصدار من مكان آخر منذ أن فتحته. سيؤدي الحفظ إلى استبدال تلك التغييرات.",
+      "reloadVersion": "إعادة التحميل",
+      "savedElsewhere": "حُفظت هذه المسودة في مكان آخر في الأثناء: لم يُحفظ شيء. أعد تحميلها لرؤية التغييرات الأخرى (وستُفقد تغييراتك)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "تم نقل المجموعة، لكن تعذّر حفظ موضعها بين المجموعات الشقيقة الجديدة",
+    "crossTenantMove": "تبقى المجموعة في مساحة عملها: أفلتها بين مجموعات مساحة العمل نفسها.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "تم حذف الإشعار",
+      "live_alert_cleared": "تم مسح الإشعارات",
+      "sso_sync_delete_blocked": "حُظر حذف الحساب من Obligate (لا يزال مُشارًا إليه): عُطّل، احذفه يدويًا",
+      "android_mass_missing_confirmed": "Android: تأكّد الاختفاء الجماعي",
+      "legacy_agent_package_confirmed": "تأكيد ملف APK أعاده جهاز"
+    },
+    "families": {
+      "legacy_agent": "وكيل Android"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "أزل تعيينات هذا التطبيق قبل تغيير منصاته.",
+    "exportBusy": "عمليات تصدير PDF الجارية كثيرة جدًا: أعد المحاولة بعد لحظة.",
+    "exportTooLarge": "عدد الصفوف كبير جدًا لتصدير PDF (2000 كحد أقصى): ضيّق عوامل التصفية أو صدّر بتنسيق CSV أو XLSX.",
+    "exportTimeout": "استغرق تصدير PDF وقتًا طويلًا: صدّر بتنسيق CSV أو XLSX أو ضيّق عوامل التصفية.",
+    "tenantHasBridgeDevices": "لا تزال مساحة العمل هذه تضم {{devices}} جهازًا مسجلًا بوكيل الجسر لنظام Android: ألغِها أولًا ثم احذف مساحة العمل.",
+    "deadLetterAlreadyApplied": "أُعيد تطبيق هذه الرسالة الميتة بالفعل: لا تُطبَّق مرتين.",
+    "userHasDependencies": "لا تزال سجلات أخرى تشير إلى هذا الحساب: عطّله بدلًا من ذلك، أو أزل أولًا ما يشير إليه.",
+    "invalidConfirmMissing": "يجب أن يذكر التأكيد العدد الدقيق للأجهزة المحتجزة (عدد صحيح موجب).",
+    "adminRequired": "لا يمكن إطلاق أمر مدمّر إلا لمسؤول المستأجر.",
+    "releaseRateLimited": "أُطلق عدد كبير جدًا من الأوامر المدمّرة خلال الساعة الأخيرة: أعد المحاولة لاحقًا.",
+    "policyVersionChanged": "تغيّر الإصدار منذ معاينته: راجعه مرة أخرى.",
+    "twoFactorSetupRequired": "العامل الثاني مطلوب: اضبط أولًا تطبيق مصادقة في ملفك الشخصي.",
+    "packageNotConfirmed": "أعاد جهاز إرسال ملف APK هذا: أكّده في علامة التبويب «الحزم» لوكيل Android قبل تثبيته.",
+    "capabilityMissing": "لا يملك فريقك الصلاحية التي يتطلبها هذا الإجراء."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "غير مسموح: ليس لديك حق الكتابة على هذه الأجهزة.",
+      "status": {
+        "governed": "تغيير خاضع للحوكمة: أعد التسمية من بطاقة الجهاز"
+      },
+      "governedHint": "تغيير خاضع للحوكمة: الاسم الجديد سيُدخل الجهاز إلى مجموعة ديناميكية يستهدفها تعيين أو يُخرجه منها. أعد تسميته من بطاقة الجهاز حيث تُعرض معاينة الأثر."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "الحالة",
+      "toConfirm": "بانتظار التأكيد",
+      "toConfirmHint": "أعاد جهاز إرساله: لا يمكن تثبيته حتى يؤكده شخص.",
+      "confirmedState": "مؤكَّد",
+      "confirm": "تأكيد",
+      "confirmTitle": "تأكيد ملف APK هذا",
+      "confirmMessage": "أعاد جهاز إرسال ملف APK هذا ({{packageName}}، {{version}})، ولم يرفعه شخص. بعد تأكيده يمكن تثبيته على أجهزة المستأجر.",
+      "confirmCheck": "تحقق قبل التأكيد من أن اسم الحزمة والإصدار والموقِّع هي ما تتوقعه.",
+      "signerShort": "الموقِّع",
+      "confirmed": "تم تأكيد ملف APK: يمكن تثبيته الآن.",
+      "fromDevice": "من الجهاز",
+      "unconfirmedHint": "يجب تأكيد الحزم التي أعادتها الأجهزة ({{count}}) في علامة التبويب «الحزم» قبل أن يمكن تثبيتها."
+    },
+    "awaitingApproval": "أُرسل الطلب للموافقة"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "غير مسموح لك بحذف هذه الإشعارات: فهي مشتركة على مستوى المستأجر."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "لم تُحدَّث منصات التطبيقات",
+          "message": "يشير رمز المحتوى {{label}} إلى منصات أخرى لـ {{count}} تطبيقًا معيّنًا: يُحتفظ بمنصاتها ما دامت لها تعيينات."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: احتُجز اختفاء جماعي لدى Google",
+        "message": "لم تعثر عملية مطابقة لدى Google على {{count}} من أصل {{managed}} جهازًا مُدارًا: لم يُخرج أي منها من الإدارة. تحقق من المؤسسة ثم أكّد في بطاقة Android Enterprise إن كانت قد اختفت فعلًا."
+      },
+      "google_unreachable": {
+        "title": "Android: تعذّر الوصول إلى Google",
+        "message": "لا يصل Obligarth إلى واجهة Android Management API من Google: تسجيلات Android وسياساته وأوامره في الانتظار."
+      },
+      "google_auth_failed": {
+        "title": "Android: رفضت Google الهوية",
+        "message": "رفضت Google حساب الخدمة (مفتاح ملغى أو إذن مفقود): توقف ربط Android."
+      },
+      "google_key_expiring": {
+        "title": "Android: مفتاح حساب الخدمة على وشك الانتهاء",
+        "message": "ينتهي مفتاح حساب خدمة Google خلال {{days}} يوم/أيام: استبدله."
+      },
+      "quota_warning": {
+        "title": "Android: حصة الأجهزة عند 80 %",
+        "message": "أجهزة Android في مشروع Google: {{count}}. استُخدم 80 % من حصته."
+      },
+      "quota_exhausted": {
+        "title": "Android: بلغت حصة الأجهزة حدها",
+        "message": "أجهزة Android: {{count}}. بلغت حصة مشروع Google حدها، وتُرفض التسجيلات الجديدة."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: إشعار في الرسائل الميتة",
+        "message": "تعذّرت معالجة إشعار من Google للمستأجر {{tenantId}} ({{code}}) ونُقل إلى الرسائل الميتة."
+      },
+      "retention_risk": {
+        "title": "Android: إشعارات معرّضة لانتهاء الصلاحية",
+        "message": "لم يُسحب أي إشعار من Google منذ {{days}} يوم/أيام: قد تنتهي صلاحية الأقدم قبل قراءتها."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: رسائل من مؤسسات مجهولة",
+        "message": "رسائل Pub/Sub في الساعة الأخيرة من مؤسسات لا يعرفها Obligarth: {{lastHour}}."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: رسالة اختبار Pub/Sub مفقودة",
+        "message": "لم تصل رسالة اختبار Pub/Sub لمؤسسة المستأجر {{tenantId}}: تحقق من أذونات الموضوع."
+      },
+      "ownership_violation": {
+        "title": "Android: رفض فحص الملكية استدعاءً",
+        "message": "رفض فحص الملكية استدعاءً إلى Google ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: مؤسسة من المشروع غير موجودة في السجل",
+        "message": "مؤسسة من مشروع Google ({{ref}}) غير موجودة في سجل Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: رُفضت استدعاءات التسجيل الراجعة",
+        "message": "استدعاءات تسجيل المؤسسات الراجعة المرفوضة في الساعة الأخيرة: {{lastHour}}."
+      },
+      "domain_claimed": {
+        "title": "Android: تسجيل نطاق يطالب به مستأجر آخر",
+        "message": "حاول المستأجر {{tenantId}} تسجيل مؤسسة لنطاق يطالب به مستأجر آخر."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: بلوغ الحد الأخير للعمليات الهدّامة",
+        "message": "بُلغ الحد الأخير لعمليات Android الهدّامة ({{kind}}، {{count}}): تُرفض العمليات التالية."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: فُكّ ربط المؤسسة خارج Obligarth",
+        "message": "فُكّ ربط مؤسسة Android لهذا المستأجر خارج Obligarth: لم تعد أجهزتها مُدارة."
+      },
+      "signup_failed": {
+        "title": "Android: فشل تسجيل المؤسسة",
+        "message": "فشل تسجيل مؤسسة Android ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: انقطع تسجيل المؤسسة",
+        "message": "انقطع تسجيل مؤسسة Android قبل اكتماله: ابدأه من جديد."
+      },
+      "device_api_too_low": {
+        "title": "Android: جهاز دون الحد الأدنى لمستوى API في ملفه",
+        "message": "وُضع في الحجر جهاز Android دون الحد الأدنى لمستوى API في ملف تسجيله."
+      },
+      "enrollment_spike": {
+        "title": "Android: ارتفاع مفاجئ في التسجيلات على رمز طويل",
+        "message": "التسجيلات في الساعة الأخيرة على الرمز الطويل {{tokenId}}: {{perHour}}. قد تتطلب التسجيلات التالية موافقة."
+      },
+      "policy_push_failed": {
+        "title": "Android: رفضت Google السياسة",
+        "message": "رفضت Google سياسة الجهاز {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: سلامة الجهاز مهددة",
+        "message": "أخفق الجهاز {{deviceId}} في فحص السلامة: ربما تعرّض للاختراق."
+      },
+      "device_pending_approval": {
+        "title": "Android: أجهزة بانتظار الموافقة",
+        "message": "توجد أجهزة Android بانتظار الموافقة عليها."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: بلوغ حد التسجيلات في الحجر",
+        "message": "بُلغ حد تسجيلات Android في الحجر: تُرفض التسجيلات التالية."
+      },
+      "device_offline_long": {
+        "title": "Android: أجهزة دون اتصال منذ 240 يومًا",
+        "message": "أجهزة Android دون اتصال منذ 240 يومًا: {{count}}."
+      },
+      "device_presumed_gone": {
+        "title": "Android: أجهزة يُفترض أنها اختفت",
+        "message": "أجهزة Android يُفترض أنها اختفت (غير موجودة لدى Google): {{count}}. أكّدها أو استعدها."
+      },
+      "token_expiring": {
+        "title": "Android: رموز تسجيل طويلة يجب تجديدها",
+        "message": "رموز تسجيل طويلة تنتهي قريبًا: {{count}}. جدّدها."
+      },
+      "byod_code_flood": {
+        "title": "Android: رموز دعوة BYOD خاطئة كثيرة",
+        "message": "أكثر من {{perHour}} رمز دعوة BYOD خاطئ في ساعة: تُرفض كل رموز المستأجر حتى نهاية الساعة."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "تسجيلات دون رمز من هذا المستأجر",
+        "message": "عُثر على أجهزة Android دون رمز تسجيل من هذا المستأجر: تحقق من الحجر."
+      },
+      "ownership_mismatch": {
+        "title": "الملكية أو الوضع يختلفان عن ملف التسجيل",
+        "message": "سُجّل جهاز Android بملكية أو وضع لا يسمح بهما ملف تسجيله: إنه في الحجر."
+      },
+      "duplicate_serial": {
+        "title": "رقم تسلسلي يحمله جهاز مُدار",
+        "message": "سُجّل جهاز Android بالرقم التسلسلي للجهاز {{deviceId}} المُدار بالفعل."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "تأكيد أجهزة Android المختفية لدى Google",
+      "androidReleaseHeld": "إطلاق أمر Android محتجز"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "طلب الموافقة لم يعد موجودًا.",
+      "batchGone": "انتهت صلاحية دفعة التغييرات أو استُخدمت بالفعل: اطلبها من الوكيل مرة أخرى.",
+      "capabilityMissing": "لا يملك فريقك الصلاحية التي يتطلبها هذا الإجراء.",
+      "detachOneByOne": "لا يمكن للوكيل فصل عدة أجهزة عن موقعها دفعة واحدة: افصلها واحدًا تلو الآخر في وحدة التحكم.",
+      "executionFailed": "فشل الإجراء المعتمد عند تنفيذه.",
+      "keyInactive": "مفتاح الوصول لم يعد نشطًا.",
+      "perimeterLost": "أصبح الإجراء الآن خارج نطاقك أو نطاق المفتاح.",
+      "planChanged": "تغيّرت الخطة منذ اعتمادها: لم يُطبَّق شيء.",
+      "policyChanged": "تغيّرت السياسة منذ الطلب: لم يُطبَّق شيء.",
+      "unknownTool": "أداة غير معروفة.",
+      "refusedStatus": "رفضته وحدة التحكم (HTTP {{status}})",
+      "interrupted": "توقف الإجراء قبل اكتماله: تحقق من نتيجته قبل طلبه مجددًا.",
+      "cancelFailed": "لم يكتمل الإلغاء بعد: تُعاد المحاولة كل دقيقة.",
+      "stepUpRequired": "يتطلب الإجراء عاملًا ثانيًا حديثًا: وافق عليه مجددًا من وحدة التحكم.",
+      "impactChanged": "تغيّر الأثر منذ أن اطلعت عليه: لم يُنفَّذ أي شيء."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "عامل ثانٍ لأوامر وكيل Android",
+      "legacyAgentCommandsSensitiveHelp": "يتطلب تثبيت تطبيق أو إلغاء تثبيته وتحديث الوكيل وإعادة تشغيل جهاز وتعليق وضع الكشك فيه العاملَ الثاني لمن يرسلها (وحدة التحكم وMCP). معطّل افتراضيًا. وكما في الإعدادات الأخرى، يوافق على التغيير شخص ثانٍ.",
+      "pending": "تغيير بانتظار الموافقة (الطلب رقم {{id}})",
+      "pendingOpen": "فتح الموافقات",
+      "on": "مفعّل",
+      "off": "معطّل"
     }
   }
 }

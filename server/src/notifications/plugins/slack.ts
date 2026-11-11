@@ -1,4 +1,5 @@
 import type { NotificationPlugin, NotificationPayload } from '../types';
+import { guardedPost } from '../../utils/ssrfGuard';
 
 export const slackPlugin: NotificationPlugin = {
   type: 'slack',
@@ -29,12 +30,8 @@ export const slackPlugin: NotificationPlugin = {
     };
     if (config.channel) body.channel = config.channel;
 
-    const res = await fetch(String(config.webhookUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000),
-    });
+    // A public destination only, no redirect.
+    const res = await guardedPost(String(config.webhookUrl), { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 'public');
     if (!res.ok) throw new Error(`Slack returned ${res.status}`);
   },
 

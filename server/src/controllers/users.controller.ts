@@ -230,6 +230,10 @@ export const usersController = {
         const { deviceKeyService } = await import('../services/deviceKey/deviceKey.service');
         await deviceKeyService.revokeAllForUser(id, 'password_reset', { byUserId: req.session.userId, req });
       } catch { /* trigger */ }
+      // And so do its open sessions: a reset meant to cut an intruder off must
+      // not leave the intruder's session alive (it is never the caller's own).
+      const { killSessionsForUser } = await import('../services/userSessions.service');
+      await killSessionsForUser(id, 'password_reset').catch(() => 0);
       res.json({ success: true, message: 'Password changed' });
     } catch (err) {
       next(err);

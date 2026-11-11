@@ -66,6 +66,7 @@ export const APPLE_ALERTS = {
   'vpp.token_invalid': { scope: 'tenant', severity: 'critical', title: 'Content token invalid', message: 'The content token {label} is no longer valid: import a new one.' },
   'vpp.operation_failed': { scope: 'tenant', severity: 'warning', title: 'Apps and Books operations failed', message: '{count} licence operation(s) failed.' },
   'vpp.notification_auth_failed': { scope: 'tenant', severity: 'warning', title: 'Apps and Books notifications refused', message: '{count} notification(s) presented a wrong secret.' },
+  'vpp.platforms_kept': { scope: 'tenant', severity: 'warning', title: 'App platforms not updated', message: 'The content token {label} lists other platforms for {count} assigned app(s): their platforms are kept until their assignments are removed.' },
   // ── Deadlines (INT-05) ────────────────────────────────────────────────────
   'deadline.apns_certificate': { scope: 'tenant', severity: 'warning', title: 'Push certificate expiring', message: '{label} expires in {daysLeft} day(s) ({notAfter}).' },
   'deadline.ade_token': { scope: 'tenant', severity: 'warning', title: 'ADE token expiring', message: '{label} expires in {daysLeft} day(s) ({notAfter}).' },

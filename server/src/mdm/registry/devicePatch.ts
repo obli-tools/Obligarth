@@ -37,6 +37,11 @@ export const DevicePatchBody = z.object({
 }).strict();
 export type DevicePatch = z.infer<typeof DevicePatchBody>;
 
+/** The restrictable action of the name and custom fields of one device when they rewrite its bridge agent policy
+ *  (review F116; mdm/registry/agentValues.ts). Here, in a module without runtime imports: the sites' registration
+ *  (sites/guard.ts) reads it while the import chains of the policies may still be loading. */
+export const DEVICE_VALUES_ACTION = 'sites.device_values';
+
 /** The fields of a patch the rule language reads (name, tags, custom_field, lifecycle_status, warranty_status). */
 export const RULE_FACT_PATCH_FIELDS = ['displayName', 'tags', 'customFields', 'lifecycleStatus', 'warrantyStatus'] as const;
 

@@ -39,6 +39,17 @@ export function translateErrorCode(code: string | undefined, params?: Record<str
   return null;
 }
 
+/** The execution error of an approved request, as the server stores it ("<code>" or "<code>: <English detail>",
+ *  e.g. "packageNotConfirmed: the package is no longer confirmed"): the translation of its code when the console
+ *  has one, otherwise the text unchanged. `translate` is injectable for tests. */
+export function executionErrorText(
+  raw: string,
+  translate: (code: string) => string | null = (code) => translateErrorCode(code),
+): string {
+  const m = /^([a-z][A-Za-z0-9]*)(?::\s.*)?$/s.exec(raw.trim());
+  return (m && translate(m[1])) || raw;
+}
+
 /** The details that are themselves codes of the server, translated before they reach the sentence of their error
  *  (error code → detail → prefix of its labels); a code without a label stays as the server sent it. */
 const CODED_DETAILS: Record<string, Record<string, string>> = {

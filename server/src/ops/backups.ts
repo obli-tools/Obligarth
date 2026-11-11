@@ -73,6 +73,8 @@ async function raise(actor: DbActor, f: ReturnType<typeof backupFindings>[number
     message: f.message.slice(0, 500),
     navigateTo: null,
     stableKey: f.key,
+    // An alert of the instance: the platform administrators' only, never the other members of the master tenant.
+    platformOnly: true,
   }));
 }
 

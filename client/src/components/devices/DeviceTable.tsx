@@ -17,7 +17,7 @@ import type {
   ComplianceState, ConfigState, DeviceFacets, DeviceGroupTreeNode, DeviceSummary, DeviceView, Ownership, RuleNode,
 } from '@obligarth/shared';
 import { useTenantStore } from '@/store/tenantStore';
-import { groupsApi } from '@/api/groups.api';
+import { useGroupStore } from '@/store/groupStore';
 import { DeviceRow } from '@/components/devices/DeviceRow';
 import { DevicesKpiStrip, isApplePlatform, type KpiFilter } from '@/components/devices/DevicesKpiStrip';
 import { AdvancedFilterDialog } from '@/components/devices/AdvancedFilterDialog';
@@ -307,7 +307,9 @@ export function DeviceTable({
   const [devices, setDevices] = useState<DeviceSummary[]>([]);
   const [total, setTotal] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  const [tree, setTree] = useState<DeviceGroupTreeNode[]>([]);
+  // The group tree is the store's, shared with the side panel (which pushes its own reloads there): a group created
+  // or moved in the panel is known here at once (the server emits no group event).
+  const tree = useGroupStore((s) => s.tree);
   const [collapsedGroupIds, setCollapsedGroupIds] = useState<Set<number>>(() => {
     try {
       const raw = localStorage.getItem('obligarth:deviceTableCollapsed');
@@ -408,20 +410,28 @@ export function DeviceTable({
     supervisedOnly, osBelow, tagFilters, endUserId, lostOnly, groupId, ungroupedOnly, isMaster, tenantFilters, sortBy, sortOrder,
     ruleJson, smartGroupId, siteId]);
 
+  // Only the answer of the LAST reset (and the pages appended after it) lands: a slow answer of a previous filter
+  // must not replace the list of the current one, which "select all" and the batch actions then act on.
+  const loadSeqRef = useRef(0);
   const load = useCallback(async (reset: boolean) => {
+    const seq = reset ? ++loadSeqRef.current : loadSeqRef.current;
     const pageToFetch = reset ? 1 : loadedPagesRef.current + 1;
     const size = treeViewActive ? TREE_MAX : FLAT_PAGE_SIZE;
-    if (reset) { setIsLoading(true); loadedPagesRef.current = 1; } else setAppending(true);
+    // A reset drops an append in flight (its answer is stale): its flag goes with it.
+    if (reset) { setIsLoading(true); setAppending(false); loadedPagesRef.current = 1; } else setAppending(true);
     try {
       const result = await mdmApi.listDevices({ ...listParams, page: pageToFetch, pageSize: size });
+      if (seq !== loadSeqRef.current) return;
       setDevices((prev) => (reset ? result.items : [...prev, ...result.items]));
       setTotal(result.total);
       loadedPagesRef.current = pageToFetch;
       setHasMore(!treeViewActive && pageToFetch * size < result.total);
     } catch (err) {
-      toast.error(apiErrorMessage(err));
+      if (seq === loadSeqRef.current) toast.error(apiErrorMessage(err));
     } finally {
-      if (reset) setIsLoading(false); else setAppending(false);
+      if (seq === loadSeqRef.current) {
+        if (reset) setIsLoading(false); else setAppending(false);
+      }
     }
   }, [listParams, treeViewActive]);
 
@@ -430,7 +440,7 @@ export function DeviceTable({
 
   const loadFacets = useCallback(() => { mdmApi.facets().then(setFacets).catch(() => setFacets(null)); }, []);
   useEffect(() => {
-    groupsApi.tree().then(setTree).catch(() => setTree([]));
+    void useGroupStore.getState().fetchTree();
     loadFacets();
   }, [loadFacets]);
 
@@ -1630,6 +1640,16 @@ function DeviceListBody({
     return node ? [node] : [];
   }, [tree, groupId]);
 
+  // The groups the rendered tree shows. A loaded device whose group is not among them (a group created after the
+  // tree was read) is still rendered, in an "other groups" block: no device of the list is ever invisible (the
+  // count and "select all" include it).
+  const orphans = useMemo(() => {
+    const shown = new Set<number>();
+    const walk = (nodes: DeviceGroupTreeNode[]) => { for (const n of nodes) { shown.add(n.id); walk(n.children); } };
+    walk(roots);
+    return devices.filter((d) => d.groupId != null && !shown.has(d.groupId));
+  }, [devices, roots]);
+
   const row = (device: DeviceSummary) => (
     <DeviceRow
       key={device.id} device={device}
@@ -1659,6 +1679,16 @@ function DeviceListBody({
       {list.map(row)}
     </div>
   ) : null);
+  const orphansBlock = orphans.length > 0 ? (
+    <div>
+      <div className="flex items-center gap-2 px-4 py-1.5 bg-bg-tertiary/70">
+        <FolderX className="w-3.5 h-3.5 text-text-muted flex-shrink-0" />
+        <span className="text-xs font-semibold text-text-muted">{t('devices.list.otherGroups') || 'Other groups'}</span>
+        <span className="text-[10px] text-text-muted">({orphans.length})</span>
+      </div>
+      {orphans.map(row)}
+    </div>
+  ) : null;
 
   // Master view: the roots and the ungrouped devices bucketed by tenant, the master tenant first.
   if (isMaster && groupId === null) {
@@ -1701,6 +1731,7 @@ function DeviceListBody({
             </div>
           );
         })}
+        {orphansBlock}
       </>
     );
   }
@@ -1709,6 +1740,7 @@ function DeviceListBody({
     <>
       {sortedRoots.flatMap((r) => renderTreeNode(r, 0, ctx))}
       {groupId === null && ungroupedBlock(ungrouped, false)}
+      {orphansBlock}
     </>
   );
 }

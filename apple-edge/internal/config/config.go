@@ -29,6 +29,14 @@ const (
 	PolicyAllow  = "allow"
 )
 
+// Policies of the DDM relay's response signature (the same values as package
+// ddm's ResponseSig*). TODO(F100): default to require-v2 once every brain in
+// production signs v2.
+const (
+	DDMResponseSigAcceptV1  = "accept-v1"
+	DDMResponseSigRequireV2 = "require-v2"
+)
+
 // Config is the validated configuration.
 type Config struct {
 	Env        string
@@ -53,6 +61,9 @@ type Config struct {
 
 	DDMURL         string
 	DDMHMACKeyFile string
+	// DDMResponseSignature: DDMResponseSigAcceptV1 (default) or
+	// DDMResponseSigRequireV2 (see package ddm, review F100).
+	DDMResponseSignature string
 
 	APNsURL         string
 	APNsExtraCAFile string
@@ -120,6 +131,7 @@ func Load(getenv func(string) string) (*Config, error) {
 		APITokenNextFile:         p.str("EDGE_API_TOKEN_NEXT_FILE", ""),
 		DDMURL:                   p.str("EDGE_DDM_URL", "http://server:3001/internal/apple-edge/ddm"),
 		DDMHMACKeyFile:           p.str("EDGE_DDM_HMAC_KEY_FILE", ""),
+		DDMResponseSignature:     p.str("EDGE_DDM_RESPONSE_SIGNATURE", DDMResponseSigAcceptV1),
 		APNsURL:                  strings.TrimRight(p.str("EDGE_APNS_URL", "https://api.push.apple.com"), "/"),
 		APNsExtraCAFile:          p.str("EDGE_APNS_EXTRA_CA_FILE", ""),
 		APNsExpiration:           p.duration("EDGE_APNS_EXPIRATION", 72*time.Hour, 0, 30*24*time.Hour),
@@ -165,6 +177,9 @@ func Load(getenv func(string) string) (*Config, error) {
 	}
 	if c.CrossTenantPolicy != PolicyRefuse && c.CrossTenantPolicy != PolicyAllow {
 		return nil, fmt.Errorf("EDGE_CROSS_TENANT_POLICY must be %q or %q", PolicyRefuse, PolicyAllow)
+	}
+	if c.DDMResponseSignature != DDMResponseSigAcceptV1 && c.DDMResponseSignature != DDMResponseSigRequireV2 {
+		return nil, fmt.Errorf("EDGE_DDM_RESPONSE_SIGNATURE must be %q or %q", DDMResponseSigAcceptV1, DDMResponseSigRequireV2)
 	}
 	if c.LogLevel != "info" && c.LogLevel != "debug" {
 		return nil, errors.New(`EDGE_LOG_LEVEL must be "info" or "debug"`)

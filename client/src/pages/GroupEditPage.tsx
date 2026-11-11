@@ -40,7 +40,7 @@ export function GroupEditPage() {
  const navigate = useNavigate();
  const { t } = useTranslation();
  const { canWriteGroup, isAdmin } = useAuthStore();
- const { getGroup, fetchGroups, fetchTree, tree } = useGroupStore();
+ const { getGroup, fetchGroups, fetchTree, tree, treeLoaded } = useGroupStore();
 
  const groupId = parseInt(id!, 10);
 
@@ -69,6 +69,10 @@ export function GroupEditPage() {
  const parentNode = findNodeById(tree, parentId);
  return parentNode?.children ?? [];
  }, [group, tree]);
+
+ // The siblings and the ancestors (inherited grants) come from the store's tree: read it fresh (the side
+ // panel keeps its own copy, and the server emits no group event).
+ useEffect(() => { void fetchTree(); }, [groupId, fetchTree]);
 
  // Sync sibling list when group or tree changes
  useEffect(() => {
@@ -107,7 +111,9 @@ export function GroupEditPage() {
  setPendingParentId(undefined);
  });
 
- if (loading) {
+ // A grant inherited from an ancestor group is known once the tree is read: wait for it rather than say
+ // "access denied" for a moment.
+ if (loading || (group && !isAdmin() && !treeLoaded && !canWriteGroup(groupId))) {
  return (
  <div className="flex h-full items-center justify-center">
  <LoadingSpinner size="lg" />

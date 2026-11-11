@@ -56,6 +56,18 @@ const asObject = (v: unknown): Record<string, unknown> => {
 /** A list of ids as one PostgreSQL array literal ('{1,2,3}'): a single binding whatever the number of ids. */
 const pgIntArray = (ids: readonly number[]): string => `{${ids.map(Number).filter((n) => Number.isSafeInteger(n)).join(',')}}`;
 
+/** A caller limited to the devices of their teams (an array; undefined or 'all': every device of the scope). */
+export const isRestricted = (visibleIds: number[] | 'all' | undefined): visibleIds is number[] => Array.isArray(visibleIds);
+
+/** The team scope of a caller on a query of `devices`: nothing when empty, one array binding otherwise. */
+export function applyVisibleIds(q: Knex.QueryBuilder, visibleIds: number[] | 'all' | undefined): void {
+  if (!isRestricted(visibleIds)) return;
+  if (visibleIds.length === 0) q.whereRaw('false');
+  // One array binding, not one placeholder per device: a member whose teams reach thousands of devices would
+  // send as many bindings (65 535 at most in the protocol), and the statement would cost its own parsing.
+  else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(visibleIds)]);
+}
+
 /** Filters of GET /api/mdm/devices (§10.6): the registry of services/deviceListFilters.ts (P0-5 T2). */
 export type { DeviceListFilters };
 
@@ -219,12 +231,7 @@ class DeviceService {
     thresholds: Map<number, number>): Promise<void> {
     const scope = await this.listTenantIds(tenantId, view, f.tenantIds);
     if (scope !== 'all') q.whereIn('devices.tenant_id', scope);
-    if (f.visibleIds !== undefined && f.visibleIds !== 'all') {
-      if (f.visibleIds.length === 0) q.whereRaw('false');
-      // One array binding, not one placeholder per device: a member whose teams reach thousands of devices would
-      // send as many bindings (65 535 at most in the protocol), and the statement would cost its own parsing.
-      else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(f.visibleIds)]);
-    }
+    applyVisibleIds(q, f.visibleIds);
     await applyDeviceListFilters(q, f, { tenantId, scope, thresholds, now: new Date() });
   }
 
@@ -270,10 +277,7 @@ class DeviceService {
     const base = () => {
       const q = db('devices');
       if (!isGlobalView(tenantId, view)) q.where('devices.tenant_id', tenantId);
-      if (visibleIds !== undefined && visibleIds !== 'all') {
-        if (visibleIds.length === 0) q.whereRaw('false');
-        else q.whereRaw('devices.id = ANY(?::integer[])', [pgIntArray(visibleIds)]);
-      }
+      applyVisibleIds(q, visibleIds);
       return q;
     };
     const count = async (col: string) => (await base().groupBy(col).select(`${col} as value`)
@@ -583,14 +587,19 @@ class DeviceService {
    * (every state but 'unenrolled'); 'stale' = no contact for mdmStaleAfterDays days, or none 24 h after
    * the enrollment.
    */
-  async getFleetSummary(tenantId: number, opts?: { strictTenantScope?: boolean; globalView?: boolean }): Promise<MdmFleetSummary> {
+  async getFleetSummary(tenantId: number,
+    opts?: { strictTenantScope?: boolean; globalView?: boolean; visibleIds?: number[] | 'all' }): Promise<MdmFleetSummary> {
     const isMaster = isGlobalView(tenantId, opts) && !opts?.strictTenantScope;
     const scope: number[] | 'all' = isMaster ? 'all' : [tenantId];
+    // A caller limited to the devices of their teams (F007/F014): the counters of those devices only, the same filter
+    // as getFacets; the snapshots of yesterday are the whole tenant's, so no delta is computed against them.
+    const restricted = isRestricted(opts?.visibleIds);
     const thresholds = await this.thresholds(scope);
     const days = this.staleDaysSql(thresholds);
     const managed = () => {
       const q = db('devices').whereNot('devices.enrollment_state', 'unenrolled');
       if (!isMaster) q.where('devices.tenant_id', tenantId);
+      applyVisibleIds(q, opts?.visibleIds);
       return q;
     };
     const row = await managed().first(db.raw(`
@@ -622,7 +631,7 @@ class DeviceService {
       byOwnership[g.ownership] = (byOwnership[g.ownership] ?? 0) + Number(g.n);
     }
     // Deltas against yesterday's snapshot of the tenant (null without one: the console hides them).
-    const yesterday = isMaster ? null : await db('fleet_daily_snapshot')
+    const yesterday = isMaster || restricted ? null : await db('fleet_daily_snapshot')
       .where({ tenant_id: tenantId })
       .where('day', '<', new Date().toISOString().slice(0, 10))
       .orderBy('day', 'desc')
@@ -661,16 +670,21 @@ class DeviceService {
   }
 
   /** The daily series of the last `days` days, the current day synthesised from the live state. */
-  async getFleetTimeseries(tenantId: number, days: number, view?: TenantView): Promise<MdmFleetPoint[]> {
+  async getFleetTimeseries(tenantId: number, days: number, view?: TenantView,
+    visibleIds?: number[] | 'all'): Promise<MdmFleetPoint[]> {
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
     const cutoff = new Date(today.getTime() - (Math.max(1, days) - 1) * 86_400_000).toISOString().slice(0, 10);
     const isMaster = isGlobalView(tenantId, view);
+    const todayStr = today.toISOString().slice(0, 10);
+    // The snapshots count whole tenants: a caller limited to their teams' devices gets the live point only, filtered.
+    if (isRestricted(visibleIds)) {
+      return [DeviceService.pointOf(todayStr, await this.getFleetSummary(tenantId, { globalView: isMaster, visibleIds }))];
+    }
     const q = db('fleet_daily_snapshot').where('day', '>=', cutoff).groupBy('day').orderBy('day', 'asc')
       .select('day', ...DeviceService.seriesSums());
     if (!isMaster) q.where({ tenant_id: tenantId });
     const rows = await q as Array<Record<string, any>>;
-    const todayStr = today.toISOString().slice(0, 10);
     const live = DeviceService.pointOf(todayStr, await this.getFleetSummary(tenantId, { globalView: isMaster }));
     const points = rows
       .map((r) => ({ at: (r.day instanceof Date ? r.day.toISOString() : String(r.day)).slice(0, 10), total: r.total,
@@ -681,10 +695,16 @@ class DeviceService {
   }
 
   /** The hourly series of the last `hours` hours (7 days at most), the current hour synthesised. */
-  async getFleetHourlySeries(tenantId: number, hours: number, view?: TenantView): Promise<MdmFleetPoint[]> {
+  async getFleetHourlySeries(tenantId: number, hours: number, view?: TenantView,
+    visibleIds?: number[] | 'all'): Promise<MdmFleetPoint[]> {
     const cap = Math.min(168, Math.max(2, hours));
     const cutoff = new Date(Date.now() - cap * 3_600_000);
     const isMaster = isGlobalView(tenantId, view);
+    if (isRestricted(visibleIds)) {
+      const hour = new Date();
+      hour.setMinutes(0, 0, 0);
+      return [DeviceService.pointOf(hour.toISOString(), await this.getFleetSummary(tenantId, { globalView: isMaster, visibleIds }))];
+    }
     const q = db('fleet_hourly_snapshot').where('hour', '>=', cutoff).groupBy('hour').orderBy('hour', 'asc')
       .select('hour', ...DeviceService.seriesSums());
     if (!isMaster) q.where({ tenant_id: tenantId });

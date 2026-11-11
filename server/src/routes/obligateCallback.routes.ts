@@ -1067,9 +1067,26 @@ async function applyConfirmedSync(
         }
         return { retry: 'identity_still_at_obligate' };
       }
-      await db('sso_foreign_users').where({ local_user_id: localId }).del();
-      await db('users').where({ id: localId }).del();
-      // A deleted user's sessions would keep their role (admin bypasses).
+      // Disabled and signed out BEFORE the deletion is attempted (review F047): a deletion that fails (a row still
+      // referencing the account) never leaves it active with live sessions; its keys, trusted IPs and phone keys go
+      // too. Then the link and the account in one transaction: never a users row left without its link, or the
+      // reverse.
+      await deactivateConfirmed(localId, user.is_active !== false);
+      try {
+        await db.transaction(async (trx) => {
+          await trx('sso_foreign_users').where({ local_user_id: localId }).del();
+          await trx('users').where({ id: localId }).del();
+        });
+      } catch (err) {
+        if ((err as { code?: unknown })?.code !== '23503') throw err;
+        // Still referenced (a foreign key without ON DELETE): the account stays, disabled; a later push or an
+        // administrator deletes it once the reference is gone. Never retried in a loop.
+        const constraint = String((err as { constraint?: unknown }).constraint ?? '').slice(0, 120) || null;
+        logger.warn({ localUserId: localId, constraint }, 'SSO sync: delete confirmed but the account is still referenced: disabled, not deleted');
+        await audit('delete_blocked', { username: user.username, constraint });
+        return 'done';
+      }
+      // A deleted user's sessions would keep their role (admin bypasses); the hooks of a deletion run too.
       const { killSessionsForUser } = await import('../services/userSessions.service');
       await killSessionsForUser(localId, 'user_deleted');
       logger.info(`SSO sync: deleted user #${localId} (gone from Obligate)`);

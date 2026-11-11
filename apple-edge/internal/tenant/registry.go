@@ -127,7 +127,11 @@ func (r *Registry) Keys() []string {
 func (r *Registry) Loaded() bool { return r.loaded.Load() }
 
 // publish replaces (or removes, when t is nil) the entry of key, unless the
-// snapshot already holds a newer version.
+// snapshot already holds a newer version. Every write of a tenant sets
+// updated_at to greatest(clock_timestamp(), updated_at + 1 µs) under its row
+// lock, so the versions grow in commit order (now() is the start of the
+// transaction: two crossed writes could commit in the reverse order of their
+// timestamps and leave this replica on the older one, review F097).
 func (r *Registry) publish(key string, t *Tenant, seen time.Time) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -69,6 +69,15 @@ export async function licenseTargetsOf(tenantId: number, appId: number, q: Knex 
     : { deviceId: Number(r.id), kind: 'device' as const, ...(r.serial_number ? { serialNumber: r.serial_number } : {}) }));
 }
 
+/**
+ * An app applied is no longer on the device when the managed list does not show it: no row (a personal or COPE
+ * device, the row deleted), a row no longer managed (a corporate device keeps it, managed false), or the status
+ * ManagedButUninstalled (still managed, removed from the device).
+ */
+export function appDrifted(a: { managed: boolean; management_status: string | null } | undefined): boolean {
+  return !a || !a.managed || a.management_status === 'ManagedButUninstalled';
+}
+
 /** The hook of the ingestor of ManagedApplicationList (section 8.3, step 3). */
 export async function applyManagedApps(trx: Knex.Transaction, tenantId: number, deviceId: number): Promise<void> {
   const any = await trx('device_artifacts').where({ tenant_id: tenantId, device_id: deviceId, channel: 'app' }).whereNotNull('desired_hash')
@@ -99,8 +108,9 @@ export async function applyManagedApps(trx: Knex.Transaction, tenantId: number, 
     } else if (awaiting && a?.management_status && /^Prompting/.test(a.management_status)
       && now.getTime() - new Date(row.delivered_at ?? row.state_at).getTime() > PROMPTING_TIMEOUT_MS) {
       await set({ state: 'error', state_reasons: JSON.stringify([`app:${a.management_status}`]) });
-    } else if (!a && row.state === 'applied') {
-      // Applied, absent now: removed by the user or the device; delivered again.
+    } else if (row.state === 'applied' && appDrifted(a)) {
+      // Applied, gone now: removed by the user or the device; delivered again (the idempotency keys of the version
+      // bound the deliveries: attempts_exhausted, mdm/apple/reconcile.ts).
       await set({ state: 'pending', state_reasons: JSON.stringify(['drift_absent']), desired_at: now });
       again = true;
     }

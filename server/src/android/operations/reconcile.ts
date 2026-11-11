@@ -35,8 +35,9 @@ import { readEnterprise } from '../enterprises/registry';
 import { androidGateway } from '../gateway';
 import { AndroidError } from '../gateway/errors';
 import type { AndroidGateway } from '../gateway/types';
+import { jsonbStringify } from '../inbox/jsonbSafe';
 import { sendDrainInTx } from '../link/pull';
-import { listAllDevices, releaseGoneDevice, writtenDuringListing } from './gone';
+import { holdMassMissing, listAllDevices, releaseGoneDevice, writtenDuringListing } from './gone';
 import { automaticForgetEnabled, deleteDevicePolicy, forgetPresumedGone } from './forget';
 import { tenantDeadlineAlerts } from './deadlines';
 import { markEnterpriseAccessLost } from './offboarding';
@@ -82,14 +83,36 @@ interface KnownDevice {
 }
 
 /** Asks an extra reconciliation of a tenant (operator, absence of the instance, restore); picked up within the minute. */
-export async function requestReconcile(tenantId: number, trigger: Exclude<AndroidReconcileTrigger, 'daily'>, actor: DbActor = RECONCILE_ACTOR): Promise<boolean> {
+// Review F023: `confirmMissing` (operator only) is the exact count of a held mass disappearance the operator saw and
+// confirms; kept in last_result (counts only) until the next pass, which consumes it by rewriting last_result.
+export async function requestReconcile(tenantId: number, trigger: Exclude<AndroidReconcileTrigger, 'daily'>, actor: DbActor = RECONCILE_ACTOR,
+  o: { confirmMissing?: number } = {}): Promise<boolean> {
   return asTenant(tenantId, actor, async () => {
     const e = await readEnterprise();
     if (!e || e.state !== 'linked') return false;
+    const confirm = trigger === 'operator' && Number.isInteger(o.confirmMissing) && (o.confirmMissing as number) > 0 ? o.confirmMissing as number : null;
+    const result = confirm !== null
+      ? db.raw(`coalesce(android_reconcile_state.last_result, '{}'::jsonb) || jsonb_build_object('confirmMissing', ?::int)`, [confirm])
+      : db.raw(`android_reconcile_state.last_result - 'confirmMissing'`);
     await db('android_reconcile_state').insert({
       tenant_id: tenantId, enterprise_id: e.id, slot_minute: slotMinuteOf(tenantId), requested_at: db.fn.now(), request_trigger: trigger,
-    }).onConflict(['tenant_id', 'enterprise_id']).merge({ requested_at: db.fn.now(), request_trigger: trigger, updated_at: db.fn.now() });
+      ...(confirm !== null ? { last_result: JSON.stringify({ confirmMissing: confirm }) } : {}),
+    }).onConflict(['tenant_id', 'enterprise_id']).merge({ requested_at: db.fn.now(), request_trigger: trigger, last_result: result, updated_at: db.fn.now() });
     return true;
+  });
+}
+
+/** The mass disappearance held by the last pass (count of devices and of the managed ones), or null. */
+export async function readReconcileHold(tenantId: number, actor: DbActor): Promise<{ heldMissing: number; managed: number; at: Date | null } | null> {
+  return asTenant(tenantId, actor, async () => {
+    const e = await readEnterprise();
+    if (!e) return null;
+    const row = await db('android_reconcile_state').where({ tenant_id: tenantId, enterprise_id: e.id }).first('last_result', 'last_finished_at') as
+      { last_result: Record<string, unknown> | null; last_finished_at: Date | null } | undefined;
+    const held = row?.last_result?.heldMissing;
+    if (typeof held !== 'number' || held <= 0) return null;
+    const managed = row?.last_result?.heldManaged;
+    return { heldMissing: held, managed: typeof managed === 'number' ? managed : 0, at: row?.last_finished_at ?? null };
   });
 }
 
@@ -102,8 +125,10 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
     const e = await readEnterprise();
     if (!e || e.state !== 'linked') return 'no_enterprise';
     const slot = slotMinuteOf(tenantId);
-    const prev = await db('android_reconcile_state').where({ tenant_id: tenantId, enterprise_id: e.id }).first('requested_at', 'request_trigger', 'last_started_at') as
-      { requested_at: Date | null; request_trigger: string | null; last_started_at: Date | null } | undefined;
+    const prev = await db('android_reconcile_state').where({ tenant_id: tenantId, enterprise_id: e.id }).first('requested_at', 'request_trigger', 'last_started_at', 'last_result') as
+      { requested_at: Date | null; request_trigger: string | null; last_started_at: Date | null; last_result: Record<string, unknown> | null } | undefined;
+    const confirmed = prev?.last_result?.confirmMissing;
+    const confirmedMissing = typeof confirmed === 'number' && Number.isInteger(confirmed) ? confirmed : null;
     const trigger: AndroidReconcileTrigger = o.trigger ?? ((prev?.request_trigger as AndroidReconcileTrigger | null) ?? 'daily');
     await db('android_reconcile_state').insert({ tenant_id: tenantId, enterprise_id: e.id, slot_minute: slot, last_started_at: now, last_trigger: trigger })
       .onConflict(['tenant_id', 'enterprise_id']).merge({ slot_minute: slot, last_started_at: now, last_trigger: trigger, updated_at: db.fn.now() });
@@ -142,11 +167,26 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       return staleByOwnership.get(ownership)!;
     };
     let offlineLong = 0;
+    // Review F023: an implausible mass disappearance (an empty or truncated list taken for complete) is held, never
+    // applied by an unattended pass: alert, nothing released, the run counted as incomplete, the count kept for the
+    // console (readReconcileHold). Only an operator's reconciliation confirming that exact count releases them; a
+    // plain operator's run (to "repair" the alert during the incident) holds them as well.
+    const missingCandidates = listed.complete
+      ? known.filter((k) => !atGoogle.has(k.amapi_name) && !writtenDuringListing(k, listStartedAt)).length : 0;
+    const holdMissing = holdMassMissing(missingCandidates, known.length, trigger, confirmedMissing);
+    if (holdMissing) {
+      out.complete = false;
+      logger.warn({ android: { reconcile: 'mass_missing_held', tenantId, missing: missingCandidates, managed: known.length } },
+        'android: mass disappearance held, nothing released');
+      void raiseAndroidTenantAlert(tenantId, 'android.mass_missing_held', { count: missingCandidates, managed: known.length });
+    } else if (listed.complete) {
+      void resolveAndroidTenantAlert(tenantId, 'android.mass_missing_held');
+    }
     for (const k of known) {
       const g = atGoogle.get(k.amapi_name);
       const deviceId = Number(k.device_id);
       if (!g) {
-        if (!listed.complete) continue;
+        if (!listed.complete || holdMissing) continue;
         if (writtenDuringListing(k, listStartedAt)) continue;
         if (await releaseGoneDevice(tenantId, deviceId)) out.missing += 1;
         continue;
@@ -154,13 +194,17 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       const report = time(g.lastStatusReportTime);
       const stored = k.last_status_report_at ? new Date(k.last_status_report_at) : null;
       if (report && (!stored || report.getTime() > stored.getTime())) {
+        // Review F024: a report the base refuses (jsonb) skips this device only, never the pass of the tenant.
         await db.transaction(async (trx) => {
-          const payload = JSON.stringify(g);
+          const payload = jsonbStringify(g);
           const r = await trx('android_inbox').insert({
             tenant_id: tenantId, message_id: `rc-${deviceId}-${report.getTime()}`, event_type: 'amapi.status_report', enterprise_name: e.name,
             resource_name: g.name, published_at: now, occurred_at: report, payload: trx.raw('?::jsonb', [payload]), payload_bytes: Buffer.byteLength(payload),
           }).onConflict(['tenant_id', 'message_id']).ignore().returning('id');
           if (r.length) { out.refreshed += 1; await sendDrainInTx(trx, tenantId); }
+        }).catch((err: unknown) => {
+          logger.warn({ android: { reconcile: 'report_write_failed', tenantId, deviceId, code: (err as { code?: string })?.code ?? 'error' } },
+            'android: reconciled report not written');
         });
       } else if ((typeof g.state === 'string' && g.state !== k.state) || (typeof g.appliedState === 'string' && g.appliedState !== k.applied_state)) {
         await db('android_devices').where({ tenant_id: tenantId, device_id: deviceId }).whereNull('released_at').update({
@@ -239,7 +283,8 @@ export async function reconcileTenant(tenantId: number, o: { gateway?: AndroidGa
       logger.warn({ android: { reconcile: 'tokens', tenantId, kind: (err as AndroidError)?.kind ?? 'error' } }, 'android: token collection skipped');
     }
     await db('android_reconcile_state').where({ tenant_id: tenantId, enterprise_id: e.id }).update({
-      last_finished_at: db.fn.now(), last_result: JSON.stringify(out), last_error: null, google_count: out.googleCount, google_stale: out.googleStale,
+      last_finished_at: db.fn.now(),
+      last_result: JSON.stringify(holdMissing ? { ...out, heldMissing: missingCandidates, heldManaged: known.length } : out), last_error: null, google_count: out.googleCount, google_stale: out.googleStale,
       counted_at: listed.complete ? db.fn.now() : null, next_due_at: nextSlot(now, slot), requested_at: null, request_trigger: null, updated_at: db.fn.now(),
     });
     // Alerts: identifiers and counts only.

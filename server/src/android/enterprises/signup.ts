@@ -54,6 +54,19 @@ export function isPersonalDomain(domain: string): boolean {
   return PERSONAL_DOMAINS.test(domain.toLowerCase());
 }
 
+/**
+ * May a failed enterprises.create have created the enterprise at Google all the same? Yes for an answer never read
+ * (delay, cut connection, abort, 5xx: kind 'unavailable') and for an error that is not the gateway's; no for a firm
+ * refusal (400, 401/403, 409, 429, quota, ownership…), nor for a request that certainly never left (circuit open, no
+ * access token: details.notSent). Pure (unit tests).
+ */
+export function createOutcomeUnknown(err: unknown): boolean {
+  const kind = (err as { kind?: unknown } | null)?.kind;
+  if (typeof kind !== 'string') return true;
+  if ((err as { details?: { notSent?: unknown } }).details?.notSent === true) return false;
+  return kind === 'unavailable';
+}
+
 /** The marker appended to the display name at creation (RR-3): ' ~' + 8 hex characters of the signup id. */
 export function signupMarker(signupId: string): string {
   return ` ~${signupId.replace(/-/g, '').slice(0, 8)}`;
@@ -193,7 +206,7 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
     .returning(['id', 'enterprise_id', 'signup_url_name'])) as Array<{ id: string; enterprise_id: number; signup_url_name: string | null }>;
   if (!signup.length) return rejected('already_consumed', tenantId);
   const s = signup[0];
-  const fail = async (code: string, alert: 'android.signup_failed' | null): Promise<CallbackResult> => {
+  const fail = async (code: string, alert: 'android.signup_failed' | 'android.signup_interrupted' | null): Promise<CallbackResult> => {
     await asTenant(tenantId, CALLBACK_ACTOR, () => db('android_signups').where({ id: s.id, state: 'consuming' })
       .update({ state: 'failed', failure_code: code }));
     if (alert) void raiseAndroidTenantAlert(tenantId, alert, { code });
@@ -220,6 +233,10 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
     }));
   } catch (err) {
     logger.warn({ android: { signup: 'create_failed', tenantId, kind: (err as AndroidError)?.kind ?? 'error' } }, 'android: enterprise creation failed');
+    // Review F022: enterprises.create is never retried. An outcome unknown (delay, cut, 5xx: Google may have created
+    // the enterprise) is recorded as interrupted, so the orphan it may have left stays adoptable (the marker and the
+    // name never seen by the registry remain the proofs); a firm refusal of Google (400, 403, 429…) stays google_error.
+    if (createOutcomeUnknown(err)) return fail('interrupted', 'android.signup_interrupted');
     return fail('google_error', 'android.signup_failed');
   }
 
@@ -244,7 +261,8 @@ export async function handleSignupCallback(query: Record<string, unknown>, o: { 
     }));
   } catch (err) {
     logger.warn({ android: { signup: 'bind_failed', tenantId, code: (err as { code?: string }).code ?? 'error' } }, 'android: enterprise bind failed');
-    return fail('bind_refused', 'android.signup_failed');
+    // Review F022: the enterprise exists at Google, only the binding failed: interrupted, hence adoptable.
+    return fail('interrupted', 'android.signup_interrupted');
   }
   return { result: 'ok', tenantId };
 }

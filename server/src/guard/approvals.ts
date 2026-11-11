@@ -271,6 +271,7 @@ const SettingsPayload = z.object({
   hourlyCapMin: z.number().int().min(3).max(50).optional(),
   massApproverSide: z.enum(['client', 'msp']).optional(),
   publishFleetShareFloor: z.number().int().min(1).max(PUBLISH_APPROVAL_THRESHOLDS.fleetShareFloorMax).optional(),
+  legacyAgentCommandsSensitive: z.boolean().optional(),
 }).strict();
 
 async function executeSettingsChange(x: ApprovalExecution): Promise<void> {
@@ -296,6 +297,11 @@ export async function applySettings(tenantId: number, input: GuardSettingsInput,
     }
     if (input.massApproverSide !== undefined && input.massApproverSide !== before.mass_approver_side) {
       patch.mass_approver_side = input.massApproverSide; changes.massApproverSide = { from: before.mass_approver_side, to: input.massApproverSide };
+    }
+    // Review F115: the second factor of the bridge agent's commands.
+    if (input.legacyAgentCommandsSensitive !== undefined && input.legacyAgentCommandsSensitive !== before.legacy_agent_commands_sensitive) {
+      patch.legacy_agent_commands_sensitive = input.legacyAgentCommandsSensitive;
+      changes.legacyAgentCommandsSensitive = { from: before.legacy_agent_commands_sensitive, to: input.legacyAgentCommandsSensitive };
     }
     // DM23: the floor of the share of the fleet (setting publishFleetShareFloor), written here only.
     const floorBefore = await fleetShareFloor(trx, tenantId);

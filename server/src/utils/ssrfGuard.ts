@@ -1,5 +1,6 @@
 import { lookup } from 'dns/promises';
-import { BlockList, isIP } from 'net';
+import { BlockList, isIP, type LookupFunction } from 'net';
+import { Agent, fetch as undiciFetch } from 'undici';
 
 // Reject any HTTP target that resolves to a private / loopback /
 // link-local / metadata range. Used by the webhook notification
@@ -99,6 +100,90 @@ const SIEM_REFUSED: ReadonlyArray<readonly [string, BlockList]> = [
   ['multicast', blockListOf([['224.0.0.0', 4, 'ipv4'], ['ff00::', 8, 'ipv6']])],
   ['reserved', blockListOf([['240.0.0.0', 4, 'ipv4'], ['::', 96, 'ipv6']])],
 ];
+
+// ── Outbound notifications (review F056) ────────────────────────────────────
+// Every notification plugin that posts to a URL of its configuration goes
+// through guardedPost: http(s) only, the name resolved once and every address
+// screened, the connection pinned to those addresses (no second resolution: DNS
+// rebinding), redirects refused (a public target answering 307 towards an
+// internal address), the body of the answer never read back (only its status:
+// an error message never carries an internal service's page).
+//   'public': SaaS destinations (Discord, Slack, Teams, the generic webhook):
+//     loopback, the private ranges (RFC 1918, ULA, CGNAT), link-local (cloud
+//     metadata) and the unspecified, multicast and reserved ranges refused.
+//   'lan': self-hosted servers (ntfy, Gotify), often on the local network: the
+//     private ranges admitted, everything else above refused (loopback and
+//     link-local above all).
+
+const NOTIFY_PRIVATE = blockListOf([
+  ['10.0.0.0', 8, 'ipv4'], ['172.16.0.0', 12, 'ipv4'], ['192.168.0.0', 16, 'ipv4'], ['100.64.0.0', 10, 'ipv4'], ['fc00::', 7, 'ipv6'],
+]);
+
+export type NotifyTargetPolicy = 'public' | 'lan';
+
+/** Why a notification may not be sent to `ip`, or null. */
+export function notifyRefusal(ip: string, family: number, policy: NotifyTargetPolicy): string | null {
+  const why = siemRefusal(ip, family, false);
+  if (why) return why;
+  const address = String(ip ?? '').replace(/%.*$/, '');
+  if (policy === 'public' && NOTIFY_PRIVATE.check(address, family === 6 ? 'ipv6' : 'ipv4')) return 'private';
+  return null;
+}
+
+/** The URL and the addresses a notification may be posted to, or an Error that says why not. */
+export async function assertNotifyTarget(rawUrl: string, policy: NotifyTargetPolicy): Promise<{ url: URL; addresses: Array<{ address: string; family: number }> }> {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new Error('Invalid URL');
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(`Refused non-HTTP scheme: ${url.protocol}`);
+  const name = url.hostname.replace(/^\[(.*)\]$/, '$1');
+  if (!name) throw new Error('Invalid URL');
+  if (/^(localhost|localhost\.localdomain)$/i.test(name)) throw new Error('Refused destination (loopback)');
+  const v = isIP(name);
+  let all: Array<{ address: string; family: number }>;
+  if (v) {
+    all = [{ address: name, family: v }];
+  } else {
+    try {
+      all = await lookup(name, { all: true });
+    } catch (err) {
+      throw new Error(`Could not resolve ${name}: ${(err as Error).message}`);
+    }
+  }
+  if (!all.length) throw new Error(`Could not resolve ${name}`);
+  for (const a of all) {
+    const why = notifyRefusal(a.address, a.family, policy);
+    if (why) throw new Error(`Refused destination (${why}: ${name}${v ? '' : ` → ${a.address}`})`);
+  }
+  return { url, addresses: all };
+}
+
+/**
+ * POSTs a notification to `rawUrl` under `policy` (see above): pinned to the screened addresses, redirects refused,
+ * 10 seconds at most. Returns the status only; the body of the answer is discarded.
+ */
+export async function guardedPost(rawUrl: string, init: { headers: Record<string, string>; body: string; timeoutMs?: number },
+  policy: NotifyTargetPolicy): Promise<{ ok: boolean; status: number }> {
+  const { url, addresses } = await assertNotifyTarget(rawUrl, policy);
+  const pinned: LookupFunction = (_host, options, callback) => {
+    if (options?.all) callback(null, addresses.map((a) => ({ address: a.address, family: a.family })));
+    else callback(null, addresses[0].address, addresses[0].family);
+  };
+  const dispatcher = new Agent({ connect: { lookup: pinned } });
+  try {
+    const res = await undiciFetch(url, {
+      method: 'POST', headers: init.headers, body: init.body, redirect: 'error',
+      signal: AbortSignal.timeout(init.timeoutMs ?? 10_000), dispatcher,
+    });
+    await res.body?.cancel().catch(() => undefined);
+    return { ok: res.ok, status: res.status };
+  } finally {
+    await dispatcher.close().catch(() => undefined);
+  }
+}
 
 /** Why a SIEM may not be reached at `ip`, or null. */
 export function siemRefusal(ip: string, family: number, allowLoopback: boolean): string | null {

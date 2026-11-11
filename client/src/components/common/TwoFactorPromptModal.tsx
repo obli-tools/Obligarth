@@ -28,6 +28,9 @@ import { useIsCoarsePointer } from '@/hooks/useMediaQuery';
 const BUILTIN_ACTIONS: Record<string, [key: string, fallback: string]> = {
  'profile.totp_manage': ['twoFactorPrompt.actions.totpManage', 'Change your authenticator app'],
  'profile.email_otp_manage': ['twoFactorPrompt.actions.emailOtpManage', 'Change your e-mail sign-in codes'],
+ // Always asked by the server (review F023), whatever the tenant's matrix.
+ 'android.reconcile_confirm_missing': ['twoFactorPrompt.actions.androidReconcileConfirmMissing', 'Confirm Android devices gone at Google'],
+ 'mdm.android_release_held': ['twoFactorPrompt.actions.androidReleaseHeld', 'Release a held Android command'],
 };
 
 // Actions of the tenant's Restrictions matrix named in words instead of their

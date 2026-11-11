@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
@@ -42,20 +42,65 @@ export function DeviceCommandsTab({ deviceId, canAct }: { deviceId: number; canA
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
+  // Only the answers of the latest (re)load land: a slow answer of the previous filter must not replace the rows of
+  // the current one. A reload (live event, refresh, after an action) reads again as many pages as were shown, so
+  // that "Load more" is not undone by each acknowledgement of the device.
+  const seqRef = useRef(0);
+  const pagesRef = useRef(1);
   const load = useCallback((more = false, from: string | null = null) => {
-    appleApi.deviceQueue(deviceId, { state: filter, cursor: more ? from : null })
-      .then((r) => {
-        setRows((prev) => (more && prev ? [...prev, ...r.items] : r.items));
-        setCursor(r.nextCursor);
+    if (more) {
+      // Its own number: a reload still in flight is dropped (its rows would not match the cursor appended from),
+      // and a reload asked later drops this page in turn. The rows and the cursor always come from one read.
+      const seq = ++seqRef.current;
+      appleApi.deviceQueue(deviceId, { state: filter, cursor: from })
+        .then((r) => {
+          if (seq !== seqRef.current) return;
+          setRows((prev) => (prev ? [...prev, ...r.items] : r.items));
+          setCursor(r.nextCursor);
+          pagesRef.current += 1;
+          setError(null);
+        })
+        .catch((err) => { if (seq === seqRef.current) setError(apiErrorMessage(err)); });
+      return;
+    }
+    const seq = ++seqRef.current;
+    const wanted = Math.max(1, pagesRef.current);
+    void (async () => {
+      try {
+        let items: MdmTargetView[] = [];
+        let next: string | null = null;
+        let pages = 0;
+        do {
+          const r = await appleApi.deviceQueue(deviceId, { state: filter, cursor: next });
+          if (seq !== seqRef.current) return;
+          items = items.concat(r.items);
+          next = r.nextCursor;
+          pages += 1;
+        } while (next !== null && pages < wanted);
+        setRows(items);
+        setCursor(next);
+        pagesRef.current = pages;
         setError(null);
-      })
-      .catch((err) => { setRows((prev) => prev ?? []); setError(apiErrorMessage(err)); });
+      } catch (err) {
+        if (seq !== seqRef.current) return;
+        setRows((prev) => prev ?? []);
+        setError(apiErrorMessage(err));
+      }
+    })();
   }, [deviceId, filter]);
-  useEffect(() => { setRows(null); load(); }, [load]);
-  // Live: a command of this device changed state.
-  useEffect(() => registerSocketListener(SocketEvents.MDM_COMMAND_CHANGED, (p: { deviceIds?: number[] }) => {
-    if (!Array.isArray(p?.deviceIds) || p.deviceIds.map(Number).includes(deviceId)) load();
-  }), [deviceId, load]);
+  // Another device or filter: from its first page.
+  useEffect(() => { pagesRef.current = 1; setRows(null); load(); }, [load]);
+  // Live: a command of this device changed state. A burst of events (an inventory acknowledges many commands)
+  // makes one reload once it settles, instead of reloads that each cancel the previous one and never land.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const off = registerSocketListener(SocketEvents.MDM_COMMAND_CHANGED, (p: { deviceIds?: number[] }) => {
+      if (Array.isArray(p?.deviceIds) && !p.deviceIds.map(Number).includes(deviceId)) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { timer = null; load(); }, 400);
+    });
+    return () => { off(); if (timer) clearTimeout(timer); };
+  }, [deviceId, load]);
 
   const cancel = async (row: MdmTargetView) => {
     setBusy(row.commandId);

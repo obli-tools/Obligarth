@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "パスワードをスペースだけにすることはできません。パスワードを削除するには、欄を空にしてください。"
+    },
+    "reconcileHold": {
+      "help": "前回の調整で、管理中の {{managed}} 台のうち {{count}} 台が Google で見つかりませんでした。管理から外されたデバイスはありません。まず Google でエンタープライズを確認し、これらのデバイスが本当に消失している場合にのみ確認してください。",
+      "confirm": "{{count}} 台の消失を確認…",
+      "confirmTitle": "消失したデバイスを確認",
+      "confirmMessage": "{{count}} 台のデバイスを管理から外しますか? Google で本当に削除された場合にのみ実行してください。2 要素目が求められます。",
+      "confirmed": "確認を記録しました。調整は 1 分以内に実行されます。"
+    }
+  },
   "common": {
     "save": "保存",
     "cancel": "キャンセル",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "このワークスペースに切り替えられませんでした。",
+    "roleAdministrator": "管理者",
+    "roleMember": "メンバー",
+    "confirmRoleChange": "このワークスペースで {{user}} にロール「{{role}}」を付与しますか？",
+    "roleOf": "{{user}} のロール",
+    "deleteTitle": "ワークスペース「{{name}}」を削除",
+    "confirmDeleteTyped": "管理対象デバイスを含むすべてのデータが完全に削除されます。確認のため「{{slug}}」と入力してください。",
+    "deleted": "ワークスペース「{{name}}」を削除しました",
     "pageTitle": "ワークスペース",
     "pageDesc": "マルチテナント展開のワークスペースとメンバーを管理します。",
     "create": "新しいワークスペース",
@@ -279,6 +299,9 @@
     "switchWorkspace": "ワークスペースを切り替え"
   },
   "devices": {
+    "list": {
+      "otherGroups": "その他のグループ"
+    },
     "tabApiKeys": "APIキー",
     "viewDevice": "デバイスを表示",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "使用中：保護設定「Android エージェントのコマンドに第 2 要素」はオンです。",
+      "commandsSensitiveOff": "未使用：保護設定「Android エージェントのコマンドに第 2 要素」はオフです（セキュリティ、保護タブ）。"
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "エラー"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "サーバーに保存されたバージョンを再読み込みしますか？保存されていない変更は失われます。",
+      "noLongerDraft": "このバージョンは下書きではなくなりました（別の場所で提出または公開されました）。再読み込みしてください。",
+      "confirmOverwrite": "この下書きは、開いた後に別のユーザーによって変更されました。それでも自分のバージョンを保存しますか？相手の変更は失われます。",
+      "reviewBeforePublish": "このバージョンは別の場所で変更されました。現在の内容を表示しています。公開する前に確認してください。",
+      "changedElsewhere": "このバージョンは、開いた後に別の場所で変更されました。保存するとそれらの変更が置き換えられます。",
+      "reloadVersion": "再読み込み",
+      "savedElsewhere": "この下書きはその間に別の場所で保存されました。何も保存されていません。再読み込みすると他の変更が表示されます(あなたの変更は失われます)。"
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "グループを移動しましたが、新しい兄弟グループ内での位置を保存できませんでした",
+    "crossTenantMove": "グループは所属するワークスペースから移動できません。同じワークスペースのグループの間にドロップしてください。",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "通知を削除しました",
+      "live_alert_cleared": "通知をクリアしました",
+      "sso_sync_delete_blocked": "Obligate によるアカウント削除をブロック(まだ参照あり): 無効化済み、手動で削除してください",
+      "android_mass_missing_confirmed": "Android: 大量消失を確認",
+      "legacy_agent_package_confirmed": "デバイスから返送された APK を確認"
+    },
+    "families": {
+      "legacy_agent": "Android エージェント"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "プラットフォームを変更する前に、このアプリの割り当てを削除してください。",
+    "exportBusy": "実行中の PDF エクスポートが多すぎます。しばらくしてから再試行してください。",
+    "exportTooLarge": "PDF エクスポートには行が多すぎます(最大 2,000 行)。フィルターを絞り込むか、CSV または XLSX でエクスポートしてください。",
+    "exportTimeout": "PDF エクスポートに時間がかかりすぎました。CSV または XLSX でエクスポートするか、フィルターを絞り込んでください。",
+    "tenantHasBridgeDevices": "このワークスペースには Android ブリッジエージェントで登録されたデバイスがまだ {{devices}} 台あります。先にそれらを取り消してから、ワークスペースを削除してください。",
+    "deadLetterAlreadyApplied": "このデッドレターはすでに再適用されています。二重に適用されることはありません。",
+    "userHasDependencies": "このアカウントはまだ他のレコードから参照されています。代わりに無効化するか、先に参照元を削除してください。",
+    "invalidConfirmMissing": "確認には保留中のデバイスの正確な数(正の整数)を指定する必要があります。",
+    "adminRequired": "破壊的なコマンドを解放できるのはテナントの管理者だけです。",
+    "releaseRateLimited": "直近 1 時間に解放された破壊的なコマンドが多すぎます。後で再試行してください。",
+    "policyVersionChanged": "プレビュー以降にバージョンが変更されました。もう一度確認してください。",
+    "twoFactorSetupRequired": "2 要素目が必要です。先にプロフィールで認証アプリを設定してください。",
+    "packageNotConfirmed": "この APK はデバイスから返送されたものです。インストールする前に Android エージェントの「パッケージ」タブで確認してください。",
+    "capabilityMissing": "あなたのチームには、この操作に必要な権限がありません。"
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "許可されていません: これらのデバイスへの書き込み権限がありません。",
+      "status": {
+        "governed": "管理対象の変更: デバイスの詳細から名前を変更してください"
+      },
+      "governedHint": "管理対象の変更: 新しい名前により、割り当ての対象となる動的グループにデバイスが出入りします。影響をプレビューできるデバイスの詳細から名前を変更してください。"
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "状態",
+      "toConfirm": "確認待ち",
+      "toConfirmHint": "デバイスから返送されました。担当者が確認するまでインストールできません。",
+      "confirmedState": "確認済み",
+      "confirm": "確認する",
+      "confirmTitle": "この APK を確認",
+      "confirmMessage": "この APK（{{packageName}}、{{version}}）は担当者がアップロードしたものではなく、デバイスから返送されたものです。確認後、テナントのデバイスにインストールできます。",
+      "confirmCheck": "確認する前に、パッケージ名、バージョン、署名者が想定どおりであることを確かめてください。",
+      "signerShort": "署名者",
+      "confirmed": "APK を確認しました。インストールできるようになりました。",
+      "fromDevice": "デバイスから",
+      "unconfirmedHint": "デバイスから返送された {{count}} 件のパッケージは、インストールする前に「パッケージ」タブで確認する必要があります。"
+    },
+    "awaitingApproval": "承認のためにリクエストを送信しました"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "これらの通知を削除する権限がありません。通知はテナント全体で共有されています。"
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "アプリのプラットフォームは更新されていません",
+          "message": "コンテンツトークン {{label}} は、割り当て済みの {{count}} 個のアプリに別のプラットフォームを示しています。割り当てがある間はプラットフォームが維持されます。"
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: Google での大量消失を保留",
+        "message": "調整の結果、管理中の {{managed}} 台のうち {{count}} 台が Google で見つかりませんでした。管理から外されたデバイスはありません。エンタープライズを確認し、本当に消失している場合は Android Enterprise カードで確認してください。"
+      },
+      "google_unreachable": {
+        "title": "Android：Google に接続できません",
+        "message": "Obligarth は Google の Android Management API に接続できません。Android の登録、ポリシー、コマンドは待機中です。"
+      },
+      "google_auth_failed": {
+        "title": "Android：Google が ID を拒否",
+        "message": "Google がサービス アカウントを拒否しました（キーの取り消しまたは権限不足）。Android の連携は停止しています。"
+      },
+      "google_key_expiring": {
+        "title": "Android：サービス アカウントのキーの期限が近い",
+        "message": "Google サービス アカウントのキーは {{days}} 日後に期限切れになります。交換してください。"
+      },
+      "quota_warning": {
+        "title": "Android：デバイス割り当てが 80 %",
+        "message": "Google プロジェクト内の Android デバイスは {{count}} 台で、割り当ての 80 % を使用しています。"
+      },
+      "quota_exhausted": {
+        "title": "Android：デバイス割り当てに到達",
+        "message": "Android デバイスは {{count}} 台で、Google プロジェクトの割り当てに達しました。新しい登録は拒否されます。"
+      },
+      "inbox_dead_letter": {
+        "title": "Android：通知がデッドレターに",
+        "message": "テナント {{tenantId}} の Google 通知を処理できず（{{code}}）、デッドレターに移動しました。"
+      },
+      "retention_risk": {
+        "title": "Android：通知が期限切れになるおそれ",
+        "message": "{{days}} 日間 Google 通知が取得されていません。古いものは読まれる前に期限切れになる可能性があります。"
+      },
+      "pubsub_foreign_message": {
+        "title": "Android：不明な企業からのメッセージ",
+        "message": "直近 1 時間の Pub/Sub メッセージのうち {{lastHour}} 件は、Obligarth が知らない企業からのものです。"
+      },
+      "pubsub_test_missing": {
+        "title": "Android：Pub/Sub テスト メッセージがありません",
+        "message": "テナント {{tenantId}} の企業の Pub/Sub テスト メッセージが届きませんでした。トピックの権限を確認してください。"
+      },
+      "ownership_violation": {
+        "title": "Android：所有確認により呼び出しを拒否",
+        "message": "Google への呼び出しが所有確認により拒否されました（{{reason}}）。"
+      },
+      "enterprise_orphan": {
+        "title": "Android：プロジェクトの企業が登録簿にありません",
+        "message": "Google プロジェクトの企業（{{ref}}）が Obligarth の登録簿にありません。"
+      },
+      "signup_callback_rejected": {
+        "title": "Android：登録コールバックを拒否",
+        "message": "直近 1 時間に {{lastHour}} 件の企業登録コールバックが拒否されました。"
+      },
+      "domain_claimed": {
+        "title": "Android：他のテナントが申請済みのドメインの登録",
+        "message": "テナント {{tenantId}} が、他のテナントが申請済みのドメインで企業を登録しようとしました。"
+      },
+      "gateway_cap_reached": {
+        "title": "Android：破壊的操作の最終上限に到達",
+        "message": "Android の破壊的操作の最終上限に達しました（{{kind}}、{{count}}）。以降の操作は拒否されます。"
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android：Obligarth の外部で企業の連携が解除されました",
+        "message": "このテナントの Android 企業は Obligarth の外部で連携が解除されました。デバイスは管理されなくなりました。"
+      },
+      "signup_failed": {
+        "title": "Android：企業の登録に失敗",
+        "message": "Android 企業の登録に失敗しました（{{code}}）。"
+      },
+      "signup_interrupted": {
+        "title": "Android：企業の登録が中断",
+        "message": "Android 企業の登録が完了前に中断されました。もう一度開始してください。"
+      },
+      "device_api_too_low": {
+        "title": "Android：デバイスがプロファイルの最小 API レベル未満",
+        "message": "登録プロファイルの最小 API レベル未満の Android デバイスが隔離されました。"
+      },
+      "enrollment_spike": {
+        "title": "Android：長期トークンでの登録の急増",
+        "message": "長期トークン {{tokenId}} で直近 1 時間に {{perHour}} 件の登録がありました。以降は承認が必要になる場合があります。"
+      },
+      "policy_push_failed": {
+        "title": "Android：Google がポリシーを拒否",
+        "message": "Google がデバイス {{deviceId}} のポリシーを拒否しました。"
+      },
+      "integrity_compromised": {
+        "title": "Android：デバイスの整合性が危険",
+        "message": "デバイス {{deviceId}} は整合性チェックに失敗しました。侵害されている可能性があります。"
+      },
+      "device_pending_approval": {
+        "title": "Android：承認待ちのデバイス",
+        "message": "Android デバイスが承認を待っています。"
+      },
+      "quarantine_cap_reached": {
+        "title": "Android：隔離中の登録の上限に到達",
+        "message": "隔離中の Android 登録の上限に達しました。以降の登録は拒否されます。"
+      },
+      "device_offline_long": {
+        "title": "Android：240 日間連絡のないデバイス",
+        "message": "{{count}} 台の Android デバイスが 240 日間連絡していません。"
+      },
+      "device_presumed_gone": {
+        "title": "Android：消失したと推定されるデバイス",
+        "message": "{{count}} 台の Android デバイスが消失したと推定されます（Google に存在しません）。確認または復元してください。"
+      },
+      "token_expiring": {
+        "title": "Android：更新が必要な長期登録トークン",
+        "message": "{{count}} 件の長期登録トークンがまもなく期限切れになります。更新してください。"
+      },
+      "byod_code_flood": {
+        "title": "Android：誤った BYOD 招待コードが多すぎます",
+        "message": "1 時間に {{perHour}} 件を超える誤った BYOD 招待コードがありました。この時間が終わるまで、テナントのすべてのコードが拒否されます。"
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "このテナントのトークンがない登録",
+        "message": "このテナントの登録トークンがない Android デバイスが見つかりました。隔離を確認してください。"
+      },
+      "ownership_mismatch": {
+        "title": "所有形態またはモードが登録プロファイルと異なる",
+        "message": "Android デバイスが、登録プロファイルで許可されていない所有形態またはモードで登録しました。隔離中です。"
+      },
+      "duplicate_serial": {
+        "title": "管理対象デバイスが使用中のシリアル番号",
+        "message": "Android デバイスが、すでに管理されているデバイス {{deviceId}} のシリアル番号で登録しました。"
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Google で消失した Android デバイスを確認",
+      "androidReleaseHeld": "保留中の Android コマンドを解放"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "承認リクエストはもう存在しません。",
+      "batchGone": "変更のバッチは期限切れか、すでに使用されています。エージェントにもう一度依頼してください。",
+      "capabilityMissing": "あなたのチームには、この操作に必要な権限がありません。",
+      "detachOneByOne": "エージェントは複数のデバイスを一度にサイトから切り離せません。コンソールで 1 台ずつ切り離してください。",
+      "executionFailed": "承認された操作は実行時に失敗しました。",
+      "keyInactive": "アクセスキーは有効ではなくなりました。",
+      "perimeterLost": "この操作は、あなたまたはキーの範囲外になりました。",
+      "planChanged": "承認後にプランが変更されました。何も適用されていません。",
+      "policyChanged": "リクエスト後にポリシーが変更されました。何も適用されていません。",
+      "unknownTool": "不明なツールです。",
+      "refusedStatus": "コンソールにより拒否されました(HTTP {{status}})",
+      "interrupted": "操作は完了前に中断されました。再度依頼する前に結果を確認してください。",
+      "cancelFailed": "キャンセルはまだ完了していません。1 分ごとに再試行されます。",
+      "stepUpRequired": "この操作には新しい第 2 要素が必要です。コンソールから再度承認してください。",
+      "impactChanged": "確認後に影響が変わったため、何も実行されませんでした。"
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Android エージェントのコマンドに第 2 要素",
+      "legacyAgentCommandsSensitiveHelp": "アプリのインストール／アンインストール、エージェントの更新、デバイスの再起動、キオスクの一時停止には、送信者の第 2 要素が必要になります（コンソールと MCP）。既定ではオフです。他の設定と同様に、変更は 2 人目が承認します。",
+      "pending": "変更は承認待ちです（リクエスト #{{id}}）",
+      "pendingOpen": "承認を開く",
+      "on": "オン",
+      "off": "オフ"
     }
   }
 }

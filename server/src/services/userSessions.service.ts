@@ -1,7 +1,7 @@
 import { db } from '../db';
 import { getIO } from '../socket';
 import { logger } from '../utils/logger';
-import { forgetSessionUser } from '../middleware/sessionUserGuard';
+import { forgetSessionUser, markSessionsRevoked } from '../middleware/sessionUserGuard';
 import { sessionHash, sessionRoom } from '../utils/sessionHash';
 import { forgetTenantMemberships } from './tenant.service';
 import { forgetGrantsOfUser } from '../db/platformAccess';
@@ -50,6 +50,27 @@ export function onSessionsKilled(hook: SessionsKilledHook): void {
   hooks.push(hook);
 }
 
+// A request of a deleted session still in flight saves it back when it ends
+// (connect-pg-simple `set` is an upsert). The ids are remembered by
+// sessionUserGuard (a request or handshake presenting one is ended), and the
+// rows are deleted again once such requests are over, so a resurrected row
+// does not outlive a restart of this process either.
+const RESWEEP_DELAYS_MS = [15_000, 2 * 60_000, 10 * 60_000];
+
+function revokeDeletedSessions(sids: ReadonlyArray<string>): void {
+  const list = sids.filter((s) => typeof s === 'string' && s.length > 0);
+  if (list.length === 0) return;
+  markSessionsRevoked(list);
+  for (const delay of RESWEEP_DELAYS_MS) {
+    // The timer keeps the database context of the caller (AsyncLocalStorage).
+    const t = setTimeout(() => {
+      db('session').whereIn('sid', list).del()
+        .catch((err: unknown) => logger.warn({ err, sessions: list.length }, 'revoked sessions not swept again'));
+    }, delay);
+    t.unref?.();
+  }
+}
+
 export async function killSessionsForUser(userId: number, reason: string): Promise<number> {
   if (!Number.isInteger(userId) || userId <= 0) return 0;
   const uid = String(userId);
@@ -58,10 +79,12 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   const res = await db.raw(
     `DELETE FROM session
       WHERE (sess::jsonb ->> 'userId') = ?
-         OR (sess::jsonb ->> 'pendingMfaUserId') = ?`,
+         OR (sess::jsonb ->> 'pendingMfaUserId') = ?
+      RETURNING sid`,
     [uid, uid],
-  ) as { rowCount?: number } | undefined;
+  ) as { rowCount?: number; rows?: Array<{ sid: string }> } | undefined;
   const count = Number(res?.rowCount ?? 0);
+  revokeDeletedSessions((res?.rows ?? []).map((r) => r.sid));
   forgetSessionUser(userId);
   forgetTenantMemberships(userId);
   // The cached global-view grants of its sessions (they expire by themselves
@@ -87,6 +110,43 @@ export async function killSessionsForUser(userId: number, reason: string): Promi
   }
   logger.info({ userId, reason, count, ...closed }, 'user sessions killed');
   return count;
+}
+
+/**
+ * The credentials of the account changed (password set by a reset link, by an
+ * administrator or from the profile; second factor reset by an
+ * administrator): every OTHER session of the user ends — the one that made the
+ * change (`keepSid`) stays signed in. Sessions are sliding (7 days renewed at
+ * each request): without this, a stolen session would outlive the reset that
+ * was meant to cut it. Their live channels are closed too. Never throws.
+ */
+export async function killOtherSessionsForUser(userId: number, keepSid: string | undefined | null, reason: string): Promise<number> {
+  if (!Number.isInteger(userId) || userId <= 0) return 0;
+  if (typeof keepSid !== 'string' || keepSid.length === 0) {
+    try { return await killSessionsForUser(userId, reason); } catch (err) {
+      logger.warn({ err, userId, reason }, 'user sessions not killed');
+      return 0;
+    }
+  }
+  const uid = String(userId);
+  try {
+    const res = await db.raw(
+      `DELETE FROM session
+        WHERE ((sess::jsonb ->> 'userId') = ? OR (sess::jsonb ->> 'pendingMfaUserId') = ?)
+          AND sid <> ?
+        RETURNING sid`,
+      [uid, uid, keepSid],
+    ) as { rows?: Array<{ sid: string }> } | undefined;
+    const sids = (res?.rows ?? []).map((r) => r.sid);
+    revokeDeletedSessions(sids);
+    forgetSessionUser(userId);
+    if (sids.length > 0) await closeSessionChannels(sids, reason);
+    logger.info({ userId, reason, count: sids.length }, 'other sessions of the user killed');
+    return sids.length;
+  } catch (err) {
+    logger.warn({ err, userId, reason }, 'other sessions of the user not killed');
+    return 0;
+  }
 }
 
 // ── Per-session live channels (device-bound 2FA revocation, §6.7) ──────────

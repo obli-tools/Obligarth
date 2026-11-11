@@ -130,13 +130,14 @@ const SPECS: Record<LegacyAgentCommandType, CommandSpec> = {
   },
   // Agent 1.3.0 (lot PONT-POL §8.5): the kiosk of the agent policy left for some minutes, and the policy applied again
   // from a full configuration. Both immediate on the device; the console also needs mdm.policies.manage (routes.ts). No
-  // secret: the console lists the queue.
+  // secret: the console lists the queue. Restrictable by the tenant's matrix (legacy_agent.policy_commands, review F115;
+  // no level by default).
   'kiosk.suspend': {
     type: 'kiosk.suspend', params: z.object({ minutes: z.number().int().min(1).max(240) }).strict(),
-    capability: 'mdm:profiles', restrictionKey: null, guardedBy: null, lifetimeSeconds: DAY,
+    capability: 'mdm:profiles', restrictionKey: 'legacy_agent.policy_commands', guardedBy: null, lifetimeSeconds: DAY,
   },
   'policy.reapply': {
-    type: 'policy.reapply', params: z.object({}).strict(), capability: 'mdm:profiles', restrictionKey: null, guardedBy: null,
+    type: 'policy.reapply', params: z.object({}).strict(), capability: 'mdm:profiles', restrictionKey: 'legacy_agent.policy_commands', guardedBy: null,
     lifetimeSeconds: DAY,
   },
   // Agent 1.4.0 (lot BANC §3.8, D15): the device given back by the owner agent (its policies, the owner, then the
@@ -438,7 +439,7 @@ export const WITHDRAWN_UPDATE_EXCLUDED_SQL = "NOT (request_type = 'agent.update'
  * The commands an interrogation takes, in the tenant's transaction, the satellite already locked: nothing while the
  * tenant is frozen (RS-3: the pending get hold_reason 'frozen'); else at most 20, pending (not_before passed,
  * expires_at ahead) and sent without result for max(2 × pollSeconds, 600 s), erase first, then lock, then by age;
- * `onlyTypes` narrows them (agentTooOld: agent.update and inventory.refresh only).
+ * `onlyTypes` narrows them (agentTooOld: the erase, the lock, agent.update and inventory.refresh only).
  */
 export async function deliver(trx: Knex.Transaction, tenantId: number, deviceId: number,
   o: {

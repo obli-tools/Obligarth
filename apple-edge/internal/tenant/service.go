@@ -202,7 +202,7 @@ INSERT INTO apple_edge.tenant_cas (id, tenant_key, status, cert_pem, key_enc, sh
 VALUES ($1, $2, 'active', $3, $4, $5, $6)`, caID, key, string(certPEM), enc, out.CA.SHA256, out.CA.NotAfter); err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET updated_at = now() WHERE key = $1`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key); err != nil {
 			return err
 		}
 		prev := make([]string, 0, len(out.Previous))
@@ -388,7 +388,7 @@ func (s *Service) SetState(ctx context.Context, key, state string) error {
 		if st == state {
 			return "", nil
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = $2, updated_at = now() WHERE key = $1`, key, state)
+		_, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = $2, updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key, state)
 		return state, err
 	})
 }
@@ -399,7 +399,7 @@ func (s *Service) Freeze(ctx context.Context, key string, frozen bool) error {
 		if st != StateActive && st != StateSuspended {
 			return "", errNotLive
 		}
-		_, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET commands_frozen = $2, updated_at = now() WHERE key = $1`, key, frozen)
+		_, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET commands_frozen = $2, updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key, frozen)
 		return "", err
 	})
 }
@@ -427,7 +427,7 @@ func (s *Service) Retire(ctx context.Context, key string) error {
 		if tokens > 0 {
 			return "", apierr.Conflict("tenant_has_ade_tokens", fmt.Sprintf("%d ADE tokens are still present (delete them first)", tokens))
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = 'retiring', retiring_since = now(), updated_at = now() WHERE key = $1`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = 'retiring', retiring_since = now(), updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key); err != nil {
 			return "", err
 		}
 		_, err = tx.ExecContext(ctx, `UPDATE apple_edge.data_keys SET destroy_after = now() + make_interval(secs => $2) WHERE tenant_key = $1 AND state = 'active'`, key, s.RetireAfter.Seconds())
@@ -441,7 +441,7 @@ func (s *Service) Restore(ctx context.Context, key string) error {
 		if st != StateRetiring {
 			return "", apierr.Conflict("tenant_not_retiring", "only a retiring tenant can be restored")
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = 'active', retiring_since = NULL, updated_at = now() WHERE key = $1`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET state = 'active', retiring_since = NULL, updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key); err != nil {
 			return "", err
 		}
 		_, err := tx.ExecContext(ctx, `UPDATE apple_edge.data_keys SET destroy_after = NULL WHERE tenant_key = $1 AND state = 'active'`, key)
@@ -498,9 +498,11 @@ SELECT key FROM apple_edge.tenants
 				`DELETE FROM apple_edge.issued_certs WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.scep_challenges WHERE tenant_key = $1`,
 				`DELETE FROM apple_edge.push_certs WHERE tenant_key = $1`,
+				// Its push topics are free again (review F099).
+				`DELETE FROM apple_edge.topics WHERE tenant_key = $1`,
 				`UPDATE apple_edge.tenant_cas SET key_enc = NULL, status = 'retired' WHERE tenant_key = $1`,
 				`UPDATE apple_edge.data_keys SET dek_wrapped = NULL, state = 'destroyed', destroyed_at = now() WHERE tenant_key = $1`,
-				`UPDATE apple_edge.tenants SET state = 'retired', retired_at = now(), updated_at = now() WHERE key = $1`,
+				`UPDATE apple_edge.tenants SET state = 'retired', retired_at = now(), updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`,
 			} {
 				if _, err := tx.ExecContext(ctx, q, key); err != nil {
 					return err

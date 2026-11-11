@@ -66,6 +66,12 @@ function query(params: object | undefined): Record<string, string | number | boo
   return out;
 }
 
+/** A content hash the server accepts as expectedContentSha256 (64 hexadecimal digits), else undefined: a version
+ *  read without one is saved without the comparison, as before. */
+export function expectedSha(sha: string | null | undefined): string | undefined {
+  return typeof sha === 'string' && /^[0-9a-fA-F]{64}$/.test(sha) ? sha : undefined;
+}
+
 /** What the operator may change on a device record (PATCH /api/mdm/devices/:id). */
 export interface DevicePatch {
   displayName?: string | null;
@@ -256,8 +262,12 @@ export const mdmApi = {
     const res = await apiClient.post<ApiResponse<PolicyVersion>>(`/mdm/policies/${id}/versions`, from ? { from } : {});
     return res.data.data!;
   },
-  async saveDraft(id: number, version: number, content: PolicyContentV1, changeNote?: string | null): Promise<PolicyVersion> {
-    const res = await apiClient.put<ApiResponse<PolicyVersion>>(`/mdm/policies/${id}/versions/${version}`, { content, changeNote: changeNote ?? null });
+  /** `expectedContentSha256`: the contentSha256 of the draft as the editor read it (optimistic concurrency, review
+   *  F070): a draft saved elsewhere meanwhile answers 409 policyVersionChanged and nothing is written. */
+  async saveDraft(id: number, version: number, content: PolicyContentV1, changeNote?: string | null, expectedContentSha256?: string): Promise<PolicyVersion> {
+    const expected = expectedSha(expectedContentSha256);
+    const res = await apiClient.put<ApiResponse<PolicyVersion>>(`/mdm/policies/${id}/versions/${version}`,
+      { content, changeNote: changeNote ?? null, ...(expected ? { expectedContentSha256: expected } : {}) });
     return res.data.data!;
   },
   async discardVersion(id: number, version: number): Promise<void> {
@@ -272,8 +282,12 @@ export const mdmApi = {
     return res.data.data!;
   },
   /** Publication: done (a second factor may have been asked by the interceptor), or waiting for a second approver. */
-  async submitVersion(id: number, version: number): Promise<SubmitOutcome> {
-    const res = await apiClient.post<ApiResponse<SubmitOutcome>>(`/mdm/policies/${id}/versions/${version}/submit`);
+  /** `expectedContentSha256`: the content the console showed and previewed; a draft saved meanwhile answers 409
+   *  policyVersionChanged (nothing published). */
+  async submitVersion(id: number, version: number, expectedContentSha256?: string): Promise<SubmitOutcome> {
+    const expected = expectedSha(expectedContentSha256);
+    const res = await apiClient.post<ApiResponse<SubmitOutcome>>(`/mdm/policies/${id}/versions/${version}/submit`,
+      expected ? { expectedContentSha256: expected } : undefined);
     return res.data.data!;
   },
   async importRawProfile(id: number, file: File): Promise<RawProfileImport> {

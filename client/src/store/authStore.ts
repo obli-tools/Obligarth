@@ -16,6 +16,8 @@ import { connectSocket, disconnectSocket } from '../socket/socketClient';
 import { useLiveAlertsStore } from './liveAlertsStore';
 import { setLanguage } from '../i18n';
 import { useTenantStore } from './tenantStore';
+import { inheritedGroupLevel } from './groupStore';
+import { resetSession } from './sessionReset';
 import { applyTheme, isKnownTheme } from '../utils/theme';
 
 function syncPreferencesToStore(user: User) {
@@ -51,7 +53,8 @@ interface AuthState {
   login: (username: string, password: string) => Promise<LoginResult>;
   logout: () => Promise<void>;
   checkSession: () => Promise<void>;
-  refreshPermissions: () => Promise<void>;
+  /** Re-reads the permissions of the active tenant; false when the read failed (the previous ones are kept). */
+  refreshPermissions: () => Promise<boolean>;
 
   // Convenience permission checkers
   isAdmin: () => boolean;
@@ -81,6 +84,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const user = result.user;
+      // Nothing of a previous account (session expired without a logout) survives a new sign-in.
+      resetSession();
       set({ user, isLoading: false });
       syncPreferencesToStore(user);
       connectSocket(user.id);
@@ -137,6 +142,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } finally {
       disconnectSocket();
       set({ user: null, permissions: null, requires2faSetup: false });
+      // The account's data in the other stores (alerts, tenants, group tree, MCP notices) goes with it: the next
+      // account signing in in this tab starts from empty stores.
+      resetSession();
     }
 
     if (obligateLogoutUrl) {
@@ -164,8 +172,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const permissions = await authApi.getPermissions();
       set({ permissions });
+      return true;
     } catch {
-      // Ignore errors
+      // The caller decides (a tenant switch must not keep the previous tenant's capabilities).
+      return false;
     }
   },
 
@@ -178,32 +188,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return permissions?.canCreate ?? false;
   },
 
-  canWriteDevice: (deviceId: number, groupId: number | null) => {
-    const { user, permissions } = get();
-    if (!user) return false;
-    if (user.role === 'admin') return true;
-    if (!permissions) return false;
+  canWriteDevice: (deviceId: number, groupId: number | null) =>
+    get().getDevicePermission(deviceId, groupId) === 'rw',
 
-    // Check direct device permission
-    const devicePerm = permissions.permissions[`device:${deviceId}`];
-    if (devicePerm === 'rw') return true;
-
-    // Check group permission
-    if (groupId !== null) {
-      const groupPerm = permissions.permissions[`group:${groupId}`];
-      if (groupPerm === 'rw') return true;
-    }
-
-    return false;
-  },
-
-  canWriteGroup: (groupId: number) => {
-    const { user, permissions } = get();
-    if (!user) return false;
-    if (user.role === 'admin') return true;
-    if (!permissions) return false;
-    return permissions.permissions[`group:${groupId}`] === 'rw';
-  },
+  canWriteGroup: (groupId: number) => get().getGroupPermission(groupId) === 'rw',
 
   getDevicePermission: (deviceId: number, groupId: number | null) => {
     const { user, permissions } = get();
@@ -211,8 +199,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (user.role === 'admin') return 'rw';
     if (!permissions) return null;
 
-    const devicePerm = permissions.permissions[`device:${deviceId}`];
-    const groupPerm = groupId !== null ? permissions.permissions[`group:${groupId}`] : null;
+    // Same rule as the server (permission.service getDevicePermission): the device's own grant, else its group's
+    // or an ancestor group's (closure), else for a device without group the 'ungrouped' grant.
+    const devicePerm = permissions.permissions[`device:${deviceId}`] ?? null;
+    const groupPerm = groupId !== null
+      ? inheritedGroupLevel(permissions.permissions, groupId)
+      : permissions.permissions['ungrouped:0'] ?? null;
 
     if (devicePerm === 'rw' || groupPerm === 'rw') return 'rw';
     if (devicePerm === 'ro' || groupPerm === 'ro') return 'ro';
@@ -224,6 +216,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     if (!user) return null;
     if (user.role === 'admin') return 'rw';
     if (!permissions) return null;
-    return permissions.permissions[`group:${groupId}`] ?? null;
+    // A grant on an ancestor group holds for its subgroups (server: _getGroupPermissionViaClosure).
+    return inheritedGroupLevel(permissions.permissions, groupId);
   },
 }));

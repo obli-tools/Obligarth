@@ -270,7 +270,7 @@ export function registerWriteTools(): void {
 
   registerTool({
     name: 'reboot_device', title: 'Restart devices', scope: 'commands.restart',
-    description: 'Restarts Android agent devices (Knox licensed). Restriction legacy_agent.restart: may need the human (authorization) or another approver.',
+    description: 'Restarts Android agent devices (Knox licensed). Restriction legacy_agent.restart: may need the human (authorization) or another approver. With the guard setting legacyAgentCommandsSensitive of the tenant on, legacy_agent.commands_sensitive (a second factor at least).',
     inputSchema: js.obj({ tenant_id: js.tenant, device_ids: ids, reason: why }, ['tenant_id', 'device_ids']),
     args: ARGS.reboot_device,
     annotations: { title: 'Restart devices', ...WRITE, destructiveHint: true, idempotentHint: false },
@@ -279,7 +279,7 @@ export function registerWriteTools(): void {
 
   registerTool({
     name: 'install_app', title: 'Install an app', scope: 'commands.apps',
-    description: 'Installs a package of the tenant (see list_legacy_packages) on Android agent devices. Restriction legacy_agent.apps.',
+    description: 'Installs a package of the tenant (see list_legacy_packages) on Android agent devices; a package sent back by a device must be confirmed by a human first (confirmedAt; packageNotConfirmed otherwise). Restriction legacy_agent.apps. With the guard setting legacyAgentCommandsSensitive of the tenant on, legacy_agent.commands_sensitive (a second factor at least).',
     inputSchema: js.obj({ tenant_id: js.tenant, device_ids: ids, package_id: js.str('The package id (uuid).', { format: 'uuid' }), reason: why }, ['tenant_id', 'device_ids', 'package_id']),
     args: ARGS.install_app,
     annotations: { title: 'Install an app', ...WRITE, destructiveHint: false, idempotentHint: true },
@@ -288,7 +288,7 @@ export function registerWriteTools(): void {
 
   registerTool({
     name: 'uninstall_app', title: 'Uninstall an app', scope: 'commands.apps',
-    description: 'Uninstalls an app (Android package name) from Android agent devices. Restriction legacy_agent.apps.',
+    description: 'Uninstalls an app (Android package name) from Android agent devices. Restriction legacy_agent.apps. With the guard setting legacyAgentCommandsSensitive of the tenant on, legacy_agent.commands_sensitive (a second factor at least).',
     inputSchema: js.obj({ tenant_id: js.tenant, device_ids: ids, package_name: js.str('The Android package name.', { maxLength: 255 }), reason: why }, ['tenant_id', 'device_ids', 'package_name']),
     args: ARGS.uninstall_app,
     annotations: { title: 'Uninstall an app', ...WRITE, destructiveHint: true, idempotentHint: true },
@@ -306,7 +306,7 @@ export function registerWriteTools(): void {
 
   registerTool({
     name: 'update_agent', title: 'Update the Android agent', scope: 'commands.apps',
-    description: 'Updates the Android bridge agent to a version (see list_legacy_agent_releases). Restriction legacy_agent.update.',
+    description: 'Updates the Android bridge agent to a version (see list_legacy_agent_releases). Restriction legacy_agent.update. With the guard setting legacyAgentCommandsSensitive of the tenant on, legacy_agent.commands_sensitive (a second factor at least).',
     inputSchema: js.obj({ tenant_id: js.tenant, device_ids: ids, release_id: js.str('The version id (uuid).', { format: 'uuid' }), reason: why }, ['tenant_id', 'device_ids', 'release_id']),
     args: ARGS.update_agent,
     annotations: { title: 'Update the Android agent', ...WRITE, destructiveHint: false, idempotentHint: true },

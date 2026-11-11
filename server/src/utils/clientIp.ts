@@ -5,8 +5,8 @@ import os from 'os';
 import type { IncomingMessage } from 'http';
 
 /**
- * The one way to know a client's IP (audit, "trust this IP" 2FA window) —
- * not the rate-limit key, see below.
+ * The one way to know a client's IP (audit, "trust this IP" 2FA window, and
+ * the key of the rate limits, see below).
  *
  * `X-Forwarded-For` is a list the CLIENT can pre-fill: only the entries added
  * by proxies we trust are meaningful. Like Express's `trust proxy`, the list
@@ -37,9 +37,16 @@ import type { IncomingMessage } from 'http';
  * 172.16/12), set TRUSTED_PROXY_HOPS=1: with 2, such a client can choose the
  * address it is seen with.
  *
- * Rate limits do NOT use this function: they key on req.ip, which Express
- * ('trust proxy', 1 — app.ts) resolves to the address the client nginx saw,
- * something a client cannot forge.
+ * Rate limits key on this function too (limiterClientKey,
+ * middleware/rateLimiter.ts), falling back on req.ip (Express 'trust proxy', 1
+ * — app.ts) when it cannot resolve; behind a relay everyone shares that
+ * relay's bucket. A client inside a trusted range (the TRUSTED_PROXY_HOPS=2
+ * case above) chooses the address it is seen with: it can spread itself over
+ * many buckets, and also fill the bucket of another address (a targeted
+ * lock-out of that address). That is why an address key is never the only
+ * brute-force bound — the login and the second factor also have a
+ * per-account limit (authAccountLimiter, mfaAccountLimiter) — and why
+ * TRUSTED_PROXY_HOPS must be 1 when such clients exist.
  */
 export const DEFAULT_TRUSTED_PROXIES = 'loopback, self, 172.16.0.0/12';
 

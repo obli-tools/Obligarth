@@ -9,7 +9,7 @@ import { logger } from '../utils/logger';
 import { registerMcpAuditActions, systemCtx } from '../mcp/audit';
 import { forgetMcpUser } from '../mcp/auth';
 import {
-  assertFiledApprovalLive, cancelDeadKeyRows, cancelForKey, expireDue, interruptStale, retryCancelFailed,
+  assertFiledApprovalLive, cancelDeadKeyRows, cancelForKey, closeDecidedFiled, expireDue, interruptStale, retryCancelFailed,
 } from '../mcp/authorizations/service';
 import { expireBlocks, flushDeferred, loadBlocks, retryObliguard } from '../mcp/blocks';
 import { invalidatePolicy, refreshPolicy } from '../mcp/ipPolicy';
@@ -86,11 +86,11 @@ export function registerMcpModule(): void {
     },
   });
 
-  // Every minute, in the job of the bridge agent: authorizations past their deadline, interrupted executions,
-  // cancellations to retry; blocks past their end, blocks deferred by the per-minute cap, the IP policy (and its mode
-  // change); every 5 minutes, the Obliguard reports still pending or failed.
+  // Every minute, in the job of the bridge agent: authorizations past their deadline, filed ones whose approval was
+  // decided, interrupted executions, cancellations to retry; blocks past their end, blocks deferred by the per-minute
+  // cap, the IP policy (and its mode change); every 5 minutes, the Obliguard reports still pending or failed.
   registerLegacyAgentMinuteStep('mcp', async (ctx) => {
-    let expired = 0; let interrupted = 0; let retried = 0; let deadCancelled = 0;
+    let expired = 0; let filedClosed = 0; let interrupted = 0; let retried = 0; let deadCancelled = 0;
     const actx = systemCtx({ requestId: 'job-mcp-minute' });
     // Keys whose owner changed his credentials, was disabled or removed: revoked now, not at their next use.
     let staleRevoked = 0;
@@ -100,6 +100,8 @@ export function registerMcpModule(): void {
       const any = await db('mcp_authorizations').where({ tenant_id: tenantId }).whereIn('state', ['pending', 'executing', 'filed']).first('id');
       if (!any) return;
       expired += await expireDue(tenantId, actx);
+      // Filed rows whose console approval was decided (review F051): a failure here never stops the other steps.
+      try { filedClosed += await closeDecidedFiled(tenantId, actx); } catch (err) { logger.warn({ err, tenantId }, 'mcp minute step: decided filed rows not closed'); }
       interrupted += await interruptStale(tenantId, actx);
       retried += await retryCancelFailed(tenantId);
       deadCancelled += await cancelDeadKeyRows(tenantId);
@@ -111,7 +113,7 @@ export function registerMcpModule(): void {
     if (++minuteCount % 5 === 0) resent = await retryObliguard();
     if (failed > 0) logger.warn({ failed }, 'mcp minute step: tenants failed');
     return {
-      mcpExpired: expired, mcpInterrupted: interrupted, mcpCancelRetried: retried, mcpStaleKeysRevoked: staleRevoked, mcpDeadKeyCancelled: deadCancelled,
+      mcpExpired: expired, mcpFiledClosed: filedClosed, mcpInterrupted: interrupted, mcpCancelRetried: retried, mcpStaleKeysRevoked: staleRevoked, mcpDeadKeyCancelled: deadCancelled,
       mcpUnblocked: unblocked, mcpBlocksFlushed: flushed, mcpObliguardResent: resent,
     };
   });

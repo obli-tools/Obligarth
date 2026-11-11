@@ -55,9 +55,16 @@ const PatchBody = z.object({
   description: z.string().max(10_000).nullable().optional(),
   category: z.string().max(32).optional(),
 }).strict();
+/** The contentSha256 of the version the editor read (review F070): optional, a client that omits it is not checked. */
+const ExpectedSha = z.string().regex(/^[0-9a-fA-F]{64}$/);
 const DraftBody = z.object({
   content: z.record(z.string(), z.unknown()),
   changeNote: z.string().max(2000).nullable().optional(),
+  expectedContentSha256: ExpectedSha.optional(),
+}).strict();
+/** The body of a submission: empty for the clients that send none. */
+const SubmitBody = z.object({
+  expectedContentSha256: ExpectedSha.optional(),
 }).strict();
 const NewVersionBody = z.object({
   /** Number of a rejected version to take up again (default: a copy of the published version). */
@@ -180,12 +187,14 @@ router.get('/policies/:id/versions/:v', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// PUT /api/mdm/policies/:id/versions/:v — { content, changeNote? }: the draft (validation, secrets moved to the vault).
+// PUT /api/mdm/policies/:id/versions/:v — { content, changeNote?, expectedContentSha256? }: the draft (validation,
+// secrets moved to the vault). expectedContentSha256: 409 policyVersionChanged when the draft was saved meanwhile.
 router.put('/policies/:id/versions/:v', manage, async (req, res, next) => {
   try {
     const b = parse(DraftBody, req.body);
     const id = idParam(req.params.id);
-    const v = await policyService.saveDraft(req.tenantId!, id, idParam(req.params.v, 'Policy version'), b.content, b.changeNote ?? null, await actorOf(req));
+    const v = await policyService.saveDraft(req.tenantId!, id, idParam(req.params.v, 'Policy version'), b.content, b.changeNote ?? null,
+      await actorOf(req), { expectedContentSha256: b.expectedContentSha256 });
     emitPolicyChanged(req.tenantId!, [id]);
     res.json({ data: v });
   } catch (err) { next(err); }
@@ -238,10 +247,14 @@ router.post('/policies/:id/versions/:v/impact', async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// POST /api/mdm/policies/:id/versions/:v/submit — publication (step-up) or approval request (202).
+// POST /api/mdm/policies/:id/versions/:v/submit — { expectedContentSha256? } (or no body): publication (step-up) or
+// approval request (202). expectedContentSha256: compared under the lock with the draft as checked, 409
+// policyVersionChanged when it differs (a draft saved by someone else since the editor read it).
 router.post('/policies/:id/versions/:v/submit', manage, async (req, res, next) => {
   try {
-    send(res, await submitVersion(req, req.tenantId!, idParam(req.params.id), idParam(req.params.v, 'Policy version')));
+    const b = parse(SubmitBody, req.body ?? {});
+    send(res, await submitVersion(req, req.tenantId!, idParam(req.params.id), idParam(req.params.v, 'Policy version'),
+      b.expectedContentSha256 !== undefined ? { expectContentSha: b.expectedContentSha256.toLowerCase() } : {}));
   } catch (err) { next(err); }
 });
 

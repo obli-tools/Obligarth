@@ -234,5 +234,11 @@ async function resetSecondFactorsIn(
       byUserId: byUserId ?? null, req: ctx.req, auditTenantId: ctx.auditTenantId ?? null,
     });
   } catch { /* the credential-version trigger remains the safety net */ }
+  // The account's open sessions end with its factors (a reset after a
+  // compromise must cut the intruder's session off); the administrator's own
+  // session survives a reset of its own account.
+  const { killOtherSessionsForUser } = await import('./userSessions.service');
+  const keep = byUserId === userId && ctx.req ? ctx.req.sessionID : null;
+  await killOtherSessionsForUser(userId, keep, 'totp_reset');
   return true;
 }

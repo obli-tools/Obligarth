@@ -2,6 +2,18 @@ import { db } from '../db';
 import type { DeviceCapability, PermissionLevel, TenantCapability, UserPermissions } from '@obligarth/shared';
 import { knownDeviceCapabilities, knownTenantCapabilities, TENANT_CAPABILITIES } from '@obligarth/shared';
 import { normaliseTenantRole } from './userScope.service';
+import type { Knex } from 'knex';
+
+/**
+ * The team permission rows that may carry `capability`: an action of the MDM
+ * (anything but the 'monitor' baseline) is only ever used on a row with write
+ * access (shared/src/capabilities.ts), as userHoldsDeviceCapabilityAnywhere
+ * reads it. Without this, a write row lacking the capability and a read-only
+ * row carrying it would together grant an action no single row grants.
+ */
+export function onActionRows(capability: DeviceCapability): (q: Knex.QueryBuilder) => void {
+  return (q) => { if (capability !== 'monitor') q.where('tp.level', 'rw'); };
+}
 
 export const permissionService = {
   /**
@@ -153,6 +165,7 @@ export const permissionService = {
     const directPerms = await db('team_permissions as tp')
       .join('team_memberships as tm', 'tm.team_id', 'tp.team_id')
       .where({ 'tm.user_id': userId, 'tp.scope': 'device', 'tp.scope_id': deviceId })
+      .modify(onActionRows(capability))
       .select('tp.capabilities');
 
     for (const row of directPerms) {
@@ -165,6 +178,7 @@ export const permissionService = {
         .join('team_memberships as tm', 'tm.team_id', 'tp.team_id')
         .join('device_group_closure as dgc', 'dgc.ancestor_id', 'tp.scope_id')
         .where({ 'tm.user_id': userId, 'tp.scope': 'group', 'dgc.descendant_id': deviceRow.group_id })
+        .modify(onActionRows(capability))
         .select('tp.capabilities');
 
       for (const row of groupPerms) {
@@ -199,6 +213,7 @@ export const permissionService = {
         .join('team_memberships as tm', 'tm.team_id', 'tp.team_id')
         .where({ 'tm.user_id': userId, 'tp.scope': 'device' })
         .whereIn('tp.scope_id', chunk)
+        .modify(onActionRows(capability))
         .select('tp.scope_id', 'tp.capabilities') as Array<{ scope_id: number; capabilities: unknown }>;
       for (const row of direct) if (hasCap(row.capabilities)) granted.add(Number(row.scope_id));
 
@@ -210,6 +225,7 @@ export const permissionService = {
           .join('device_group_closure as dgc', 'dgc.ancestor_id', 'tp.scope_id')
           .where({ 'tm.user_id': userId, 'tp.scope': 'group' })
           .whereIn('dgc.descendant_id', groupIds)
+          .modify(onActionRows(capability))
           .select('dgc.descendant_id', 'tp.capabilities') as Array<{ descendant_id: number; capabilities: unknown }>;
         for (const row of groupRows) if (hasCap(row.capabilities)) grantedGroups.add(Number(row.descendant_id));
       }

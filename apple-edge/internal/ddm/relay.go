@@ -3,15 +3,32 @@
 // tokens, status). The device's Endpoint is checked against an allow-list
 // and travels as data: the target URL is fixed, so a device can never
 // redirect the request. Requests and responses are signed with HMAC-SHA256
-// over "<timestamp>.<body>" with a key shared with the brain.
+// over "<timestamp>.<body>" with a key shared with the brain (v1).
+//
+// Signature v2 of the response (review F100): v1 signs the response alone, so
+// a signed response captured on the internal network could be replayed within
+// its window as the answer to any other request. Every request now carries a
+// random nonce (X-Edge-Nonce); a brain that knows v2 adds
+// X-Edge-Response-Signature, an HMAC that binds the response (timestamp,
+// HTTP status, body) to its request (timestamp, nonce, body). When that header
+// is present it is the only one that counts: a wrong v2 is refused, never
+// rescued by v1. When it is absent (a brain of an older version, during a
+// rolling update), the v1 signature is accepted, with a warning and the
+// counter apple_edge_ddm_relay_v1_fallback_total, unless
+// EDGE_DDM_RESPONSE_SIGNATURE=require-v2.
+//
+// TODO(F100): once every brain in production signs v2 (the counter stays at
+// zero), make require-v2 the default, then remove the v1 fallback.
 package ddm
 
 import (
 	"bytes"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +37,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/micromdm/nanomdm/mdm"
@@ -39,6 +57,16 @@ const (
 	HeaderTimestamp  = "X-Edge-Timestamp"
 	HeaderSignature  = "X-Edge-Signature"
 	signatureVersion = "v1="
+	// HeaderNonce is the random nonce of a request, echoed in the v2
+	// signature of its response (a brain of an older version ignores it).
+	HeaderNonce = "X-Edge-Nonce"
+	// HeaderResponseSignature carries the v2 signature of a response, bound
+	// to its request.
+	HeaderResponseSignature = "X-Edge-Response-Signature"
+	responseV2Version       = "v2="
+	// responseV2Label separates the v2 response signature from every other
+	// use of the key (the v1 signatures of both directions).
+	responseV2Label = "obligarth-ddm-response-v2"
 	// MinKeyBytes is the minimum size of the shared HMAC key.
 	MinKeyBytes = 32
 	// MaxStatusBytes is the largest status report relayed: a report of Apple
@@ -105,6 +133,65 @@ func Verify(key []byte, ts, sig string, body []byte, now time.Time) bool {
 	return hmac.Equal([]byte(Sign(key, ts, body)), []byte(sig))
 }
 
+// Response signature policies (EDGE_DDM_RESPONSE_SIGNATURE).
+const (
+	// ResponseSigAcceptV1 verifies v2 when the brain sends it and falls back
+	// to v1 when it does not (default: a rolling update keeps working).
+	ResponseSigAcceptV1 = "accept-v1"
+	// ResponseSigRequireV2 refuses a response without a v2 signature.
+	ResponseSigRequireV2 = "require-v2"
+)
+
+// NewNonce returns a random request nonce (128 bits, base64url, unpadded).
+func NewNonce() (string, error) {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b[:]), nil
+}
+
+func sha256Hex(b []byte) string {
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// SignResponseV2 returns the X-Edge-Response-Signature of a response: "v2=" +
+// base64(HMAC-SHA256(key, label LF respTs LF status LF reqTs LF nonce LF
+// hex(sha256(reqBody)) LF hex(sha256(respBody)))). The request's body names
+// the tenant, the enrollment and the endpoint; the method and the path are
+// fixed (one POST route) and left out, so that a path prefix in EDGE_DDM_URL
+// (a proxy in between) cannot break the check.
+func SignResponseV2(key []byte, respTs string, status int, reqTs, nonce string, reqBody, respBody []byte) string {
+	m := hmac.New(sha256.New, key)
+	for i, part := range []string{responseV2Label, respTs, strconv.Itoa(status), reqTs, nonce, sha256Hex(reqBody), sha256Hex(respBody)} {
+		if i > 0 {
+			m.Write([]byte("\n"))
+		}
+		m.Write([]byte(part))
+	}
+	return responseV2Version + base64.StdEncoding.EncodeToString(m.Sum(nil))
+}
+
+// VerifyResponseV2 checks the timestamp window and the v2 signature of a
+// response against the request it answers.
+func VerifyResponseV2(key []byte, respTs, sig string, status int, reqTs, nonce string, reqBody, respBody []byte, now time.Time) bool {
+	n, err := strconv.ParseInt(respTs, 10, 64)
+	if err != nil {
+		return false
+	}
+	if d := now.Sub(time.Unix(n, 0)); d > SignatureWindow || d < -SignatureWindow {
+		return false
+	}
+	return hmac.Equal([]byte(SignResponseV2(key, respTs, status, reqTs, nonce, reqBody, respBody)), []byte(sig))
+}
+
+// NewV1FallbackCounter registers the counter of Relay.V1Fallback.
+func NewV1FallbackCounter(reg *obs.Registry) *obs.CounterVec {
+	return reg.Counter("apple_edge_ddm_relay_v1_fallback_total",
+		"DDM relay responses accepted on their v1 signature alone (brain without the v2 response signature).", "tenant")
+}
+
 // Request is the JSON body sent to the brain.
 type Request struct {
 	V                  int     `json:"v"`
@@ -127,6 +214,40 @@ type Relay struct {
 	Now     func() time.Time
 	// StatusLimiter bounds the status reports per device (nil: no bound).
 	StatusLimiter *ratelimit.Limiter
+	// ResponseSignature is ResponseSigAcceptV1 (empty: the same) or
+	// ResponseSigRequireV2.
+	ResponseSignature string
+	// V1Fallback counts the responses accepted on their v1 signature alone,
+	// by tenant (nil: not counted).
+	V1Fallback *obs.CounterVec
+
+	fallbackLoggedAt atomic.Int64 // Unix seconds of the last fallback warning
+}
+
+// verifyResponse applies the response signature policy: it reports whether
+// the response is authentic and, with v2, bound to its request.
+func (r *Relay) verifyResponse(tenant string, resp *http.Response, reqTs, nonce string, reqBody, payload []byte) bool {
+	now := r.now()
+	ts := resp.Header.Get(HeaderTimestamp)
+	if v2 := resp.Header.Get(HeaderResponseSignature); v2 != "" {
+		// Present: the only signature that counts, never rescued by v1.
+		return VerifyResponseV2(r.Key, ts, v2, resp.StatusCode, reqTs, nonce, reqBody, payload, now)
+	}
+	if r.ResponseSignature == ResponseSigRequireV2 {
+		return false
+	}
+	if !Verify(r.Key, ts, resp.Header.Get(HeaderSignature), payload, now) {
+		return false
+	}
+	if r.V1Fallback != nil {
+		r.V1Fallback.Inc(tenant)
+	}
+	// One warning a minute at most: every check-in falls back until the brain is updated.
+	if last := r.fallbackLoggedAt.Load(); now.Unix()-last >= 60 && r.fallbackLoggedAt.CompareAndSwap(last, now.Unix()) {
+		r.Logger.Info("msg", "DDM relay: response accepted on its v1 signature only (brain without the v2 response signature, update it)",
+			"component", "ddm", "severity", "warning", "tenant", tenant)
+	}
+	return true
 }
 
 func (r *Relay) now() time.Time {
@@ -201,10 +322,15 @@ func (r *Relay) DeclarativeManagement(req *mdm.Request, m *mdm.DeclarativeManage
 	if err != nil {
 		return nil, err
 	}
+	nonce, err := NewNonce()
+	if err != nil {
+		return nil, err
+	}
 	ts := strconv.FormatInt(r.now().Unix(), 10)
 	hreq.Header.Set("Content-Type", "application/json")
 	hreq.Header.Set(HeaderTimestamp, ts)
 	hreq.Header.Set(HeaderSignature, Sign(r.Key, ts, raw))
+	hreq.Header.Set(HeaderNonce, nonce)
 	if rid := reqctx.RequestID(req.Context()); rid != "" {
 		hreq.Header.Set("X-Request-ID", rid)
 	}
@@ -235,7 +361,7 @@ func (r *Relay) DeclarativeManagement(req *mdm.Request, m *mdm.DeclarativeManage
 		r.Logger.Error("msg", "DDM relay: response too large", "component", "ddm", "tenant", key)
 		return nil, statusErr(http.StatusBadGateway, "response too large")
 	}
-	if !Verify(r.Key, resp.Header.Get(HeaderTimestamp), resp.Header.Get(HeaderSignature), payload, r.now()) {
+	if !r.verifyResponse(key, resp, ts, nonce, raw, payload) {
 		outcome = "bad_signature"
 		r.Logger.Error("msg", "DDM relay: unsigned or badly signed response", "component", "ddm", "tenant", key, "status", resp.StatusCode)
 		return nil, statusErr(http.StatusBadGateway, "invalid response signature")

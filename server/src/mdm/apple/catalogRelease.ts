@@ -5,6 +5,7 @@ import { forEachTenant } from '../../db/tenantContext';
 import { appConfigService } from '../../services/appConfig.service';
 import { logger } from '../../utils/logger';
 import { requestTenantResolution } from '../policies/triggers';
+import { ANDROID_COMPILER_VERSION } from '../android/compile';
 import { appleCatalog } from './catalog';
 import { COMPILER_VERSION } from './compile';
 import { APPLE_OVERLAY, MVP_TYPES } from './overlay';
@@ -31,6 +32,10 @@ const ACTOR = { type: 'job' as const, name: 'mdm.catalog-release' };
 export function catalogFingerprint(): string {
   return createHash('sha256').update(canonicalJson({
     commit: appleCatalog().release.commit, overlay: APPLE_OVERLAY, mvp: [...MVP_TYPES].sort(), compiler: COMPILER_VERSION,
+    // The Android compiler (mdm/android/compile.ts): a new form of the compiled policy resolves every tenant again.
+    // This only requests the resolution: the hash of the artifact amapi:policy (android/policies/channel.ts) does not
+    // carry the version yet, so no device is pushed its policy again by this alone (review A1, F009).
+    androidCompiler: ANDROID_COMPILER_VERSION,
   })).digest('hex');
 }
 
@@ -48,6 +53,6 @@ export async function resolveOnCatalogChange(): Promise<number> {
   if (failed === 0) {
     await asNone(ACTOR, () => appConfigService.set(KEY, current));
   }
-  logger.info({ requested, failed, first: stored === null }, 'Apple catalog, overlay or compiler changed: policies resolved again');
+  logger.info({ requested, failed, first: stored === null }, 'Apple catalog, overlay or compiler (Apple or Android) changed: policies resolved again');
   return requested;
 }

@@ -51,7 +51,11 @@ import { defaultApplicationDomain, preferredActivityConflicts, preferredDomains 
 // Pure: no database, no logger; the unit tests load it.
 // =============================================================================
 
-/** Bumped when the form of the compiled body changes: every tenant is then resolved again. */
+/** Bumped when the form of the compiled body changes: every tenant is then resolved again (catalogFingerprint,
+ *  mdm/apple/catalogRelease.ts). That alone pushes nothing to the devices: the hash of the artifact amapi:policy
+ *  (android/policies/channel.ts) is computed from the retained settings, not from the compiled policy, so its desired
+ *  version stays the same. Until that hash carries this version too, a bump must come with a forced push of the
+ *  Android policies (review A1, F009). */
 export const ANDROID_COMPILER_VERSION = 2;
 
 export type AndroidNotApplicableReason = AndroidUnavailableReason | UnavailableReason;

@@ -15,8 +15,11 @@ import { mdmApi } from '@/api/mdm.api';
 import { useGroupTreeChange } from '@/components/mdm/GroupTreeChange';
 import type { DeviceGroupTreeNode } from '@obligarth/shared';
 import { SocketEvents, isMasterTenant, MASTER_TENANT_ID } from '@obligarth/shared';
-import { getSocket } from '@/socket/socketClient';
+import { registerSocketListener } from '@/socket/socketListeners';
 import { useTenantStore } from '@/store/tenantStore';
+import { useGroupStore } from '@/store/groupStore';
+import { isStepUpHandled } from '@/api/client';
+import { apiErrorMessage } from '@/utils/apiError';
 import { clsx } from 'clsx';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
@@ -565,6 +568,8 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     try {
       const data = await groupsApi.tree();
       setTree(data);
+      // The device list (DeviceTable) renders its groups from the store: it follows this panel's changes.
+      useGroupStore.getState().setTree(data);
       setExpandedIds((prev) => {
         const stored = getInitialExpanded();
         if (stored !== null) return prev;
@@ -581,20 +586,12 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
   }, []);
   useEffect(() => { fetchTree(); fetchSummary(); }, [fetchTree, fetchSummary]);
 
+  // Through the app-wide registry: the listeners follow the socket when a tenant switch replaces it.
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket) return;
     const handler = () => { fetchTree(); };
-    socket.on(SocketEvents.GROUP_CREATED, handler);
-    socket.on(SocketEvents.GROUP_UPDATED, handler);
-    socket.on(SocketEvents.GROUP_DELETED, handler);
-    socket.on(SocketEvents.GROUP_MOVED, handler);
-    return () => {
-      socket.off(SocketEvents.GROUP_CREATED, handler);
-      socket.off(SocketEvents.GROUP_UPDATED, handler);
-      socket.off(SocketEvents.GROUP_DELETED, handler);
-      socket.off(SocketEvents.GROUP_MOVED, handler);
-    };
+    const offs = [SocketEvents.GROUP_CREATED, SocketEvents.GROUP_UPDATED, SocketEvents.GROUP_DELETED, SocketEvents.GROUP_MOVED]
+      .map((ev) => registerSocketListener(ev, handler));
+    return () => offs.forEach((off) => off());
   }, [fetchTree]);
 
   const toggleExpand = useCallback((id: number) => {
@@ -657,6 +654,18 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
     const targetData = over.data.current as any;
     if (typeof draggedId !== 'number') return;
 
+    // The global view (master tenant) shows the groups of every tenant: a group never leaves its tenant, and its
+    // siblings are those of its tenant (the server refuses a reorder across tenants, 409 crossTenantBatch).
+    const draggedTenantId = findNode(tree, draggedId)?.tenantId;
+    const otherTenant = (groupId: number | null | undefined): boolean => {
+      if (groupId == null || draggedTenantId === undefined) return false;
+      const tenantId = findNode(tree, groupId)?.tenantId;
+      return tenantId !== undefined && tenantId !== draggedTenantId;
+    };
+    const refuseCrossTenant = () => {
+      toast.error(t('groups.crossTenantMove') || 'A group stays in its workspace: drop it among the groups of the same workspace.', { duration: 6000 });
+    };
+
     // Three drop kinds: 'root-target' / 'group-target' (re-parent only),
     // 'between' (reorder OR re-parent + insert at a precise sibling
     // position). The latter is what makes the sidebar feel like a real
@@ -667,10 +676,13 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
       const insertBeforeId: number | null = (targetData.insertBeforeId ?? null) as number | null;
       // Reject moving a group into its own subtree.
       if (newParent !== null && (newParent === draggedId || isDescendantOf(tree, draggedId, newParent))) return;
+      if (otherTenant(newParent) || otherTenant(insertBeforeId)) { refuseCrossTenant(); return; }
 
       // Compute the target sibling list (sans the dragged group) and the
       // insertion index. `insertBeforeId === null` → tail-append.
-      const siblings = newParent === null ? tree : findNode(tree, newParent)?.children ?? [];
+      const siblings = newParent === null
+        ? tree.filter((n) => draggedTenantId === undefined || n.tenantId === draggedTenantId)
+        : findNode(tree, newParent)?.children ?? [];
       const ordered = siblings.filter((s) => s.id !== draggedId).map((s) => s.id);
       const insertIdx = insertBeforeId === null
         ? ordered.length
@@ -693,8 +705,8 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
         await reorder();
         toast.success(t('groups.moved', 'Group moved'));
         fetchTree();
-      } catch {
-        toast.error(t('groups.failedMove', 'Failed to move group'));
+      } catch (err) {
+        if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err, t('groups.failedMove', 'Failed to move group')), { duration: 7000 });
       }
       return;
     }
@@ -706,6 +718,7 @@ export function GroupSidePanel({ groupId, onGroupChange, className, variant = 'p
       targetParentId = targetData.groupId as number;
       if (targetParentId === draggedId) return;
       if (isDescendantOf(tree, draggedId, targetParentId)) return;
+      if (otherTenant(targetParentId)) { refuseCrossTenant(); return; }
     } else {
       return;
     }

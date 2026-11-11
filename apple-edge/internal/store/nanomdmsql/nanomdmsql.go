@@ -249,6 +249,19 @@ func DropOtherCertHashes(ctx context.Context, q Querier, deviceID, keep string) 
 	return res.RowsAffected()
 }
 
+// DropCertHashes removes every certificate association of a device
+// enrollment and of its user channels ("<deviceID>:<user>"). The guard
+// calls it when a holder of the identifier is evicted (ADE proof or
+// approved transfer): its disabled enrollment must not be revived by a
+// TokenUpdate of its identity (review F095).
+func DropCertHashes(ctx context.Context, q Querier, deviceID string) (int64, error) {
+	res, err := q.ExecContext(ctx, `DELETE FROM nanomdm.cert_auth_associations WHERE id = $1 OR left(id, length($1) + 1) = $1 || ':'`, deviceID)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
 // PurgeDevice deletes a device and everything that cascades from it
 // (enrollments, users, queue, results) plus its certificate associations.
 func PurgeDevice(ctx context.Context, q Querier, deviceID string) error {

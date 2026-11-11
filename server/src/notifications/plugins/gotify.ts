@@ -1,5 +1,6 @@
 import type { NotificationPlugin, NotificationPayload } from '../types';
 import { statusIcon } from '../statusIcons';
+import { guardedPost } from '../../utils/ssrfGuard';
 
 export const gotifyPlugin: NotificationPlugin = {
   type: 'gotify',
@@ -16,16 +17,15 @@ export const gotifyPlugin: NotificationPlugin = {
     const prefix = payload.appName || 'Obligarth';
     const url = `${String(config.serverUrl).replace(/\/$/, '')}/message`;
 
-    const res = await fetch(`${url}?token=${config.appToken}`, {
-      method: 'POST',
+    // Self-hosted servers may be on the local network ('lan'): loopback and link-local refused, no redirect.
+    const res = await guardedPost(`${url}?token=${encodeURIComponent(String(config.appToken ?? ''))}`, {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         title: `[${prefix}] ${icon} ${payload.monitorName}`,
         message: `${payload.oldStatus} → ${payload.newStatus}${payload.message ? `\n${payload.message}` : ''}`,
         priority: Number(config.priority) || 5,
       }),
-      signal: AbortSignal.timeout(10000),
-    });
+    }, 'lan');
     if (!res.ok) throw new Error(`Gotify returned ${res.status}`);
   },
 

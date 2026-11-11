@@ -61,6 +61,9 @@ import { registerGuardModule } from '../guard/module';
 import { registerAppleModule } from '../modules/apple';
 import { registerLegacyAgentModule } from '../modules/legacyAgent';
 import { registerRemoteModule } from '../modules/remote';
+import { registerBenchModule } from '../modules/bench';
+import { registerMcpModule } from '../modules/mcp';
+import { registerSitesModule } from '../modules/sites';
 import { registerMdmModule } from '../mdm';
 import { registerPrivacyModule } from '../modules/privacy';
 import { registerAndroidModule } from '../modules/android';
@@ -109,7 +112,12 @@ export function registerServerModules(): void {
   registerMdmModule();
   registerAppleModule();
   registerLegacyAgentModule();
+  // Bench stations, MCP server, sites: their audit actions, approval request types, restrictable actions and jobs
+  // (sites.batches-purge) are the server's too (the steps write the journal, the queues never replayed are listed).
+  registerBenchModule();
   registerRemoteModule();
+  registerMcpModule();
+  registerSitesModule();
   registerPrivacyModule();
   registerAndroidModule();
   registerOpsModule();

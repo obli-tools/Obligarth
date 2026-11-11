@@ -10,7 +10,7 @@ import { userActor } from '../../db/context';
 import { audit, type AuditWriteContext } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import {
-  approvalService, refuse, requireTenantCapability, type ApprovalExecution, type PendingApproval,
+  activeRequester, approvalService, refuse, requireTenantCapability, type ApprovalExecution, type PendingApproval,
 } from '../../services/approval.service';
 import { deviceService } from '../../services/device.service';
 import { permissionService } from '../../services/permission.service';
@@ -24,9 +24,10 @@ import { quoted } from '../policies/impactPure';
 import { signImpactToken } from '../policies/impactToken';
 import type { PolicyState } from '../policies/loader';
 import {
-  approvedImpactOf, conflictRefusal, emitPolicyChanged, impactChanged, matrixLevel, refuseUnlessAsApproved, stepUp, visibleDevices,
+  approvedImpactOf, conflictRefusal, emitPolicyChanged, impactChanged, matrixLevel, refuseUnlessAsApproved, stepUp, strictest, visibleDevices,
   type Level, type RouteOutcome,
 } from '../policies/publishGuard';
+import { DEVICE_VALUES_ACTION, deviceValuesLevel } from '../registry/agentValues';
 import { requestDeviceResolution } from '../policies/triggers';
 import {
   DevicePatchBody, factsWithPatch, labelOf, touchesRuleFacts, writeDevicePatch, type DevicePatch,
@@ -479,6 +480,13 @@ export async function changeDeviceFacts(req: Request, tenantId: number, deviceId
     return { status: 200, body: { data: body } };
   };
   const none: DeviceFactsEffect = { entered: [], left: [] };
+  // Review F116: the level the tenant asks (opt-in, sites.device_values) when the name or the custom fields rewrite the
+  // bridge agent policy of the device ('none' otherwise: the paths below as before). Both fields are facts a rule reads.
+  const valuesFloor = await deviceValuesLevel(db, req, tenantId, deviceId, patch);
+  /** Under the lock of the configuration: does the restriction now ask more than `valuesFloor` (an agent policy, or
+   *  the tenant's matrix, changed since)? Then 409 impactChanged: submitted again, the stricter level applies. */
+  const valuesFloorRose = async (trx: Q): Promise<boolean> =>
+    strictest(await deviceValuesLevel(trx, req, tenantId, deviceId, patch), valuesFloor) !== valuesFloor;
   // Nothing a rule reads: as before (no lock).
   if (!touchesRuleFacts(patch)) {
     if (dryRun) return preview(false, none, null);
@@ -490,7 +498,7 @@ export async function changeDeviceFacts(req: Request, tenantId: number, deviceId
   const effectOf = (q: Q): Promise<FactsEffect> => deviceFactsEffect(q, tenantId, deviceId, patch);
   const first = await effectOf(db);
   const groupsOf = (e: FactsEffect): DeviceFactsEffect => ({ entered: e.entered, left: e.left });
-  if (!movesGroups(first)) {
+  if (!movesGroups(first) && valuesFloor === 'none') {
     if (dryRun) return preview(false, groupsOf(first), null);
     // No dynamic group of the tenant is targeted: written as before, without the lock (a rename or a tag never waits
     // behind a publication). A group targeted in the meantime then sees the device enter as any change of the
@@ -505,31 +513,48 @@ export async function changeDeviceFacts(req: Request, tenantId: number, deviceId
     // is seen here (409 impactChanged: submit again, the governed circuit then applies).
     await withConfigurationLock(tenantId, async (trx) => {
       if (movesGroups(await effectOf(trx))) impactChanged();
+      // F116: an agent policy published meanwhile may now read the name or the custom fields.
+      if (await valuesFloorRose(trx)) impactChanged();
       if (!(await writeDevicePatch(trx, tenantId, deviceId, patch))) throw new AppError(404, 'Device not found');
     });
     return null;
   }
-  // D11: devices.manage, and the governed preview.
+  // D11: devices.manage when the device enters or leaves a targeted group, and the governed preview. A change that only
+  // rewrites the agent policy of the device (valuesFloor) stays a write on that device: no devices.manage asked.
   const userId = req.session.userId!;
-  if (req.session.role !== 'admin' && !(await permissionService.userHasTenantCapability(userId, tenantId, 'devices.manage'))) {
+  if (movesGroups(first) && req.session.role !== 'admin'
+    && !(await permissionService.userHasTenantCapability(userId, tenantId, 'devices.manage'))) {
     throw factsGoverned(groupsOf(first));
   }
   const change: DeviceFactsChange = { kind: 'device_facts', deviceId, patch };
   const visible = await visibleDevices(req);
-  const head = await look(db, tenantId, change, visible);
+  /** The level of a look, raised to the tenant's restriction of the device's values (F116). */
+  const levelOf = (l: GovernedLook): Level => strictest(l.level, valuesFloor);
+  const raise = (l: GovernedLook): GovernedLook => {
+    const level = levelOf(l);
+    if (level === 'restricted' && !l.impact.approval.required) l.impact.approval = { required: true, reasons: ['restriction'] };
+    return { ...l, level };
+  };
+  const head = raise(await look(db, tenantId, change, visible));
   // One device: the sample shows it; no token of a list (it would carry the values of the patch in a URL).
   if (dryRun) return preview(true, groupsOf(first), head.impact);
   if (head.impact.conflicts.length) conflictRefusal(head.impact.conflicts);
   let proven = false;
   if (head.level === 'sensitive') {
-    const refused = await stepUp(req);
+    // The publication's step-up when the configuration of the device changes, the values' own otherwise.
+    const refused = await stepUp(req, valuesFloor === 'sensitive' && head.impact.devicesTouched === 0 ? DEVICE_VALUES_ACTION : undefined);
     if (refused) return refused;
     proven = true;
   }
   const ctx = await audit.fromRequest(req, tenantId);
   const done = await withConfigurationLock(tenantId, async (trx): Promise<{ look: GovernedLook; effect: FactsEffect; approval: PendingApproval | null }> => {
     const effect = await effectOf(trx);
-    const now = await look(trx, tenantId, change, visible);
+    // D11 under the lock: a change sent here by the restriction of the values alone (F116), devices.manage unchecked,
+    // that now moves the device in a targeted group (an assignment written meanwhile) is submitted again (409), D11
+    // then checked, as the path without governance does above.
+    if (!movesGroups(first) && movesGroups(effect)) impactChanged();
+    if (await valuesFloorRose(trx)) impactChanged();
+    const now = raise(await look(trx, tenantId, change, visible));
     if (now.impact.conflicts.length) conflictRefusal(now.impact.conflicts);
     if (now.level === 'restricted') {
       const d = await trx('devices').where({ tenant_id: tenantId, id: deviceId }).first('label') as { label: string } | undefined;
@@ -567,7 +592,14 @@ export async function executeDeviceFactsChange(x: ApprovalExecution): Promise<vo
   const patch = DevicePatchBody.safeParse(p.patch);
   const approved = approvedImpactOf(p);
   if (!approved || !patch.success || !Number.isSafeInteger(deviceId) || deviceId <= 0) refuse('Malformed request of a change of a device');
-  const r = await requireTenantCapability(x.requesterId, x.tenantId, 'devices.manage');
+  // devices.manage when the change moves the device in a targeted dynamic group (D11); a change approved only because
+  // the tenant restricts the values of one device (F116, sites.device_values) stays a write on that device.
+  const moves = movesGroups(await deviceFactsEffect(db, x.tenantId, deviceId, patch.data!).catch((err: unknown): never => {
+    const e = err as { statusCode?: number; message?: string };
+    if (e.statusCode && e.statusCode < 500) refuse(`The change no longer applies: ${e.message}`);
+    throw err;
+  }));
+  const r = moves ? await requireTenantCapability(x.requesterId, x.tenantId, 'devices.manage') : await activeRequester(x.requesterId);
   if (!r.isPlatformAdmin && !(await permissionService.canWriteDevice(x.requesterId, deviceId, false))) {
     refuse('The requester no longer has write access to the device');
   }
@@ -579,6 +611,10 @@ export async function executeDeviceFactsChange(x: ApprovalExecution): Promise<vo
   };
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
   await withConfigurationLock(x.tenantId, async (trx) => {
+    // A targeted group may have appeared since the check above: under the lock, D11 again.
+    if (!moves && movesGroups(await deviceFactsEffect(trx, x.tenantId, deviceId, change.patch).catch(stale))) {
+      await requireTenantCapability(x.requesterId, x.tenantId, 'devices.manage');
+    }
     const now = await computeImpact(trx, x.tenantId, change, { cumulative: false }).catch(stale);
     if (now.impact.conflicts.length) refuse('policyConflict: the change now sets a key to two values at the same priority on the device; request it again');
     refuseUnlessAsApproved(approved!, now, 'request the change again');

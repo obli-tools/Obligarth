@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ExternalLink, Eye, Lock, MapPin, Navigation, RefreshCw } from 'lucide-react';
 import type { DeviceDetail, DeviceLocationPoint, DeviceLocations } from '@obligarth/shared';
@@ -123,10 +123,16 @@ export function LocationCard({ device, locate, id, className, reveal, onRevealed
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState(false);
 
+  // The positions of the device shown only: a late answer for a previous device is dropped.
+  const deviceIdRef = useRef(device.id);
+  deviceIdRef.current = device.id;
   const load = useCallback(() => {
     if (!readable) return;
+    const id = device.id;
     setError(null);
-    mdmApi.locations(device.id, 20).then((d) => { setData(d); setError(null); }).catch((err) => setError(apiErrorMessage(err)));
+    mdmApi.locations(id, 20)
+      .then((d) => { if (deviceIdRef.current === id) { setData(d); setError(null); } })
+      .catch((err) => { if (deviceIdRef.current === id) setError(apiErrorMessage(err)); });
   }, [device.id, readable]);
   // Another device, the lost mode ended or the device left management: nothing shown until asked again.
   useEffect(() => { setShown(false); setData(null); setError(null); setPreview(false); }, [device.id, readable]);

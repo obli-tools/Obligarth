@@ -55,6 +55,9 @@ const RetirePayload = z.object({
   since: z.string().max(40),
   /** Rounds of the waiting step 1. */
   round: z.number().int().min(0).max(1_000),
+  /** authenticated_at (ISO) of the enrollment cycle the retirement was asked for (review F015): a device enrolled
+   *  again since then is never released by this chain. Absent from the jobs sent before it. */
+  cycle: z.string().max(40).nullable().optional(),
 }).strict();
 type RetireJob = z.infer<typeof RetirePayload>;
 
@@ -83,7 +86,10 @@ const stepId = (p: Pick<RetireJob, 'actionUuid' | 'deviceId' | 'step' | 'round'>
 export async function startRetirementInTx(trx: Knex.Transaction, tenantId: number, actionUuid: string, deviceIds: number[]): Promise<void> {
   const since = new Date();
   for (const deviceId of deviceIds) {
-    const p: RetireJob = { tenantId, deviceId, actionUuid: actionUuid.toLowerCase(), step: 1, since: since.toISOString(), round: 0 };
+    const sat = await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).first('authenticated_at') as
+      { authenticated_at: Date | string | null } | undefined;
+    const cycle = sat?.authenticated_at ? new Date(sat.authenticated_at).toISOString() : null;
+    const p: RetireJob = { tenantId, deviceId, actionUuid: actionUuid.toLowerCase(), step: 1, since: since.toISOString(), round: 0, cycle };
     await handle().sendInTx(trx, p, { id: stepId(p), tenantId });
     await deviceEvents.add(trx, tenantId, deviceId, 'retire_requested', since, stepId(p), { action: actionUuid.toLowerCase() });
   }
@@ -105,6 +111,17 @@ interface Facts {
   /** The late cancellation of the action was asked (result.lateCancel of its pending action), or the action itself
    *  was cancelled (state 'cancelled': cancelled while paused or scheduled after an interrupted run, no mark). */
   lateCancel: boolean;
+  /** The device opened an enrollment cycle after the one the retirement was asked for (review F015). */
+  reenrolled: boolean;
+}
+
+/** Was the record enrolled again after the cycle of the retirement? Pure (unit tests). A job without a cycle (sent
+ *  before review F015) or a record without authenticated_at compares nothing. */
+export function reenrolledSince(cycle: string | null | undefined, authenticatedAt: Date | string | null | undefined): boolean {
+  if (!cycle || !authenticatedAt) return false;
+  const from = Date.parse(cycle);
+  const now = new Date(authenticatedAt).getTime();
+  return Number.isFinite(from) && Number.isFinite(now) && now > from;
 }
 
 /** Release reasons that come from apple-edge's own release of the enrollment (its certificates revoked). */
@@ -117,14 +134,15 @@ async function factsOf(ctx: JobContext<RetireJob>): Promise<Facts> {
       .leftJoin('apple_devices as a', function joinSatellite() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
       .join('tenants as t', 't.id', 'd.tenant_id')
       .where({ 'd.tenant_id': tenantId, 'd.id': deviceId })
-      .first('t.mdm_key', 'a.enrollment_id', 'a.id_released_at', 'a.id_release_reason', 'd.enrollment_state') as
-      { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; id_release_reason: string | null; enrollment_state: string } | undefined;
+      .first('t.mdm_key', 'a.enrollment_id', 'a.id_released_at', 'a.id_release_reason', 'a.authenticated_at', 'd.enrollment_state') as
+      { mdm_key: string | null; enrollment_id: string | null; id_released_at: Date | null; id_release_reason: string | null; authenticated_at: Date | null; enrollment_state: string } | undefined;
     const target = await trx('mdm_command_targets').where({ tenant_id: tenantId, command_id: jobIdFor('mdm.command', `${actionUuid.toLowerCase()}:${deviceId}`).toLowerCase(), device_id: deviceId })
       .first('state', 'reject_code') as { state: string; reject_code: string | null } | undefined;
     const action = await trx('pending_actions').where({ tenant_id: tenantId, uuid: actionUuid.toLowerCase() }).first('result', 'state') as
       { result: unknown; state: string } | undefined;
     return { key: r?.mdm_key ?? null, enrollmentId: r?.enrollment_id ?? null, state: r?.enrollment_state ?? null, released: !!r?.id_released_at && RELEASED_AT_EDGE.has(String(r?.id_release_reason ?? '')),
-      target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null || action?.state === 'cancelled' };
+      target: target?.state ?? null, rejectCode: target?.reject_code ?? null, lateCancel: lateCancelOf(action?.result) !== null || action?.state === 'cancelled',
+      reenrolled: reenrolledSince(ctx.payload.cycle, r?.authenticated_at) };
   });
 }
 
@@ -138,11 +156,13 @@ export function retirementCancelled(f: Pick<Facts, 'state' | 'target' | 'rejectC
   return f.target === 'cancelled' && f.rejectCode !== 'cancel_after_delivery';
 }
 
-/** The step stops the chain: its entry says 'cancelled', no next step. */
-async function stopCancelled(ctx: JobContext<RetireJob>, kind: 'retire_management_removed' | 'retire_licenses_released' | 'retire_released'): Promise<JobResult> {
-  await mark(ctx, kind, { outcome: 'cancelled' });
+/** The step stops the chain: its entry says 'cancelled' (with the reason 'reenrolled' for a device enrolled again
+ *  since the retirement was asked, review F015), no next step. */
+async function stopCancelled(ctx: JobContext<RetireJob>, kind: 'retire_management_removed' | 'retire_licenses_released' | 'retire_released' | 'retired',
+  reason?: 'reenrolled'): Promise<JobResult> {
+  await mark(ctx, kind, { outcome: 'cancelled', ...(reason ? { reason } : {}) });
   realtime.deviceChanged(ctx.payload.tenantId, ctx.payload.deviceId);
-  return { output: { step: ctx.payload.step, outcome: 'cancelled' } };
+  return { output: { step: ctx.payload.step, outcome: 'cancelled', ...(reason ? { reason } : {}) } };
 }
 
 async function mark(ctx: JobContext<RetireJob>, kind: typeof RETIRE_EVENT_KINDS[number], details: Record<string, string | number | boolean> = {}): Promise<void> {
@@ -155,6 +175,12 @@ async function retire(ctx: JobContext<RetireJob>): Promise<JobResult> {
   const { tenantId, deviceId, step } = ctx.payload;
   const f = await factsOf(ctx);
   if (f.state === null) return { output: { step, skipped: 'no_record' } };
+  // Review F015: a device enrolled again since the retirement was asked (a new Authenticate on the same record) is
+  // never released by it, whatever its old RemoveProfile became: checked before every step.
+  if (f.reenrolled) {
+    const kinds = ['retire_management_removed', 'retire_licenses_released', 'retire_released', 'retired'] as const;
+    return stopCancelled(ctx, kinds[Math.min(Math.max(step, 1), 4) - 1], 'reenrolled');
+  }
   switch (step) {
     case 1: {
       if (retirementCancelled(f)) return stopCancelled(ctx, 'retire_management_removed');

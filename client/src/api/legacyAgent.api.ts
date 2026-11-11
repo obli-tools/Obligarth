@@ -123,6 +123,13 @@ export const legacyAgentApi = {
   uploadPackage(file: File, meta: { packageName: string; versionCode: string; versionName?: string; signerSha256?: string; label?: string }): Promise<LegacyAgentPackageView> {
     return uploadApk('/legacy-agent/packages', file, meta);
   },
+  /** Review F028: a package sent back by a device (app.pull, the harvest) may be installed once a holder of
+   *  mdm.apps.manage confirmed it. Idempotent; 404 for an unknown id; 503 auditUnavailable when the audit cannot be
+   *  written (the confirmation is then refused). */
+  async confirmPackage(id: string): Promise<LegacyAgentPackageView> {
+    const res = await apiClient.post<ApiResponse<LegacyAgentPackageView>>(`/legacy-agent/packages/${encodeURIComponent(id)}/confirm`, {});
+    return res.data.data!;
+  },
   async releases(): Promise<LegacyAgentReleaseView[]> {
     const res = await apiClient.get<ApiResponse<LegacyAgentReleaseView[]>>('/legacy-agent/releases');
     return res.data.data ?? [];
@@ -131,8 +138,10 @@ export const legacyAgentApi = {
     const res = await apiClient.get<ApiResponse<{ knoxLicenseSet: boolean }>>('/legacy-agent/settings');
     return res.data.data!;
   },
-  async setKnoxLicense(licenseKey: string | null): Promise<{ knoxLicenseSet: boolean }> {
+  /** `pendingApproval`: 202 — the removal of the key went to a second person (legacy_agent.knox_key at 'restricted'). */
+  async setKnoxLicense(licenseKey: string | null): Promise<{ knoxLicenseSet: boolean; pendingApproval?: boolean }> {
     const res = await apiClient.put<ApiResponse<{ knoxLicenseSet: boolean }>>('/legacy-agent/settings/knox', { licenseKey });
+    if (res.status === 202) return { knoxLicenseSet: licenseKey === null, pendingApproval: true };
     return res.data.data!;
   },
 

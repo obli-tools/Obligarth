@@ -1,6 +1,7 @@
 import { db } from '../../db';
 import { asNone, type DbActor } from '../../db/context';
 import { audit } from '../../audit';
+import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import {
   applyEvent, CONSUMER_ACTOR, EventScope, tenantIdsOfKeys, type EventCollector, type OutboxRow,
@@ -112,11 +113,16 @@ export async function redriveDeadLetter(eventId: string, userId: number): Promis
     await trx.raw("SET LOCAL statement_timeout = '30s'");
     const res = await trx.raw(`
       SELECT seq::text AS seq, event_id::text AS event_id, schema_version, scope, tenant_key, type, enrollment_id,
-             command_uuid, request_id, occurred_at, payload, reason
+             command_uuid, request_id, occurred_at, payload, reason, redrive_outcome
         FROM obligarth.apple_edge_dead_letters WHERE event_id = ? FOR UPDATE`, [eventId]) as
-      { rows: Array<OutboxRow & { reason: string }> };
+      { rows: Array<OutboxRow & { reason: string; redrive_outcome: string | null }> };
     const row = res.rows[0];
     if (!row) return { found: false };
+    // Applied once already (a double click, two administrators: the second waited for the lock): never applied twice
+    // (review F059); the consumer's own guard (consumed_at) does not cover a dead letter.
+    if (row.redrive_outcome === 'applied') {
+      throw new AppError(409, 'This dead letter was already redriven and applied', 'deadLetterAlreadyApplied');
+    }
     const tenants = await tenantIdsOfKeys(trx, row.tenant_key ? [row.tenant_key] : []);
     const scope = new EventScope(trx, CONSUMER_ACTOR);
     const { outcome, tenantId } = await applyEvent(trx, row, {

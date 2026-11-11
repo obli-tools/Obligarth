@@ -254,13 +254,22 @@ func (s *Surface) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 	source := s.clientAddr(r)
-	if s.failLim.Blocked(source) {
+	// A blocked source address is refused, except for a check-in or command
+	// request announcing an identity the verifier would accept for the
+	// tenant (an enrolled device behind the same public address as the
+	// offender keeps its management, review F098); that identity is still
+	// verified on the signature afterwards, and a failure counts again.
+	blocked := s.failLim.Blocked(source)
+	refuseBlocked := func() {
 		s.metrics.RateLimited.Inc("source")
 		fail(w, http.StatusTooManyRequests, strconv.Itoa(int(FailBlock.Seconds())))
-		return
 	}
 	key, op, ok := splitPath(r.URL.EscapedPath())
 	if !ok {
+		if blocked {
+			refuseBlocked()
+			return
+		}
 		s.failLim.Fail(source)
 		fail(w, http.StatusNotFound, "")
 		return
@@ -268,6 +277,10 @@ func (s *Surface) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	t := s.reg.Get(key)
 	if t == nil {
 		route = "unknown"
+		if blocked {
+			refuseBlocked()
+			return
+		}
 		s.failLim.Fail(source)
 		fail(w, http.StatusNotFound, "")
 		return
@@ -277,8 +290,26 @@ func (s *Surface) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 	case "mdm", "checkin", "scep":
 		route = op
 	default: // including the reserved acme/ and ddm/ prefixes
+		if blocked {
+			refuseBlocked()
+			return
+		}
 		fail(w, http.StatusNotFound, "")
 		return
+	}
+	if blocked {
+		// The identity certificate is not secret (it travels in every request):
+		// a blocked source replaying the header of an enrolled device is held
+		// to the per-device rate for that presumed identity, in a bucket of
+		// its own so that it never drains the device's.
+		sha := ""
+		if op != "scep" {
+			sha = s.verifier.Presumed(r.Context(), t, r.Header.Get("Mdm-Signature"))
+		}
+		if sha == "" || !s.deviceLim.Allow("blocked:"+sha) {
+			refuseBlocked()
+			return
+		}
 	}
 	if t.State == tenant.StateSuspended {
 		fail(w, http.StatusServiceUnavailable, retrySuspended)
@@ -477,21 +508,26 @@ func readInto(buf []byte, r io.Reader) ([]byte, error) {
 
 func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant, source string) {
 	op := r.URL.Query().Get("operation")
+	// The metric label never carries the caller's value: only the known
+	// operations, anything else is "other" (an unbounded label would let an
+	// anonymous caller grow the registry without limit).
+	label := scepOpLabel(op)
 	outcome := "error"
 	defer func() {
 		if w.status > 0 && w.status < 400 {
 			outcome = "ok"
 		}
-		s.metrics.SCEPRequests.Inc(t.Key, op, outcome)
+		s.metrics.SCEPRequests.Inc(t.Key, label, outcome)
 	}()
 	switch {
 	case r.Method == http.MethodGet && (op == "GetCACaps" || op == "GetCACert" || op == "PKIOperation"):
 	case r.Method == http.MethodPost && op == "PKIOperation":
 	case r.Method != http.MethodGet && r.Method != http.MethodPost:
+		label = "other"
 		fail(w, http.StatusMethodNotAllowed, "")
 		return
 	default:
-		op = "other"
+		label = "other"
 		fail(w, http.StatusNotFound, "")
 		return
 	}
@@ -523,6 +559,16 @@ func (s *Surface) serveSCEP(w *statusWriter, r *http.Request, t *tenant.Tenant, 
 	r2 := r.Clone(ctx)
 	r2.URL.Path, r2.URL.RawPath = "/scep", ""
 	t.SCEP.ServeHTTP(&uniformErrors{ResponseWriter: w}, r2)
+}
+
+// scepOpLabel returns the metric label of a SCEP operation: the operations
+// served, or "other".
+func scepOpLabel(op string) string {
+	switch op {
+	case "GetCACaps", "GetCACert", "PKIOperation":
+		return op
+	}
+	return "other"
 }
 
 // clientAddr returns the address used by the failure limiter: the address

@@ -7,7 +7,9 @@
 //     alert above 10 per hour; the payload is never written nor logged;
 //   - over ANDROID_INBOX_MAX_BYTES: a reduced event amapi.oversized { type, resource_name };
 //   - per tenant, one transaction: INSERT … ON CONFLICT (tenant_id, message_id) DO NOTHING, then the drain job of the
-//     tenant (sendInTx, singletonKey t:<id>); a tenant whose write fails keeps its messages unacknowledged.
+//     tenant (sendInTx, singletonKey t:<id>); a tenant whose batch fails is written again message by message (review
+//     F024): a message whose data the base refuses is written reduced (amapi.oversized) and acknowledged, the others
+//     written as they are; those still refused (a passing failure) stay unacknowledged.
 // A failure of the database acknowledges nothing (the deadline expires, Pub/Sub delivers again). After an absence of
 // more than 7 days, seek first (AN37). The only timer of the module (G-A5), like the outbox consumer.
 import type { Knex } from 'knex';
@@ -23,6 +25,7 @@ import { readPlatformState, updatePlatformState } from '../enterprises/registry'
 import { AndroidError, AndroidResponseTooLargeError } from '../gateway/errors';
 import { androidGateway } from '../gateway';
 import type { AndroidGateway } from '../gateway/types';
+import { isDataRefusal, jsonbStringify } from '../inbox/jsonbSafe';
 import { classifyMessage } from '../inbox/schemas';
 import { androidMetrics } from '../metrics';
 import { androidWait } from '../wait';
@@ -144,9 +147,9 @@ export async function pullOnce(o: { gateway?: AndroidGateway; cfg?: AndroidConfi
       if (oversized) {
         out.oversized += 1;
         eventType = 'amapi.oversized';
-        payload = JSON.stringify({ type: c.eventType, resource_name: c.resourceName });
+        payload = jsonbStringify({ type: c.eventType, resource_name: c.resourceName });
       } else {
-        payload = JSON.stringify(c.payload);
+        payload = jsonbStringify(c.payload);
       }
       const entry = perTenant.get(tenantId) ?? { rows: [], acks: [] };
       entry.rows.push({
@@ -160,10 +163,12 @@ export async function pullOnce(o: { gateway?: AndroidGateway; cfg?: AndroidConfi
 
   let maxPublish: Date | null = null;
   for (const [tenantId, entry] of perTenant) {
+    const insertRows = (trx: Knex.Transaction, rows: Row[]) => trx('android_inbox')
+      .insert(rows.map((row) => ({ ...row, payload: row.payload === null ? null : trx.raw('?::jsonb', [row.payload]) })))
+      .onConflict(['tenant_id', 'message_id']).ignore().returning('id');
     try {
       const inserted = await asTenant(tenantId, PULL_ACTOR, () => db.transaction(async (trx) => {
-        const r = await trx('android_inbox').insert(entry.rows.map((row) => ({ ...row, payload: row.payload === null ? null : trx.raw('?::jsonb', [row.payload]) })))
-          .onConflict(['tenant_id', 'message_id']).ignore().returning('id');
+        const r = await insertRows(trx, entry.rows);
         await drainSender(trx, tenantId);
         return r.length;
       }));
@@ -175,8 +180,51 @@ export async function pullOnce(o: { gateway?: AndroidGateway; cfg?: AndroidConfi
       }
       toAck.push(...entry.acks);
     } catch (err) {
-      out.failedTenants.push(tenantId);
-      logger.warn({ tenantId, err: (err as { code?: string }).code ?? (err as Error)?.name }, 'android: inbox write failed, messages left unacknowledged');
+      logger.warn({ tenantId, err: (err as { code?: string }).code ?? (err as Error)?.name }, 'android: inbox batch write failed, retried message by message');
+      // Review F024: one message the base refuses must not hold the whole batch of the tenant (redelivered at every
+      // deadline for 7 days). Each row in its own savepoint; a row whose data the base refuses (isDataRefusal) is
+      // written reduced (its type and resource only, as an oversized message; the daily reconciliation brings the
+      // state back) and acknowledged; a passing failure, or a row refused even reduced, stays unacknowledged.
+      try {
+        const settled = await asTenant(tenantId, PULL_ACTOR, () => db.transaction(async (trx) => {
+          const acks: string[] = [];
+          let written = 0;
+          let reduced = 0;
+          for (let i = 0; i < entry.rows.length; i++) {
+            const row = entry.rows[i];
+            try {
+              written += (await trx.transaction((sp) => insertRows(sp, [row]))).length;
+              acks.push(entry.acks[i]);
+              continue;
+            } catch (rowErr) {
+              // A passing failure (lock, conflict…) keeps the real payload: left unacknowledged, redelivered.
+              if (!isDataRefusal(rowErr)) continue;
+            }
+            const fallback: Row = {
+              ...row, event_type: 'amapi.oversized',
+              payload: jsonbStringify({ type: row.event_type, resource_name: row.resource_name }),
+            };
+            fallback.payload_bytes = Buffer.byteLength(fallback.payload as string);
+            try {
+              written += (await trx.transaction((sp) => insertRows(sp, [fallback]))).length;
+              reduced += 1;
+              acks.push(entry.acks[i]);
+            } catch { /* left unacknowledged: redelivered */ }
+          }
+          if (written) await drainSender(trx, tenantId);
+          return { acks, written, reduced };
+        }));
+        out.written += settled.written;
+        out.oversized += settled.reduced;
+        if (settled.acks.length < entry.rows.length) out.failedTenants.push(tenantId);
+        for (const [i, row] of entry.rows.entries()) {
+          if (settled.acks.includes(entry.acks[i]) && (!maxPublish || row.published_at > maxPublish)) maxPublish = row.published_at;
+        }
+        toAck.push(...settled.acks);
+      } catch (err2) {
+        out.failedTenants.push(tenantId);
+        logger.warn({ tenantId, err: (err2 as { code?: string }).code ?? (err2 as Error)?.name }, 'android: inbox write failed, messages left unacknowledged');
+      }
     }
   }
   if (out.failedTenants.length === perTenant.size && perTenant.size > 0 && out.written === 0 && toAck.length === 0) {

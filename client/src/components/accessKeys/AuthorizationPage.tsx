@@ -14,7 +14,7 @@ import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { registerSocketListener } from '@/socket/socketListeners';
 import { useTenantStore } from '@/store/tenantStore';
 import { anonymize } from '@/utils/anonymize';
-import { apiErrorMessage } from '@/utils/apiError';
+import { apiErrorMessage, translateErrorCode, trCode } from '@/utils/apiError';
 import { AUTH_STATE_TONE, authStateLabel } from './accessKeyLabels';
 import { RelativeDate } from './KeyList';
 
@@ -23,6 +23,21 @@ import { RelativeDate } from './KeyList';
 // parameters, and apart, quoted as plain text, what the agent wrote. A move of devices shows the preview the user
 // approves (the server refuses when the impact changed since). Approve asks a fresh second factor (the client's
 // interceptor shows the code or phone prompt); the action then runs once, as the user.
+
+/** Why an authorization did not run, from its errorCode: the codes of the authorizations (mcpAuthorizations.errors),
+ *  then those of the console's API (a refusal it relayed), then a refusal by HTTP status (refused<status>); an
+ *  unknown code is shown as the server wrote it. */
+function authorizationErrorLabel(code: string): string {
+  if (/^[A-Za-z][A-Za-z0-9]*$/.test(code)) {
+    const own = trCode(`mcpAuthorizations.errors.${code}`, '');
+    if (own) return own;
+    const api = translateErrorCode(code);
+    if (api) return api;
+  }
+  const status = /^refused(\d{3})$/.exec(code)?.[1];
+  if (status) return trCode('mcpAuthorizations.errors.refusedStatus', `Refused by the console (HTTP ${status})`, { status });
+  return code;
+}
 
 /** The time left before an expiry, ticking each second (mm:ss). */
 function useCountdown(iso: string | null): string | null {
@@ -151,7 +166,10 @@ export function AuthorizationPage() {
               </>)}
               {a.errorCode && (<>
                 <dt className="text-text-muted">{t('mcpAuthorizations.error') || 'Error'}</dt>
-                <dd className="font-mono text-xs text-red-400">{a.errorCode}</dd>
+                <dd className="text-xs text-red-400">
+                  {authorizationErrorLabel(a.errorCode)}
+                  <span className="ml-2 font-mono text-[11px] text-text-muted">{a.errorCode}</span>
+                </dd>
               </>)}
               {a.state === 'filed' && typeof a.outcome?.approvalId === 'number' && (<>
                 <dt className="text-text-muted">{t('mcpAuthorizations.approvalRequest') || 'Approval request'}</dt>

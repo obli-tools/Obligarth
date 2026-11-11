@@ -279,7 +279,8 @@ func StartWithOptions(ctx context.Context, cfg *config.Config, sec Secrets, logg
 
 	// DDM: the relay is the DeclarativeManagement service of the core.
 	a.Relay = &ddm.Relay{URL: cfg.DDMURL, Key: sec.DDMKey, Timeout: opt.DDMTimeout, Logger: logger, Metrics: a.Metrics,
-		StatusLimiter: ratelimit.New(ddm.StatusRate, ddm.StatusBurst, 1000000),
+		StatusLimiter:     ratelimit.New(ddm.StatusRate, ddm.StatusBurst, 1000000),
+		ResponseSignature: cfg.DDMResponseSignature, V1Fallback: ddm.NewV1FallbackCounter(a.Metrics.Registry),
 		Client: &http.Client{
 			Transport: &http.Transport{Proxy: nil, MaxIdleConnsPerHost: 16, IdleConnTimeout: 90 * time.Second,
 				DialContext: (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext},

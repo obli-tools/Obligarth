@@ -10,7 +10,9 @@
 //   POST /commands/:id/cancel         cancellation (guarded commands: through the action)
 //   POST /commands/:id/retry          a new command of the same type for a command in error (not guarded); the queue
 //                                     route …/relaunch does the same for an Android command
-//   POST /commands/:id/release        a command held by the last-resort cap, released once the freeze is lifted
+//   POST /commands/:id/release        a command held by the last-resort cap, released once the freeze is lifted (a
+//                                     fresh second factor; WIPE and RELINQUISH_OWNERSHIP: a tenant administrator,
+//                                     50 per tenant and per hour)
 // Header Idempotency-Key: a request replayed with the same key returns the same commands.
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
@@ -27,6 +29,7 @@ import { AndroidCommandError, cancelAndroidCommand } from '../commands/bus';
 import { ANDROID_ACTION_APPROVAL, consoleType, enqueueConsoleCommand } from '../commands/console';
 import { commands, readCommand } from '../commands/store';
 import { releaseHeldCommand } from '../commands/submit';
+import { giveBack, tryTake } from '../gateway/limiter';
 import { toRouteError } from './enterprise.routes';
 import { ANDROID_COMMAND_CAPABILITY, ANDROID_COMMAND_RESTRICTION, androidDeviceOf } from './deviceAccess';
 
@@ -149,6 +152,32 @@ export async function retryAndroidCommandFor(req: Request, res: Response, comman
   } catch (err) { throw routeError(err); }
 }
 
+/** The action key of the second factor of a release (echoed in the 401 the console shows). */
+const RELEASE_ACTION_KEY = 'mdm.android_release_held';
+const RELEASE_DESTRUCTIVE = new Set(['WIPE', 'RELINQUISH_OWNERSHIP']);
+/**
+ * Destructive releases per tenant and per hour, shared by every process of the instance and kept across restarts: a
+ * token bucket of the gateway's limiter table (android_rate_buckets, refilled at RELEASES_PER_HOUR per hour; an idle
+ * one is full, hence the same as the row purgeIdleBuckets deletes after an hour).
+ */
+export const RELEASES_PER_HOUR = 50;
+export const releaseBucket = (tenantId: number): string => `r:android-release:${tenantId}`;
+
+/** Takes one release of the tenant's hourly budget; false when spent. `refundRelease` gives it back (nothing released). */
+export async function takeRelease(tenantId: number): Promise<boolean> {
+  return (await tryTake(releaseBucket(tenantId), RELEASES_PER_HOUR, RELEASES_PER_HOUR / 3600)) === null;
+}
+export async function refundRelease(tenantId: number): Promise<void> {
+  await giveBack(releaseBucket(tenantId), RELEASES_PER_HOUR).catch(() => undefined);
+}
+
+/** An administrator of the request's tenant (or of the platform). */
+async function isTenantAdmin(req: Request): Promise<boolean> {
+  if (req.session.role === 'admin') return true;
+  const ut = await db('user_tenants').where({ user_id: Number(req.session.userId), tenant_id: Number(req.tenantId) }).first('role') as { role: string } | undefined;
+  return ut?.role === 'admin';
+}
+
 let channelRegistered = false;
 
 /** The queue routes hand the amapi devices and the Android commands to these handlers. */
@@ -188,7 +217,38 @@ export function createAndroidCommandsRouter(): Router {
     if (!id.success) throw new AppError(404, 'Not found', 'notFound');
     const tenantId = Number(req.tenantId);
     await ownCommand(req, id.data);
-    const r = await releaseHeldCommand(tenantId, id.data, { type: 'user', userId: Number(req.session.userId) });
+    // Review F121: the last-resort cap is the final net against a mass erase; lifting it for one command asks more
+    // than the capability of the type. A destructive command (WIPE, RELINQUISH_OWNERSHIP) is released by an
+    // administrator of the tenant only; every release asks a fresh second factor (never the trusted-IP shortcut);
+    // destructive releases are bounded per tenant and per hour.
+    const row = await readCommand(db, tenantId, id.data);
+    if (!row) throw new AppError(404, 'Not found', 'notFound');
+    const destructive = RELEASE_DESTRUCTIVE.has(String(row.request_type));
+    if (destructive && !(await isTenantAdmin(req))) {
+      throw new AppError(403, 'Only an administrator of the tenant releases a destructive command', 'adminRequired');
+    }
+    // The budget is taken before the second factor, so that a refusal (429) never spends a proof; given back when the
+    // factor fails or nothing was released.
+    if (destructive && !(await takeRelease(tenantId))) {
+      throw new AppError(429, 'Too many destructive commands released in the last hour', 'releaseRateLimited');
+    }
+    let r: Awaited<ReturnType<typeof releaseHeldCommand>>;
+    try {
+      const { checkSecondFactor } = await import('../../services/deviceKey/stepUpProof');
+      const proof = await checkSecondFactor(req, { actionKey: RELEASE_ACTION_KEY, deviceIds: [Number(row.device_id)], allowTrustedIp: false, allowDevice: true });
+      if (!proof.ok) {
+        if (destructive) await refundRelease(tenantId);
+        for (const [k, v] of Object.entries(proof.headers ?? {})) res.setHeader(k, v);
+        res.status(proof.status).json(proof.body);
+        return;
+      }
+      req.stepUpVia = proof.via;
+      r = await releaseHeldCommand(tenantId, id.data, { type: 'user', userId: Number(req.session.userId) });
+    } catch (err) {
+      if (destructive) await refundRelease(tenantId);
+      throw err;
+    }
+    if (destructive && r !== 'released') await refundRelease(tenantId);
     if (r === 'frozen') throw new AppError(423, 'The tenant is frozen', 'tenantFrozen');
     if (r === 'not_held') throw new AppError(409, 'This command is not held by the last-resort cap', 'commandNotHeld');
     res.json({ success: true, data: { result: r } });

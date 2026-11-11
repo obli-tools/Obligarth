@@ -76,6 +76,10 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   if (!row) {
     const q = await trx('android_quarantine').where({ amapi_name: d.name }).first('id');
     if (q) return 'ignored';
+    // Review F025: a report of a resource whose record left management (superseded, forgotten, removed, gone at
+    // Google) has nothing to update; only a name never recorded waits for its enrollment.
+    const released = await trx('android_devices').where({ tenant_id: tenantId, amapi_name: d.name }).whereNotNull('released_at').first('device_id');
+    if (released) return 'ignored';
     throw new MissingPrerequisite('device not enrolled yet');
   }
   const deviceId = Number(row.device_id);

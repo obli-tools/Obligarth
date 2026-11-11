@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
@@ -37,6 +37,7 @@ import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { apiErrorMessage } from '@/utils/apiError';
 import { saveBlob } from '@/utils/download';
+import { isUnconfirmedPackage, splitInstallable } from '@/utils/legacyPackages';
 
 // The Android bridge agent (agent-pont-android §7): the devices of the tenant (state of the agent, of the device
 // administrator and of Knox, last interrogation, identity conflicts; actions on a selection), the enrollment tokens
@@ -658,7 +659,7 @@ function guessColumns(header: string[], rows: string[][], format: LegacyAgentNam
   return { name, imei, serial: find(spec.serial) };
 }
 
-const IMPORT_ORDER: LegacyAgentNameImportStatus[] = ['rename', 'renamed', 'same', 'notFound', 'ambiguous', 'duplicate', 'forbidden', 'invalid'];
+const IMPORT_ORDER: LegacyAgentNameImportStatus[] = ['rename', 'renamed', 'same', 'notFound', 'ambiguous', 'duplicate', 'governed', 'forbidden', 'invalid'];
 
 function NameImportDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { t } = useTranslation();
@@ -684,7 +685,7 @@ function NameImportDialog({ onClose, onDone }: { onClose: () => void; onDone: ()
   const sorted = useMemo(() => [...(result?.rows ?? [])].sort((a, b) => IMPORT_ORDER.indexOf(a.status) - IMPORT_ORDER.indexOf(b.status)), [result]);
   const label = (s: LegacyAgentNameImportStatus) => t(`legacyAgent.importNames.status.${s}`) || s;
   const tone = (s: LegacyAgentNameImportStatus) => (s === 'rename' || s === 'renamed' ? 'text-accent'
-    : s === 'same' ? 'text-text-muted' : s === 'notFound' ? 'text-amber-400' : 'text-red-400');
+    : s === 'same' ? 'text-text-muted' : s === 'notFound' || s === 'governed' ? 'text-amber-400' : 'text-red-400');
   const toRename = counts.rename ?? 0;
   const ready = pairs.length > 0 && cols.name >= 0 && (cols.imei >= 0 || cols.serial >= 0);
 
@@ -774,6 +775,16 @@ function NameImportDialog({ onClose, onDone }: { onClose: () => void; onDone: ()
               <span key={s} className={tone(s)}>{label(s)} <span className="font-semibold tabular-nums">{counts[s]}</span></span>
             ))}
           </div>
+          {(counts.governed ?? 0) > 0 && (
+            <p className="text-xs text-text-muted">
+              {t('legacyAgent.importNames.governedHint') || 'Governed change: the new name would move the device into or out of a dynamic group that an assignment targets. Rename it from the device record, where its impact is previewed.'}
+            </p>
+          )}
+          {(counts.forbidden ?? 0) > 0 && (
+            <p className="text-xs text-text-muted">
+              {t('legacyAgent.importNames.forbiddenHint') || 'Not allowed: you have no write access on these devices.'}
+            </p>
+          )}
           <div className="max-h-80 overflow-auto rounded-xl bg-bg-secondary">
             <table className="w-full text-xs">
               <thead className={clsx(headCls, 'sticky top-0 bg-bg-tertiary')}>
@@ -836,13 +847,30 @@ function CommandDialog({ kind, count, onClose, onSend }: { kind: 'message' | 'in
               <option value="fullscreen">{t('legacyAgent.message.fullscreen') || 'Full screen'}</option>
             </select></label>
         </>)}
-        {kind === 'install' && (
-          <label className={labelCls}>{t('legacyAgent.packages.choose') || 'Package'}
-            <select className={fieldCls} value={choice} onChange={(e) => setChoice(e.target.value)}>
-              <option value="">—</option>
-              {packages.map((p) => <option key={p.id} value={p.id}>{p.label ?? p.packageName} {p.versionName ?? ''} ({p.versionCode})</option>)}
-            </select></label>
-        )}
+        {kind === 'install' && (() => {
+          // Review F028: a package sent back by a device is offered only once confirmed (the server answers 422
+          // packageNotConfirmed otherwise); it stays listed, greyed, with where to confirm it.
+          const { installable, toConfirm } = splitInstallable(packages);
+          return (<>
+            <label className={labelCls}>{t('legacyAgent.packages.choose') || 'Package'}
+              <select className={fieldCls} value={choice} onChange={(e) => setChoice(e.target.value)}>
+                <option value="">—</option>
+                {installable.map((p) => <option key={p.id} value={p.id}>{p.label ?? p.packageName} {p.versionName ?? ''} ({p.versionCode})</option>)}
+                {toConfirm.map((p) => (
+                  <option key={p.id} value={p.id} disabled>
+                    {p.label ?? p.packageName} {p.versionName ?? ''} ({p.versionCode}) — {t('legacyAgent.packages.toConfirm') || 'To confirm'}
+                  </option>
+                ))}
+              </select></label>
+            {toConfirm.length > 0 && (
+              <p className="flex items-start gap-1.5 text-xs text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {t('legacyAgent.packages.unconfirmedHint', { count: toConfirm.length })
+                  || `${toConfirm.length} package(s) sent back by a device must be confirmed in the Packages tab before they can be installed.`}
+              </p>
+            )}
+          </>);
+        })()}
         {kind === 'uninstall' && (
           <label className={labelCls}>{t('legacyAgent.packages.packageName') || 'Package name'}<input className={fieldCls} value={packageName} onChange={(e) => setPackageName(e.target.value)} placeholder="com.example.app" /></label>
         )}
@@ -1020,7 +1048,12 @@ function TokensTab() {
   };
   const siteById = useMemo(() => new Map(sites.map((x) => [x.id, x])), [sites]);
   const saveKnox = async (value: string | null) => {
-    try { const s = await legacyAgentApi.setKnoxLicense(value); setKnoxSet(s.knoxLicenseSet); setKnox(''); toast.success(t('legacyAgent.knox.saved') || 'Knox licence saved'); } catch (err) { fail(err); }
+    try {
+      const s = await legacyAgentApi.setKnoxLicense(value);
+      setKnoxSet(s.knoxLicenseSet); setKnox('');
+      if (s.pendingApproval) toast.success(t('legacyAgent.awaitingApproval') || 'Request sent for approval');
+      else toast.success(t('legacyAgent.knox.saved') || 'Knox licence saved');
+    } catch (err) { fail(err); }
   };
   return (
     <div className="space-y-4">
@@ -1119,12 +1152,39 @@ function TokensTab() {
 
 function PackagesTab() {
   const { t } = useTranslation();
+  const confirm = useConfirm();
+  const admin = useAuthStore((s) => s.isAdmin());
+  const caps = useAuthStore((s) => s.permissions?.tenantCapabilities ?? []);
+  // The right of the upload (mdm.apps.manage) confirms a package sent back by a device.
+  const canConfirm = admin || caps.includes('mdm.apps.manage');
   const [rows, setRows] = useState<LegacyAgentPackageView[] | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [meta, setMeta] = useState({ packageName: '', versionCode: '', versionName: '', signerSha256: '', label: '' });
   const [busy, setBusy] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
   const load = useCallback(() => { legacyAgentApi.packages().then(setRows).catch((err) => { setRows([]); fail(err); }); }, []);
   useEffect(() => { load(); }, [load]);
+  const confirmPackage = async (p: LegacyAgentPackageView) => {
+    const ok = await confirm({
+      title: t('legacyAgent.packages.confirmTitle') || 'Confirm this APK',
+      message: (
+        <div className="space-y-2 text-sm">
+          <p>{t('legacyAgent.packages.confirmMessage', { packageName: p.packageName, version: p.versionName ?? p.versionCode })
+            || `This APK (${p.packageName}, ${p.versionName ?? p.versionCode}) was sent back by a device, not uploaded by a person. Once confirmed, it can be installed on the devices of the tenant.`}</p>
+          <p className="font-mono text-xs text-text-muted break-all">SHA-256 {p.sha256}{p.signerSha256 ? <><br />{t('legacyAgent.packages.signerShort') || 'Signer'} {p.signerSha256}</> : null}</p>
+          <p className="text-text-muted">{t('legacyAgent.packages.confirmCheck') || 'Check that the package name, the version and the signer are those you expect before confirming.'}</p>
+        </div>
+      ),
+      confirmLabel: t('legacyAgent.packages.confirm') || 'Confirm',
+    });
+    if (!ok) return;
+    setConfirming(p.id);
+    try {
+      await legacyAgentApi.confirmPackage(p.id);
+      toast.success(t('legacyAgent.packages.confirmed') || 'APK confirmed: it can now be installed.');
+      load();
+    } catch (err) { fail(err); } finally { setConfirming(null); }
+  };
   const upload = async () => {
     if (!file) return;
     setBusy(true);
@@ -1156,14 +1216,38 @@ function PackagesTab() {
         <thead className={headCls}><tr>
           <th className={thCls}>{t('legacyAgent.packages.label') || 'Label'}</th><th className={thCls}>{t('legacyAgent.packages.packageName') || 'Package name'}</th>
           <th className={thCls}>{t('legacyAgent.packages.version') || 'Version'}</th><th className={thCls}>SHA-256</th><th className={thCls}>{t('legacyAgent.packages.size') || 'Size'}</th>
+          <th className={thCls}>{t('legacyAgent.packages.state') || 'State'}</th>
         </tr></thead>
         <tbody>{(rows ?? []).map((p) => (
           <tr key={p.id} className={rowCls}>
             <td className={clsx(tdCls, 'font-medium text-text-primary')}>{p.label ?? '—'}</td><td className={clsx(tdCls, 'font-mono text-xs text-text-secondary')}>{p.packageName}</td>
             <td className={clsx(tdCls, 'text-text-secondary')}>{p.versionName ?? ''} <span className="text-xs text-text-muted">({p.versionCode})</span></td>
             <td className={clsx(tdCls, 'font-mono text-xs text-text-muted')}>{p.sha256.slice(0, 16)}…</td><td className={clsx(tdCls, 'text-text-secondary')}>{t('legacyAgent.packages.mib', { size: (p.sizeBytes / 1048576).toFixed(1) }) || `${(p.sizeBytes / 1048576).toFixed(1)} MiB`}</td>
+            <td className={tdCls}>
+              {isUnconfirmedPackage(p) ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span title={t('legacyAgent.packages.toConfirmHint') || 'Sent back by a device: it cannot be installed until a person confirms it.'}>
+                    <Flag tone="amber" text={t('legacyAgent.packages.toConfirm') || 'To confirm'} />
+                  </span>
+                  {canConfirm && (
+                    <Button size="sm" variant="secondary" loading={confirming === p.id} disabled={confirming !== null} onClick={() => void confirmPackage(p)}>
+                      <ShieldCheck className="mr-1 h-4 w-4" />{t('legacyAgent.packages.confirm') || 'Confirm'}
+                    </Button>
+                  )}
+                </div>
+              ) : typeof p.confirmedAt === 'string'
+                // Review T6-R5: a server older than F028 sends no confirmedAt: no badge rather than a false "Confirmed".
+                ? <Flag tone="green" text={t('legacyAgent.packages.confirmedState') || 'Confirmed'} />
+                : null}
+              {p.sourceDeviceId !== null && p.sourceDeviceId !== undefined && (
+                <div className="mt-0.5 text-[11px] text-text-muted">
+                  {t('legacyAgent.packages.fromDevice') || 'From the device'}{' '}
+                  <Link to={`/devices/${p.sourceDeviceId}`} className="text-accent hover:underline">#{p.sourceDeviceId}</Link>
+                </div>
+              )}
+            </td>
           </tr>))}
-          {rows && rows.length === 0 && <tr><td colSpan={5} className="p-8 text-center text-text-muted">{t('legacyAgent.packages.empty') || 'No package yet.'}</td></tr>}
+          {rows && rows.length === 0 && <tr><td colSpan={6} className="p-8 text-center text-text-muted">{t('legacyAgent.packages.empty') || 'No package yet.'}</td></tr>}
         </tbody>
       </table>
       </div>

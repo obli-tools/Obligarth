@@ -394,6 +394,12 @@ export async function onAuthenticate(trx: Knex.Transaction, tenantId: number, f:
     // What the rules of the new cycle do not collect leaves the inventory of the previous one (§5.2, criterion 7:
     // a device enrolled again under a narrower ownership, corporate → COPE, keeps no unmanaged app).
     await applyCollectionRules(trx, tenantId, deviceId, rules);
+    // Review F016: a setup plan still running belongs to the previous cycle (a device erased in the setup assistant
+    // and enrolled again without a CheckOut). It ends here, before its commands are closed (its hook would otherwise
+    // try a DeviceConfigured for a device that is enrolling), so that the TokenUpdate of this cycle opens a new plan
+    // with its own commands (apple.await-configuration recreates a plan that is not running).
+    await trx('apple_setup_plans').where({ tenant_id: tenantId, device_id: deviceId, state: 'running' })
+      .update({ state: 'cancelled', completed_at: f.occurredAt, outcome_code: 'new_cycle' });
     // The commands requested before this Authenticate died with the previous cycle (apple-edge empties the queue of
     // an enrollment that authenticates again): their open targets are closed, the hooks of the final states run
     // (review of lot B3, INT-B3-R4). A command requested since belongs to the new cycle and stays.

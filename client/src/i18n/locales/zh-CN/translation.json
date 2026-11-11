@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "密码不能只包含空格。若要移除密码，请将此字段留空。"
+    },
+    "reconcileHold": {
+      "help": "上次对账发现 {{managed}} 台受管设备中有 {{count}} 台在 Google 端缺失：没有设备被移出管理。请先在 Google 检查企业；仅当这些设备确实已消失时才确认。",
+      "confirm": "确认 {{count}} 台设备已消失…",
+      "confirmTitle": "确认已消失的设备",
+      "confirmMessage": "将 {{count}} 台设备移出管理？仅当它们确实已在 Google 端移除时才这样做：将要求第二因素。",
+      "confirmed": "确认已记录：对账将在一分钟内运行。"
+    }
+  },
   "common": {
     "save": "保存",
     "cancel": "取消",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "无法切换到此工作区。",
+    "roleAdministrator": "管理员",
+    "roleMember": "成员",
+    "confirmRoleChange": "要在此工作区中授予 {{user}}“{{role}}”角色吗？",
+    "roleOf": "{{user}} 的角色",
+    "deleteTitle": "删除工作区“{{name}}”",
+    "confirmDeleteTyped": "其所有数据（包括受管设备）将被永久删除。输入“{{slug}}”以确认。",
+    "deleted": "工作区“{{name}}”已删除",
     "pageTitle": "工作区",
     "pageDesc": "管理多租户部署的工作区及其成员。",
     "create": "新建工作区",
@@ -279,6 +299,9 @@
     "switchWorkspace": "切换工作区"
   },
   "devices": {
+    "list": {
+      "otherGroups": "其他组"
+    },
     "tabApiKeys": "API 密钥",
     "viewDevice": "查看设备",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "使用中：防护设置“Android 代理命令的第二因素”已开启。",
+      "commandsSensitiveOff": "未使用：防护设置“Android 代理命令的第二因素”已关闭（安全 > 防护选项卡）。"
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "错误"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "重新加载服务器上保存的版本？未保存的更改将丢失。",
+      "noLongerDraft": "此版本已不再是草稿（已在其他地方提交或发布）：请重新加载。",
+      "confirmOverwrite": "自您打开以来，此草稿已被他人修改。仍要保存您的版本吗？对方的更改将丢失。",
+      "reviewBeforePublish": "此版本已在其他地方被修改：现已显示其当前内容，请在发布前检查。",
+      "changedElsewhere": "自您打开以来，此版本已在其他地方被修改。保存将覆盖这些更改。",
+      "reloadVersion": "重新加载",
+      "savedElsewhere": "此草稿在此期间已在别处保存：未保存任何内容。请重新加载以查看其他更改（您的更改将丢失）。"
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "组已移动，但无法保存其在新同级组中的位置",
+    "crossTenantMove": "组只能留在其所属工作区：请将其放到同一工作区的组中。",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "通知已删除",
+      "live_alert_cleared": "通知已清除",
+      "sso_sync_delete_blocked": "Obligate 删除账户被阻止（仍被引用）：已停用，请手动删除",
+      "android_mass_missing_confirmed": "Android：已确认大规模消失",
+      "legacy_agent_package_confirmed": "已确认由设备回传的 APK"
+    },
+    "families": {
+      "legacy_agent": "Android 代理"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "更改此应用的平台前，请先移除其分配。",
+    "exportBusy": "正在进行的 PDF 导出过多：请稍后重试。",
+    "exportTooLarge": "PDF 导出的行数过多（最多 2000 行）：请缩小筛选范围，或导出为 CSV 或 XLSX。",
+    "exportTimeout": "PDF 导出耗时过长：请导出为 CSV 或 XLSX，或缩小筛选范围。",
+    "tenantHasBridgeDevices": "此工作区仍有 {{devices}} 台通过 Android 桥接代理注册的设备：请先撤销这些设备，再删除工作区。",
+    "deadLetterAlreadyApplied": "此死信已被重新应用：不会应用两次。",
+    "userHasDependencies": "此账户仍被其他记录引用：请改为停用它，或先移除引用它的内容。",
+    "invalidConfirmMissing": "确认必须给出被暂扣设备的确切数量（正整数）。",
+    "adminRequired": "只有租户管理员才能释放破坏性命令。",
+    "releaseRateLimited": "过去一小时内释放的破坏性命令过多：请稍后重试。",
+    "policyVersionChanged": "版本自预览以来已更改：请重新审阅。",
+    "twoFactorSetupRequired": "需要第二因素：请先在个人资料中设置身份验证器应用。",
+    "packageNotConfirmed": "此 APK 由设备回传：安装前请在 Android 代理的“软件包”选项卡中确认。",
+    "capabilityMissing": "您的团队不具备此操作所需的权限。"
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "不允许：您对这些设备没有写入权限。",
+      "status": {
+        "governed": "受管控的更改：请在设备详情中重命名"
+      },
+      "governedHint": "受管控的更改：新名称会使设备进入或离开某个分配所针对的动态组。请在设备详情中重命名，那里会预览影响。"
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "状态",
+      "toConfirm": "待确认",
+      "toConfirmHint": "由设备回传：在有人确认之前无法安装。",
+      "confirmedState": "已确认",
+      "confirm": "确认",
+      "confirmTitle": "确认此 APK",
+      "confirmMessage": "此 APK（{{packageName}}，{{version}}）由设备回传，而非由人员上传。确认后即可安装到该租户的设备上。",
+      "confirmCheck": "确认前请检查软件包名称、版本和签名者是否符合预期。",
+      "signerShort": "签名者",
+      "confirmed": "APK 已确认：现在可以安装。",
+      "fromDevice": "来自设备",
+      "unconfirmedHint": "{{count}} 个由设备回传的软件包需先在“软件包”选项卡中确认，才能安装。"
+    },
+    "awaitingApproval": "请求已提交审批"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "您无权删除这些通知：它们由整个租户共享。"
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "应用平台未更新",
+          "message": "内容令牌 {{label}} 为 {{count}} 个已分配的应用列出了其他平台：只要它们仍有分配，其平台就会保留。"
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android：已暂扣 Google 端的大规模消失",
+        "message": "一次对账发现 {{managed}} 台受管设备中有 {{count}} 台在 Google 端缺失：没有设备被移出管理。请检查企业，若确实已消失，请在 Android Enterprise 卡片上确认。"
+      },
+      "google_unreachable": {
+        "title": "Android：无法访问 Google",
+        "message": "Obligarth 无法访问 Google 的 Android Management API：Android 注册、策略和命令正在等待。"
+      },
+      "google_auth_failed": {
+        "title": "Android：Google 拒绝了身份",
+        "message": "Google 拒绝了服务账号（密钥已撤销或缺少权限）：Android 连接已停止。"
+      },
+      "google_key_expiring": {
+        "title": "Android：服务账号密钥即将过期",
+        "message": "Google 服务账号的密钥将在 {{days}} 天后过期：请更换。"
+      },
+      "quota_warning": {
+        "title": "Android：设备配额已达 80%",
+        "message": "Google 项目中有 {{count}} 台 Android 设备：已使用其配额的 80%。"
+      },
+      "quota_exhausted": {
+        "title": "Android：设备配额已用尽",
+        "message": "{{count}} 台 Android 设备：Google 项目的配额已用尽，新的注册将被拒绝。"
+      },
+      "inbox_dead_letter": {
+        "title": "Android：通知进入死信",
+        "message": "租户 {{tenantId}} 的一条 Google 通知无法处理（{{code}}），已移至死信。"
+      },
+      "retention_risk": {
+        "title": "Android：通知有过期风险",
+        "message": "已有 {{days}} 天未拉取任何 Google 通知：最早的通知可能在读取前过期。"
+      },
+      "pubsub_foreign_message": {
+        "title": "Android：来自未知企业的消息",
+        "message": "最近一小时内有 {{lastHour}} 条 Pub/Sub 消息来自 Obligarth 未知的企业。"
+      },
+      "pubsub_test_missing": {
+        "title": "Android：缺少 Pub/Sub 测试消息",
+        "message": "租户 {{tenantId}} 企业的 Pub/Sub 测试消息未送达：请检查主题的权限。"
+      },
+      "ownership_violation": {
+        "title": "Android：调用被归属检查拒绝",
+        "message": "一次对 Google 的调用被归属检查拒绝（{{reason}}）。"
+      },
+      "enterprise_orphan": {
+        "title": "Android：项目中的企业不在注册表中",
+        "message": "Google 项目中的一个企业（{{ref}}）不在 Obligarth 的注册表中。"
+      },
+      "signup_callback_rejected": {
+        "title": "Android：注册回调被拒绝",
+        "message": "最近一小时内有 {{lastHour}} 个企业注册回调被拒绝。"
+      },
+      "domain_claimed": {
+        "title": "Android：注册了其他租户已声明的域名",
+        "message": "租户 {{tenantId}} 试图为其他租户已声明的域名注册企业。"
+      },
+      "gateway_cap_reached": {
+        "title": "Android：已达到破坏性操作的最后上限",
+        "message": "已达到 Android 破坏性操作的最后上限（{{kind}}，{{count}}）：后续操作将被拒绝。"
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android：企业在 Obligarth 之外被解除关联",
+        "message": "此租户的 Android 企业在 Obligarth 之外被解除关联：其设备不再受管理。"
+      },
+      "signup_failed": {
+        "title": "Android：企业注册失败",
+        "message": "Android 企业注册失败（{{code}}）。"
+      },
+      "signup_interrupted": {
+        "title": "Android：企业注册中断",
+        "message": "一次 Android 企业注册在完成前中断：请重新开始。"
+      },
+      "device_api_too_low": {
+        "title": "Android：设备低于其配置文件的最低 API 级别",
+        "message": "一台低于其注册配置文件最低 API 级别的 Android 设备已被隔离。"
+      },
+      "enrollment_spike": {
+        "title": "Android：长期令牌上的注册激增",
+        "message": "最近一小时内通过长期令牌 {{tokenId}} 注册了 {{perHour}} 次：后续注册可能需要批准。"
+      },
+      "policy_push_failed": {
+        "title": "Android：策略被 Google 拒绝",
+        "message": "Google 拒绝了设备 {{deviceId}} 的策略。"
+      },
+      "integrity_compromised": {
+        "title": "Android：设备完整性存在风险",
+        "message": "设备 {{deviceId}} 未通过完整性检查：可能已被入侵。"
+      },
+      "device_pending_approval": {
+        "title": "Android：设备等待批准",
+        "message": "有 Android 设备正在等待批准。"
+      },
+      "quarantine_cap_reached": {
+        "title": "Android：已达到隔离注册上限",
+        "message": "隔离中的 Android 注册已达上限：后续注册将被拒绝。"
+      },
+      "device_offline_long": {
+        "title": "Android：设备 240 天未联系",
+        "message": "{{count}} 台 Android 设备已 240 天未联系。"
+      },
+      "device_presumed_gone": {
+        "title": "Android：设备疑似消失",
+        "message": "{{count}} 台 Android 设备疑似消失（Google 中不存在）：请确认或恢复。"
+      },
+      "token_expiring": {
+        "title": "Android：需续期的长期注册令牌",
+        "message": "{{count}} 个长期注册令牌即将过期：请续期。"
+      },
+      "byod_code_flood": {
+        "title": "Android：错误的 BYOD 邀请码过多",
+        "message": "一小时内错误的 BYOD 邀请码超过 {{perHour}} 个：在本小时结束前，该租户的所有邀请码都将被拒绝。"
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "没有此租户令牌的注册",
+        "message": "发现没有此租户注册令牌的 Android 设备：请检查隔离区。"
+      },
+      "ownership_mismatch": {
+        "title": "所有权或模式与注册配置文件不符",
+        "message": "一台 Android 设备以其注册配置文件不允许的所有权或模式注册：已被隔离。"
+      },
+      "duplicate_serial": {
+        "title": "序列号已被受管设备使用",
+        "message": "一台 Android 设备使用了已受管设备 {{deviceId}} 的序列号进行注册。"
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "确认在 Google 端消失的 Android 设备",
+      "androidReleaseHeld": "释放被暂扣的 Android 命令"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "审批请求已不存在。",
+      "batchGone": "此批更改已过期或已被使用：请再次向代理请求。",
+      "capabilityMissing": "您的团队不具备此操作所需的能力。",
+      "detachOneByOne": "代理无法一次将多台设备从其站点分离：请在控制台中逐台分离。",
+      "executionFailed": "已批准的操作在执行时失败。",
+      "keyInactive": "访问密钥已不再有效。",
+      "perimeterLost": "此操作现已超出您或密钥的范围。",
+      "planChanged": "计划自批准以来已更改：未应用任何内容。",
+      "policyChanged": "策略自请求以来已更改：未应用任何内容。",
+      "unknownTool": "未知工具。",
+      "refusedStatus": "被控制台拒绝（HTTP {{status}}）",
+      "interrupted": "操作在结束前被中断：再次请求前请检查其结果。",
+      "cancelFailed": "取消尚未完成：每分钟重试一次。",
+      "stepUpRequired": "此操作需要新的第二因素：请在控制台中重新批准。",
+      "impactChanged": "自您查看后影响已发生变化：未执行任何操作。"
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Android 代理命令的第二因素",
+      "legacyAgentCommandsSensitiveHelp": "安装或卸载应用、更新代理、重启设备及暂停其信息亭，都需要发送者提供第二因素（控制台和 MCP）。默认关闭。与其他设置一样，此更改需由第二个人批准。",
+      "pending": "更改等待批准（请求 #{{id}}）",
+      "pendingOpen": "打开审批",
+      "on": "开",
+      "off": "关"
     }
   }
 }

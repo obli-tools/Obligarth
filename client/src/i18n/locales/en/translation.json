@@ -281,6 +281,8 @@
     }
   },
   "groups": {
+    "movedOrderFailed": "Group moved, but its position among its new siblings could not be saved",
+    "crossTenantMove": "A group stays in its workspace: drop it among the groups of the same workspace.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -717,7 +719,9 @@
       "scopeInclude": "Only these",
       "scopeExclude": "All except these",
       "searchDevices": "Search devices…",
-      "devicesTruncated": "Showing the first {{count}} devices — refine the search to find others."
+      "devicesTruncated": "Showing the first {{count}} devices — refine the search to find others.",
+      "commandsSensitiveOn": "In use: the guard setting \"Second factor on the Android agent commands\" is on.",
+      "commandsSensitiveOff": "Not in use: the guard setting \"Second factor on the Android agent commands\" is off (Security, Guards tab)."
     },
     "permissionSets": "Permission Sets",
     "tabPermissionSets": "Permissions",
@@ -856,6 +860,14 @@
     "otherApps": "Other apps"
   },
   "tenant": {
+    "switchFailed": "Could not switch to this workspace.",
+    "roleAdministrator": "Administrator",
+    "roleMember": "Member",
+    "confirmRoleChange": "Give {{user}} the role \"{{role}}\" in this workspace?",
+    "roleOf": "Role of {{user}}",
+    "deleteTitle": "Delete the workspace \"{{name}}\"",
+    "confirmDeleteTyped": "All its data, its devices under management included, will be permanently removed. Type \"{{slug}}\" to confirm.",
+    "deleted": "Workspace \"{{name}}\" deleted",
     "pageTitle": "Workspaces",
     "pageDesc": "Manage tenants and their members for multi-tenant deployments.",
     "create": "New Workspace",
@@ -973,6 +985,7 @@
       "xlsx": "Export Excel (xlsx)"
     },
     "list": {
+      "otherGroups": "Other groups",
       "count_one": "{{count}} device",
       "count_other": "{{count}} devices"
     },
@@ -1387,6 +1400,12 @@
       "command": "setting"
     },
     "editor": {
+      "confirmReload": "Reload the version saved on the server? Your unsaved changes are lost.",
+      "noLongerDraft": "This version is no longer a draft (it was submitted or published elsewhere): reload it.",
+      "confirmOverwrite": "This draft was changed by someone else since you opened it. Save your version anyway? Their changes will be lost.",
+      "reviewBeforePublish": "This version was changed elsewhere: its current content is now shown, review it before publishing.",
+      "changedElsewhere": "This version was changed elsewhere since you opened it. Saving would replace those changes.",
+      "reloadVersion": "Reload",
       "publishedVersion": "published: v{{version}}",
       "archive": "Archive",
       "archived": "Policy archived",
@@ -1438,7 +1457,8 @@
       "importedSuspect_other": "{{count}} keys look like secrets but were kept in clear in the policy (the profile is still delivered encrypted to each device). Check them before publishing; delete the item to remove them.",
       "importedSignedTrusted": "The file was signed by {{signer}}: the signature verifies and its certificate chains to a public root. The signature was removed: the profile is delivered by this server, encrypted for each device.",
       "importedSignedUntrusted": "The file was signed by {{signer}}: the signature verifies, but its certificate does not chain to a public root. The signature was removed: the profile is delivered by this server, encrypted for each device.",
-      "importedSignedUnverified": "The file was signed with an algorithm this server does not verify: the signature was removed without being checked. The profile is delivered by this server, encrypted for each device."
+      "importedSignedUnverified": "The file was signed with an algorithm this server does not verify: the signature was removed without being checked. The profile is delivered by this server, encrypted for each device.",
+      "savedElsewhere": "This draft was saved elsewhere in the meantime: nothing was saved. Reload it to see the other changes (yours are then lost)."
     }
   },
   "supervision": {
@@ -1891,7 +1911,12 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Notification deleted",
+      "live_alert_cleared": "Notifications cleared",
+      "sso_sync_delete_blocked": "Account deletion by Obligate blocked (still referenced): deactivated, delete it by hand",
+      "android_mass_missing_confirmed": "Android: mass disappearance confirmed",
+      "legacy_agent_package_confirmed": "APK sent back by a device confirmed"
     },
     "families": {
       "auth": "Authentication",
@@ -1921,7 +1946,8 @@
       "mdm": "MDM commands",
       "enrollment": "Enrollment",
       "privacy": "Privacy",
-      "ops": "Operations"
+      "ops": "Operations",
+      "legacy_agent": "Android agent"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -1969,7 +1995,8 @@
     "agoSeconds": "{{count}}s ago",
     "agoMinutes": "{{count}}m ago",
     "agoHours": "{{count}}h ago",
-    "agoDays": "{{count}}d ago"
+    "agoDays": "{{count}}d ago",
+    "deleteRefused": "You are not allowed to delete these notifications: they are shared by the tenant."
   },
   "liveAlerts": {
     "dismiss": "Dismiss"
@@ -1997,7 +2024,9 @@
     "passwordLabel": "Current password",
     "actions": {
       "totpManage": "Change your authenticator app",
-      "emailOtpManage": "Change your e-mail sign-in codes"
+      "emailOtpManage": "Change your e-mail sign-in codes",
+      "androidReconcileConfirmMissing": "Confirm Android devices gone at Google",
+      "androidReleaseHeld": "Release a held Android command"
     },
     "passwordOrCodeInvalid": "Wrong password or code."
   },
@@ -2548,7 +2577,13 @@
       "requested": "Change requested: waiting for an approver",
       "unchanged": "Nothing changed",
       "fleetShareFloor": "Second approver: 10 % of the fleet counted from (devices)",
-      "fleetShareFloorHelp": "A change of the configuration asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
+      "fleetShareFloorHelp": "A change of the configuration asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices.",
+      "legacyAgentCommandsSensitive": "Second factor on the Android agent commands",
+      "legacyAgentCommandsSensitiveHelp": "Installing or uninstalling an app, updating the agent, restarting a device and suspending its kiosk ask the second factor of the person who sends them (console and MCP). Off by default. Like the other settings, the change is approved by a second person.",
+      "pending": "Change waiting for its approval (request #{{id}})",
+      "pendingOpen": "Open the approvals",
+      "on": "on",
+      "off": "off"
     },
     "quota": "Hourly budget: {{remaining}} of {{cap}} devices left",
     "approval": {
@@ -2873,6 +2908,10 @@
         "notification_auth_failed": {
           "title": "Apps and Books notifications refused",
           "message": "{{count}} notification(s) presented a wrong secret."
+        },
+        "platforms_kept": {
+          "title": "App platforms not updated",
+          "message": "The content token {{label}} lists other platforms for {{count}} assigned app(s): their platforms are kept until their assignments are removed."
         }
       },
       "deadline": {
@@ -4211,7 +4250,7 @@
     "invalidRule": "The advanced filter is not valid.",
     "invalidIpAllow": "An entry of the address list is not an address or a network.",
     "ipPrefixTooWide": "A network of the address list is too wide.",
-    "twoFactorSetupRequired": "Set up a second factor (authenticator app) on your profile before creating an access key.",
+    "twoFactorSetupRequired": "A second factor is required: set up an authenticator app on your profile first.",
     "tenantNotAllowed": "A tenant of the key is not one you may give it.",
     "scopeNotHeld": "You do not hold this right in the chosen tenants: {{scope}}.",
     "scopeUnknown": "Unknown right.",
@@ -4246,7 +4285,19 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Remove the assignments of this app before changing its platforms.",
+    "exportBusy": "Too many PDF exports in progress: try again in a moment.",
+    "exportTooLarge": "Too many rows for a PDF export (2,000 at most): narrow the filters, or export as CSV or XLSX.",
+    "exportTimeout": "The PDF export took too long: export as CSV or XLSX, or narrow the filters.",
+    "tenantHasBridgeDevices": "This workspace still has {{devices}} device(s) enrolled with the Android bridge agent: revoke them first, then delete the workspace.",
+    "deadLetterAlreadyApplied": "This dead letter was already applied again: it is not applied twice.",
+    "userHasDependencies": "This account is still referenced by other records: disable it instead, or remove what refers to it first.",
+    "invalidConfirmMissing": "The confirmation must give the exact number of devices held (a positive integer).",
+    "adminRequired": "Only an administrator of the tenant can release a destructive command.",
+    "releaseRateLimited": "Too many destructive commands released in the last hour: try again later.",
+    "packageNotConfirmed": "This APK was sent back by a device: confirm it in the Packages tab of the Android agent before installing it.",
+    "capabilityMissing": "Your team does not hold the capability this action needs (on this device, for a device command)."
   },
   "deviceEnrollment": {
     "title": "Device enrollment",
@@ -4668,6 +4719,7 @@
       "revoked": "Include revoked"
     },
     "importNames": {
+      "forbiddenHint": "Not allowed: you have no write access on these devices.",
       "button": "Import names",
       "title": "Import device names",
       "orPaste": "or paste the content",
@@ -4693,7 +4745,8 @@
         "ambiguous": "Several devices",
         "duplicate": "Duplicate",
         "forbidden": "Not allowed",
-        "invalid": "Invalid line"
+        "invalid": "Invalid line",
+        "governed": "Governed change: rename from the device record"
       },
       "format": "Format of the export",
       "file": "File",
@@ -4705,7 +4758,8 @@
         "omnissa": "Export of the device list as CSV: \"Friendly Name\", \"IMEI\" and \"Serial Number\".",
         "csvLabel": "Other CSV",
         "csv": "Any CSV: choose the column of the name, and that of the IMEI or of the serial number."
-      }
+      },
+      "governedHint": "Governed change: the new name would move the device into or out of a dynamic group that an assignment targets. Rename it from the device record, where its impact is previewed."
     },
     "actions": {
       "message": "Message",
@@ -4776,7 +4830,19 @@
       "size": "Size",
       "mib": "{{size}} MiB",
       "empty": "No package yet.",
-      "chooseApk": "Choose an APK"
+      "chooseApk": "Choose an APK",
+      "state": "State",
+      "toConfirm": "To confirm",
+      "toConfirmHint": "Sent back by a device: it cannot be installed until a person confirms it.",
+      "confirmedState": "Confirmed",
+      "confirm": "Confirm",
+      "confirmTitle": "Confirm this APK",
+      "confirmMessage": "This APK ({{packageName}}, {{version}}) was sent back by a device, not uploaded by a person. Once confirmed, it can be installed on the devices of the tenant.",
+      "confirmCheck": "Check that the package name, the version and the signer are those you expect before confirming.",
+      "signerShort": "Signer",
+      "confirmed": "APK confirmed: it can now be installed.",
+      "fromDevice": "From the device",
+      "unconfirmedHint": "{{count}} package(s) sent back by a device must be confirmed in the Packages tab before they can be installed."
     },
     "releases": {
       "choose": "Version of the agent",
@@ -5025,6 +5091,7 @@
       "until": "until {{at}}"
     },
     "commands": {
+      "passwordBlank": "The password cannot be made of spaces only. Leave the field empty to remove the password.",
       "queued": "Command queued: Google delivers it to the device.",
       "passwordHint": "Sealed in the vault at once, never shown again. Empty: the password is removed.",
       "packagesHint": "Packages separated by spaces or commas.",
@@ -5474,6 +5541,13 @@
         "DEVICE_INCOMPATIBLE": "device incompatible",
         "PROJECT_NOT_PERMITTED": "not permitted for this project"
       }
+    },
+    "reconcileHold": {
+      "help": "The last reconciliation found {{count}} of the {{managed}} managed device(s) missing at Google: none was taken out of management. Check the enterprise at Google first; confirm only if these devices are really gone.",
+      "confirm": "Confirm {{count}} device(s) gone…",
+      "confirmTitle": "Confirm the devices gone",
+      "confirmMessage": "Take {{count}} device(s) out of management? Do it only if they were really removed at Google: a second factor is asked.",
+      "confirmed": "Confirmation recorded: the reconciliation runs within the minute."
     }
   },
   "androidApps": {
@@ -6682,6 +6756,23 @@
       "cancelled": "Cancelled",
       "filed": "Sent for approval",
       "interrupted": "Interrupted"
+    },
+    "errors": {
+      "approvalMissing": "The approval request no longer exists.",
+      "batchGone": "The batch of changes expired or was already used: ask the agent again.",
+      "capabilityMissing": "Your team does not hold the capability this action needs.",
+      "detachOneByOne": "Several devices cannot leave their site at once through an agent: detach them one by one in the console.",
+      "executionFailed": "The approved action failed when it ran.",
+      "keyInactive": "The access key is no longer active.",
+      "perimeterLost": "The action is now outside your perimeter or that of the key.",
+      "planChanged": "The plan changed since it was approved: nothing was applied.",
+      "policyChanged": "The policy changed since the request: nothing was applied.",
+      "unknownTool": "Unknown tool.",
+      "refusedStatus": "Refused by the console (HTTP {{status}})",
+      "interrupted": "The action was interrupted before its end: check its result before asking again.",
+      "cancelFailed": "The cancellation is not finished yet: it is retried every minute.",
+      "stepUpRequired": "The action needs a fresh second factor: approve it again from the console.",
+      "impactChanged": "The impact changed since you saw it: nothing was done."
     }
   },
   "legacyAgentPolicy": {
@@ -7531,6 +7622,136 @@
       "step": "Tap \"Scan the enrollment QR code\" and point the camera at this screen.",
       "validUntil_one": "Valid until {{date}}, for {{count}} phone.",
       "validUntil_other": "Valid until {{date}}, for {{count}} phones."
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: mass disappearance at Google held",
+        "message": "A reconciliation found {{count}} of the {{managed}} managed device(s) missing at Google: none was taken out of management. Check the enterprise, then confirm on the Android Enterprise card if they are really gone."
+      },
+      "google_unreachable": {
+        "title": "Android: Google unreachable",
+        "message": "Obligarth cannot reach the Android Management API of Google: Android enrollments, policies and commands are waiting."
+      },
+      "google_auth_failed": {
+        "title": "Android: Google identity refused",
+        "message": "Google refused the service account (revoked key or missing permission): the Android link is stopped."
+      },
+      "google_key_expiring": {
+        "title": "Android: service account key expiring",
+        "message": "The key of the Google service account expires in {{days}} day(s): replace it."
+      },
+      "quota_warning": {
+        "title": "Android: device quota at 80 %",
+        "message": "{{count}} Android devices in the Google project: 80 % of its quota is used."
+      },
+      "quota_exhausted": {
+        "title": "Android: device quota reached",
+        "message": "{{count}} Android devices: the quota of the Google project is reached, new enrollments are refused."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: notification in the dead letters",
+        "message": "A Google notification of tenant {{tenantId}} could not be processed ({{code}}) and was moved to the dead letters."
+      },
+      "retention_risk": {
+        "title": "Android: notifications at risk of expiry",
+        "message": "No Google notification was pulled for {{days}} day(s): the oldest ones may expire before being read."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: messages of unknown enterprises",
+        "message": "{{lastHour}} Pub/Sub message(s) in the last hour came from enterprises unknown to Obligarth."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: Pub/Sub test message missing",
+        "message": "The Pub/Sub test message of the enterprise of tenant {{tenantId}} did not arrive: check the permissions of the topic."
+      },
+      "ownership_violation": {
+        "title": "Android: ownership check refused a call",
+        "message": "A call to Google was refused by the ownership check ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: enterprise of the project not in the registry",
+        "message": "An enterprise of the Google project ({{ref}}) is not in the registry of Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: signup callbacks rejected",
+        "message": "{{lastHour}} enterprise signup callbacks were rejected in the last hour."
+      },
+      "domain_claimed": {
+        "title": "Android: signup for a domain claimed by another tenant",
+        "message": "Tenant {{tenantId}} tried to sign up an enterprise for a domain claimed by another tenant."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: last-resort cap of destructive operations reached",
+        "message": "The last-resort cap of destructive Android operations was reached ({{kind}}, {{count}}): the next ones are refused."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: enterprise unlinked outside Obligarth",
+        "message": "The Android Enterprise of this tenant was unlinked outside Obligarth: its devices are no longer managed."
+      },
+      "signup_failed": {
+        "title": "Android: enterprise signup failed",
+        "message": "The Android Enterprise signup failed ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: enterprise signup interrupted",
+        "message": "An Android Enterprise signup was interrupted before its end: start it again."
+      },
+      "device_api_too_low": {
+        "title": "Android: device below the minimum API level of its profile",
+        "message": "An Android device below the minimum API level of its enrollment profile was put in quarantine."
+      },
+      "enrollment_spike": {
+        "title": "Android: enrollment spike on a long token",
+        "message": "{{perHour}} enrollments in the last hour on the long token {{tokenId}}: the next ones may need an approval."
+      },
+      "policy_push_failed": {
+        "title": "Android: policy refused by Google",
+        "message": "Google refused the policy of device {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: device integrity at risk",
+        "message": "Device {{deviceId}} failed its integrity check: it may be compromised."
+      },
+      "device_pending_approval": {
+        "title": "Android: devices waiting for their approval",
+        "message": "Android devices are waiting for their approval."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: cap of quarantined enrollments reached",
+        "message": "The cap of quarantined Android enrollments is reached: the next ones are refused."
+      },
+      "device_offline_long": {
+        "title": "Android: devices without contact for 240 days",
+        "message": "{{count}} Android device(s) without contact for 240 days."
+      },
+      "device_presumed_gone": {
+        "title": "Android: devices presumed gone",
+        "message": "{{count}} Android device(s) presumed gone (missing at Google): confirm or restore them."
+      },
+      "token_expiring": {
+        "title": "Android: long enrollment tokens to renew",
+        "message": "{{count}} long enrollment token(s) expire soon: renew them."
+      },
+      "byod_code_flood": {
+        "title": "Android: too many wrong BYOD invitation codes",
+        "message": "More than {{perHour}} wrong BYOD invitation codes in an hour: every code of the tenant is refused until the hour ends."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Enrollments without a token of this tenant",
+        "message": "Android devices were found without an enrollment token of this tenant: check the quarantine."
+      },
+      "ownership_mismatch": {
+        "title": "Ownership or mode differs from the enrollment profile",
+        "message": "An Android device enrolled with an ownership or a mode its enrollment profile does not allow: it is in quarantine."
+      },
+      "duplicate_serial": {
+        "title": "Serial number held by a device under management",
+        "message": "An Android device enrolled with the serial number of device {{deviceId}}, already under management."
+      }
     }
   }
 }

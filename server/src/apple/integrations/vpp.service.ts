@@ -7,6 +7,7 @@ import type { DbActor } from '../../db/context';
 import { AppError } from '../../middleware/errorHandler';
 import { logger } from '../../utils/logger';
 import { vault } from '../../vault';
+import { hasAssignments, syncedPlatformsOutcome } from '../../mdm/apps/appCatalogService';
 import { raiseCountedInTx, raiseInTx, resolveInTx } from '../alerts/service';
 import { realtime } from '../realtime';
 import { recordDeadline, retireDeadline } from './deadlines';
@@ -505,10 +506,26 @@ const authFailures = new Map<string, { hour: number; count: number }>();
  * 404 (no such live token), 401 (wrong secret), 400 (no type), 200.
  */
 export async function receiveNotification(tenantId: number, ref: string, authorization: string | undefined, body: unknown): Promise<number> {
-  if (!/^[A-Za-z0-9_-]{16,32}$/.test(ref)) return 404;
+  const auth = await authenticateNotification(tenantId, ref, authorization);
+  if ('status' in auth) return auth.status;
+  return acceptNotification(tenantId, auth.token, body);
+}
+
+/** The well-formed reference of a token's notification URL. */
+export const isNotificationRef = (ref: string): boolean => /^[A-Za-z0-9_-]{16,32}$/.test(ref);
+
+export interface NotificationToken { id: string; label: string }
+
+/**
+ * The token a notification is for, checked before its body is read (review F017: a body of 1 MiB is parsed only
+ * for a live token and its secret): 404 (no such live token), 401 (wrong secret). The caller is in the tenant's context.
+ */
+export async function authenticateNotification(tenantId: number, ref: string, authorization: string | undefined):
+  Promise<{ status: 404 | 401 } | { token: NotificationToken }> {
+  if (!isNotificationRef(ref)) return { status: 404 };
   const r = await db('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, notification_ref: ref }).whereNot('state', 'removed')
     .first('id', 'label', 'notification_secret_hash') as { id: string; label: string; notification_secret_hash: string } | undefined;
-  if (!r) return 404;
+  if (!r) return { status: 404 };
   if (!bearerMatches(authorization, r.notification_secret_hash)) {
     const hour = Math.floor(Date.now() / 3_600_000);
     const c = authFailures.get(r.id);
@@ -519,8 +536,13 @@ export async function receiveNotification(tenantId: number, ref: string, authori
         discriminant: r.id, params: { count, label: r.label }, navigateTo: '/integrations',
       })).catch((err) => logger.warn({ code: (err as { code?: unknown })?.code ?? null }, 'apps and books: alert not raised'));
     }
-    return 401;
+    return { status: 401 };
   }
+  return { token: { id: r.id, label: r.label } };
+}
+
+/** The body of a notification of an authenticated token (the caller is in the tenant's context): 400 or 200. */
+export async function acceptNotification(tenantId: number, r: NotificationToken, body: unknown): Promise<number> {
   const doc = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : null;
   const type = typeof doc?.notificationType === 'string' && /^[A-Z_]{1,32}$/.test(doc.notificationType) ? doc.notificationType : null;
   if (!doc || !type) return 400;
@@ -863,6 +885,9 @@ export async function syncToken(tenantId: number, id: string, o: { full: boolean
       page = p.nextPageIndex;
     }
     const full = o.full || !r.assignments_version_id;
+    // Review F018: an association that ends while the list is read (finishOperation) is absent from it but real at
+    // Apple: a full synchronisation deletes only the rows last written before the reading started (1 s of margin).
+    const listStartedAt = new Date(Date.now() - 1000);
     const assignments: VppAssignmentRow[] = [];
     let versionId: string | null = r.assignments_version_id;
     for (let page = 0, n = 0; n < MAX_PAGES; n++) {
@@ -872,7 +897,7 @@ export async function syncToken(tenantId: number, id: string, o: { full: boolean
       if (p.nextPageIndex === null || p.nextPageIndex <= page) break;
       page = p.nextPageIndex;
     }
-    const changed = await db.transaction((trx) => writeMirror(trx, tenantId, r!, { cfg, assets, assignments, full, versionId }));
+    const changed = await db.transaction((trx) => writeMirror(trx, tenantId, r!, { cfg, assets, assignments, full, versionId, listStartedAt }));
     realtime.integrationChanged(tenantId, 'vpp');
     return { outcome: 'synced', assets: assets.length, assignments: assignments.length, changed };
   } catch (err) {
@@ -883,7 +908,7 @@ export async function syncToken(tenantId: number, id: string, o: { full: boolean
 }
 
 async function writeMirror(trx: Knex.Transaction, tenantId: number, r: TokenRow, s: { cfg: VppClientConfig; assets: VppAssetRow[];
-  assignments: VppAssignmentRow[]; full: boolean; versionId: string | null }): Promise<boolean> {
+  assignments: VppAssignmentRow[]; full: boolean; versionId: string | null; listStartedAt?: Date }): Promise<boolean> {
   const now = new Date();
   const row = await tokenRow(trx, tenantId, r.id, { lock: true });
   if (row.state !== 'active') return false;
@@ -930,8 +955,9 @@ async function writeMirror(trx: Knex.Transaction, tenantId: number, r: TokenRow,
     [tenantId, r.id, a.adamId, a.pricingParam, a.serialNumber, a.clientUserId, a.serialNumber ? deviceOf.get(a.serialNumber) ?? null : null, now]);
   }
   if (s.full) {
-    const mine = await trx('vpp_assignments').where({ tenant_id: tenantId, vpp_token_id: r.id, state: 'associated' })
-      .select('id', 'adam_id', 'pricing_param', 'serial_number', 'client_user_id') as Array<{ id: number; adam_id: string; pricing_param: string; serial_number: string | null; client_user_id: string | null }>;
+    const q = trx('vpp_assignments').where({ tenant_id: tenantId, vpp_token_id: r.id, state: 'associated' });
+    if (s.listStartedAt) q.where('updated_at', '<', s.listStartedAt);
+    const mine = await q.select('id', 'adam_id', 'pricing_param', 'serial_number', 'client_user_id') as Array<{ id: number; adam_id: string; pricing_param: string; serial_number: string | null; client_user_id: string | null }>;
     const drop = mine.filter((m) => !listed.has(`${m.adam_id}|${m.pricing_param}|${m.serial_number ?? ''}|${m.client_user_id ?? ''}`)).map((m) => m.id);
     for (let i = 0; i < drop.length; i += 500) await trx('vpp_assignments').where({ tenant_id: tenantId }).whereIn('id', drop.slice(i, i + 500)).del();
     if (drop.length) changed = true;
@@ -939,19 +965,32 @@ async function writeMirror(trx: Knex.Transaction, tenantId: number, r: TokenRow,
   // Metadata of the catalog the assets carry: the platforms.
   const byAdam = new Map<string, string[]>();
   for (const a of s.assets) byAdam.set(a.adamId, platformsOfAsset(a.supportedPlatforms));
+  // Review F011: counted outside the block below, so that a token which lists no asset any more (or whose conflicting
+  // apps were archived since) resolves an alert raised by an earlier synchronisation.
+  let kept = 0;
   if (byAdam.size) {
     const apps = await trx('apps').where({ tenant_id: tenantId, platform_family: 'apple' }).whereNull('archived_at').whereIn('store_id', [...byAdam.keys()])
       .select('id', 'store_id', 'supported_platforms') as Array<{ id: number; store_id: string; supported_platforms: string[] | null }>;
+    // Review F011: the platforms of an app carry its effective configuration (a withdrawn platform makes the app
+    // not applicable there, and the reconciliation removes it from those devices). The console refuses that change
+    // while the app has assignments (appPlatformsHaveAssignments); the synchronisation does not make it behind the
+    // console's back either: it keeps the platforms of an assigned app and raises vpp.platforms_kept instead.
     for (const app of apps) {
       const p = byAdam.get(String(app.store_id)) ?? [];
       if (p.length === 0) continue;
-      const cur = [...(app.supported_platforms ?? [])].sort();
-      if (cur.join(',') !== p.join(',')) {
+      const outcome = await syncedPlatformsOutcome(app.supported_platforms ?? [], p, () => hasAssignments(trx, tenantId, Number(app.id)));
+      if (outcome === 'write') {
         await trx('apps').where({ tenant_id: tenantId, id: app.id }).update({ supported_platforms: trx.raw('?::varchar[]', [p]), metadata_refreshed_at: now, updated_at: now });
       } else {
+        if (outcome === 'keep') kept++;
         await trx('apps').where({ tenant_id: tenantId, id: app.id }).update({ metadata_refreshed_at: now });
       }
     }
+  }
+  if (kept > 0) {
+    await raiseInTx(trx, tenantId, 'vpp.platforms_kept', { discriminant: r.id, params: { count: kept, label: row.label }, navigateTo: '/apps' });
+  } else {
+    await resolveInTx(trx, tenantId, 'vpp.platforms_kept', r.id);
   }
   await trx('tenant_apple_vpp_tokens').where({ tenant_id: tenantId, id: r.id }).update({
     location_name: s.cfg.locationName ?? row.location_name, location_uid: s.cfg.uId ?? row.location_uid,

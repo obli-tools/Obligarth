@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
@@ -12,6 +12,8 @@ import { mdmApi } from '@/api/mdm.api';
 import { isStepUpHandled } from '@/api/client';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
+import { switchTenant } from '@/store/tenantSwitch';
+import { useGroupStore } from '@/store/groupStore';
 import { registerSocketListener } from '@/socket/socketListeners';
 import { PageContainer } from '@/components/common/PageContainer';
 import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedTabs';
@@ -92,6 +94,10 @@ export function DeviceSummaryPage() {
   const [device, setDevice] = useState<DeviceDetail | null>(null);
   const [isLoading, setIsLoading] = useState(validId);
   const [tenantSwitchTarget, setTenantSwitchTarget] = useState<string | null>(null);
+  // One retry of the load after a switch that left currentTenantId unchanged (see the load effect).
+  const [retry, setRetry] = useState(0);
+  const retriedRef = useRef(false);
+  useEffect(() => { retriedRef.current = false; }, [deviceId]);
   const asked = searchParams.get('tab') as Tab | null;
   const [tab, setTabState] = useState<Tab>(asked && TABS.includes(asked) ? asked : 'overview');
   const setTab = (next: Tab) => {
@@ -132,13 +138,27 @@ export function DeviceSummaryPage() {
       if (cancelled) return;
       if (located && located.currentTenantId !== located.tenantId) {
         setTenantSwitchTarget(located.tenantName);
-        sessionStorage.setItem('skipTenantSwitchRedirect', '1');
-        await useTenantStore.getState().setCurrentTenant(located.tenantId);
+        const before = useTenantStore.getState().currentTenantId;
+        // The full switch (permissions, socket, tenant-scoped stores), keeping this URL. Forced: the server session
+        // (shared by the tabs) may sit on another tenant than the one this tab shows.
+        const switched = await switchTenant(located.tenantId, { keepUrl: true, force: true });
+        if (cancelled) return;
         // A refused switch leaves the tenant unchanged: no re-run, so stop here with "not found".
-        if (!cancelled && useTenantStore.getState().currentTenantId !== located.tenantId) {
-          sessionStorage.removeItem('skipTenantSwitchRedirect');
+        if (!switched) {
           setTenantSwitchTarget(null);
           setIsLoading(false);
+          return;
+        }
+        // Switched while this tab already showed that tenant: currentTenantId did not move, so the effect does
+        // not re-run by itself. Retry the load once (a second miss ends on "not found", never a loop).
+        if (useTenantStore.getState().currentTenantId === before) {
+          if (retriedRef.current) {
+            setTenantSwitchTarget(null);
+            setIsLoading(false);
+          } else {
+            retriedRef.current = true;
+            setRetry((n) => n + 1);
+          }
         }
         return;
       }
@@ -146,7 +166,7 @@ export function DeviceSummaryPage() {
     };
     void load();
     return () => { cancelled = true; };
-  }, [deviceId, validId, reload, currentTenantId]);
+  }, [deviceId, validId, reload, currentTenantId, retry]);
 
   // Live: the registry or the Apple satellite of this device changed, or one of its commands (an acknowledged lost
   // mode changes the record without a DEVICE_UPDATED).
@@ -160,6 +180,8 @@ export function DeviceSummaryPage() {
     return () => offs.forEach((off) => off());
   }, [deviceId, reload]);
 
+  // canWriteDevice walks the group tree for a grant given on an ancestor group: re-render when it loads.
+  useGroupStore((s) => s.parents);
   const canWrite = device ? canWriteDevice(device.id, device.groupId) : false;
   // The actions of a lost or stolen device, whatever its channel (header, banner, panel, location card).
   const deviceActions = useDeviceActions(device, { canAct: canWrite, onQueued: reloadQuietly });

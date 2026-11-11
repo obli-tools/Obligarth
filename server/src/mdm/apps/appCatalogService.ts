@@ -1,7 +1,7 @@
 import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
-  APPLE_APP_KINDS_MVP, APPLE_APP_OPTION_DEFAULTS, appArtifactKey, isSecretRef,
+  APPLE_APP_KINDS_MVP, APPLE_APP_OPTION_DEFAULTS, MASTER_TENANT_ID, appArtifactKey, isSecretRef,
   type AppCatalogEntry, type AppDetail, type AppleAppOptions, type JsonValue,
 } from '@obligarth/shared';
 import { AppError } from '../../middleware/errorHandler';
@@ -228,18 +228,58 @@ export async function patchApp(trx: Knex.Transaction, tenantId: number, id: numb
   if (b.publisher !== undefined) set.publisher = b.publisher;
   if (b.iconUrl !== undefined) set.icon_url = b.iconUrl;
   if (b.minimumOsVersion !== undefined) set.minimum_os_version = b.minimumOsVersion;
-  if (b.supportedPlatforms !== undefined) set.supported_platforms = trx.raw('?::varchar[]', [b.supportedPlatforms]);
+  if (b.supportedPlatforms !== undefined) {
+    // The platforms decide where an assigned app applies: one withdrawn removes the app from every device of that
+    // platform it is assigned to (RemoveApplication), one added installs it on every device of that platform the
+    // assignments target (InstallApplication, a licence each), both outside the preview, the step-up and the second
+    // approver of a change of assignments. Any change of the set is refused while the app has assignments, as its
+    // archiving (appPlatformsHaveAssignments); the same set (any order) changes nothing.
+    const before = Array.isArray(cur.supported_platforms) ? (cur.supported_platforms as string[]) : [];
+    if (platformsChanged(before, b.supportedPlatforms) && await hasAssignments(trx, tenantId, id)) {
+      throw new AppError(409, 'Remove the assignments of this app before changing its platforms', 'appPlatformsHaveAssignments');
+    }
+    set.supported_platforms = trx.raw('?::varchar[]', [b.supportedPlatforms]);
+  }
   const fields = Object.keys(set);
   if (fields.length) await trx('apps').where({ tenant_id: tenantId, id }).update({ ...set, updated_at: new Date() });
   return { entry: (await entries(trx, tenantId, [await appRow(trx, tenantId, id)]))[0], fields };
+}
+
+/** Do two lists of platforms differ as sets (an added or a withdrawn platform)? Pure. */
+export function platformsChanged(before: readonly string[], after: readonly string[]): boolean {
+  const a = new Set(before);
+  const b = new Set(after);
+  return a.size !== b.size || [...a].some((p) => !b.has(p));
+}
+
+/** What a synchronisation of the catalog (Apps and Books) does with the platforms Apple lists for an app (review
+ *  F011): nothing when the set is the same (or Apple lists none), written when the app has no assignment, kept (and
+ *  counted in vpp.platforms_kept) when it has some, as the console refuses that change (appPlatformsHaveAssignments).
+ *  `assigned` is only asked when the set changes. */
+export async function syncedPlatformsOutcome(current: readonly string[], listed: readonly string[],
+  assigned: () => Promise<boolean>): Promise<'unchanged' | 'write' | 'keep'> {
+  if (listed.length === 0 || !platformsChanged(current, listed)) return 'unchanged';
+  return (await assigned()) ? 'keep' : 'write';
+}
+
+/** Does an assignment (of any tenant: the master's library is shared) name the app? Also read by the VPP
+ *  synchronisation, which keeps the platforms of an assigned app (review F011). The tenant's own assignments are read
+ *  directly; for the master tenant, those of its child tenants are invisible under RLS (assignments is of class
+ *  'tenant') and are asked of obligarth.app_assigned_anywhere (a boolean only). */
+export async function hasAssignments(trx: Knex.Transaction, tenantId: number, id: number): Promise<boolean> {
+  const n = await trx('assignments').where({ resource_type: 'app', resource_tenant_id: tenantId, resource_id: id }).count({ n: '*' }).first() as { n: string | number };
+  if (Number(n?.n ?? 0) > 0) return true;
+  // Only the master tenant's resources are named from another tenant (constraint assignments_resource_owner).
+  if (tenantId !== MASTER_TENANT_ID) return false;
+  const r = await trx.raw('SELECT obligarth.app_assigned_anywhere(?::integer, ?::integer) AS assigned', [tenantId, id]) as { rows: Array<{ assigned: boolean }> };
+  return r.rows[0]?.assigned === true;
 }
 
 /** « Archiver » : refused while the app has assignments (appHasAssignments). */
 export async function archiveApp(trx: Knex.Transaction, tenantId: number, id: number): Promise<AppCatalogEntry> {
   const cur = await appRow(trx, tenantId, id, true);
   if (cur.archived_at) throw new AppError(409, 'This app is archived already', 'appArchived');
-  const n = await trx('assignments').where({ resource_type: 'app', resource_tenant_id: tenantId, resource_id: id }).count({ n: '*' }).first() as { n: string | number };
-  if (Number(n?.n ?? 0) > 0) throw new AppError(409, 'Remove the assignments of this app before archiving it', 'appHasAssignments');
+  if (await hasAssignments(trx, tenantId, id)) throw new AppError(409, 'Remove the assignments of this app before archiving it', 'appHasAssignments');
   await trx('apps').where({ tenant_id: tenantId, id }).update({ archived_at: new Date(), updated_at: new Date() });
   return (await entries(trx, tenantId, [await appRow(trx, tenantId, id)]))[0];
 }

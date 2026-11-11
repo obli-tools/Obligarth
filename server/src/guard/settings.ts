@@ -1,6 +1,6 @@
 // Guard settings of a tenant (docs: audit-durci §10.6, §10.7; table
 // tenant_guard_settings): hourly cap, side of the approver of mass actions,
-// emergency freeze. A tenant without a row has the defaults. Read and written
+// the second factor of the bridge agent's commands (review F115), emergency freeze. A tenant without a row has the defaults. Read and written
 // in the tenant's database context.
 import type { Knex } from 'knex';
 import {
@@ -13,6 +13,8 @@ export interface GuardSettingsRow {
   hourly_cap_percent: number;
   hourly_cap_min: number;
   mass_approver_side: GuardSide;
+  /** Review F115: the commands of the bridge agent ask a second factor (false: the default, the current behaviour). */
+  legacy_agent_commands_sensitive: boolean;
   frozen_at: Date | null;
   frozen_by: number | null;
   frozen_source: 'manual' | 'anomaly' | null;
@@ -27,6 +29,7 @@ export function defaultSettings(tenantId: number): GuardSettingsRow {
     hourly_cap_percent: GUARD_HOURLY_CAP_PERCENT_DEFAULT,
     hourly_cap_min: GUARD_HOURLY_CAP_MIN_DEFAULT,
     mass_approver_side: 'client',
+    legacy_agent_commands_sensitive: false,
     frozen_at: null,
     frozen_by: null,
     frozen_source: null,
@@ -37,7 +40,7 @@ export function defaultSettings(tenantId: number): GuardSettingsRow {
 }
 
 const COLUMNS = [
-  'tenant_id', 'hourly_cap_percent', 'hourly_cap_min', 'mass_approver_side', 'frozen_at', 'frozen_by',
+  'tenant_id', 'hourly_cap_percent', 'hourly_cap_min', 'mass_approver_side', 'legacy_agent_commands_sensitive', 'frozen_at', 'frozen_by',
   'frozen_source', 'frozen_reason', 'updated_by', 'updated_at',
 ] as const;
 
@@ -61,6 +64,7 @@ function normalise(row: Record<string, unknown> | undefined, tenantId: number): 
     hourly_cap_percent: Number(row.hourly_cap_percent),
     hourly_cap_min: Number(row.hourly_cap_min),
     mass_approver_side: row.mass_approver_side === 'msp' ? 'msp' : 'client',
+    legacy_agent_commands_sensitive: row.legacy_agent_commands_sensitive === true,
     frozen_at: row.frozen_at ? new Date(row.frozen_at as string | Date) : null,
     frozen_by: row.frozen_by === null || row.frozen_by === undefined ? null : Number(row.frozen_by),
     frozen_source: row.frozen_source === 'manual' || row.frozen_source === 'anomaly' ? row.frozen_source : null,
@@ -80,6 +84,7 @@ export function settingsToDto(s: GuardSettingsRow, hold: { lostAt: Date; until: 
     hourlyCapMin: s.hourly_cap_min,
     massApproverSide: s.mass_approver_side,
     ...(floor !== undefined ? { publishFleetShareFloor: floor } : {}),
+    legacyAgentCommandsSensitive: s.legacy_agent_commands_sensitive,
     frozen: s.frozen_at !== null,
     frozenAt: s.frozen_at ? s.frozen_at.toISOString() : null,
     frozenBy: s.frozen_by,

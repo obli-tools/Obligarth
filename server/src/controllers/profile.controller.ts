@@ -114,6 +114,10 @@ export const profileController = {
         const { deviceKeyService } = await import('../services/deviceKey/deviceKey.service');
         await deviceKeyService.revokeAllForUser(req.session.userId!, 'password_change', { byUserId: req.session.userId!, req });
       } catch { /* trigger */ }
+      // The account's other sessions end with the old password (one of them
+      // may be the intruder the change is meant to cut off); this one stays.
+      const { killOtherSessionsForUser } = await import('../services/userSessions.service');
+      await killOtherSessionsForUser(req.session.userId!, req.sessionID, 'password_change');
 
       res.json({ success: true, message: 'Password changed successfully' });
     } catch (err) {

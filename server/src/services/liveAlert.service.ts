@@ -1,7 +1,7 @@
 import type { Server as SocketIOServer } from 'socket.io';
 import type { Knex } from 'knex';
 import { db } from '../db';
-import { SocketEvents } from '@obligarth/shared';
+import { MASTER_TENANT_ID, SocketEvents } from '@obligarth/shared';
 
 
 let _io: SocketIOServer | null = null;
@@ -15,6 +15,10 @@ export function setLiveAlertIO(io: SocketIOServer): void {
 // registers their kinds (registerAppleModule); the lists of the current tenant and of all the user's tenants leave
 // them out for anyone else, and the delivery announces them to the platform administrators' room (role:admin).
 const platformOnlyKinds = new Set<string>();
+/** Kind of an alert of the platform written through add() (`platformOnly`): the jobs, the operations of the instance,
+ *  the MSP copy of a guarded action. Without a kind, a row of the master tenant is read by every member of it. */
+export const PLATFORM_ALERT_KIND = 'platform';
+platformOnlyKinds.add(PLATFORM_ALERT_KIND);
 export function registerPlatformOnlyAlertKinds(kinds: readonly string[]): void {
   for (const k of kinds) platformOnlyKinds.add(k);
 }
@@ -211,6 +215,9 @@ type AddOpts = {
   message: string;
   navigateTo?: string | null;
   stableKey?: string | null;
+  /** An alert of the platform (filed in the master tenant): read by the platform administrators only and announced
+   *  to their room (kind PLATFORM_ALERT_KIND). Ignored in any other tenant. */
+  platformOnly?: boolean;
 };
 
 function insertValues(tenantId: number, opts: AddOpts): Record<string, unknown> {
@@ -221,6 +228,7 @@ function insertValues(tenantId: number, opts: AddOpts): Record<string, unknown> 
     message: opts.message,
     navigate_to: opts.navigateTo ?? null,
     stable_key: opts.stableKey ?? null,
+    ...(opts.platformOnly === true && tenantId === MASTER_TENANT_ID ? { kind: PLATFORM_ALERT_KIND } : {}),
   };
 }
 
@@ -274,7 +282,14 @@ export const liveAlertService = {
         .whereNull('read_at')
         .whereNull('resolved_at')
         .first();
-      if (existing) return null;
+      if (existing) {
+        // A platform alert filed before it was marked as one (no kind): it becomes the platform's now, hidden
+        // from the members who are not platform administrators from their next read.
+        if (opts.platformOnly === true && tenantId === MASTER_TENANT_ID && existing.kind == null) {
+          await db('live_alerts').where({ id: existing.id }).whereNull('kind').update({ kind: PLATFORM_ALERT_KIND });
+        }
+        return null;
+      }
     }
 
     const [row] = await db('live_alerts').insert(insertValues(tenantId, opts)).returning('*');
@@ -390,8 +405,9 @@ export const liveAlertService = {
     await db('live_alerts').where({ id, tenant_id: tenantId }).delete();
   },
 
-  async clearAll(tenantId: number, opts: { platformAdmin?: boolean } = {}): Promise<void> {
-    await hidePlatformOnly(db('live_alerts').where({ tenant_id: tenantId }), opts.platformAdmin === true).delete();
+  /** Deletes the tenant's alerts the reader may see; returns how many. */
+  async clearAll(tenantId: number, opts: { platformAdmin?: boolean } = {}): Promise<number> {
+    return Number(await hidePlatformOnly(db('live_alerts').where({ tenant_id: tenantId }), opts.platformAdmin === true).delete());
   },
 
   /**

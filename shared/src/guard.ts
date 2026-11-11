@@ -120,6 +120,9 @@ export interface GuardSettingsDto {
   massApproverSide: GuardSide;
   /** DM23 (setting publishFleetShareFloor), changed under guard.settings_change only. */
   publishFleetShareFloor?: number;
+  /** Review F115: the commands of the bridge agent (LEGACY_AGENT_SENSITIVE_COMMAND_TYPES) ask a second factor on every
+   *  path (restriction legacy_agent.commands_sensitive). false by default; the automatic flows never read it. */
+  legacyAgentCommandsSensitive?: boolean;
   frozen: boolean;
   frozenAt: string | null;
   frozenBy: number | null;
@@ -141,6 +144,9 @@ export interface GuardSettingsInput {
   /** DM23: devices touched before the 10 % share of the fleet asks a second approver (1 to 25). Changed under
    *  guard.settings_change only (decision of the owners of 19/10/2026). */
   publishFleetShareFloor?: number;
+  /** Review F115: true makes the commands of the bridge agent ask a second factor (changed under guard.settings_change,
+   *  like the other settings: a second approver). */
+  legacyAgentCommandsSensitive?: boolean;
 }
 
 export interface GuardApproverDto {

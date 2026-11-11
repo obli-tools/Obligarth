@@ -19,7 +19,7 @@ interface ProtectedRouteProps {
 }
 
 export function ProtectedRoute({ requiredRole, requiredCapabilities }: ProtectedRouteProps) {
-  const { user, isInitialized, permissions } = useAuthStore();
+  const { user, isInitialized, permissions, requires2faSetup } = useAuthStore();
   const location = useLocation();
 
   if (!isInitialized) {
@@ -43,6 +43,14 @@ export function ProtectedRoute({ requiredRole, requiredCapabilities }: Protected
     location.pathname !== '/enroll'
   ) {
     return <Navigate to="/enroll" replace />;
+  }
+
+  // "Force 2FA" (platform setting): a local account without a second factor
+  // sets one up on its profile first — the server answers 403
+  // twoFactorSetupRequired anywhere else (server/src/middleware/force2fa.ts).
+  // Never an Obligate SSO account (the server does not flag it).
+  if (requires2faSetup && location.pathname !== '/profile' && location.pathname !== '/enroll') {
+    return <Navigate to="/profile" replace />;
   }
 
   if (requiredRole && user.role !== requiredRole) {

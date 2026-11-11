@@ -76,9 +76,18 @@ export function PolicyEditorPage() {
   const fileRef = useRef<HTMLInputElement>(null);
   const dirtyRef = useRef(false);
   dirtyRef.current = dirty;
+  // The version shown changed on the server (another administrator saved it, an approval moved its state) while
+  // this screen holds unsaved changes: a banner says so, and saving asks before overwriting.
+  const [changedElsewhere, setChangedElsewhere] = useState(false);
+  const versionRef = useRef<PolicyVersion | null>(null);
+  versionRef.current = version;
+  const selectedRef = useRef<number | null>(null);
+  selectedRef.current = selected;
 
-  /** The envelope and the list of versions; `keep`: stay on the version shown when it still exists. */
-  const loadPolicy = useCallback(async (keep: number | null = null): Promise<void> => {
+  /** The envelope and the list of versions; `keep`: stay on the version shown when it still exists.
+   *  `quiet` (a live reload): a passing failure (network, restart) keeps the editor and its unsaved changes on
+   *  screen; only a real 404 says the policy is gone. */
+  const loadPolicy = useCallback(async (keep: number | null = null, quiet = false): Promise<void> => {
     try {
       const [p, vs] = await Promise.all([mdmApi.getPolicy(policyId), mdmApi.listVersions(policyId)]);
       setPolicy(p);
@@ -87,8 +96,9 @@ export function PolicyEditorPage() {
       const wanted = keep !== null && vs.some((v) => v.version === keep) ? keep
         : p.openVersion?.version ?? p.currentVersion ?? vs[0]?.version ?? null;
       setSelected(wanted);
-    } catch {
-      setNotFound(true);
+    } catch (err) {
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (!quiet || status === 404) setNotFound(true);
     } finally {
       setLoading(false);
     }
@@ -106,6 +116,7 @@ export function PolicyEditorPage() {
     setIssues([]);
     setConflicts([]);
     setValidated(false);
+    setChangedElsewhere(false);
   }, []);
   useEffect(() => {
     if (selected === null) { setVersion(null); setRows([]); return; }
@@ -114,10 +125,42 @@ export function PolicyEditorPage() {
     return () => { cancelled = true; };
   }, [policyId, selected, applyVersion]);
 
-  // Live: the policy changed elsewhere (another administrator, an approval executed). An unsaved draft is kept.
+  /** The server's copy of the version shown when it differs from the one this screen loaded (content or state),
+   *  else null. The server keeps no revision token on a draft (last write wins): the content hash stands for it. */
+  const remoteChange = useCallback(async (): Promise<PolicyVersion | null> => {
+    const shown = versionRef.current;
+    if (!shown) return null;
+    const fresh = await mdmApi.getVersion(policyId, shown.version);
+    return fresh.contentSha256 !== shown.contentSha256 || fresh.state !== shown.state ? fresh : null;
+  }, [policyId]);
+
+  // Live: the policy changed elsewhere (another administrator, an approval executed). The envelope and the list
+  // are re-read; the version shown too when it has no unsaved change, else the banner says it changed.
   useEffect(() => registerSocketListener(SocketEvents.POLICY_CHANGED, (p: { policyIds?: number[] }) => {
-    if (Array.isArray(p?.policyIds) && p.policyIds.map(Number).includes(policyId) && !dirtyRef.current) void loadPolicy(selected);
-  }), [policyId, loadPolicy, selected]);
+    if (!Array.isArray(p?.policyIds) || !p.policyIds.map(Number).includes(policyId)) return;
+    void (async () => {
+      const shownBefore = versionRef.current?.version ?? null;
+      await loadPolicy(selectedRef.current, true);
+      // loadPolicy moved to another version (this one was discarded): the selection effect loads it.
+      if (shownBefore === null || selectedRef.current !== shownBefore) return;
+      const fresh = await remoteChange().catch(() => null);
+      if (!fresh || versionRef.current?.version !== fresh.version) return;
+      if (dirtyRef.current) setChangedElsewhere(true);
+      else applyVersion(fresh);
+    })();
+  }), [policyId, loadPolicy, remoteChange, applyVersion]);
+
+  /** Shows the server's copy of the version, the unsaved changes dropped (after a confirmation). */
+  const reloadVersion = async () => {
+    const shown = versionRef.current;
+    if (!shown) return;
+    if (dirtyRef.current && !(await confirm({ message: t('policies.editor.confirmReload') || 'Reload the version saved on the server? Your unsaved changes are lost.', danger: true }))) return;
+    try {
+      applyVersion(await mdmApi.getVersion(policyId, shown.version));
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    }
+  };
 
   const types = useMemo(() => new Map((catalog?.types ?? []).map((x) => [x.type, x])), [catalog]);
   const editable = canManage && version?.state === 'draft' && policy?.state !== 'archived' && policy?.shared !== true;
@@ -158,12 +201,32 @@ export function PolicyEditorPage() {
     if (!content) { toast.error(t('policies.editor.invalidJson') || 'An item is not valid JSON: fix it before saving.'); return false; }
     setBusy(true);
     try {
-      const saved = await mdmApi.saveDraft(policyId, version.version, content, changeNote.trim() || null);
+      // The draft replaces the whole content: re-read it first, so that another administrator's save is not lost
+      // without a word (a failed re-read does not block: the server still refuses a version no longer a draft).
+      const fresh = await remoteChange().catch(() => null);
+      if (fresh) {
+        setChangedElsewhere(true);
+        if (fresh.state !== 'draft') {
+          toast.error(t('policies.editor.noLongerDraft') || 'This version is no longer a draft (it was submitted or published elsewhere): reload it.', { duration: 7000 });
+          return false;
+        }
+        if (!(await confirm({ message: t('policies.editor.confirmOverwrite') || 'This draft was changed by someone else since you opened it. Save your version anyway? Their changes will be lost.', danger: true }))) return false;
+      }
+      // The server compares the hash under the lock of the draft (review F070): the one read, or the one just
+      // re-read when the operator chose to overwrite it; a save in between answers 409 policyVersionChanged.
+      const expected = (fresh ?? version).contentSha256;
+      const saved = await mdmApi.saveDraft(policyId, version.version, content, changeNote.trim() || null, expected);
       applyVersion(saved);
       toast.success(t('policies.editor.saved') || 'Draft saved');
       void loadPolicy(saved.version);
       return true;
     } catch (err) {
+      if (apiErrorCode(err) === 'policyVersionChanged') {
+        // Nothing was written: the edits stay on the screen, the banner offers to reload the saved draft.
+        setChangedElsewhere(true);
+        toast.error(t('policies.editor.savedElsewhere') || 'This draft was saved elsewhere in the meantime: nothing was saved. Reload it to see the other changes (yours are then lost).', { duration: 9000 });
+        return false;
+      }
       if (apiErrorCode(err) === 'validationFailed') {
         const details = apiErrorBody(err)?.details;
         setIssues(Array.isArray(details) ? details as PolicyValidationIssue[] : []);
@@ -193,7 +256,17 @@ export function PolicyEditorPage() {
   };
 
   const openPublish = async () => {
-    if (dirty && !(await save())) return;
+    if (dirty) {
+      if (!(await save())) return;
+    } else {
+      // What is submitted is the content stored on the server: it must be the one on the screen.
+      const fresh = await remoteChange().catch(() => null);
+      if (fresh) {
+        applyVersion(fresh);
+        toast.error(t('policies.editor.reviewBeforePublish') || 'This version was changed elsewhere: its current content is now shown, review it before publishing.', { duration: 7000 });
+        return;
+      }
+    }
     setPublishOpen(true);
   };
 
@@ -372,6 +445,16 @@ export function PolicyEditorPage() {
             </span>
           </div>
 
+          {changedElsewhere && (
+            <div role="alert" className="flex flex-wrap items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-sm text-amber-400">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span className="min-w-0 flex-1">{t('policies.editor.changedElsewhere') || 'This version was changed elsewhere since you opened it. Saving would replace those changes.'}</span>
+              <Button size="sm" variant="secondary" disabled={busy} onClick={() => { void reloadVersion(); }}>
+                <RefreshCw className="w-3.5 h-3.5 mr-1" />{t('policies.editor.reloadVersion') || 'Reload'}
+              </Button>
+            </div>
+          )}
+
           {validated && issues.length === 0 && conflicts.length === 0 && (
             <p className="flex items-center gap-1.5 text-sm text-green-400"><CheckCircle2 className="w-4 h-4" />{t('policies.editor.valid') || 'The content is valid'}</p>
           )}
@@ -460,12 +543,21 @@ export function PolicyEditorPage() {
         load={() => mdmApi.versionImpact(policyId, version!.version)}
         apply={async () => {
           try {
-            const outcome = await mdmApi.submitVersion(policyId, version!.version);
+            const outcome = await mdmApi.submitVersion(policyId, version!.version, version!.contentSha256);
             announceSubmitOutcome(t, outcome);
             await loadPolicy(version!.version);
             // The version shown changed state (published, or awaiting approval): read it again.
             mdmApi.getVersion(policyId, version!.version).then(applyVersion).catch(() => { /* list reloaded above */ });
           } catch (err) {
+            if (apiErrorCode(err) === 'policyVersionChanged') {
+              // Saved elsewhere since the preview: nothing published. The server's copy is shown to be reviewed.
+              setPublishOpen(false);
+              const fresh = await remoteChange().catch(() => null);
+              if (fresh && !dirtyRef.current) applyVersion(fresh);
+              else setChangedElsewhere(true);
+              toast.error(t('policies.editor.reviewBeforePublish') || 'This version was changed elsewhere: its current content is now shown, review it before publishing.', { duration: 8000 });
+              throw err;
+            }
             if (apiErrorCode(err) === 'validationFailed') {
               const details = apiErrorBody(err)?.details;
               setIssues(Array.isArray(details) ? details as PolicyValidationIssue[] : []);

@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "La password non può essere composta solo da spazi. Lascia il campo vuoto per rimuovere la password."
+    },
+    "reconcileHold": {
+      "help": "L'ultima riconciliazione non ha trovato presso Google {{count}} dei {{managed}} dispositivi gestiti: nessuno è stato tolto dalla gestione. Verifica prima l'enterprise presso Google; conferma solo se questi dispositivi sono davvero scomparsi.",
+      "confirm": "Conferma la scomparsa di {{count}} dispositivo/i…",
+      "confirmTitle": "Conferma i dispositivi scomparsi",
+      "confirmMessage": "Togliere {{count}} dispositivo/i dalla gestione? Fallo solo se sono stati davvero rimossi presso Google: viene richiesto un secondo fattore.",
+      "confirmed": "Conferma registrata: la riconciliazione viene eseguita entro un minuto."
+    }
+  },
   "common": {
     "save": "Salva",
     "cancel": "Annulla",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Impossibile passare a questo spazio di lavoro.",
+    "roleAdministrator": "Amministratore",
+    "roleMember": "Membro",
+    "confirmRoleChange": "Assegnare a {{user}} il ruolo «{{role}}» in questo spazio di lavoro?",
+    "roleOf": "Ruolo di {{user}}",
+    "deleteTitle": "Elimina lo spazio di lavoro «{{name}}»",
+    "confirmDeleteTyped": "Tutti i suoi dati, dispositivi gestiti inclusi, saranno eliminati definitivamente. Digita «{{slug}}» per confermare.",
+    "deleted": "Spazio di lavoro «{{name}}» eliminato",
     "pageTitle": "Spazi di lavoro",
     "pageDesc": "Gestisci gli spazi di lavoro e i loro membri per distribuzioni multi-tenant.",
     "create": "Nuovo spazio di lavoro",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Cambia spazio di lavoro"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Altri gruppi"
+    },
     "tabApiKeys": "Chiavi API",
     "viewDevice": "Visualizza dispositivo",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "In uso: l'impostazione di protezione «Secondo fattore sui comandi dell'agente Android» è attiva.",
+      "commandsSensitiveOff": "Non in uso: l'impostazione di protezione «Secondo fattore sui comandi dell'agente Android» è disattiva (Sicurezza, scheda Protezioni)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Errore"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Ricaricare la versione salvata sul server? Le modifiche non salvate andranno perse.",
+      "noLongerDraft": "Questa versione non è più una bozza (è stata inviata o pubblicata altrove): ricaricala.",
+      "confirmOverwrite": "Questa bozza è stata modificata da qualcun altro da quando l'hai aperta. Salvare comunque la tua versione? Le sue modifiche andranno perse.",
+      "reviewBeforePublish": "Questa versione è stata modificata altrove: ora è mostrato il suo contenuto attuale, controllalo prima di pubblicare.",
+      "changedElsewhere": "Questa versione è stata modificata altrove da quando l'hai aperta. Salvarla sostituirebbe quelle modifiche.",
+      "reloadVersion": "Ricarica",
+      "savedElsewhere": "Questa bozza è stata salvata altrove nel frattempo: non è stato salvato nulla. Ricaricala per vedere le altre modifiche (le tue vanno perse)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Gruppo spostato, ma non è stato possibile salvare la sua posizione tra i nuovi gruppi fratelli",
+    "crossTenantMove": "Un gruppo resta nel suo spazio di lavoro: rilascialo tra i gruppi dello stesso spazio.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Notifica eliminata",
+      "live_alert_cleared": "Notifiche cancellate",
+      "sso_sync_delete_blocked": "Eliminazione dell'account da Obligate bloccata (ancora referenziato): disattivato, da eliminare a mano",
+      "android_mass_missing_confirmed": "Android: scomparsa massiva confermata",
+      "legacy_agent_package_confirmed": "APK rinviato da un dispositivo confermato"
+    },
+    "families": {
+      "legacy_agent": "Agente Android"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Rimuovi le assegnazioni di questa app prima di cambiarne le piattaforme.",
+    "exportBusy": "Troppe esportazioni PDF in corso: riprova tra un momento.",
+    "exportTooLarge": "Troppe righe per un'esportazione PDF (al massimo 2000): restringi i filtri o esporta in CSV o XLSX.",
+    "exportTimeout": "L'esportazione PDF ha richiesto troppo tempo: esporta in CSV o XLSX, o restringi i filtri.",
+    "tenantHasBridgeDevices": "Questo spazio ha ancora {{devices}} dispositivo/i registrato/i con l'agente ponte Android: revocali prima, poi elimina lo spazio.",
+    "deadLetterAlreadyApplied": "Questa lettera morta è già stata riapplicata: non viene applicata due volte.",
+    "userHasDependencies": "Questo account è ancora referenziato da altri record: disattivalo invece, oppure rimuovi prima ciò che vi fa riferimento.",
+    "invalidConfirmMissing": "La conferma deve indicare il numero esatto di dispositivi trattenuti (un intero positivo).",
+    "adminRequired": "Solo un amministratore del tenant può rilasciare un comando distruttivo.",
+    "releaseRateLimited": "Troppi comandi distruttivi rilasciati nell'ultima ora: riprova più tardi.",
+    "policyVersionChanged": "La versione è cambiata dalla sua anteprima: rivedila.",
+    "twoFactorSetupRequired": "È richiesto un secondo fattore: configura prima un'app di autenticazione nel tuo profilo.",
+    "packageNotConfirmed": "Questo APK è stato rinviato da un dispositivo: confermalo nella scheda Pacchetti dell'agente Android prima di installarlo.",
+    "capabilityMissing": "Il tuo team non ha la capacità richiesta da questa azione."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Non consentito: non hai diritto di scrittura su questi dispositivi.",
+      "status": {
+        "governed": "Modifica governata: rinomina dalla scheda del dispositivo"
+      },
+      "governedHint": "Modifica governata: il nuovo nome farebbe entrare o uscire il dispositivo da un gruppo dinamico a cui punta un'assegnazione. Rinominalo dalla sua scheda, dove l'impatto viene mostrato in anteprima."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Stato",
+      "toConfirm": "Da confermare",
+      "toConfirmHint": "Rinviato da un dispositivo: non può essere installato finché una persona non lo conferma.",
+      "confirmedState": "Confermato",
+      "confirm": "Conferma",
+      "confirmTitle": "Conferma questo APK",
+      "confirmMessage": "Questo APK ({{packageName}}, {{version}}) è stato rinviato da un dispositivo, non caricato da una persona. Una volta confermato, può essere installato sui dispositivi del tenant.",
+      "confirmCheck": "Prima di confermare, verifica che nome del pacchetto, versione e firmatario siano quelli attesi.",
+      "signerShort": "Firmatario",
+      "confirmed": "APK confermato: ora può essere installato.",
+      "fromDevice": "Dal dispositivo",
+      "unconfirmedHint": "{{count}} pacchetto/i rinviato/i da un dispositivo deve/devono essere confermato/i nella scheda Pacchetti prima di poter essere installato/i."
+    },
+    "awaitingApproval": "Richiesta inviata per l'approvazione"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Non è autorizzato a eliminare queste notifiche: sono condivise dal tenant."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Piattaforme delle app non aggiornate",
+          "message": "Il token di contenuto {{label}} indica altre piattaforme per {{count}} app assegnata/e: le loro piattaforme sono mantenute finché hanno assegnazioni."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: scomparsa massiva presso Google trattenuta",
+        "message": "Una riconciliazione non ha trovato presso Google {{count}} dei {{managed}} dispositivi gestiti: nessuno è stato tolto dalla gestione. Verifica l'enterprise, poi conferma sulla scheda Android Enterprise se sono davvero scomparsi."
+      },
+      "google_unreachable": {
+        "title": "Android: Google irraggiungibile",
+        "message": "Obligarth non raggiunge l'API Android Management di Google: le registrazioni, i criteri e i comandi Android sono in attesa."
+      },
+      "google_auth_failed": {
+        "title": "Android: identità rifiutata da Google",
+        "message": "Google ha rifiutato l'account di servizio (chiave revocata o autorizzazione mancante): il collegamento Android è fermo."
+      },
+      "google_key_expiring": {
+        "title": "Android: chiave dell'account di servizio in scadenza",
+        "message": "La chiave dell'account di servizio Google scade tra {{days}} giorno/i: sostituiscila."
+      },
+      "quota_warning": {
+        "title": "Android: quota di dispositivi all'80 %",
+        "message": "{{count}} dispositivi Android nel progetto Google: è usato l'80 % della sua quota."
+      },
+      "quota_exhausted": {
+        "title": "Android: quota di dispositivi raggiunta",
+        "message": "{{count}} dispositivi Android: la quota del progetto Google è raggiunta, le nuove registrazioni sono rifiutate."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: notifica tra i messaggi non recapitabili",
+        "message": "Una notifica Google del tenant {{tenantId}} non è stata elaborata ({{code}}) ed è stata spostata tra i messaggi non recapitabili."
+      },
+      "retention_risk": {
+        "title": "Android: notifiche a rischio di scadenza",
+        "message": "Nessuna notifica Google prelevata da {{days}} giorno/i: le più vecchie possono scadere prima di essere lette."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: messaggi di aziende sconosciute",
+        "message": "{{lastHour}} messaggio/i Pub/Sub dell'ultima ora proviene/provengono da aziende sconosciute a Obligarth."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: messaggio di prova Pub/Sub mancante",
+        "message": "Il messaggio di prova Pub/Sub dell'azienda del tenant {{tenantId}} non è arrivato: verifica le autorizzazioni dell'argomento."
+      },
+      "ownership_violation": {
+        "title": "Android: chiamata rifiutata dal controllo di appartenenza",
+        "message": "Una chiamata a Google è stata rifiutata dal controllo di appartenenza ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: azienda del progetto assente dal registro",
+        "message": "Un'azienda del progetto Google ({{ref}}) non è nel registro di Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: ritorni di registrazione rifiutati",
+        "message": "{{lastHour}} ritorni di registrazione aziendale sono stati rifiutati nell'ultima ora."
+      },
+      "domain_claimed": {
+        "title": "Android: registrazione di un dominio rivendicato da un altro tenant",
+        "message": "Il tenant {{tenantId}} ha tentato di registrare un'azienda per un dominio rivendicato da un altro tenant."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: raggiunto il limite di ultima istanza delle operazioni distruttive",
+        "message": "È stato raggiunto il limite di ultima istanza delle operazioni Android distruttive ({{kind}}, {{count}}): le successive sono rifiutate."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: azienda scollegata fuori da Obligarth",
+        "message": "L'azienda Android di questo tenant è stata scollegata fuori da Obligarth: i suoi dispositivi non sono più gestiti."
+      },
+      "signup_failed": {
+        "title": "Android: registrazione dell'azienda non riuscita",
+        "message": "La registrazione dell'azienda Android non è riuscita ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: registrazione dell'azienda interrotta",
+        "message": "Una registrazione di azienda Android è stata interrotta prima della fine: riavviala."
+      },
+      "device_api_too_low": {
+        "title": "Android: dispositivo sotto il livello API minimo del suo profilo",
+        "message": "Un dispositivo Android sotto il livello API minimo del suo profilo di registrazione è stato messo in quarantena."
+      },
+      "enrollment_spike": {
+        "title": "Android: picco di registrazioni su un token lungo",
+        "message": "{{perHour}} registrazioni nell'ultima ora sul token lungo {{tokenId}}: le successive possono richiedere un'approvazione."
+      },
+      "policy_push_failed": {
+        "title": "Android: criterio rifiutato da Google",
+        "message": "Google ha rifiutato il criterio del dispositivo {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: integrità del dispositivo a rischio",
+        "message": "Il dispositivo {{deviceId}} non ha superato il controllo di integrità: potrebbe essere compromesso."
+      },
+      "device_pending_approval": {
+        "title": "Android: dispositivi in attesa di approvazione",
+        "message": "Alcuni dispositivi Android attendono la loro approvazione."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: limite delle registrazioni in quarantena raggiunto",
+        "message": "È stato raggiunto il limite delle registrazioni Android in quarantena: le successive sono rifiutate."
+      },
+      "device_offline_long": {
+        "title": "Android: dispositivi senza contatto da 240 giorni",
+        "message": "{{count}} dispositivo/i Android senza contatto da 240 giorni."
+      },
+      "device_presumed_gone": {
+        "title": "Android: dispositivi presunti scomparsi",
+        "message": "{{count}} dispositivo/i Android presunto/i scomparso/i (assente/i in Google): confermali o ripristinali."
+      },
+      "token_expiring": {
+        "title": "Android: token di registrazione lunghi da rinnovare",
+        "message": "{{count}} token di registrazione lungo/hi scade/scadono a breve: rinnovali."
+      },
+      "byod_code_flood": {
+        "title": "Android: troppi codici di invito BYOD errati",
+        "message": "Più di {{perHour}} codici di invito BYOD errati in un'ora: tutti i codici del tenant sono rifiutati fino alla fine dell'ora."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Registrazioni senza token di questo tenant",
+        "message": "Sono stati trovati dispositivi Android senza token di registrazione di questo tenant: verifica la quarantena."
+      },
+      "ownership_mismatch": {
+        "title": "Proprietà o modalità diversa dal profilo di registrazione",
+        "message": "Un dispositivo Android si è registrato con una proprietà o una modalità non consentita dal suo profilo di registrazione: è in quarantena."
+      },
+      "duplicate_serial": {
+        "title": "Numero di serie già usato da un dispositivo gestito",
+        "message": "Un dispositivo Android si è registrato con il numero di serie del dispositivo {{deviceId}}, già gestito."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Conferma dispositivi Android scomparsi presso Google",
+      "androidReleaseHeld": "Rilascia un comando Android trattenuto"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "La richiesta di approvazione non esiste più.",
+      "batchGone": "Il lotto di modifiche è scaduto o è già stato usato: chiedi di nuovo all'agente.",
+      "capabilityMissing": "Il tuo team non ha la capacità richiesta da questa azione.",
+      "detachOneByOne": "Un agente non può staccare più dispositivi dal loro sito in una volta: staccali uno per uno nella console.",
+      "executionFailed": "L'azione approvata non è riuscita durante l'esecuzione.",
+      "keyInactive": "La chiave di accesso non è più attiva.",
+      "perimeterLost": "L'azione ora è fuori dal tuo perimetro o da quello della chiave.",
+      "planChanged": "Il piano è cambiato dalla sua approvazione: non è stato applicato nulla.",
+      "policyChanged": "Il criterio è cambiato dalla richiesta: non è stato applicato nulla.",
+      "unknownTool": "Strumento sconosciuto.",
+      "refusedStatus": "Rifiutato dalla console (HTTP {{status}})",
+      "interrupted": "L'azione è stata interrotta prima della fine: verifica il risultato prima di richiederla di nuovo.",
+      "cancelFailed": "L'annullamento non è ancora terminato: viene ritentato ogni minuto.",
+      "stepUpRequired": "L'azione richiede un secondo fattore recente: approvala di nuovo dalla console.",
+      "impactChanged": "L'impatto è cambiato da quando l'hai visto: non è stato fatto nulla."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Secondo fattore sui comandi dell'agente Android",
+      "legacyAgentCommandsSensitiveHelp": "Installare o disinstallare un'app, aggiornare l'agente, riavviare un dispositivo e sospenderne il chiosco richiedono il secondo fattore della persona che li invia (console e MCP). Disattivato per impostazione predefinita. Come per le altre impostazioni, la modifica è approvata da una seconda persona.",
+      "pending": "Modifica in attesa di approvazione (richiesta n. {{id}})",
+      "pendingOpen": "Apri le approvazioni",
+      "on": "attivo",
+      "off": "disattivo"
     }
   }
 }

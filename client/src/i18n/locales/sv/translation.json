@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Lösenordet kan inte bestå av enbart blanksteg. Lämna fältet tomt för att ta bort lösenordet."
+    },
+    "reconcileHold": {
+      "help": "Den senaste avstämningen hittade inte {{count}} av {{managed}} hanterade enheter hos Google: ingen togs ur hantering. Kontrollera först företaget hos Google; bekräfta bara om enheterna verkligen är borta.",
+      "confirm": "Bekräfta att {{count}} enhet(er) är borta…",
+      "confirmTitle": "Bekräfta de försvunna enheterna",
+      "confirmMessage": "Ta {{count}} enhet(er) ur hantering? Gör det bara om de verkligen har tagits bort hos Google: en andra faktor efterfrågas.",
+      "confirmed": "Bekräftelsen registrerad: avstämningen körs inom en minut."
+    }
+  },
   "common": {
     "save": "Spara",
     "cancel": "Avbryt",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Det gick inte att byta till den här arbetsytan.",
+    "roleAdministrator": "Administratör",
+    "roleMember": "Medlem",
+    "confirmRoleChange": "Ge {{user}} rollen ”{{role}}” i den här arbetsytan?",
+    "roleOf": "Roll för {{user}}",
+    "deleteTitle": "Ta bort arbetsytan ”{{name}}”",
+    "confirmDeleteTyped": "Alla dess data, inklusive hanterade enheter, tas bort permanent. Skriv ”{{slug}}” för att bekräfta.",
+    "deleted": "Arbetsytan ”{{name}}” har tagits bort",
     "pageTitle": "Arbetsytor",
     "pageDesc": "Hantera arbetsytor och deras medlemmar för flertenantdistributioner.",
     "create": "Ny arbetsyta",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Byt arbetsyta"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Andra grupper"
+    },
     "tabApiKeys": "API-nycklar",
     "viewDevice": "Visa enhet",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "Används: skyddsinställningen ”Andra faktor för Android-agentens kommandon” är på.",
+      "commandsSensitiveOff": "Används inte: skyddsinställningen ”Andra faktor för Android-agentens kommandon” är av (Säkerhet, fliken Skydd)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Fel"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Läsa in versionen som sparats på servern igen? Dina osparade ändringar går förlorade.",
+      "noLongerDraft": "Den här versionen är inte längre ett utkast (den har skickats in eller publicerats någon annanstans): läs in den igen.",
+      "confirmOverwrite": "Det här utkastet har ändrats av någon annan sedan du öppnade det. Spara din version ändå? Deras ändringar går förlorade.",
+      "reviewBeforePublish": "Den här versionen har ändrats någon annanstans: dess aktuella innehåll visas nu, granska det innan du publicerar.",
+      "changedElsewhere": "Den här versionen har ändrats någon annanstans sedan du öppnade den. Att spara skulle ersätta de ändringarna.",
+      "reloadVersion": "Läs in igen",
+      "savedElsewhere": "Utkastet sparades någon annanstans under tiden: inget sparades. Läs in det igen för att se de andra ändringarna (dina går då förlorade)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Gruppen har flyttats, men dess position bland de nya syskongrupperna kunde inte sparas",
+    "crossTenantMove": "En grupp stannar i sin arbetsyta: släpp den bland grupperna i samma arbetsyta.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Avisering borttagen",
+      "live_alert_cleared": "Aviseringar rensade",
+      "sso_sync_delete_blocked": "Borttagning av kontot från Obligate blockerad (refereras fortfarande): inaktiverat, ta bort manuellt",
+      "android_mass_missing_confirmed": "Android: massförsvinnande bekräftat",
+      "legacy_agent_package_confirmed": "APK tillbakaskickad av en enhet bekräftad"
+    },
+    "families": {
+      "legacy_agent": "Android-agent"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Ta bort appens tilldelningar innan du ändrar dess plattformar.",
+    "exportBusy": "För många PDF-exporter pågår: försök igen om en stund.",
+    "exportTooLarge": "För många rader för en PDF-export (högst 2 000): begränsa filtren eller exportera som CSV eller XLSX.",
+    "exportTimeout": "PDF-exporten tog för lång tid: exportera som CSV eller XLSX, eller begränsa filtren.",
+    "tenantHasBridgeDevices": "Den här arbetsytan har fortfarande {{devices}} enhet(er) registrerade med Android-bryggagenten: återkalla dem först och ta sedan bort arbetsytan.",
+    "deadLetterAlreadyApplied": "Det här döda meddelandet har redan tillämpats igen: det tillämpas inte två gånger.",
+    "userHasDependencies": "Kontot refereras fortfarande av andra poster: inaktivera det i stället, eller ta först bort det som hänvisar till det.",
+    "invalidConfirmMissing": "Bekräftelsen måste ange exakt antal kvarhållna enheter (ett positivt heltal).",
+    "adminRequired": "Endast en administratör för klienten kan frisläppa ett destruktivt kommando.",
+    "releaseRateLimited": "För många destruktiva kommandon frisläppta den senaste timmen: försök igen senare.",
+    "policyVersionChanged": "Versionen har ändrats sedan förhandsvisningen: granska den igen.",
+    "twoFactorSetupRequired": "En andra faktor krävs: konfigurera först en autentiseringsapp i din profil.",
+    "packageNotConfirmed": "Den här APK-filen skickades tillbaka av en enhet: bekräfta den på fliken Paket för Android-agenten innan du installerar den.",
+    "capabilityMissing": "Ditt team saknar den behörighet som den här åtgärden kräver."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Inte tillåtet: du har inte skrivbehörighet till dessa enheter.",
+      "status": {
+        "governed": "Styrd ändring: byt namn från enhetens kort"
+      },
+      "governedHint": "Styrd ändring: det nya namnet skulle flytta enheten in i eller ut ur en dynamisk grupp som en tilldelning riktar sig mot. Byt namn från enhetens kort, där effekten förhandsvisas."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Status",
+      "toConfirm": "Att bekräfta",
+      "toConfirmHint": "Tillbakaskickad av en enhet: kan inte installeras förrän en person har bekräftat den.",
+      "confirmedState": "Bekräftad",
+      "confirm": "Bekräfta",
+      "confirmTitle": "Bekräfta den här APK-filen",
+      "confirmMessage": "Den här APK-filen ({{packageName}}, {{version}}) skickades tillbaka av en enhet, den laddades inte upp av en person. När den är bekräftad kan den installeras på klientens enheter.",
+      "confirmCheck": "Kontrollera att paketnamnet, versionen och signeraren är de du väntar dig innan du bekräftar.",
+      "signerShort": "Signerare",
+      "confirmed": "APK-filen är bekräftad: den kan nu installeras.",
+      "fromDevice": "Från enheten",
+      "unconfirmedHint": "{{count}} paket som skickats tillbaka av en enhet måste bekräftas på fliken Paket innan de kan installeras."
+    },
+    "awaitingApproval": "Begäran skickad för godkännande"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Du får inte ta bort dessa aviseringar: de delas av hela klientorganisationen."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Appars plattformar inte uppdaterade",
+          "message": "Innehållstoken {{label}} anger andra plattformar för {{count}} tilldelade app(ar): deras plattformar behålls så länge de har tilldelningar."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: massförsvinnande hos Google kvarhållet",
+        "message": "En avstämning hittade inte {{count}} av {{managed}} hanterade enheter hos Google: ingen togs ur hantering. Kontrollera företaget och bekräfta sedan på kortet Android Enterprise om de verkligen är borta."
+      },
+      "google_unreachable": {
+        "title": "Android: Google kan inte nås",
+        "message": "Obligarth når inte Googles Android Management API: Android-registreringar, -policyer och -kommandon väntar."
+      },
+      "google_auth_failed": {
+        "title": "Android: identitet nekad av Google",
+        "message": "Google nekade tjänstkontot (återkallad nyckel eller saknad behörighet): Android-kopplingen är stoppad."
+      },
+      "google_key_expiring": {
+        "title": "Android: tjänstkontots nyckel löper snart ut",
+        "message": "Nyckeln för Googles tjänstkonto löper ut om {{days}} dag(ar): ersätt den."
+      },
+      "quota_warning": {
+        "title": "Android: enhetskvot på 80 %",
+        "message": "{{count}} Android-enheter i Google-projektet: 80 % av dess kvot används."
+      },
+      "quota_exhausted": {
+        "title": "Android: enhetskvoten är nådd",
+        "message": "{{count}} Android-enheter: Google-projektets kvot är nådd, nya registreringar nekas."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: avisering bland de döda meddelandena",
+        "message": "En Google-avisering för klienten {{tenantId}} kunde inte behandlas ({{code}}) och flyttades till de döda meddelandena."
+      },
+      "retention_risk": {
+        "title": "Android: aviseringar riskerar att löpa ut",
+        "message": "Ingen Google-avisering har hämtats på {{days}} dag(ar): de äldsta kan löpa ut innan de läses."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: meddelanden från okända företag",
+        "message": "{{lastHour}} Pub/Sub-meddelande(n) under den senaste timmen kom från företag som Obligarth inte känner till."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: Pub/Sub-testmeddelande saknas",
+        "message": "Pub/Sub-testmeddelandet för företaget hos klienten {{tenantId}} kom inte fram: kontrollera ämnets behörigheter."
+      },
+      "ownership_violation": {
+        "title": "Android: anrop nekat av ägarkontrollen",
+        "message": "Ett anrop till Google nekades av ägarkontrollen ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: projektets företag saknas i registret",
+        "message": "Ett företag i Google-projektet ({{ref}}) finns inte i Obligarths register."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: registreringsåteranrop nekade",
+        "message": "{{lastHour}} återanrop för företagsregistrering nekades under den senaste timmen."
+      },
+      "domain_claimed": {
+        "title": "Android: registrering av en domän som en annan klient gör anspråk på",
+        "message": "Klienten {{tenantId}} försökte registrera ett företag för en domän som en annan klient gör anspråk på."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: sista gränsen för destruktiva åtgärder nådd",
+        "message": "Den sista gränsen för destruktiva Android-åtgärder nåddes ({{kind}}, {{count}}): nästa nekas."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: företaget kopplades bort utanför Obligarth",
+        "message": "Android-företaget för den här klienten kopplades bort utanför Obligarth: dess enheter hanteras inte längre."
+      },
+      "signup_failed": {
+        "title": "Android: registreringen av företaget misslyckades",
+        "message": "Registreringen av Android-företaget misslyckades ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: registreringen av företaget avbröts",
+        "message": "En registrering av ett Android-företag avbröts innan den var klar: starta den igen."
+      },
+      "device_api_too_low": {
+        "title": "Android: enhet under profilens lägsta API-nivå",
+        "message": "En Android-enhet under den lägsta API-nivån i sin registreringsprofil sattes i karantän."
+      },
+      "enrollment_spike": {
+        "title": "Android: topp av registreringar på en lång token",
+        "message": "{{perHour}} registreringar under den senaste timmen på den långa token {{tokenId}}: nästa kan kräva ett godkännande."
+      },
+      "policy_push_failed": {
+        "title": "Android: policy nekad av Google",
+        "message": "Google nekade policyn för enheten {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: enhetens integritet hotad",
+        "message": "Enheten {{deviceId}} klarade inte integritetskontrollen: den kan vara komprometterad."
+      },
+      "device_pending_approval": {
+        "title": "Android: enheter väntar på godkännande",
+        "message": "Android-enheter väntar på sitt godkännande."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: gränsen för registreringar i karantän nådd",
+        "message": "Gränsen för Android-registreringar i karantän är nådd: nästa nekas."
+      },
+      "device_offline_long": {
+        "title": "Android: enheter utan kontakt i 240 dagar",
+        "message": "{{count}} Android-enhet(er) utan kontakt i 240 dagar."
+      },
+      "device_presumed_gone": {
+        "title": "Android: enheter antas vara borta",
+        "message": "{{count}} Android-enhet(er) antas vara borta (saknas hos Google): bekräfta eller återställ dem."
+      },
+      "token_expiring": {
+        "title": "Android: långa registreringstoken att förnya",
+        "message": "{{count}} lång(a) registreringstoken löper snart ut: förnya dem."
+      },
+      "byod_code_flood": {
+        "title": "Android: för många felaktiga BYOD-inbjudningskoder",
+        "message": "Fler än {{perHour}} felaktiga BYOD-inbjudningskoder på en timme: alla klientens koder nekas tills timmen är slut."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Registreringar utan token från den här klienten",
+        "message": "Android-enheter hittades utan registreringstoken från den här klienten: kontrollera karantänen."
+      },
+      "ownership_mismatch": {
+        "title": "Ägarskap eller läge skiljer sig från registreringsprofilen",
+        "message": "En Android-enhet registrerades med ett ägarskap eller läge som registreringsprofilen inte tillåter: den är i karantän."
+      },
+      "duplicate_serial": {
+        "title": "Serienummer som redan används av en hanterad enhet",
+        "message": "En Android-enhet registrerades med serienumret för enheten {{deviceId}}, som redan hanteras."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Bekräfta Android-enheter som försvunnit hos Google",
+      "androidReleaseHeld": "Frisläpp ett kvarhållet Android-kommando"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Godkännandebegäran finns inte längre.",
+      "batchGone": "Ändringsbatchen har gått ut eller redan använts: be agenten igen.",
+      "capabilityMissing": "Ditt team har inte den behörighet som åtgärden kräver.",
+      "detachOneByOne": "En agent kan inte koppla loss flera enheter från deras plats samtidigt: koppla loss dem en i taget i konsolen.",
+      "executionFailed": "Den godkända åtgärden misslyckades när den kördes.",
+      "keyInactive": "Åtkomstnyckeln är inte längre aktiv.",
+      "perimeterLost": "Åtgärden ligger nu utanför ditt område eller nyckelns.",
+      "planChanged": "Planen har ändrats sedan godkännandet: inget tillämpades.",
+      "policyChanged": "Policyn har ändrats sedan begäran: inget tillämpades.",
+      "unknownTool": "Okänt verktyg.",
+      "refusedStatus": "Avvisades av konsolen (HTTP {{status}})",
+      "interrupted": "Åtgärden avbröts innan den var klar: kontrollera resultatet innan du begär den igen.",
+      "cancelFailed": "Avbrytandet är inte klart ännu: det försöks igen varje minut.",
+      "stepUpRequired": "Åtgärden kräver en färsk andra faktor: godkänn den igen från konsolen.",
+      "impactChanged": "Påverkan har ändrats sedan du såg den: ingenting gjordes."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Andra faktor för Android-agentens kommandon",
+      "legacyAgentCommandsSensitiveHelp": "Att installera eller avinstallera en app, uppdatera agenten, starta om en enhet och pausa dess kiosk kräver den andra faktorn hos den som skickar dem (konsol och MCP). Av som standard. Som för de andra inställningarna godkänns ändringen av en andra person.",
+      "pending": "Ändring väntar på godkännande (begäran nr {{id}})",
+      "pendingOpen": "Öppna godkännandena",
+      "on": "på",
+      "off": "av"
     }
   }
 }

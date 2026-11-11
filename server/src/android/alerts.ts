@@ -52,6 +52,8 @@ export const ANDROID_ALERTS: readonly AndroidAlertDefinition[] = [
   { key: 'android.quarantine_cap_reached', scope: 'tenant', severity: sev('critical'), title: 'Android: cap of quarantined enrollments reached' },
   { key: 'android.device_offline_long', scope: 'tenant', severity: sev('medium'), title: 'Android: devices without contact for 240 days' },
   { key: 'android.device_presumed_gone', scope: 'tenant', severity: sev('low'), title: 'Android: devices presumed gone' },
+  // Review F023: a reconciliation found most of the fleet absent at Google; nothing released until an operator confirms.
+  { key: 'android.mass_missing_held', scope: 'tenant', severity: sev('critical'), title: 'Android: mass disappearance at Google held' },
   { key: 'android.token_expiring', scope: 'tenant', severity: sev('low'), title: 'Android: long enrollment tokens to renew' },
   // Lot AN-F1: wrong BYOD invitation codes beyond the hourly threshold (every code of the tenant refused until the hour ends).
   { key: 'android.byod_code_flood', scope: 'tenant', severity: sev('high'), title: 'Android: too many wrong BYOD invitation codes' },
@@ -91,9 +93,34 @@ const FORBIDDEN_KEYS = new Set([...ANDROID_LOG_FORBIDDEN_KEYS, 'serial', 'phone'
 
 const suffixOf = (s: string): string => (/^[A-Za-z0-9:_-]{1,64}$/.test(s) ? s : '');
 
+/** The i18n key of an Android alert: alerts.<key> (the console renders `${i18nKey}.title` and `${i18nKey}.message`). */
+export const alertI18nKey = (key: string): string => `alerts.${key}`;
+
+/** The marker text of an Android alert from parameters already reduced by alertParams. */
+const markerOf = (key: string, reduced: Record<string, string | number>): string =>
+  `i18n:${alertI18nKey(key)} ${JSON.stringify(reduced).slice(0, 400)}`;
+
 /** The text of an Android alert: the i18n key and the reduced parameters (the console translates alerts.<key>). */
 export function alertMessage(key: string, params: Record<string, unknown>): string {
-  return `i18n:alerts.${key} ${JSON.stringify(alertParams(params)).slice(0, 400)}`;
+  return markerOf(key, alertParams(params));
+}
+
+/**
+ * The translatable fields of a live alert (I11, review R6 need 2): i18n_key and i18n_params, as the alerts of the
+ * Apple catalogue carry them. The message keeps its marker (the fallback the consoles already in production read, and
+ * the text of the socket announcement, sent before this). Stamped on the active row of this stable key that has no
+ * key yet and carries this very message: the row just inserted, or an older one of the same parameters; a row raised
+ * with other parameters keeps its marker only, so that its fields never contradict its text. Never throws.
+ */
+async function stampI18n(tenantId: number, stableKey: string, key: string, reduced: Record<string, string | number>, message: string): Promise<void> {
+  try {
+    await asTenant(tenantId, PLATFORM_ACTOR, () => db('live_alerts')
+      .where({ tenant_id: tenantId, stable_key: stableKey, message })
+      .whereNull('resolved_at').whereNull('i18n_key')
+      .update({ i18n_key: alertI18nKey(key), i18n_params: JSON.stringify(reduced) }));
+  } catch (err) {
+    logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: alert i18n fields not written');
+  }
 }
 
 /** Raises a platform alert (master tenant); never throws. `params`: identifiers and counts only. */
@@ -101,26 +128,30 @@ export async function raiseAndroidPlatformAlert(key: string, params: Record<stri
   const def = byKey.get(key);
   if (!def || def.scope === 'tenant') { logger.error({ alert: key }, 'android: undeclared platform alert'); return; }
   const suffix = suffixOf(dedupSuffix);
-  await raiseJobAlert(PLATFORM_ACTOR, {
-    stableKey: `${key}${suffix ? `:${suffix}` : ''}`,
-    severity: def.severity,
-    title: def.title,
-    message: alertMessage(key, params),
-  });
+  const stableKey = `${key}${suffix ? `:${suffix}` : ''}`;
+  const reduced = alertParams(params);
+  // raiseJobAlert cuts the message at 500 characters: the stamp compares the stored text.
+  const message = markerOf(key, reduced).slice(0, 500);
+  await raiseJobAlert(PLATFORM_ACTOR, { stableKey, severity: def.severity, title: def.title, message });
+  await stampI18n(MASTER_TENANT_ID, stableKey, key, reduced, message);
 }
 
 /** Raises a tenant alert in `tenantId`; never throws. */
 export async function raiseAndroidTenantAlert(tenantId: number, key: string, params: Record<string, string | number> = {}): Promise<void> {
   const def = byKey.get(key);
   if (!def || def.scope === 'platform') { logger.error({ alert: key }, 'android: undeclared tenant alert'); return; }
+  const reduced = alertParams(params);
+  const message = markerOf(key, reduced);
   try {
     await asTenant(tenantId, PLATFORM_ACTOR, () => liveAlertService.add(tenantId, {
-      severity: def.severity, title: def.title, message: alertMessage(key, params),
+      severity: def.severity, title: def.title, message,
       navigateTo: null, stableKey: key,
     }));
   } catch (err) {
     logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: tenant alert not written');
+    return;
   }
+  await stampI18n(tenantId, key, key, reduced, message);
 }
 
 /**
@@ -128,7 +159,7 @@ export async function raiseAndroidTenantAlert(tenantId: number, key: string, par
  * key, scope, severity, title (English), i18n key of the text.
  */
 export function androidAlertDefinitions(): Array<AndroidAlertDefinition & { i18nKey: string }> {
-  return ANDROID_ALERTS.map((a) => ({ ...a, i18nKey: `alerts.${a.key}` }));
+  return ANDROID_ALERTS.map((a) => ({ ...a, i18nKey: alertI18nKey(a.key) }));
 }
 
 /** Resolves a platform alert (master tenant; the stable key with its suffix); never throws. */

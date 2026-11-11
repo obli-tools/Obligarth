@@ -66,7 +66,7 @@ export async function alertA3(userId: number, tenants: number): Promise<void> {
     message: `Account #${userId} requested guarded actions in ${tenants} tenants within one hour.`,
     stableKey: `guard:a3:${userId}:${hour}`,
     navigateTo: '/admin/security?tab=guard',
-  });
+  }, { platform: true });
 }
 
 /** remote.burst (P0-15 §4.6): one operator asked more than REMOTE_LIMITS.burstPerHour remote assistance sessions in

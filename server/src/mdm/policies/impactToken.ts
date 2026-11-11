@@ -1,5 +1,6 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { deflateRawSync, inflateRawSync } from 'node:zlib';
+import { isSecretValue } from '@obligarth/shared';
 import { config } from '../../config';
 import type { ProposedChange, TouchedDevice } from './impact';
 
@@ -30,9 +31,40 @@ function tokenKey(): Buffer {
 
 const mac = (body: string): Buffer => createHmac('sha256', tokenKey()).update(body, 'utf8').digest();
 
+/** What a token carries in place of a secret typed in. */
+export const REDACTED_SECRET_VALUE = '(redacted)';
+const TOO_DEEP = Symbol('tooDeep');
+
+/**
+ * The change without any secret typed in ({"$secretValue"}: an Android app's managed configuration, previewed before
+ * sealBatchAndroidOptions seals it): the payload is only compressed, never encrypted, and the token travels in a URL
+ * (GET /api/mdm/impact/:token/devices), so it reaches the access logs. The marker keeps its place (the setting still
+ * changes), never its value. TOO_DEEP: a value nested beyond what is looked at (no token).
+ */
+function withoutSecretValues(v: unknown, depth = 0): unknown {
+  if (depth > 64) return TOO_DEEP;
+  if (isSecretValue(v)) return { $secretValue: REDACTED_SECRET_VALUE };
+  if (Array.isArray(v)) {
+    const out = v.map((x) => withoutSecretValues(x, depth + 1));
+    return out.includes(TOO_DEEP) ? TOO_DEEP : out;
+  }
+  if (v && typeof v === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, x] of Object.entries(v)) {
+      const r = withoutSecretValues(x, depth + 1);
+      if (r === TOO_DEEP) return TOO_DEEP;
+      out[k] = r;
+    }
+    return out;
+  }
+  return v;
+}
+
 /** The token of a change previewed by `userId` in `tenantId`; null when the change is too large to travel in a URL. */
 export function signImpactToken(tenantId: number, userId: number, change: ProposedChange, now = Date.now()): string | null {
-  const payload: Payload = { v: 1, t: tenantId, u: userId, exp: now + TTL_MS, c: change };
+  const carried = withoutSecretValues(change);
+  if (carried === TOO_DEEP) return null;
+  const payload: Payload = { v: 1, t: tenantId, u: userId, exp: now + TTL_MS, c: carried as ProposedChange };
   const body = deflateRawSync(Buffer.from(JSON.stringify(payload), 'utf8')).toString('base64url');
   const token = `${body}.${mac(body).toString('base64url')}`;
   return token.length <= MAX_TOKEN_LENGTH ? token : null;

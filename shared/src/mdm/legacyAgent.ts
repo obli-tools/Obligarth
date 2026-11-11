@@ -307,7 +307,24 @@ export interface LegacyAgentPackageView {
   signerSha256: string | null;
   label: string | null;
   createdAt: string;
+  /** Review F028: a package sent back by a device (app.pull, the harvest) is "to confirm" (null) until a holder of
+   *  mdm.apps.manage confirms it (POST /api/legacy-agent/packages/:id/confirm); an upload is confirmed at once, and the
+   *  packages that existed before the change are confirmed (grandfathered). An app.install of an unconfirmed package
+   *  is refused (422 packageNotConfirmed). */
+  confirmedAt: string | null;
+  confirmedBy: number | null;
+  /** The device the APK came from (an app.pull), null for an upload. */
+  sourceDeviceId: number | null;
 }
+
+/** Review F115 (decision of the owners): the commands of the bridge agent that the per-tenant guard setting
+ *  legacyAgentCommandsSensitive (GET/PUT /api/guard/settings, off by default) makes 'sensitive' (a second factor) on
+ *  every path (a device's record, a batch, the MCP server). The automatic flows (the harvest of the APKs, the
+ *  automatic update to the bundled release) never read it. */
+export const LEGACY_AGENT_SENSITIVE_COMMAND_TYPES = ['app.install', 'app.uninstall', 'agent.update', 'device.reboot', 'kiosk.suspend'] as const;
+/** The restrictable action those commands go through while the setting is on (floor 'sensitive'; a tenant may raise
+ *  it to 'restricted' in its matrix). Off, they go through their own key as before. */
+export const LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION = 'legacy_agent.commands_sensitive';
 
 export interface LegacyAgentReleaseView {
   id: string;
@@ -377,9 +394,13 @@ export type LegacyAgentNameImportFormat = typeof LEGACY_AGENT_NAME_IMPORT_FORMAT
  * What became of a row: `rename` (preview) / `renamed` (applied), `same` (the device already has the name), `notFound`
  * (no agent of the tenant the caller sees reports this IMEI or serial number), `ambiguous` (several report it), `duplicate` (the IMEI, or
  * the device, is already taken by an earlier row of the file), `invalid` (neither a valid IMEI nor a serial number, or no name), `forbidden` (the
- * caller cannot write on the device).
+ * caller cannot write on the device), `governed` (the new name would make the device enter or leave a dynamic group
+ * an assignment targets: renamed only through the governed change of its record, PATCH /api/mdm/devices/:id, never
+ * by the import; review F030), or a rename the tenant's restriction sites.device_values governs (its level on the device
+ * for the new display name is not 'none': review F116).
  */
-export type LegacyAgentNameImportStatus = 'rename' | 'renamed' | 'same' | 'notFound' | 'ambiguous' | 'duplicate' | 'invalid' | 'forbidden';
+export type LegacyAgentNameImportStatus =
+  'rename' | 'renamed' | 'same' | 'notFound' | 'ambiguous' | 'duplicate' | 'invalid' | 'forbidden' | 'governed';
 
 export interface LegacyAgentNameImportRow {
   imei: string;

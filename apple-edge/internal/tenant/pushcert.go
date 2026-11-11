@@ -150,6 +150,13 @@ func (s *Service) ImportPushCert(ctx context.Context, key string, in PushImport)
 				return err
 			}
 		}
+		// A topic still bound to a retired tenant (retired before its topics
+		// were released at finalisation) is taken over: the customer recreated
+		// later imports the same push certificate (review F099).
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.topics SET tenant_key = $2, bound_at = now()
+ WHERE topic = $1 AND tenant_key <> $2 AND tenant_key IN (SELECT key FROM apple_edge.tenants WHERE state = 'retired')`, topic, key); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO apple_edge.topics (topic, tenant_key) VALUES ($1, $2) ON CONFLICT (topic) DO NOTHING`, topic, key); err != nil {
 			return err
 		}
@@ -213,7 +220,7 @@ VALUES ($1, $2, 'active', $3, $4, $5, $6, `+nextStale+`, now())`, info.ID, key, 
 			}
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET updated_at = now() WHERE key = $1`, key); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE apple_edge.tenants SET updated_at = greatest(clock_timestamp(), updated_at + interval '1 microsecond') WHERE key = $1`, key); err != nil {
 			return err
 		}
 		if err := s.Out.Insert(ctx, tx, outbox.T(key, "apns.certificate_activated", map[string]any{

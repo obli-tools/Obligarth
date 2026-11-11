@@ -5,6 +5,8 @@ import { asNone, asTenant, type DbActor } from './db/context';
 import { logger } from './utils/logger';
 import { getSessionMiddleware } from './app';
 import { sessionRoom } from './utils/sessionHash';
+import { isSessionRevoked } from './middleware/sessionUserGuard';
+import { force2faBlocks } from './middleware/force2fa';
 
 // Database context (rls-tenant §7.5): the handshake reads the account and
 // its memberships in the context 'none' of the session's user (its own
@@ -12,6 +14,33 @@ import { sessionRoom } from './utils/sessionHash';
 // socket's tenant (SocketConnection.on, runInTenant), never without one.
 
 let io: SocketIOServer;
+
+// ── Reader rooms ────────────────────────────────────────────────────────────
+// `tenant:<id>` is joined by every member of the tenant: an event that carries
+// what only some members may read through the API goes to a reader room
+// instead, joined at the handshake under the rule of that API:
+//   - approvals (routes/approval.routes.ts requireApprovalAccess): a platform
+//     administrator, a holder of approvals.review, a designated approver of
+//     the tenant; any other member gets its own requests (room user:<id>);
+//   - guarded actions (guard/routes.ts requireGuardReader): a platform
+//     administrator, a holder of devices.manage, approvals.review or
+//     audit.read, a designated approver.
+// The rooms are frozen for the socket's life, like its identity.
+
+export const approvalReadersRoom = (tenantId: number): string => `tenant:${tenantId}:approvals`;
+export const guardReadersRoom = (tenantId: number): string => `tenant:${tenantId}:guard`;
+
+async function readerRoomsOf(userId: number, tenantId: number, isAdmin: boolean): Promise<{ approvals: boolean; guard: boolean }> {
+  if (isAdmin) return { approvals: true, guard: true };
+  const { permissionService } = await import('./services/permission.service');
+  const caps = new Set<string>(await permissionService.listUserTenantCapabilities(userId, tenantId));
+  const designated = !!(await db('tenant_approvers').where({ tenant_id: tenantId, user_id: userId }).whereNull('revoked_at').first('id'));
+  const reviewer = designated || caps.has('approvals.review');
+  return {
+    approvals: reviewer,
+    guard: reviewer || caps.has('devices.manage') || caps.has('audit.read'),
+  };
+}
 
 // ── Module handlers ─────────────────────────────────────────────────────────
 // The core keeps the handshake (identity from the session cookie only), the
@@ -97,6 +126,8 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
       const sess = (socket.request as any).session as { userId?: number; currentTenantId?: number; deviceKeyId?: string } | undefined;
       const userId = Number(sess?.userId);
       if (!Number.isSafeInteger(userId) || userId <= 0) return next(new Error('Unauthorized'));
+      // A session deleted by a credential change, brought back by a concurrent save.
+      if (isSessionRevoked((socket.request as any).sessionID)) return next(new Error('Unauthorized'));
       const actor: DbActor = { type: 'user', userId };
 
       // Tenant: the session's current tenant (what the REST API uses); the
@@ -130,11 +161,28 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
         // Every tenant of the user (multi-tenant live alerts), read now:
         // its own membership rows.
         const memberships = await db('user_tenants').where({ user_id: user.id }).pluck('tenant_id') as number[];
-        return { user, memberships };
+        // force_2fa (middleware/force2fa.ts): an account the API refuses until
+        // it sets up a second factor gets only its own rooms, no tenant event.
+        const setupOnly = await force2faBlocks(Number(user.id));
+        return { user, memberships, setupOnly };
       });
       if ('error' in verdict) return next(new Error(verdict.error));
 
+      if (verdict.setupOnly) {
+        (socket as any).user = verdict.user;
+        (socket as any).setupOnly = true;
+        return next();
+      }
+
+      // The reader rooms of the tenant (approvals, guarded actions): the same
+      // rules as their REST reads, evaluated in the tenant's context.
+      const readerOf = tenantId
+        ? await asTenant(tenantId, actor, () => readerRoomsOf(userId, tenantId, verdict.user.role === 'admin'))
+          .catch((err) => { logger.warn({ err, userId, tenantId }, 'socket reader rooms not resolved'); return { approvals: false, guard: false }; })
+        : { approvals: false, guard: false };
+
       (socket as any).user = verdict.user;
+      (socket as any).readerOf = readerOf;
       (socket as any).tenantId = tenantId;
       (socket as any).memberTenantIds = verdict.memberships;
       next();
@@ -156,6 +204,11 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
     // (userSessions.service closeSessionChannels).
     const sid = (socket.request as any).sessionID;
     if (typeof sid === 'string' && sid) socket.join(sessionRoom(sid));
+    // force_2fa, no second factor yet: no tenant room, no module handler.
+    if ((socket as any).setupOnly === true) {
+      logger.debug({ userId: user.id }, 'Socket connected (second factor setup only)');
+      return;
+    }
     if (tenantId) {
       socket.join(`tenant:${tenantId}`);
       socket.join(`tenant:${tenantId}:notifications`);
@@ -163,6 +216,9 @@ export function createSocketServer(server: HttpServer): SocketIOServer {
         socket.join(`tenant:${tenantId}:admin`);
         socket.join('role:admin');
       }
+      const readerOf = (socket as any).readerOf as { approvals: boolean; guard: boolean } | undefined;
+      if (readerOf?.approvals) socket.join(approvalReadersRoom(tenantId));
+      if (readerOf?.guard) socket.join(guardReadersRoom(tenantId));
     }
     socket.join('general');
 

@@ -66,11 +66,19 @@ export function notifyOwner(r: AuthorizationRow): void {
  * per user, created per hour. In the transaction of the insert, under the user's authorization lock: concurrent calls
  * (a batch, parallel requests) are counted one after the other, never all against the same count.
  */
+// A row still open for the caps: pending or executing, or filed while its approval is not decided. A filed row whose
+// approval is visible and decided is not counted even before the minute step closes it (closeDecidedFiled; review
+// F051); one whose approval is not visible from this context (another tenant) still counts.
+const OPEN_ROW_SQL = `(state IN ('pending', 'executing') OR (state = 'filed' AND NOT EXISTS (
+      SELECT 1 FROM pending_approvals p WHERE p.tenant_id = mcp_authorizations.tenant_id
+         AND p.id::text = mcp_authorizations.outcome ->> 'approvalId'
+         AND (p.status IN ('executed', 'denied', 'expired', 'cancelled') OR (p.status = 'approved' AND p.execution_error IS NOT NULL)))))`;
+
 async function enforceCaps(trx: Knex.Transaction, caller: McpCaller): Promise<void> {
   const s = await mcpSettings();
   const r = await trx('mcp_authorizations').where({ user_id: caller.userId }).first(trx.raw(`
-    count(*) FILTER (WHERE state IN ('pending', 'filed', 'executing') AND key_id = ?)::int AS key_open,
-    count(*) FILTER (WHERE state IN ('pending', 'filed', 'executing'))::int AS user_open,
+    count(*) FILTER (WHERE ${OPEN_ROW_SQL} AND key_id = ?)::int AS key_open,
+    count(*) FILTER (WHERE ${OPEN_ROW_SQL})::int AS user_open,
     count(*) FILTER (WHERE key_id = ? AND created_at > now() - interval '1 hour')::int AS key_hour`, [caller.key.rowId, caller.key.rowId])) as
     { key_open: number; user_open: number; key_hour: number } | undefined;
   const counts = r ?? { key_open: 0, user_open: 0, key_hour: 0 };
@@ -341,12 +349,72 @@ export async function assertFiledApprovalLive(approval: { id: number; tenantId: 
 
 // ── Minute step, per tenant (§6.4) ──────────────────────────────────────────
 
-/** Pending rows past their expiry become 'expired' (in tenant T's context). */
+/** Pending rows past their expiry become 'expired' (in tenant T's context). The filed rows whose approval was decided
+ *  are closed by closeDecidedFiled, a step of its own of the minute job (modules/mcp.ts). */
 export async function expireDue(tenantId: number, ctx: AuditWriteContext): Promise<number> {
   const rows = await db('mcp_authorizations').where({ tenant_id: tenantId, state: 'pending' }).where('expires_at', '<=', new Date())
     .update({ state: 'expired', decided_at: new Date() }).returning('*') as AuthorizationRow[];
   for (const r of rows) { await auditState(r, 'mcp.authorization.expired', ctx); notifyOwner(r); }
   return rows.length;
+}
+
+/** An approval 'approved' with no outcome after this long: its execution was interrupted (a crash in between). */
+const APPROVED_STALE_MS = 15 * 60_000;
+
+/**
+ * The state a filed row takes from its approval (review F051), or null while the approval is still open. `approval`
+ * undefined: the approval is gone (its row deleted), the tracking is cancelled.
+ */
+export function filedOutcomeOf(approval: { status: string; execution_error: string | null; reviewed_at: Date | string | null } | undefined,
+  now = Date.now()): { state: McpAuthorizationState; errorCode: string | null } | null {
+  if (!approval) return { state: 'cancelled', errorCode: 'approvalMissing' };
+  switch (approval.status) {
+    case 'executed': return { state: 'executed', errorCode: null };
+    case 'denied': return { state: 'denied', errorCode: null };
+    case 'expired': return { state: 'expired', errorCode: null };
+    case 'cancelled': return { state: 'cancelled', errorCode: null };
+    case 'approved':
+      if (approval.execution_error) return { state: 'failed', errorCode: 'executionFailed' };
+      if (approval.reviewed_at && now - new Date(approval.reviewed_at).getTime() > APPROVED_STALE_MS) {
+        return { state: 'interrupted', errorCode: 'interrupted' };
+      }
+      return null;
+    default: return null;
+  }
+}
+
+/**
+ * Filed rows whose console approval is decided (approved and executed, denied, expired, cancelled, failed) are
+ * closed to the matching state (in tenant T's context): nothing else moves them out of 'filed' once the approval is
+ * decided, and an open row counts against the caps of its key and its user, and reads 'filed' to the agent forever.
+ * A row awaiting a failed cancellation is left to retryCancelFailed.
+ */
+export async function closeDecidedFiled(tenantId: number, ctx: AuditWriteContext): Promise<number> {
+  const rows = await db('mcp_authorizations as a')
+    .leftJoin('pending_approvals as p', function joinApproval() {
+      this.on('p.tenant_id', '=', 'a.tenant_id').andOn(db.raw("p.id::text = a.outcome ->> 'approvalId'"));
+    })
+    .where({ 'a.tenant_id': tenantId, 'a.state': 'filed' })
+    .where((w) => w.whereNull('a.error_code').orWhereNot('a.error_code', 'cancelFailed'))
+    .where((w) => w.whereNull('p.id').orWhereNot('p.status', 'pending'))
+    .limit(500)
+    .select('a.*', 'p.id as approval_row', 'p.status as approval_status', 'p.execution_error as approval_error',
+      'p.reviewed_at as approval_reviewed_at') as AuthorizationRow[];
+  let n = 0;
+  for (const r of rows) {
+    const approvalId = Number(jsonOf(r.outcome)?.approvalId);
+    const next = filedOutcomeOf(r.approval_row == null ? undefined
+      : { status: String(r.approval_status), execution_error: r.approval_error ?? null, reviewed_at: r.approval_reviewed_at ?? null });
+    if (!next) continue;
+    const outcome = { approvalId: Number.isSafeInteger(approvalId) ? approvalId : null, approvalStatus: r.approval_row == null ? null : String(r.approval_status),
+      ...(r.approval_error ? { executionError: String(r.approval_error).slice(0, 500) } : {}) };
+    const done = await transition(db, String(r.id), ['filed'], next.state, { decided: true, outcome, errorCode: next.errorCode });
+    if (!done) continue;
+    n++;
+    await auditState(done, `mcp.authorization.${next.state}`, ctx, { approvalId: outcome.approvalId, approvalStatus: outcome.approvalStatus });
+    notifyOwner(done);
+  }
+  return n;
 }
 
 /**

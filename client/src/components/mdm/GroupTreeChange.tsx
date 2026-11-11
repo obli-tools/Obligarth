@@ -46,8 +46,16 @@ export function useGroupTreeChange(onDone?: (change: GroupTreeChange, outcome: G
           onDone?.(change, 'awaiting_approval');
           return;
         }
-        await change.after?.();
-        toast.success(t('groups.moved', 'Group moved'));
+        // The move is done from here on: a failure of the order among the new siblings does not undo it, so it is
+        // told as such and the caller reloads its tree ('done'), never as a failed move.
+        const orderError = await (change.after?.() ?? Promise.resolve()).then(() => null, (err: unknown) => ({ err }));
+        if (orderError) {
+          if (!isStepUpHandled(orderError.err)) {
+            toast(`${t('groups.movedOrderFailed') || 'Group moved, but its position among its new siblings could not be saved'}: ${apiErrorMessage(orderError.err)}`, { duration: 8000 });
+          }
+        } else {
+          toast.success(t('groups.moved', 'Group moved'));
+        }
       } else {
         if (!(await groupsApi.delete(change.groupId))) {
           toast(t('groups.deleteAwaitingApproval') || 'Deletion sent for approval: it will apply once a second administrator approves it', { duration: 7000 });

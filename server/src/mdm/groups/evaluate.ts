@@ -9,7 +9,7 @@ import type { DbActor } from '../../db/context';
 import type { JobContext } from '../../jobs';
 import { getIO } from '../../socket';
 import { logger } from '../../utils/logger';
-import { raiseInTx } from '../../apple/alerts/service';
+import { raiseInTx, resolveInTx } from '../../apple/alerts/service';
 import { retryOnDeadlock } from '../policies/jobs';
 import { requestDeviceResolution } from '../policies/triggers';
 import { loadRulePrivacy, type RulePrivacy } from '../rules/facts';
@@ -291,20 +291,42 @@ export function emitGroupsChanged(tenantId: number, smartGroupIds: number[]): vo
   } catch { /* no Socket.io in this process */ }
 }
 
-/** The pending changes of the held groups a run met, counted again (one transaction). */
+/** The pending changes of the held groups a run met, counted again (one transaction); a held group no assignment
+ *  targets any more is released (active, computed in full, its alert resolved). */
 async function refreshHeld(ctx: Pick<JobContext<unknown>, 'withTenant'>, run: EvaluationRun): Promise<number> {
   if (run.heldTouched.size === 0) return 0;
   const ids = [...run.heldTouched];
   run.heldTouched.clear();
-  return retryOnDeadlock(() => ctx.withTenant(async (trx) => {
-    let n = 0;
+  const released: number[] = [];
+  const n = await retryOnDeadlock(() => ctx.withTenant(async (trx) => {
+    released.length = 0;
+    let count = 0;
     for (const g of await lockGroups(trx, run.tenantId, null, ids)) {
       if (g.state !== 'held' || validateRule(g.rule).length > 0) continue;
+      if (!g.targeted) {
+        // No assignment targets it any more (its last one was deleted): the mass guard no longer applies to it (only a
+        // targeted group is held), it is active again, computed in full, its alert resolved. Otherwise it stayed held
+        // for ever: its members never computed again and the alert raised.
+        await trx('smart_groups').where({ tenant_id: run.tenantId, id: g.id }).update({
+          state: 'active', state_reason: null, state_since: null, pending_added: 0, pending_removed: 0,
+          guard_window_start: null, guard_window_changes: 0,
+        });
+        g.state = 'active';
+        g.windowStart = null;
+        g.windowChanges = 0;
+        await computeGroup(trx, run, g);
+        await resolveInTx(trx, run.tenantId, 'smart_group.mass_change', g.id);
+        logger.info({ tenantId: run.tenantId, smartGroupId: g.id }, 'dynamic group released: no assignment targets it any more');
+        released.push(g.id);
+        continue;
+      }
       await writePending(trx, run, { id: g.id, rule: g.rule as RuleNode });
-      n++;
+      count++;
     }
-    return n;
+    return count;
   }));
+  emitGroupsChanged(run.tenantId, released);
+  return n;
 }
 
 /** The outcome of a run of the queue. */

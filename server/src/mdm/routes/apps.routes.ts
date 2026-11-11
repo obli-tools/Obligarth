@@ -14,7 +14,7 @@ import { emitPolicyChanged } from '../policies/publish';
 //   GET  /apps?archived=1&q=     the catalog (licences of every live token)
 //   POST /apps                   from a licence of the tenant, or by App Store id
 //   GET  /apps/:id               the page: installs (counts), delivery by state
-//   PATCH /apps/:id              name, publisher, icon, platforms, minimum OS
+//   PATCH /apps/:id              name, publisher, icon, platforms (none withdrawn while assignments remain), minimum OS
 //   POST /apps/:id/archive       refused while assignments remain
 // =============================================================================
 
@@ -47,15 +47,17 @@ router.get('/apps/:id', h(async (req, res) => {
 router.patch('/apps/:id', manage, h(async (req, res) => {
   const tenantId = req.tenantId!;
   const id = parseAppId(req.params.id);
-  const { entry, fields } = await db.transaction((trx) => patchApp(trx, tenantId, id, req.body));
+  const { requestTenantResolution } = await import('../policies/triggers');
+  const { entry, fields } = await db.transaction(async (trx) => {
+    const out = await patchApp(trx, tenantId, id, req.body);
+    // The platforms change the availability of the app on the devices it is assigned to (a platform withdrawn is
+    // refused while assignments remain): resolved again, requested with the change itself.
+    if (out.fields.includes('supported_platforms')) await requestTenantResolution(trx, tenantId);
+    return out;
+  });
   if (fields.length) {
     await audit.append({ tenantId, action: 'app.updated', target: { type: 'app', id: String(id) }, details: { fields } }, await audit.fromRequest(req, tenantId));
-    // The platforms change the availability of the app on the devices it is assigned to.
-    if (fields.includes('supported_platforms')) {
-      const { requestTenantResolution } = await import('../policies/triggers');
-      await db.transaction((trx) => requestTenantResolution(trx, tenantId));
-      emitPolicyChanged(tenantId, []);
-    }
+    if (fields.includes('supported_platforms')) emitPolicyChanged(tenantId, []);
   }
   res.json({ data: entry });
 }));

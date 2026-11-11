@@ -76,10 +76,21 @@ async function connectionOf(trx: Knex.Transaction): Promise<PgConnection> {
 
 const SAVEPOINT = 'obligarth_tenant_switch';
 
+/** The context the transaction itself carries (role, context text, signature),
+ *  which applyTenantContext / tenantContextStatement may have switched without
+ *  the Node context. */
+const READ_TX_CONTEXT_SQL =
+  "SELECT current_setting('role') AS role, current_setting('obligarth.ctx', true) AS ctx, "
+  + "current_setting('obligarth.ctx_sig', true) AS sig";
+
 /** Same, with its own SAVEPOINT, the Node context switched for fn (lease key
- *  updated for the consistency check) and the outer context restored after
- *  RELEASE (rls-tenant §4.5). On failure: ROLLBACK TO SAVEPOINT, which also
- *  reverts the transaction-local context, and the error is rethrown. */
+ *  updated for the consistency check) and, after RELEASE, the context the
+ *  transaction carried before restored as it was (rls-tenant §4.5): the outer
+ *  Node context when the transaction is in it, else the transaction-local one a
+ *  caller set with applyTenantContext (review F049: an outbox handler, Node in
+ *  'none', the transaction in its event's tenant). On failure: ROLLBACK TO
+ *  SAVEPOINT, which also reverts the transaction-local context, and the error is
+ *  rethrown. */
 export async function withTenantInTransaction<T>(
   trx: Knex.Transaction, tenantId: number, actor: DbActor, fn: () => Promise<T>,
 ): Promise<T> {
@@ -89,6 +100,14 @@ export async function withTenantInTransaction<T>(
   assertValidContext(inner);
   const conn = await connectionOf(trx);
   const outerLease = conn.__obligarthLease;
+  const before = await trx.raw(READ_TX_CONTEXT_SQL) as { rows: Array<{ role: string; ctx: string | null; sig: string | null }> };
+  const encOut = encodeContext(outer);
+  const txCtx = before.rows[0];
+  // The transaction in the outer Node context (the usual case): restored from it, as before. Otherwise, the values the
+  // transaction carried, as they were (they were set by this process: a signed context of the lease).
+  const restore: [string, string, string] = !txCtx || !txCtx.ctx || !txCtx.sig || txCtx.ctx === encOut.ctx
+    ? [encOut.role, encOut.ctx, encOut.sig]
+    : [txCtx.role, txCtx.ctx, txCtx.sig];
   await trx.raw(`SAVEPOINT ${SAVEPOINT}`);
   const encIn = encodeContext(inner);
   await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encIn.role, encIn.ctx, encIn.sig, LEASE_SEARCH_PATH]);
@@ -103,8 +122,7 @@ export async function withTenantInTransaction<T>(
   }
   conn.__obligarthLease = outerLease;
   await trx.raw(`RELEASE SAVEPOINT ${SAVEPOINT}`);
-  const encOut = encodeContext(outer);
-  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [encOut.role, encOut.ctx, encOut.sig, LEASE_SEARCH_PATH]);
+  await trx.raw(SET_LOCAL_WITH_ROLE_SQL, [restore[0], restore[1], restore[2], LEASE_SEARCH_PATH]);
   return result;
 }
 

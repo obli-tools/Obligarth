@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Het wachtwoord kan niet alleen uit spaties bestaan. Laat het veld leeg om het wachtwoord te verwijderen."
+    },
+    "reconcileHold": {
+      "help": "De laatste afstemming vond {{count}} van de {{managed}} beheerde apparaten niet bij Google: geen enkel is uit beheer genomen. Controleer eerst de enterprise bij Google; bevestig alleen als deze apparaten echt weg zijn.",
+      "confirm": "{{count}} apparaat/apparaten als verdwenen bevestigen…",
+      "confirmTitle": "Verdwenen apparaten bevestigen",
+      "confirmMessage": "{{count}} apparaat/apparaten uit beheer nemen? Doe dit alleen als ze echt bij Google zijn verwijderd: er wordt een tweede factor gevraagd.",
+      "confirmed": "Bevestiging vastgelegd: de afstemming draait binnen een minuut."
+    }
+  },
   "common": {
     "save": "Opslaan",
     "cancel": "Annuleren",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Kan niet naar deze werkruimte wisselen.",
+    "roleAdministrator": "Beheerder",
+    "roleMember": "Lid",
+    "confirmRoleChange": "{{user}} de rol \"{{role}}\" geven in deze werkruimte?",
+    "roleOf": "Rol van {{user}}",
+    "deleteTitle": "Werkruimte \"{{name}}\" verwijderen",
+    "confirmDeleteTyped": "Al zijn gegevens, inclusief de beheerde apparaten, worden definitief verwijderd. Typ \"{{slug}}\" om te bevestigen.",
+    "deleted": "Werkruimte \"{{name}}\" verwijderd",
     "pageTitle": "Werkruimten",
     "pageDesc": "Beheer werkruimten en hun leden voor multi-tenant implementaties.",
     "create": "Nieuwe werkruimte",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Werkruimte wisselen"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Andere groepen"
+    },
     "tabApiKeys": "API-sleutels",
     "viewDevice": "Apparaat bekijken",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "In gebruik: de beveiligingsinstelling \"Tweede factor op de opdrachten van de Android-agent\" staat aan.",
+      "commandsSensitiveOff": "Niet in gebruik: de beveiligingsinstelling \"Tweede factor op de opdrachten van de Android-agent\" staat uit (Beveiliging, tabblad Beveiligingen)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Fout"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "De op de server opgeslagen versie opnieuw laden? Uw niet-opgeslagen wijzigingen gaan verloren.",
+      "noLongerDraft": "Deze versie is geen concept meer (elders ingediend of gepubliceerd): laad haar opnieuw.",
+      "confirmOverwrite": "Dit concept is door iemand anders gewijzigd sinds u het opende. Uw versie toch opslaan? Diens wijzigingen gaan verloren.",
+      "reviewBeforePublish": "Deze versie is elders gewijzigd: de huidige inhoud wordt nu getoond, controleer die vóór het publiceren.",
+      "changedElsewhere": "Deze versie is elders gewijzigd sinds u haar opende. Opslaan zou die wijzigingen vervangen.",
+      "reloadVersion": "Opnieuw laden",
+      "savedElsewhere": "Dit concept is intussen elders opgeslagen: er is niets opgeslagen. Laad het opnieuw om de andere wijzigingen te zien (die van u gaan dan verloren)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Groep verplaatst, maar de positie tussen de nieuwe zustergroepen kon niet worden opgeslagen",
+    "crossTenantMove": "Een groep blijft in zijn werkruimte: zet hem neer tussen de groepen van dezelfde werkruimte.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Melding verwijderd",
+      "live_alert_cleared": "Meldingen gewist",
+      "sso_sync_delete_blocked": "Verwijdering van het account door Obligate geblokkeerd (nog in gebruik): uitgeschakeld, handmatig verwijderen",
+      "android_mass_missing_confirmed": "Android: massale verdwijning bevestigd",
+      "legacy_agent_package_confirmed": "Door een apparaat teruggestuurde APK bevestigd"
+    },
+    "families": {
+      "legacy_agent": "Android-agent"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Verwijder de toewijzingen van deze app voordat u de platforms wijzigt.",
+    "exportBusy": "Te veel PDF-exports bezig: probeer het zo dadelijk opnieuw.",
+    "exportTooLarge": "Te veel regels voor een PDF-export (maximaal 2000): verfijn de filters of exporteer als CSV of XLSX.",
+    "exportTimeout": "De PDF-export duurde te lang: exporteer als CSV of XLSX, of verfijn de filters.",
+    "tenantHasBridgeDevices": "Deze werkruimte heeft nog {{devices}} apparaat/apparaten ingeschreven met de Android-brugagent: trek die eerst in en verwijder daarna de werkruimte.",
+    "deadLetterAlreadyApplied": "Deze dead letter is al opnieuw toegepast: hij wordt niet twee keer toegepast.",
+    "userHasDependencies": "Dit account wordt nog door andere records gebruikt: schakel het in plaats daarvan uit, of verwijder eerst wat ernaar verwijst.",
+    "invalidConfirmMissing": "De bevestiging moet het exacte aantal vastgehouden apparaten opgeven (een positief geheel getal).",
+    "adminRequired": "Alleen een beheerder van de tenant kan een destructieve opdracht vrijgeven.",
+    "releaseRateLimited": "Te veel destructieve opdrachten vrijgegeven in het afgelopen uur: probeer het later opnieuw.",
+    "policyVersionChanged": "De versie is gewijzigd sinds de voorvertoning: bekijk hem opnieuw.",
+    "twoFactorSetupRequired": "Een tweede factor is vereist: stel eerst een authenticator-app in op uw profiel.",
+    "packageNotConfirmed": "Deze APK is door een apparaat teruggestuurd: bevestig hem op het tabblad Pakketten van de Android-agent voordat u hem installeert.",
+    "capabilityMissing": "Uw team heeft niet de bevoegdheid die deze actie vereist."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Niet toegestaan: u hebt geen schrijfrecht op deze apparaten.",
+      "status": {
+        "governed": "Beheerde wijziging: hernoem via de apparaatkaart"
+      },
+      "governedHint": "Beheerde wijziging: de nieuwe naam zou het apparaat in of uit een dynamische groep brengen waarop een toewijzing is gericht. Hernoem het via de apparaatkaart, waar de impact wordt getoond."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Status",
+      "toConfirm": "Te bevestigen",
+      "toConfirmHint": "Teruggestuurd door een apparaat: kan pas worden geïnstalleerd als een persoon hem bevestigt.",
+      "confirmedState": "Bevestigd",
+      "confirm": "Bevestigen",
+      "confirmTitle": "Deze APK bevestigen",
+      "confirmMessage": "Deze APK ({{packageName}}, {{version}}) is door een apparaat teruggestuurd, niet door een persoon geüpload. Eenmaal bevestigd kan hij op de apparaten van de tenant worden geïnstalleerd.",
+      "confirmCheck": "Controleer vóór het bevestigen of de pakketnaam, de versie en de ondertekenaar de verwachte zijn.",
+      "signerShort": "Ondertekenaar",
+      "confirmed": "APK bevestigd: hij kan nu worden geïnstalleerd.",
+      "fromDevice": "Van het apparaat",
+      "unconfirmedHint": "{{count}} door een apparaat teruggestuurd(e) pakket(ten) moet(en) op het tabblad Pakketten worden bevestigd voordat ze kunnen worden geïnstalleerd."
+    },
+    "awaitingApproval": "Verzoek ter goedkeuring verzonden"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "U mag deze meldingen niet verwijderen: ze worden gedeeld door de tenant."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "App-platforms niet bijgewerkt",
+          "message": "Het contenttoken {{label}} noemt andere platforms voor {{count}} toegewezen app(s): hun platforms blijven behouden zolang ze toewijzingen hebben."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: massale verdwijning bij Google vastgehouden",
+        "message": "Een afstemming vond {{count}} van de {{managed}} beheerde apparaten niet bij Google: geen enkel is uit beheer genomen. Controleer de enterprise en bevestig daarna op de kaart Android Enterprise als ze echt weg zijn."
+      },
+      "google_unreachable": {
+        "title": "Android: Google onbereikbaar",
+        "message": "Obligarth bereikt de Android Management API van Google niet: Android-inschrijvingen, -beleid en -opdrachten wachten."
+      },
+      "google_auth_failed": {
+        "title": "Android: identiteit door Google geweigerd",
+        "message": "Google heeft het serviceaccount geweigerd (sleutel ingetrokken of ontbrekende machtiging): de Android-koppeling is gestopt."
+      },
+      "google_key_expiring": {
+        "title": "Android: sleutel van het serviceaccount verloopt binnenkort",
+        "message": "De sleutel van het Google-serviceaccount verloopt over {{days}} dag(en): vervang hem."
+      },
+      "quota_warning": {
+        "title": "Android: apparaatquotum op 80 %",
+        "message": "{{count}} Android-apparaten in het Google-project: 80 % van het quotum is gebruikt."
+      },
+      "quota_exhausted": {
+        "title": "Android: apparaatquotum bereikt",
+        "message": "{{count}} Android-apparaten: het quotum van het Google-project is bereikt, nieuwe inschrijvingen worden geweigerd."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: melding bij de onbestelbare berichten",
+        "message": "Een Google-melding van tenant {{tenantId}} kon niet worden verwerkt ({{code}}) en is naar de onbestelbare berichten verplaatst."
+      },
+      "retention_risk": {
+        "title": "Android: meldingen dreigen te verlopen",
+        "message": "Al {{days}} dag(en) is geen Google-melding opgehaald: de oudste kunnen verlopen voordat ze worden gelezen."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: berichten van onbekende ondernemingen",
+        "message": "{{lastHour}} Pub/Sub-bericht(en) van het afgelopen uur kwam(en) van ondernemingen die Obligarth niet kent."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: Pub/Sub-testbericht ontbreekt",
+        "message": "Het Pub/Sub-testbericht van de onderneming van tenant {{tenantId}} is niet aangekomen: controleer de machtigingen van het onderwerp."
+      },
+      "ownership_violation": {
+        "title": "Android: aanroep geweigerd door de eigendomscontrole",
+        "message": "Een aanroep naar Google is geweigerd door de eigendomscontrole ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: onderneming van het project niet in het register",
+        "message": "Een onderneming van het Google-project ({{ref}}) staat niet in het register van Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: inschrijvingsterugmeldingen geweigerd",
+        "message": "{{lastHour}} terugmeldingen van ondernemingsinschrijving zijn het afgelopen uur geweigerd."
+      },
+      "domain_claimed": {
+        "title": "Android: inschrijving van een domein dat een andere tenant claimt",
+        "message": "Tenant {{tenantId}} probeerde een onderneming in te schrijven voor een domein dat een andere tenant claimt."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: laatste limiet voor destructieve bewerkingen bereikt",
+        "message": "De laatste limiet voor destructieve Android-bewerkingen is bereikt ({{kind}}, {{count}}): de volgende worden geweigerd."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: onderneming buiten Obligarth ontkoppeld",
+        "message": "De Android-onderneming van deze tenant is buiten Obligarth ontkoppeld: de apparaten worden niet meer beheerd."
+      },
+      "signup_failed": {
+        "title": "Android: inschrijving van de onderneming mislukt",
+        "message": "De inschrijving van de Android-onderneming is mislukt ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: inschrijving van de onderneming onderbroken",
+        "message": "Een inschrijving van een Android-onderneming is voor het einde onderbroken: start haar opnieuw."
+      },
+      "device_api_too_low": {
+        "title": "Android: apparaat onder het minimale API-niveau van zijn profiel",
+        "message": "Een Android-apparaat onder het minimale API-niveau van zijn inschrijvingsprofiel is in quarantaine geplaatst."
+      },
+      "enrollment_spike": {
+        "title": "Android: piek van inschrijvingen op een lang token",
+        "message": "{{perHour}} inschrijvingen in het afgelopen uur op het lange token {{tokenId}}: de volgende kunnen een goedkeuring vereisen."
+      },
+      "policy_push_failed": {
+        "title": "Android: beleid door Google geweigerd",
+        "message": "Google heeft het beleid van apparaat {{deviceId}} geweigerd."
+      },
+      "integrity_compromised": {
+        "title": "Android: integriteit van het apparaat in gevaar",
+        "message": "Apparaat {{deviceId}} is niet door de integriteitscontrole gekomen: het is mogelijk gecompromitteerd."
+      },
+      "device_pending_approval": {
+        "title": "Android: apparaten wachten op goedkeuring",
+        "message": "Er wachten Android-apparaten op hun goedkeuring."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: limiet van inschrijvingen in quarantaine bereikt",
+        "message": "De limiet van Android-inschrijvingen in quarantaine is bereikt: de volgende worden geweigerd."
+      },
+      "device_offline_long": {
+        "title": "Android: apparaten al 240 dagen zonder contact",
+        "message": "{{count}} Android-apparaat/apparaten al 240 dagen zonder contact."
+      },
+      "device_presumed_gone": {
+        "title": "Android: apparaten vermoedelijk verdwenen",
+        "message": "{{count}} Android-apparaat/apparaten vermoedelijk verdwenen (ontbreekt bij Google): bevestig of herstel ze."
+      },
+      "token_expiring": {
+        "title": "Android: lange inschrijvingstokens te vernieuwen",
+        "message": "{{count}} lang(e) inschrijvingstoken(s) verloopt/verlopen binnenkort: vernieuw ze."
+      },
+      "byod_code_flood": {
+        "title": "Android: te veel foute BYOD-uitnodigingscodes",
+        "message": "Meer dan {{perHour}} foute BYOD-uitnodigingscodes in een uur: alle codes van de tenant worden tot het einde van het uur geweigerd."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Inschrijvingen zonder token van deze tenant",
+        "message": "Er zijn Android-apparaten gevonden zonder inschrijvingstoken van deze tenant: controleer de quarantaine."
+      },
+      "ownership_mismatch": {
+        "title": "Eigendom of modus wijkt af van het inschrijvingsprofiel",
+        "message": "Een Android-apparaat heeft zich ingeschreven met een eigendom of modus die het inschrijvingsprofiel niet toestaat: het staat in quarantaine."
+      },
+      "duplicate_serial": {
+        "title": "Serienummer al gebruikt door een beheerd apparaat",
+        "message": "Een Android-apparaat heeft zich ingeschreven met het serienummer van apparaat {{deviceId}}, dat al wordt beheerd."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Bij Google verdwenen Android-apparaten bevestigen",
+      "androidReleaseHeld": "Een vastgehouden Android-opdracht vrijgeven"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Het goedkeuringsverzoek bestaat niet meer.",
+      "batchGone": "De batch wijzigingen is verlopen of al gebruikt: vraag het de agent opnieuw.",
+      "capabilityMissing": "Uw team heeft niet de bevoegdheid die deze actie vereist.",
+      "detachOneByOne": "Een agent kan niet meerdere apparaten tegelijk van hun locatie loskoppelen: koppel ze één voor één los in de console.",
+      "executionFailed": "De goedgekeurde actie is mislukt bij de uitvoering.",
+      "keyInactive": "De toegangssleutel is niet meer actief.",
+      "perimeterLost": "De actie valt nu buiten uw bereik of dat van de sleutel.",
+      "planChanged": "Het plan is gewijzigd sinds de goedkeuring: er is niets toegepast.",
+      "policyChanged": "Het beleid is gewijzigd sinds het verzoek: er is niets toegepast.",
+      "unknownTool": "Onbekend hulpmiddel.",
+      "refusedStatus": "Geweigerd door de console (HTTP {{status}})",
+      "interrupted": "De actie is voor het einde onderbroken: controleer het resultaat voordat u haar opnieuw aanvraagt.",
+      "cancelFailed": "De annulering is nog niet klaar: ze wordt elke minuut opnieuw geprobeerd.",
+      "stepUpRequired": "De actie vereist een recente tweede factor: keur haar opnieuw goed vanuit de console.",
+      "impactChanged": "De impact is veranderd sinds u hem zag: er is niets gedaan."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Tweede factor op de opdrachten van de Android-agent",
+      "legacyAgentCommandsSensitiveHelp": "Een app installeren of verwijderen, de agent bijwerken, een apparaat herstarten en de kiosk ervan opschorten vragen de tweede factor van de persoon die ze verstuurt (console en MCP). Standaard uit. Net als bij de andere instellingen keurt een tweede persoon de wijziging goed.",
+      "pending": "Wijziging wacht op goedkeuring (aanvraag nr. {{id}})",
+      "pendingOpen": "Goedkeuringen openen",
+      "on": "aan",
+      "off": "uit"
     }
   }
 }

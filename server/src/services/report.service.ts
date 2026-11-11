@@ -8,7 +8,7 @@ import { forEachTenant } from '../db/tenantContext';
 import { JobError, SCHEDULED_POLL_SECONDS, registerJob, sanitizeError, type JobContext, type JobHandle, type JobResult } from '../jobs';
 import { logger } from '../utils/logger';
 import { renderReportHtml } from './reportRenderer';
-import { launchChromium } from '../utils/chromium';
+import { inPdfSlot, renderHtmlPdf } from '../mdm/routes/pdfExportLimits';
 import { contactState } from '@obligarth/shared';
 import { privacyRulesFor, type PrivacyRules } from '../apple/devices/privacy';
 import { staleAfterDays } from '../mdm/settings';
@@ -31,6 +31,29 @@ const ERROR_OUTPUT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Cutoff of the sweep of outputs stuck in 'generating' (minutes). */
 const STALE_GENERATING_MINUTES = 60;
 const PURGE_BATCH = 500;
+
+/** How long a report job waits for a free PDF render slot, then renders at
+ *  most (review F013): a rich report is not capped in rows like the device
+ *  export, so its own limit, longer than the console's 60 s; both well within
+ *  the job's own timeout (900 s). */
+export const REPORT_PDF_SLOT_WAIT_MS = 120_000;
+export const REPORT_PDF_RENDER_TIMEOUT_MS = 300_000;
+
+/** A report's HTML rendered to PDF in one of the instance's PDF slots, with
+ *  the report's limits; `signal` (the job's) withdraws it from the queue or
+ *  stops the render. `deps`: the tests' limiter and renderer. */
+export function reportPdf(html: string, opts: {
+  signal?: AbortSignal;
+  deps?: { slot?: typeof inPdfSlot; render?: typeof renderHtmlPdf };
+} = {}): Promise<Buffer> {
+  const slot = opts.deps?.slot ?? inPdfSlot;
+  const render = opts.deps?.render ?? renderHtmlPdf;
+  return slot(() => render(html, {
+    timeoutMs: REPORT_PDF_RENDER_TIMEOUT_MS,
+    timeoutMessage: 'The PDF rendering of the report took too long',
+    signal: opts.signal,
+  }), { waitMs: REPORT_PDF_SLOT_WAIT_MS, signal: opts.signal });
+}
 
 /** The fixed messages an output fails with (never an exception's), by the
  *  stable code the console translates. */
@@ -203,7 +226,7 @@ class ReportService {
           .update({ status: 'error', error_message: OUTPUT_ERRORS.requesterUnavailable }));
         return { output: { skipped: 'no_requester' } };
       }
-      file = await ctx.inTenant(() => this.produceFile(report, visible, () => ctx.throwIfAborted()));
+      file = await ctx.inTenant(() => this.produceFile(report, visible, () => ctx.throwIfAborted(), ctx.signal));
     } catch (err) {
       if (ctx.isLastAttempt || !sanitizeError(err).retryable) {
         await ctx.inTenant(() => db('report_outputs')
@@ -234,7 +257,7 @@ class ReportService {
   /** Renders `report`, on the devices of `visible`, into a new file of the
    *  reports folder; throws on any failure. Its row count is the number of
    *  devices it lists. In the report's tenant context. */
-  private async produceFile(report: any, visible: VisibleDevices, checkpoint: () => void): Promise<{ filePath: string; size: number; rowCount: number }> {
+  private async produceFile(report: any, visible: VisibleDevices, checkpoint: () => void, signal?: AbortSignal): Promise<{ filePath: string; size: number; rowCount: number }> {
     await fs.mkdir(this.outputDir, { recursive: true });
 
     const data = await this.collectData(report, visible);
@@ -252,7 +275,7 @@ class ReportService {
       case 'csv':   content = this.toCSV(data); break;
       case 'html':  content = renderReportHtml(data, report, { tenantName }); break;
       case 'excel': content = await this.toXlsx(data, report); break;
-      case 'pdf':   content = await this.toPdf(data, report, tenantName); break;
+      case 'pdf':   content = await this.toPdf(data, report, tenantName, signal); break;
       default:      content = JSON.stringify(data, null, 2);
     }
     checkpoint();
@@ -314,24 +337,14 @@ class ReportService {
       : s;
   }
 
-  // Render the rich report document to a real PDF via the system Chromium
-  // (launchChromium resolves the executable + container-safe flags — same as
-  // the device PDF export). Returns the PDF bytes; browser always closed.
-  private async toPdf(data: Record<string, any>, report: any, tenantName: string): Promise<Buffer> {
-    const html = renderReportHtml(data, report, { tenantName });
-    const browser = await launchChromium();
-    try {
-      const page = await browser.newPage();
-      await page.setContent(html, { waitUntil: 'domcontentloaded' });
-      const pdf = await page.pdf({
-        format: 'A4', landscape: true,
-        margin: { top: '15mm', bottom: '15mm', left: '10mm', right: '10mm' },
-        printBackground: true,
-      });
-      return Buffer.from(pdf);
-    } finally {
-      await browser.close();
-    }
+  // Render the rich report document to a real PDF via the system Chromium,
+  // through the render slots of the instance shared with the device PDF
+  // export (review F013, mdm/routes/pdfExportLimits.ts): PDF_MAX_RENDERS at
+  // once over both, REPORT_PDF_RENDER_TIMEOUT_MS at most, the browser always closed.
+  // A report job waits a while for a slot; still busy, it fails retryable and
+  // the job runner tries it again later. Its own time limit (reportPdf).
+  private async toPdf(data: Record<string, any>, report: any, tenantName: string, signal?: AbortSignal): Promise<Buffer> {
+    return reportPdf(renderReportHtml(data, report, { tenantName }), { signal });
   }
 
   // Excel worksheet name rules: <=31 chars, none of []:*?/\, and unique

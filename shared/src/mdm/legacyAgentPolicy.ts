@@ -176,9 +176,27 @@ export function isIntentUriWellFormed(uri: unknown): boolean {
  * Does an intent URI reach what a kiosk tile must never reach (case-insensitive)? The agent's package named anywhere
  * (component=, package=, a selector…), a selector at all (SEL;), launch flags (set by the agent only), a browser
  * fallback URL, and a file or content data scheme (in the scheme= extra or as the data before '#').
+ * Android (Intent.parseUri) decodes the %XX sequences of names and values, so every check runs on the raw text and on
+ * each percent-decoded form of it ('tools.obli.obligarth%2Eagent', 'scheme=%66ile' are caught).
  */
 export function isUnsafeIntentUri(uri: string): boolean {
-  const u = uri.toLowerCase();
+  let u = uri.toLowerCase();
+  for (let i = 0; i < 4; i++) {
+    if (isUnsafeIntentText(u)) return true;
+    const d = percentDecodeAscii(u);
+    if (d === u) return false;
+    u = d.toLowerCase();
+  }
+  // Still changing after four decodings: nothing a legitimate tile needs.
+  return true;
+}
+
+/** Decodes every %XX sequence into the character of that byte (enough for the ASCII checks of isUnsafeIntentText). */
+function percentDecodeAscii(s: string): string {
+  return s.replace(/%([0-9a-f]{2})/gi, (_m, h: string) => String.fromCharCode(parseInt(h, 16)));
+}
+
+function isUnsafeIntentText(u: string): boolean {
   if (u.includes(LEGACY_AGENT_RESERVED_PACKAGE)) return true;
   if (u.includes(';sel;') || u.includes('#intent;sel;')) return true;
   if (u.includes('launchflags=')) return true;

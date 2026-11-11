@@ -9,7 +9,10 @@ import { handleRpc } from './transport';
 // database context of the console, the step-up capture and the API limiter: no
 // session can be read nor written here, no cookie is set. In order:
 //   0. Cache-Control: no-store on every answer;
-//   1. the IP gate (blocks, strict mode; memory only);
+//   1. the IP gate (blocks, strict mode; memory only): it refuses whatever the
+//      request, but a strict-mode block is decided only for an attempt of an
+//      MCP client (POST, no Origin, a key presented), never for a request a
+//      web page can make a visitor send (auth.ts isMcpAttempt);
 //   2. the Origin guard (DNS rebinding): an Origin other than the console's is
 //      refused; command-line clients send none; no CORS header is emitted;
 //   3. POST only (GET and DELETE: 405 Allow: POST; stateless, no SSE stream);

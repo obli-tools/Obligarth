@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Hasło nie może składać się wyłącznie ze spacji. Pozostaw pole puste, aby usunąć hasło."
+    },
+    "reconcileHold": {
+      "help": "Ostatnie uzgodnienie nie znalazło w Google {{count}} z {{managed}} zarządzanych urządzeń: żadne nie zostało wyłączone z zarządzania. Najpierw sprawdź przedsiębiorstwo w Google; potwierdź tylko, jeśli te urządzenia naprawdę zniknęły.",
+      "confirm": "Potwierdź zniknięcie urządzeń ({{count}})…",
+      "confirmTitle": "Potwierdź zniknięte urządzenia",
+      "confirmMessage": "Wyłączyć z zarządzania urządzenia ({{count}})? Zrób to tylko, jeśli naprawdę usunięto je w Google: wymagany jest drugi składnik.",
+      "confirmed": "Potwierdzenie zapisane: uzgodnienie zostanie wykonane w ciągu minuty."
+    }
+  },
   "common": {
     "save": "Zapisz",
     "cancel": "Anuluj",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Nie można przełączyć na tę przestrzeń roboczą.",
+    "roleAdministrator": "Administrator",
+    "roleMember": "Członek",
+    "confirmRoleChange": "Nadać użytkownikowi {{user}} rolę „{{role}}” w tej przestrzeni roboczej?",
+    "roleOf": "Rola użytkownika {{user}}",
+    "deleteTitle": "Usuń przestrzeń roboczą „{{name}}”",
+    "confirmDeleteTyped": "Wszystkie jej dane, łącznie z zarządzanymi urządzeniami, zostaną trwale usunięte. Wpisz „{{slug}}”, aby potwierdzić.",
+    "deleted": "Przestrzeń robocza „{{name}}” została usunięta",
     "pageTitle": "Przestrzenie robocze",
     "pageDesc": "Zarządzaj przestrzeniami roboczymi i ich członkami w środowiskach wielodostępnych.",
     "create": "Nowa przestrzeń robocza",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Zmień przestrzeń roboczą"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Inne grupy"
+    },
     "tabApiKeys": "Klucze API",
     "viewDevice": "Zobacz urządzenie",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "W użyciu: ustawienie ochrony „Drugi składnik dla poleceń agenta Android” jest włączone.",
+      "commandsSensitiveOff": "Nieużywane: ustawienie ochrony „Drugi składnik dla poleceń agenta Android” jest wyłączone (Bezpieczeństwo, karta Zabezpieczenia)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Błąd"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Wczytać ponownie wersję zapisaną na serwerze? Niezapisane zmiany zostaną utracone.",
+      "noLongerDraft": "Ta wersja nie jest już szkicem (została przesłana lub opublikowana gdzie indziej): wczytaj ją ponownie.",
+      "confirmOverwrite": "Ten szkic został zmieniony przez kogoś innego od czasu jego otwarcia. Mimo to zapisać Twoją wersję? Jego zmiany zostaną utracone.",
+      "reviewBeforePublish": "Ta wersja została zmieniona gdzie indziej: wyświetlana jest teraz jej bieżąca treść, sprawdź ją przed publikacją.",
+      "changedElsewhere": "Ta wersja została zmieniona gdzie indziej od czasu jej otwarcia. Zapisanie zastąpiłoby te zmiany.",
+      "reloadVersion": "Wczytaj ponownie",
+      "savedElsewhere": "Ten szkic został w międzyczasie zapisany gdzie indziej: nic nie zapisano. Wczytaj go ponownie, aby zobaczyć inne zmiany (Twoje zostaną utracone)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Grupa przeniesiona, ale nie udało się zapisać jej pozycji wśród nowych grup sąsiednich",
+    "crossTenantMove": "Grupa pozostaje w swojej przestrzeni roboczej: upuść ją wśród grup tej samej przestrzeni.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Powiadomienie usunięte",
+      "live_alert_cleared": "Powiadomienia wyczyszczone",
+      "sso_sync_delete_blocked": "Usunięcie konta przez Obligate zablokowane (nadal przywoływane): wyłączone, usuń ręcznie",
+      "android_mass_missing_confirmed": "Android: masowe zniknięcie potwierdzone",
+      "legacy_agent_package_confirmed": "Potwierdzono APK odesłany przez urządzenie"
+    },
+    "families": {
+      "legacy_agent": "Agent Android"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Usuń przypisania tej aplikacji przed zmianą jej platform.",
+    "exportBusy": "Zbyt wiele trwających eksportów PDF: spróbuj ponownie za chwilę.",
+    "exportTooLarge": "Zbyt wiele wierszy dla eksportu PDF (najwyżej 2000): zawęź filtry albo wyeksportuj jako CSV lub XLSX.",
+    "exportTimeout": "Eksport PDF trwał zbyt długo: wyeksportuj jako CSV lub XLSX albo zawęź filtry.",
+    "tenantHasBridgeDevices": "Ta przestrzeń ma jeszcze {{devices}} urządzeń zarejestrowanych z agentem mostu Android: najpierw je odwołaj, potem usuń przestrzeń.",
+    "deadLetterAlreadyApplied": "Ta martwa wiadomość została już ponownie zastosowana: nie jest stosowana dwa razy.",
+    "userHasDependencies": "To konto jest nadal przywoływane przez inne rekordy: zamiast tego je wyłącz albo najpierw usuń to, co się do niego odwołuje.",
+    "invalidConfirmMissing": "Potwierdzenie musi podawać dokładną liczbę wstrzymanych urządzeń (dodatnia liczba całkowita).",
+    "adminRequired": "Tylko administrator dzierżawy może zwolnić polecenie niszczące.",
+    "releaseRateLimited": "Zbyt wiele poleceń niszczących zwolnionych w ciągu ostatniej godziny: spróbuj ponownie później.",
+    "policyVersionChanged": "Wersja zmieniła się od podglądu: przejrzyj ją ponownie.",
+    "twoFactorSetupRequired": "Wymagany jest drugi składnik: najpierw skonfiguruj aplikację uwierzytelniającą w swoim profilu.",
+    "packageNotConfirmed": "Ten plik APK został odesłany przez urządzenie: potwierdź go na karcie Pakiety agenta Android przed instalacją.",
+    "capabilityMissing": "Twój zespół nie ma uprawnienia wymaganego przez tę akcję."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Niedozwolone: nie masz prawa zapisu do tych urządzeń.",
+      "status": {
+        "governed": "Zmiana nadzorowana: zmień nazwę w karcie urządzenia"
+      },
+      "governedHint": "Zmiana nadzorowana: nowa nazwa przeniosłaby urządzenie do grupy dynamicznej objętej przypisaniem lub z niej. Zmień nazwę w karcie urządzenia, gdzie widać podgląd skutków."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Stan",
+      "toConfirm": "Do potwierdzenia",
+      "toConfirmHint": "Odesłany przez urządzenie: nie można go zainstalować, dopóki osoba go nie potwierdzi.",
+      "confirmedState": "Potwierdzony",
+      "confirm": "Potwierdź",
+      "confirmTitle": "Potwierdź ten plik APK",
+      "confirmMessage": "Ten plik APK ({{packageName}}, {{version}}) został odesłany przez urządzenie, a nie przesłany przez osobę. Po potwierdzeniu można go instalować na urządzeniach dzierżawy.",
+      "confirmCheck": "Przed potwierdzeniem sprawdź, czy nazwa pakietu, wersja i podpisujący są zgodne z oczekiwaniami.",
+      "signerShort": "Podpisujący",
+      "confirmed": "Plik APK potwierdzony: można go teraz instalować.",
+      "fromDevice": "Z urządzenia",
+      "unconfirmedHint": "Pakiety odesłane przez urządzenie ({{count}}) trzeba potwierdzić na karcie Pakiety, zanim będzie można je zainstalować."
+    },
+    "awaitingApproval": "Wysłano wniosek do zatwierdzenia"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Nie masz uprawnień do usuwania tych powiadomień: są współdzielone przez dzierżawę."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Platformy aplikacji nie zostały zaktualizowane",
+          "message": "Token treści {{label}} wskazuje inne platformy dla {{count}} przypisanych aplikacji: ich platformy są zachowane, dopóki mają przypisania."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: masowe zniknięcie w Google wstrzymane",
+        "message": "Uzgodnienie nie znalazło w Google {{count}} z {{managed}} zarządzanych urządzeń: żadne nie zostało wyłączone z zarządzania. Sprawdź przedsiębiorstwo, a potem potwierdź na karcie Android Enterprise, jeśli naprawdę zniknęły."
+      },
+      "google_unreachable": {
+        "title": "Android: Google nieosiągalny",
+        "message": "Obligarth nie może połączyć się z Android Management API Google: rejestracje, zasady i polecenia Android czekają."
+      },
+      "google_auth_failed": {
+        "title": "Android: tożsamość odrzucona przez Google",
+        "message": "Google odrzucił konto usługi (unieważniony klucz lub brak uprawnienia): połączenie Android jest zatrzymane."
+      },
+      "google_key_expiring": {
+        "title": "Android: klucz konta usługi wkrótce wygaśnie",
+        "message": "Klucz konta usługi Google wygaśnie za {{days}} dni: wymień go."
+      },
+      "quota_warning": {
+        "title": "Android: limit urządzeń na poziomie 80 %",
+        "message": "Urządzenia Android w projekcie Google: {{count}}. Wykorzystano 80 % limitu."
+      },
+      "quota_exhausted": {
+        "title": "Android: osiągnięto limit urządzeń",
+        "message": "Urządzenia Android: {{count}}. Osiągnięto limit projektu Google, nowe rejestracje są odrzucane."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: powiadomienie wśród martwych wiadomości",
+        "message": "Powiadomienia Google dzierżawy {{tenantId}} nie udało się przetworzyć ({{code}}) i zostało przeniesione do martwych wiadomości."
+      },
+      "retention_risk": {
+        "title": "Android: powiadomienia zagrożone wygaśnięciem",
+        "message": "Od {{days}} dni nie pobrano żadnego powiadomienia Google: najstarsze mogą wygasnąć przed odczytaniem."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: wiadomości nieznanych firm",
+        "message": "Wiadomości Pub/Sub z ostatniej godziny od firm nieznanych Obligarth: {{lastHour}}."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: brak wiadomości testowej Pub/Sub",
+        "message": "Wiadomość testowa Pub/Sub firmy dzierżawy {{tenantId}} nie dotarła: sprawdź uprawnienia tematu."
+      },
+      "ownership_violation": {
+        "title": "Android: wywołanie odrzucone przez kontrolę przynależności",
+        "message": "Wywołanie Google zostało odrzucone przez kontrolę przynależności ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: firma projektu nieobecna w rejestrze",
+        "message": "Firma projektu Google ({{ref}}) nie znajduje się w rejestrze Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: odrzucone wywołania zwrotne rejestracji",
+        "message": "Odrzucone w ostatniej godzinie wywołania zwrotne rejestracji firmy: {{lastHour}}."
+      },
+      "domain_claimed": {
+        "title": "Android: rejestracja domeny zajętej przez inną dzierżawę",
+        "message": "Dzierżawa {{tenantId}} próbowała zarejestrować firmę dla domeny zajętej przez inną dzierżawę."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: osiągnięto ostateczny limit operacji niszczących",
+        "message": "Osiągnięto ostateczny limit niszczących operacji Android ({{kind}}, {{count}}): kolejne są odrzucane."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: firma odłączona poza Obligarth",
+        "message": "Firma Android tej dzierżawy została odłączona poza Obligarth: jej urządzenia nie są już zarządzane."
+      },
+      "signup_failed": {
+        "title": "Android: rejestracja firmy nie powiodła się",
+        "message": "Rejestracja firmy Android nie powiodła się ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: rejestracja firmy przerwana",
+        "message": "Rejestracja firmy Android została przerwana przed końcem: uruchom ją ponownie."
+      },
+      "device_api_too_low": {
+        "title": "Android: urządzenie poniżej minimalnego poziomu API profilu",
+        "message": "Urządzenie Android poniżej minimalnego poziomu API swojego profilu rejestracji zostało poddane kwarantannie."
+      },
+      "enrollment_spike": {
+        "title": "Android: szczyt rejestracji na długim tokenie",
+        "message": "Rejestracje w ostatniej godzinie na długim tokenie {{tokenId}}: {{perHour}}. Kolejne mogą wymagać zatwierdzenia."
+      },
+      "policy_push_failed": {
+        "title": "Android: zasady odrzucone przez Google",
+        "message": "Google odrzucił zasady urządzenia {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: integralność urządzenia zagrożona",
+        "message": "Urządzenie {{deviceId}} nie przeszło kontroli integralności: może być naruszone."
+      },
+      "device_pending_approval": {
+        "title": "Android: urządzenia czekają na zatwierdzenie",
+        "message": "Urządzenia Android czekają na zatwierdzenie."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: osiągnięto limit rejestracji w kwarantannie",
+        "message": "Osiągnięto limit rejestracji Android w kwarantannie: kolejne są odrzucane."
+      },
+      "device_offline_long": {
+        "title": "Android: urządzenia bez kontaktu od 240 dni",
+        "message": "Urządzenia Android bez kontaktu od 240 dni: {{count}}."
+      },
+      "device_presumed_gone": {
+        "title": "Android: urządzenia prawdopodobnie zaginione",
+        "message": "Urządzenia Android prawdopodobnie zaginione (nieobecne w Google): {{count}}. Potwierdź je lub przywróć."
+      },
+      "token_expiring": {
+        "title": "Android: długie tokeny rejestracji do odnowienia",
+        "message": "Długie tokeny rejestracji wkrótce wygasną: {{count}}. Odnów je."
+      },
+      "byod_code_flood": {
+        "title": "Android: zbyt wiele błędnych kodów zaproszeń BYOD",
+        "message": "Ponad {{perHour}} błędnych kodów zaproszeń BYOD w ciągu godziny: wszystkie kody dzierżawy są odrzucane do końca godziny."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Rejestracje bez tokenu tej dzierżawy",
+        "message": "Znaleziono urządzenia Android bez tokenu rejestracji tej dzierżawy: sprawdź kwarantannę."
+      },
+      "ownership_mismatch": {
+        "title": "Własność lub tryb inny niż w profilu rejestracji",
+        "message": "Urządzenie Android zarejestrowało się z własnością lub trybem, na które nie pozwala jego profil rejestracji: jest w kwarantannie."
+      },
+      "duplicate_serial": {
+        "title": "Numer seryjny używany już przez zarządzane urządzenie",
+        "message": "Urządzenie Android zarejestrowało się z numerem seryjnym urządzenia {{deviceId}}, które jest już zarządzane."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Potwierdź urządzenia Android zniknięte w Google",
+      "androidReleaseHeld": "Zwolnij wstrzymane polecenie Android"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Wniosek o zatwierdzenie już nie istnieje.",
+      "batchGone": "Pakiet zmian wygasł lub został już użyty: poproś agenta ponownie.",
+      "capabilityMissing": "Twój zespół nie ma uprawnienia wymaganego przez tę akcję.",
+      "detachOneByOne": "Agent nie może odłączyć kilku urządzeń od ich lokalizacji naraz: odłącz je po kolei w konsoli.",
+      "executionFailed": "Zatwierdzona akcja nie powiodła się podczas wykonania.",
+      "keyInactive": "Klucz dostępu nie jest już aktywny.",
+      "perimeterLost": "Akcja wykracza teraz poza Twój zakres lub zakres klucza.",
+      "planChanged": "Plan zmienił się od zatwierdzenia: nic nie zastosowano.",
+      "policyChanged": "Zasada zmieniła się od wniosku: nic nie zastosowano.",
+      "unknownTool": "Nieznane narzędzie.",
+      "refusedStatus": "Odrzucone przez konsolę (HTTP {{status}})",
+      "interrupted": "Akcja została przerwana przed końcem: sprawdź jej wynik, zanim poprosisz o nią ponownie.",
+      "cancelFailed": "Anulowanie jeszcze się nie zakończyło: jest ponawiane co minutę.",
+      "stepUpRequired": "Akcja wymaga świeżego drugiego składnika: zatwierdź ją ponownie w konsoli.",
+      "impactChanged": "Wpływ zmienił się, odkąd go widziałeś: nic nie zostało wykonane."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Drugi składnik dla poleceń agenta Android",
+      "legacyAgentCommandsSensitiveHelp": "Instalacja lub odinstalowanie aplikacji, aktualizacja agenta, ponowne uruchomienie urządzenia i wstrzymanie jego kiosku wymagają drugiego składnika osoby, która je wysyła (konsola i MCP). Domyślnie wyłączone. Jak w przypadku innych ustawień, zmianę zatwierdza druga osoba.",
+      "pending": "Zmiana czeka na zatwierdzenie (wniosek nr {{id}})",
+      "pendingOpen": "Otwórz zatwierdzenia",
+      "on": "włączone",
+      "off": "wyłączone"
     }
   }
 }

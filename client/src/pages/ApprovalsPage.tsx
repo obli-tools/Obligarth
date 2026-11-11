@@ -14,7 +14,7 @@ import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
 import { isStepUpHandled } from '@/api/client';
 import { guardErrorMessage } from '@/components/guard/GuardedActionDialog';
 import { POLICY_PUBLISH_REQUEST_TYPE, PolicyPublishSummary } from '@/components/mdm/PolicyPublishRequest';
-import { translateErrorCode } from '@/utils/apiError';
+import { executionErrorText, translateErrorCode } from '@/utils/apiError';
 
 // 2-step approval review page. Shows pending destructive-command requests
 // waiting for a second admin's approval. Self-requests (current user is
@@ -295,12 +295,12 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  // with the reason.
  if (done?.status === 'approved' && done.executionError) {
  toast.error(t('approvals.executionFailedToast', {
- error: done.executionError,
+ error: executionErrorText(done.executionError),
  defaultValue: 'Approved, but the action could not be executed: {{error}}',
  }), { duration: 8000 });
  } else if (done?.status === 'executed' && done.executionError) {
  toast(t('approvals.partialToast', {
- error: done.executionError,
+ error: executionErrorText(done.executionError),
  defaultValue: 'Approved and executed in part: {{error}}',
  }), { duration: 8000 });
  } else {
@@ -456,8 +456,8 @@ export function ApprovalsPage({ embedded = false }: { embedded?: boolean } = {})
  {a.executionError && (
  <p className={clsx('text-[11px] mt-1 break-words', a.status === 'executed' ? 'text-orange-400' : 'text-red-400')}>
  {a.status === 'executed'
- ? t('approvals.partialExecution', { error: a.executionError, defaultValue: 'Executed in part: {{error}}' })
- : t('approvals.notExecuted', { error: a.executionError, defaultValue: 'Approved but not executed: {{error}}' })}
+ ? t('approvals.partialExecution', { error: executionErrorText(a.executionError), defaultValue: 'Executed in part: {{error}}' })
+ : t('approvals.notExecuted', { error: executionErrorText(a.executionError), defaultValue: 'Approved but not executed: {{error}}' })}
  </p>
  )}
  </div>

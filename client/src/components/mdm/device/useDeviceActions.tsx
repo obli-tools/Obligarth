@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import type {
   AndroidDeviceAction, DeviceDetail, LegacyAgentDeviceAction, ManagementChannel, MdmDeviceAction,
@@ -112,21 +112,26 @@ export function useDeviceActions(device: DeviceDetail | null, { canAct, onQueued
   const [error, setError] = useState<string | null>(null);
   const [queue, setQueue] = useState<{ types: string[]; more: boolean } | null>(null);
 
+  // Only the answers of the latest load land: a late answer of the device shown before (the page reuses this hook
+  // from one device to the next) or of an older load must not refill the menus and the queue.
+  const loadSeqRef = useRef(0);
   const load = useCallback(() => {
+    const seq = ++loadSeqRef.current;
     if (!deviceId) return;
+    const current = () => seq === loadSeqRef.current;
     const fail = (err: unknown) => setError(apiErrorMessage(err));
-    if (channel === 'apple_mdm') appleApi.actions(deviceId).then((a) => { setApple(a); setError(null); }).catch((err) => { setApple([]); fail(err); });
-    else if (channel === 'amapi') androidApi.actions(deviceId).then((a) => { setAndroid(a); setError(null); }).catch((err) => { setAndroid([]); fail(err); });
-    else legacyAgentApi.actions(deviceId).then((a) => { setLegacy(a); setError(null); }).catch((err) => { setLegacy([]); fail(err); });
+    if (channel === 'apple_mdm') appleApi.actions(deviceId).then((a) => { if (current()) { setApple(a); setError(null); } }).catch((err) => { if (current()) { setApple([]); fail(err); } });
+    else if (channel === 'amapi') androidApi.actions(deviceId).then((a) => { if (current()) { setAndroid(a); setError(null); } }).catch((err) => { if (current()) { setAndroid([]); fail(err); } });
+    else legacyAgentApi.actions(deviceId).then((a) => { if (current()) { setLegacy(a); setError(null); } }).catch((err) => { if (current()) { setLegacy([]); fail(err); } });
     // The Apple queue carries the Android Enterprise commands too (lot AN-D); the agent has its own.
     if (channel === 'legacy_agent') {
       legacyAgentApi.deviceCommands(deviceId)
-        .then((rows) => setQueue({ types: rows.filter((c) => c.state === 'pending' || c.state === 'sent').map((c) => c.type), more: false }))
-        .catch(() => setQueue(null));
+        .then((rows) => { if (current()) setQueue({ types: rows.filter((c) => c.state === 'pending' || c.state === 'sent').map((c) => c.type), more: false }); })
+        .catch(() => { if (current()) setQueue(null); });
     } else {
       appleApi.deviceQueue(deviceId, { state: 'open' })
-        .then((r) => setQueue({ types: r.items.map((i) => i.requestType), more: r.nextCursor !== null }))
-        .catch(() => setQueue(null));
+        .then((r) => { if (current()) setQueue({ types: r.items.map((i) => i.requestType), more: r.nextCursor !== null }); })
+        .catch(() => { if (current()) setQueue(null); });
     }
   }, [deviceId, channel]);
 
@@ -136,6 +141,8 @@ export function useDeviceActions(device: DeviceDetail | null, { canAct, onQueued
   const ownership = device?.ownership;
   const supervised = device?.supervised;
   useEffect(() => {
+    // Another device: whatever is still in flight for the previous one is dropped.
+    loadSeqRef.current++;
     setApple(null); setAndroid(null); setLegacy(null); setError(null); setQueue(null);
   }, [deviceId, channel]);
   useEffect(() => { load(); }, [load, lostModeState, enrollmentState, ownership, supervised]);

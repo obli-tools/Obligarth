@@ -3,9 +3,13 @@ import { createReadStream } from 'node:fs';
 import { appendFile, mkdir, open, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { LEGACY_AGENT_PACKAGE, LEGACY_AGENT_PULL_CHUNK_BYTES } from '@obligarth/shared';
+import type { Knex } from 'knex';
 import { z } from 'zod';
 import { audit } from '../audit';
 import { LEGACY_AGENT_ACTOR } from './actor';
+import { ApkManifestError, apkManifestOfFile, type ApkManifest } from './apkManifest';
+import { ApkFormatError, apkSignersOfFile, type ApkSigners } from './apkSigner';
+import { pulledVerdict, type PulledVerdict } from './pulledApk';
 import { apkDir, MAX_APK_BYTES } from './config';
 import { withAgentTransaction } from './session';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
@@ -18,10 +22,16 @@ import { errorReply, type AgentIdentity, type Exchange, type Reply } from './sur
 // CUSTOM_DIR/agent-apk/.pull-<commandId> (an offset other than the size
 // received so far is answered with that size, the agent resumes there). The
 // last chunk closes it: the size and the SHA-256 announced must hold and the
-// file must be a ZIP archive, then it joins the store by content and becomes
-// a package of the tenant (created by the author of the command, none for the
-// harvest job; its source device kept; audited legacy_agent.package_pulled). The command's result comes by /poll (pulled).
-// The packageName stored is the command's, never the body's.
+// file must be a ZIP archive whose own manifest names the command's package and
+// the versionCode declared, signed by one certificate (pulledApk.ts: the one
+// the tenant already holds for that package, if any); then it joins the store
+// by content and becomes a package of the tenant (created by the author of the
+// command, none for the harvest job; its source device kept; audited
+// legacy_agent.package_pulled). The command's result comes by /poll (pulled).
+// The packageName stored is the command's, the versionCode and the signer the
+// ones read in the file, never the body's (review F028). The package is "to
+// confirm" (confirmed_at NULL): no app.install of it until a holder of
+// mdm.apps.manage confirms it (POST /api/legacy-agent/packages/:id/confirm).
 // =============================================================================
 
 const SHA_RE = /^[0-9a-f]{64}$/;
@@ -70,6 +80,27 @@ async function isZip(file: string): Promise<boolean> {
   }
 }
 
+/** The manifest and the signer of a pulled file, judged against the command and the tenant's packages of that name. */
+async function checkPulledApk(trx: Knex.Transaction, tenantId: number, file: string, packageName: string, b: z.infer<typeof PullBody>):
+  Promise<PulledVerdict> {
+  let manifest: ApkManifest;
+  let signers: ApkSigners;
+  try {
+    manifest = await apkManifestOfFile(file);
+    signers = await apkSignersOfFile(file);
+  } catch (err) {
+    if (err instanceof ApkManifestError || err instanceof ApkFormatError) return { ok: false, error: `This file is not a readable APK (${err.message})`.slice(0, 200) };
+    throw err;
+  }
+  // Review F028 (round 3): only the confirmed packages bind the signer; a package still to confirm (sent back by a
+  // device, perhaps a forged one) never locks out the later pulls of the genuine app.
+  const held = await trx('legacy_agent_packages').where({ tenant_id: tenantId, package_name: packageName }).whereNotNull('signer_sha256')
+    .whereNotNull('confirmed_at').pluck('signer_sha256') as string[];
+  const v = pulledVerdict(manifest, signers, packageName, { versionCode: b.versionCode, signerSha256: b.signerSha256 ?? null }, held);
+  // The versionName is a label (a resource reference in some manifests): the device's when the manifest has none.
+  return v.ok ? { ...v, versionName: v.versionName ?? b.versionName ?? null } : v;
+}
+
 export async function handlePull(who: AgentIdentity, ex: Exchange, commandId: string, raw: Buffer): Promise<Reply> {
   let json: unknown;
   try { json = JSON.parse(raw.toString('utf8')); } catch { return errorReply(400, 'badRequest', 'Malformed JSON'); }
@@ -105,6 +136,12 @@ export async function handlePull(who: AgentIdentity, ex: Exchange, commandId: st
       await unlink(part).catch(() => undefined);
       return errorReply(400, 'badRequest', sha !== b.sha256 ? 'The SHA-256 of the file does not match' : 'This file is not an APK (ZIP archive)');
     }
+    // Review F028: what the package is comes from the file, never from the device: its manifest and its signing block.
+    const checked = await checkPulledApk(trx, who.tenantId, part, packageName, b);
+    if (!checked.ok) {
+      await unlink(part).catch(() => undefined);
+      return errorReply(400, 'badRequest', checked.error);
+    }
     const final = path.join(apkDir(), `${sha}.apk`);
     if ((await sizeOf(final)) === b.total) await unlink(part).catch(() => undefined);
     else await rename(part, final);
@@ -112,14 +149,15 @@ export async function handlePull(who: AgentIdentity, ex: Exchange, commandId: st
     let row = await trx('legacy_agent_packages').where({ tenant_id: who.tenantId, sha256: sha }).first('id') as { id: string } | undefined;
     if (!row) {
       [row] = await trx('legacy_agent_packages').insert({
-        tenant_id: who.tenantId, package_name: packageName, version_code: b.versionCode, version_name: b.versionName ?? null, sha256: sha,
-        size_bytes: b.total, signer_sha256: b.signerSha256 ?? null, label: null, created_by: cmd.requested_by ?? null,
+        tenant_id: who.tenantId, package_name: packageName, version_code: checked.versionCode, version_name: checked.versionName, sha256: sha,
+        size_bytes: b.total, signer_sha256: checked.signerSha256, label: null, created_by: cmd.requested_by ?? null,
         source_device_id: who.deviceId,
       }).returning('id') as Array<{ id: string }>;
       const ctx = await audit.fromDbActor(LEGACY_AGENT_ACTOR, who.tenantId);
       await audit.appendInTx(trx, {
         tenantId: who.tenantId, action: 'legacy_agent.package_pulled', target: { type: 'legacy_agent_package', id: String(row.id) },
-        links: { command: commandId }, details: { packageName, versionCode: b.versionCode, sha256: sha, size: b.total, deviceId: who.deviceId },
+        links: { command: commandId },
+        details: { packageName, versionCode: checked.versionCode, sha256: sha, size: b.total, deviceId: who.deviceId, signerSha256: checked.signerSha256, confirmed: false },
       }, ctx, { onFailure: 'spool' });
     }
     return { status: 200, body: { received, complete: true, packageId: String(row.id) } };

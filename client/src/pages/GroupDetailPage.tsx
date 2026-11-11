@@ -51,6 +51,10 @@ export function GroupDetailPage() {
  loadData();
  }, [groupId]);
 
+ // The store's tree gives the subgroups (delete check) and the ancestors (inherited grants): read it fresh
+ // (the side panel keeps its own copy, and the server emits no group event).
+ useEffect(() => { void fetchTree(); }, [groupId, fetchTree]);
+
  if (loading && !group) {
  return (
  <div className="flex h-full items-center justify-center">

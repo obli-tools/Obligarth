@@ -3,7 +3,8 @@ import { db } from '../db';
 import { audit, type AuditWriteContext } from '../audit';
 import { AppError } from '../middleware/errorHandler';
 import { lockTenantConfiguration } from '../mdm/policies/configLock';
-import { MDM_STALE_AFTER_DAYS_DEFAULT, isMasterTenant } from '@obligarth/shared';
+import { MASTER_TENANT_ID, MDM_STALE_AFTER_DAYS_DEFAULT, SocketEvents, isMasterTenant } from '@obligarth/shared';
+import { getIO } from '../socket';
 import type { DeviceGroup, DeviceGroupTreeNode, DeviceGroupConfig, MetricThresholds } from '@obligarth/shared';
 import type { TenantView } from './deviceScope.service';
 
@@ -502,3 +503,70 @@ export const groupService = {
     return row ? rowToGroup(row) : null;
   },
 };
+
+// ── Live updates of the tree ────────────────────────────────────────────────
+// GROUP_CREATED / GROUP_UPDATED / GROUP_MOVED / GROUP_DELETED, once the change is committed (review F073, F075,
+// F077): the other consoles of the tenant follow the tree. `tenant:<id>` is joined by every member, and a member
+// restricted by its teams does not read every group (groupsController.list/tree filter them): the full group goes
+// to the tenant's admin room only; the other members get the identifiers only ({ group: { id, tenantId } }, the
+// sort order for a reorder), enough for the client to read its own filtered tree again. A creation reaches them as
+// GROUP_UPDATED: an identifier alone must not be added to their store as a group (the client's GROUP_CREATED adds
+// data.group as is; GROUP_UPDATED only merges into a group it already knows).
+// The global view (second round of the review): every change of a tenant other than the master is echoed to the
+// master tenant's admin room (platform administrators), whoever made it and however (directly, from the global view,
+// or after an approval), with the identifiers only, as GROUP_UPDATED (GROUP_DELETED for a deletion): a group of
+// another tenant is never added as such to the store of an administrator who is not in the global view.
+
+export type GroupChangeKind = 'created' | 'updated' | 'moved' | 'deleted' | 'reordered';
+
+export interface GroupEmission {
+  room: string;
+  /** Rooms excluded from `room` (a socket of the admin room gets the full event instead). */
+  except?: string;
+  event: string;
+  payload: Record<string, unknown>;
+}
+
+/** The emissions of one change of the tree (pure: what announceGroupChange sends). `group` is the full group for
+ *  created, updated and moved; for deleted and reordered, the identifiers (and sortOrder) suffice. */
+export function groupChangeEmissions(kind: GroupChangeKind, tenantId: number,
+  group: DeviceGroup | { id: number; sortOrder?: number }, extra: { groupIds?: number[] } = {}): GroupEmission[] {
+  const members = `tenant:${tenantId}`;
+  const admins = `tenant:${tenantId}:admin`;
+  const echo = isMasterTenant(tenantId) ? null : `tenant:${MASTER_TENANT_ID}:admin`;
+  const out: GroupEmission[] = [];
+  if (kind === 'deleted') {
+    const payload = { groupId: group.id, tenantId };
+    out.push({ room: members, event: SocketEvents.GROUP_DELETED, payload });
+    if (echo) out.push({ room: echo, event: SocketEvents.GROUP_DELETED, payload });
+    return out;
+  }
+  if (kind === 'reordered') {
+    const payload = {
+      group: { id: group.id, tenantId, ...(group.sortOrder !== undefined ? { sortOrder: group.sortOrder } : {}) },
+      ...(extra.groupIds ? { groupIds: extra.groupIds.slice(0, 1000) } : {}),
+    };
+    out.push({ room: members, event: SocketEvents.GROUP_UPDATED, payload });
+    if (echo) out.push({ room: echo, event: SocketEvents.GROUP_UPDATED, payload });
+    return out;
+  }
+  const event = kind === 'created' ? SocketEvents.GROUP_CREATED : kind === 'moved' ? SocketEvents.GROUP_MOVED : SocketEvents.GROUP_UPDATED;
+  const ids = { group: { id: group.id, tenantId } };
+  out.push({ room: admins, event, payload: { group } });
+  out.push({ room: members, except: admins, event: kind === 'created' ? SocketEvents.GROUP_UPDATED : event, payload: ids });
+  if (echo) out.push({ room: echo, event: SocketEvents.GROUP_UPDATED, payload: ids });
+  return out;
+}
+
+/** Sends the emissions of a committed change of the tree; never fails the request (no Socket.io in a worker). */
+export function announceGroupChange(kind: GroupChangeKind, tenantId: number,
+  group: DeviceGroup | { id: number; sortOrder?: number }, extra: { groupIds?: number[] } = {}): void {
+  let io: ReturnType<typeof getIO>;
+  try { io = getIO(); } catch { return; }
+  for (const e of groupChangeEmissions(kind, tenantId, group, extra)) {
+    try {
+      const to = io.to(e.room);
+      (e.except ? to.except(e.except) : to).emit(e.event, e.payload);
+    } catch { /* best effort: the next read of the tree catches up */ }
+  }
+}

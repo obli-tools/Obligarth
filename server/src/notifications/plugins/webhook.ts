@@ -1,5 +1,5 @@
 import type { NotificationPlugin, NotificationPayload } from '../types';
-import { assertPublicHttpUrl } from '../../utils/ssrfGuard';
+import { guardedPost } from '../../utils/ssrfGuard';
 
 export const webhookPlugin: NotificationPlugin = {
   type: 'webhook',
@@ -17,13 +17,8 @@ export const webhookPlugin: NotificationPlugin = {
     // SSRF guard — prevent admins (or a compromised tenant) from
     // pointing a webhook at internal infrastructure (Redis, Kubelet,
     // 169.254.169.254 cloud metadata, etc).
-    const url = await assertPublicHttpUrl(String(config.url));
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(10000),
-    });
+    // guardedPost: every address screened, the connection pinned to them, redirects refused.
+    const res = await guardedPost(String(config.url), { headers, body: JSON.stringify(payload) }, 'public');
     if (!res.ok) throw new Error(`Webhook returned ${res.status}`);
   },
 

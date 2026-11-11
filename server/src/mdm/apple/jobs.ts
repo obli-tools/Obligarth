@@ -88,8 +88,9 @@ async function runGc(ctx: JobContext<Record<string, never>>): Promise<JobResult>
       if (n < SLICE_ROWS) break;
     }
     // Every device that waits, page by page: a first page that never empties (devices in an error no pass changes)
-    // must not keep the others from their next pass.
-    for (let after = 0; ;) {
+    // must not keep the others from their next pass. The Apple channels only: with APPLE_EDGE_MODE=off nothing is
+    // delivered to an Apple device, the sweep is skipped (the collection above serves every channel).
+    for (let after = 0; config.apple.mode === 'on';) {
       ctx.throwIfAborted();
       const ids = await stuckDevices(db, tenantId, SWEEP_DEVICES, after);
       out.swept += await requestArtifactReconcile(null, tenantId, ids);
@@ -125,8 +126,11 @@ export function registerArtifactJobs(): void {
     description: 'Delete the artifact bodies no device wants and the artifacts removed 30 days ago; reconcile again the devices whose artifacts wait',
     payload: empty,
     policy: 'exclusive',
-    // APPLE_EDGE_MODE=off: nothing is delivered, the daily job is not scheduled (file-durable L3).
-    ...(config.apple.mode === 'on' ? { schedule: { cron: '50 4 * * *' } } : {}),
+    // Always scheduled: the store of the artifacts serves every channel (Apple, Android amapi, the bridge agent), and
+    // its bodies hold references to secrets of the vault, released once they are deleted. With APPLE_EDGE_MODE=off it
+    // was never scheduled, so an instance without Apple kept every body and every removed artifact. Only the sweep of
+    // the Apple devices that wait depends on the mode (runGc).
+    schedule: { cron: '50 4 * * *' },
     deadLetter: false,                               // the next daily run does the work again
     retry: { limit: 2, delaySeconds: 60, backoff: true, maxDelaySeconds: 900 },
     timeoutSeconds: 900,

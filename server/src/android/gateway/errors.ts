@@ -65,7 +65,11 @@ export class AndroidRateLimitedError extends AndroidError {
   }
 }
 export class AndroidUnavailableError extends AndroidError {
-  constructor(message = 'Google unavailable') { super('unavailable', message, true); this.name = 'AndroidUnavailableError'; }
+  /** `details.notSent`: the request certainly never left (circuit open, no access token): nothing done at Google. */
+  constructor(message = 'Google unavailable', details: Record<string, unknown> = {}) {
+    super('unavailable', message, true, details);
+    this.name = 'AndroidUnavailableError';
+  }
 }
 
 /** A response over its byte limit (a pull retries with fewer messages, never acknowledging). */

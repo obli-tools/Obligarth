@@ -29,13 +29,30 @@ export const enrollmentController = {
       // Check if email is already used by another user.
       // Skip for Obligate SSO users — their email comes from Obligate and may
       // already exist on an older local account (before SSO migration).
-      const currentUser = await db('users').where({ id: req.session.userId }).select('foreign_source').first() as { foreign_source: string | null } | undefined;
-      const isSso = currentUser?.foreign_source === 'obligate';
+      const currentUser = await db('users').where({ id: req.session.userId }).select('foreign_source', 'email').first() as
+        { foreign_source: string | null; email: string | null } | undefined;
+      if (!currentUser) throw new AppError(404, 'User not found');
+      const isSso = currentUser.foreign_source === 'obligate';
       // An SSO account's address is Obligate's (resynced at each SSO sign-in):
       // enrollment may send it back, never change it.
       const emailData: { email?: string | null } = { email };
       if (isSso && await refuseSsoEmailChange(req.session.userId!, emailData, res)) return;
-      if (!isSso) {
+      // The address is the channel of the password reset (and of the e-mail
+      // codes): enrollment only GIVES one to an account that has none. An
+      // address already set is changed from the profile only (PUT
+      // /api/profile: step-up or approval, notice to the old address, e-mail
+      // codes turned off) — never here, at any time, by whoever holds the
+      // session.
+      // An address that is not one (an old account's, written before the
+      // check) can carry no reset link: it may be replaced here, once, like
+      // a missing one (the console unlocks the field in that case only).
+      const currentEmail = (currentUser.email ?? '').trim();
+      const hasValidEmail = currentEmail !== '' && z.string().email().safeParse(currentEmail).success;
+      const keepEmail = isSso || hasValidEmail;
+      if (!isSso && hasValidEmail && currentEmail.toLowerCase() !== email.trim().toLowerCase()) {
+        throw new AppError(409, 'The address of this account can only be changed from the profile', 'emailChangeViaProfile');
+      }
+      if (!keepEmail) {
         // Another account's address: an identity lookup (rls-tenant §8.2);
         // the update below is the user's own row.
         const existing = await switchToIdentity(() => db('users')
@@ -53,7 +70,7 @@ export const enrollmentController = {
         .where({ id: req.session.userId })
         .update({
           display_name: displayName !== undefined ? displayName : db.raw('display_name'),
-          email: isSso ? db.raw('email') : email,
+          email: keepEmail ? db.raw('email') : email,
           preferred_language: preferredLanguage,
           preferences: JSON.stringify(preferences),
           enrollment_version: REQUIRED_ENROLLMENT_VERSION,

@@ -6,13 +6,16 @@ import { audit, canonicalJson } from '../audit';
 import { db } from '../db';
 import { userActor } from '../db/context';
 import { beyondThresholds } from '../legacyAgent/policyRoutes';
+import { DEVICE_VALUES_ACTION } from '../mdm/registry/devicePatch';
 import { AppError } from '../middleware/errorHandler';
 import { approvalService, refuse, requireTenantCapability as requesterHolds, type ApprovalExecution } from '../services/approval.service';
 import { permissionService } from '../services/permission.service';
-import { applyRestriction } from '../services/restriction.service';
+import { applyRestriction, restrictionService } from '../services/restriction.service';
 import { consumeBatch, usableBatch } from './batches';
 import type { SiteRow } from './model';
-import { applyFromDevices, applyImport, planChanged, requireWritesOf, updateSite, type SiteWho } from './service';
+import {
+  applyFromDevices, applyImport, planChanged, requireWritesOf, setDevicesSite, sitePolicyImpact, siteRow, updateSite, type SiteWho,
+} from './service';
 
 // =============================================================================
 // The guard of the writes of the sites that change what the bridge agent renders (lot P1-SITE, review): a value of a
@@ -24,11 +27,17 @@ import { applyFromDevices, applyImport, planChanged, requireWritesOf, updateSite
 //     approves it (approval request site_write), executed again as its requester, his rights read again, the plan
 //     compared with the one he saw (planChanged otherwise: nothing applied).
 // What it guards: a change of the code, name, city or values of a site (PATCH /api/sites/:id, upsert_site), an applied
-// import, the sites made from the custom fields. A new site (no device yet), its contact or its group are not guarded;
-// the site of one device is a write on that device (devices.manage and write access on it, as a move of group).
+// import, the sites made from the custom fields, and the attachment of several devices to a site when it changes their
+// agent policy (POST /api/sites/:id/devices, reviews F029/F116: a new site with values of one's choice, then hundreds of
+// devices attached to it, is a change of what they read). A new site (no device yet), its contact or its group are not
+// guarded; the site of one device is a write on that device (devices.manage and write access on it, as a move of group),
+// unless the tenant restricts sites.device_site (no level by default: opt-in, guardDeviceSite below).
 // =============================================================================
 
 export const SITES_APPLY = 'sites.apply';
+/** The change of site of ONE device that changes its agent policy (reviews F029/F116): no level by default (the operators
+ *  change the site of a phone from its record), a tenant may ask a second factor or a second person for it. */
+export const SITES_DEVICE_SITE = 'sites.device_site';
 export const SITE_WRITE_APPROVAL = 'site_write' as const;
 export const POLICY_MANAGE = 'mdm.policies.manage' as const;
 /** The tool of a console import kept for its approval (its CSV text does not fit in the sealed part). */
@@ -36,6 +45,10 @@ export const CONSOLE_IMPORT_TOOL = 'console_import';
 
 export const SITES_RESTRICTABLE_ACTIONS = [
   { key: SITES_APPLY, label: 'Change the values of sites read by the Android agent templates (a site, an import, the sites from the custom fields)', category: 'Sites' },
+  { key: SITES_DEVICE_SITE, label: 'Change the site of one device when it changes what its Android agent templates read', category: 'Sites' },
+  // Review F116: the name and the custom fields of one device (PATCH /api/mdm/devices/:id), opt-in as the site of one
+  // device; applied by the governed circuit of the facts (mdm/groups/governance.ts, mdm/registry/agentValues.ts).
+  { key: DEVICE_VALUES_ACTION, label: 'Change the name or the custom fields of one device when it changes what its Android agent templates read', category: 'Sites' },
 ] as const;
 
 const sha256 = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
@@ -58,8 +71,17 @@ const Sealed = z.discriminatedUnion('op', [
     op: z.literal('from_devices'), keys: z.object({ code: key, name: key, values: z.array(key).max(L.valuesMax) }).strict(), digest: hex,
     source: z.enum(['console', 'mcp']).optional(),
   }).strict(),
+  z.object({
+    // siteId null: several devices detached from their site (set_device_site through the MCP server, review R1).
+    op: z.literal('attach'), siteId: z.string().uuid().nullable(), deviceIds: z.array(z.number().int().positive()).min(1).max(L.bulkDevices),
+    source: z.enum(['console', 'mcp']).optional(),
+  }).strict(),
+  z.object({ op: z.literal('device_site'), siteId: z.string().uuid().nullable(), deviceId: z.number().int().positive(),
+    source: z.enum(['console', 'mcp']).optional() }).strict(),
 ]);
 export type SiteWriteSealed = z.infer<typeof Sealed>;
+/** The schema the executor reads a sealed site write with (exported for the local tests). */
+export const SiteWriteSealedSchema = Sealed;
 
 /** Write access on the group a site names (403 otherwise), as a move into it (POST /api/mdm/devices/:id/group). */
 export async function requireGroupWrite(who: SiteWho, groupId: number | null | undefined): Promise<void> {
@@ -111,6 +133,36 @@ export async function guardSiteWrite(req: Request, res: Response, g: SiteGuardIn
   return true;
 }
 
+/**
+ * The change of site of ONE device (reviews F029/F116): free unless the tenant restricts sites.device_site (opt-in, no
+ * level by default, so nothing changes for the operators). Restricted, and only when the change rewrites the agent
+ * policy of the device: a second factor ('sensitive') or a second person ('restricted', approval site_write executed
+ * again as its requester). True when the route may apply it; false when the answer is sent.
+ */
+export async function guardDeviceSite(req: Request, res: Response, g: { tenantId: number; deviceId: number; siteId: string | null }): Promise<boolean> {
+  const level = await restrictionService.getLevelFor({ tenantId: g.tenantId, actionKey: SITES_DEVICE_SITE, deviceIds: [g.deviceId] });
+  if (level === 'none') return true;
+  const site = g.siteId === null ? null : await siteRow(db, g.tenantId, g.siteId);
+  const impact = await sitePolicyImpact(db, g.tenantId, { attach: [{ deviceId: g.deviceId, site }] });
+  if (impact === 0) return true;
+  const description = site ? `Attach the device ${g.deviceId} to the site ${site.code} (its agent policy changes)`
+    : `Detach the device ${g.deviceId} from its site (its agent policy changes)`;
+  const outcome = await restrictionService.enforce({
+    req, actionKey: SITES_DEVICE_SITE, deviceIds: [g.deviceId], approvalRequestType: SITE_WRITE_APPROVAL, approvalDescription: description,
+    approvalPayload: { action: SITES_DEVICE_SITE, siteId: site?.id ?? null, code: site?.code ?? null, deviceIds: [g.deviceId], policyImpact: impact },
+    approvalSealed: { op: 'device_site', siteId: site?.id ?? null, deviceId: g.deviceId },
+  });
+  if (outcome.ok) return true;
+  if ('approval' in outcome && outcome.approval) {
+    res.status(202).json({ success: true, data: { approvalId: outcome.approval.id, status: 'pending_approval', code: 'approvalRequired', policyImpact: impact } });
+    return false;
+  }
+  const o = outcome as { status: number; body: unknown; headers?: Record<string, string> };
+  for (const [k, v] of Object.entries(o.headers ?? {})) res.setHeader(k, v);
+  res.status(o.status).json(o.body);
+  return false;
+}
+
 /** The request of a batch (jsonb, or its text). */
 const requestOf = (b: Record<string, any>): Record<string, unknown> => (typeof b.request === 'string' ? JSON.parse(b.request) : b.request) ?? {};
 
@@ -123,7 +175,8 @@ export async function executeSiteWrite(x: ApprovalExecution): Promise<string | v
   if (!parsed.success) refuse('This request carries no site write any more: do it again');
   const s = parsed.data!;
   const r = await requesterHolds(x.requesterId, x.tenantId, 'devices.manage');
-  await requesterHolds(x.requesterId, x.tenantId, POLICY_MANAGE);
+  // The site of one device (sites.device_site) stays a write on that device: no right on the policies asked.
+  if (s.op !== 'device_site') await requesterHolds(x.requesterId, x.tenantId, POLICY_MANAGE);
   const who: SiteWho = { userId: x.requesterId, admin: r.isPlatformAdmin };
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
   const source = s.source ?? 'console';
@@ -149,6 +202,18 @@ export async function executeSiteWrite(x: ApprovalExecution): Promise<string | v
           expectDigest: s.digest, source, who, canWrite: (ids) => requireWritesOf(who, ids),
         });
         return `${out.sites.length} site(s), ${out.attached} device(s) attached`;
+      }
+      case 'attach': {
+        // The requester's rights on each device read again; an archived site takes none (setDevicesSite). The move into
+        // the group of the site stays the console's guarded move.
+        await requireWritesOf(who, s.deviceIds);
+        const out = await setDevicesSite(x.tenantId, s.deviceIds, s.siteId, ctx);
+        return `${out.changed.length} device(s) ${s.siteId === null ? 'detached' : 'attached'}`;
+      }
+      case 'device_site': {
+        await requireWritesOf(who, [s.deviceId]);
+        const out = await setDevicesSite(x.tenantId, [s.deviceId], s.siteId, ctx);
+        return out.changed.length ? 'The site of the device changed' : 'The device was already on this site';
       }
     }
   } catch (err) {

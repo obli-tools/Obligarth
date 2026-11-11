@@ -115,6 +115,8 @@ async function refreshTenant(ctx: JobContext<Tenant>): Promise<JobResult> {
     const due: Record<string, number[]> = {
       DeviceInformation: rows.filter((r) => old(r.last_device_info_at, day)).map((r) => Number(r.id)),
       SecurityInfo: rows.filter((r) => old(r.last_security_info_at, day)).map((r) => Number(r.id)),
+      // last_apps_at is the installed list's only (review F004): the managed lists the delivery of the apps asks for
+      // advance last_managed_apps_at, and no longer hold this weekly list back.
       InstalledApplicationList: rows.filter((r) => old(r.last_apps_at, week)).map((r) => Number(r.id)),
       ProfileList: rows.filter((r) => old(r.last_profiles_at, week)).map((r) => Number(r.id)),
       CertificateList: rows.filter((r) => old(r.last_certificates_at, week)).map((r) => Number(r.id)),

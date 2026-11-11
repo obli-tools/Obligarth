@@ -122,8 +122,24 @@ async function setObliguardStatus(id: number, status: McpObliguardStatus, error:
   }));
 }
 
+/** Is the row of a block still active (read again by a queued report: an unblock may have come in between)? */
+async function stillActive(id: number): Promise<boolean> {
+  const r = await asIdentity(MCP_ACTOR, () => db('mcp_ip_blocks').where({ id }).first('active')) as { active: boolean } | undefined;
+  return r?.active === true;
+}
+
+/**
+ * A report to Obliguard, queued. An unblock while it waits in the queue wins (review F052): the row is read again
+ * right before the report, which is dropped for an inactive row ('withdrawn': nothing was sent); and a row unblocked
+ * while the report was in flight has the ban it just received withdrawn at once (unblock only withdraws what it saw
+ * 'sent' or 'failed').
+ */
 function pushBan(row: { id: number; ip: string; source: McpBlockSource; reason: string; first_seen_at: Date; hit_count: number; blocked_until: Date | null }): boolean {
   return obliguardQueue.push(async () => {
+    if (!(await stillActive(row.id).catch(() => true))) {
+      await setObliguardStatus(row.id, 'withdrawn', null).catch(() => undefined);
+      return;
+    }
     const r: ObliguardResult = await obliguard.sendBan({
       ip: row.ip, source: 'obligarth', reason: row.reason.slice(0, 300), proxy_host_domain: proxyHostDomain(),
       source_type: row.source === 'mcp_strict' ? 'mcp-strict' : row.source === 'manual' ? 'mcp-manual' : 'mcp-failures',
@@ -131,7 +147,12 @@ function pushBan(row: { id: number; ip: string; source: McpBlockSource; reason: 
       banned_until: row.blocked_until ? new Date(row.blocked_until).toISOString() : null,
     });
     await setObliguardStatus(row.id, r.ok ? 'sent' : 'failed', r.ok ? null : r.error).catch(() => undefined);
-    if (!r.ok) logger.warn({ ip: row.ip, error: r.error }, 'mcp: block not reported to Obliguard');
+    if (!r.ok) { logger.warn({ ip: row.ip, error: r.error }, 'mcp: block not reported to Obliguard'); return; }
+    // Unblocked while the report was in flight: the ban just sent is withdrawn.
+    if (!(await stillActive(row.id).catch(() => true))) {
+      const w = await obliguard.deleteBan(row.ip);
+      await setObliguardStatus(row.id, w.ok ? 'withdrawn' : 'failed', w.ok ? null : `withdrawal: ${w.error}`).catch(() => undefined);
+    }
   });
 }
 
@@ -276,7 +297,9 @@ export async function unblock(id: number, byUserId: number, ctx: AuditWriteConte
   blocked.delete(key);
   deferred.delete(key);
   let withdrawn: boolean | null = null;
-  if (row.obliguard_status === 'sent') {
+  // 'sent', and 'failed' too (a report that timed out may have reached Obliguard; a 404 counts as done). 'pending':
+  // the queued report reads the row again and drops itself (pushBan).
+  if (row.obliguard_status === 'sent' || row.obliguard_status === 'failed') {
     const r = await obliguard.deleteBan(key);
     withdrawn = r.ok;
     await setObliguardStatus(Number(row.id), r.ok ? 'withdrawn' : 'failed', r.ok ? null : `withdrawal: ${r.error}`).catch(() => undefined);

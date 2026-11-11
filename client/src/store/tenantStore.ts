@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { TenantWithRole } from '@obligarth/shared';
+import { onSessionReset } from './sessionReset';
 
 // ── Tenant changed event ─────────────────────────────────────────────────────
 // Fired by the tenant switcher after its switch request. The tenant-scoped
@@ -28,12 +29,30 @@ export async function emitTenantChanged(tenantId: number): Promise<void> {
   }));
 }
 
+/** Asks the server to switch the session's tenant; true when it accepted. Changes no client state: the full
+ *  switch (permissions, stores, socket) is switchTenant() in store/tenantSwitch.ts. */
+export async function requestTenantSwitch(tenantId: number): Promise<boolean> {
+  try {
+    const res = await fetch('/api/tenant/switch', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tenantId }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 interface TenantState {
   currentTenantId: number | null;
   tenants: TenantWithRole[];
   isLoading: boolean;
   fetchTenants: () => Promise<void>;
-  setCurrentTenant: (tenantId: number) => Promise<void>;
+  /** Switches the session's tenant on the server and records it; false when the server refused. Only for
+   *  callers that reload the whole page right after (a hard navigation); the others use switchTenant(). */
+  setCurrentTenant: (tenantId: number) => Promise<boolean>;
 }
 
 export const useTenantStore = create<TenantState>((set) => ({
@@ -54,17 +73,10 @@ export const useTenantStore = create<TenantState>((set) => ({
   },
 
   setCurrentTenant: async (tenantId: number) => {
-    try {
-      const res = await fetch('/api/tenant/switch', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tenantId }),
-      });
-      if (!res.ok) return;
-      set({ currentTenantId: tenantId });
-    } catch {
-      // ignore
-    }
+    if (!(await requestTenantSwitch(tenantId))) return false;
+    set({ currentTenantId: tenantId });
+    return true;
   },
 }));
+
+onSessionReset(() => useTenantStore.setState({ currentTenantId: null, tenants: [], isLoading: false }));

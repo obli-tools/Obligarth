@@ -135,9 +135,70 @@ class SoftwareRepoService {
     }
   }
 
+  /** Where an upload is streamed to before it is checked (same volume as the
+   *  depot: the accepted file is renamed into place, never copied). */
+  incomingDir(): string {
+    return path.join(config.customDir, REPO_SUBDIR, '.incoming');
+  }
+
+  /**
+   * Removes the leftovers of incomingDir() older than `maxAgeMs`: an upload
+   * cut by a crash or a restart of the process leaves its partial file there
+   * (outside every quota). Throttled (one sweep per 10 minutes at most);
+   * never throws.
+   */
+  async sweepIncoming(maxAgeMs = 60 * 60 * 1000): Promise<number> {
+    const now = Date.now();
+    if (now - this.lastIncomingSweep < 10 * 60 * 1000) return 0;
+    this.lastIncomingSweep = now;
+    const dir = this.incomingDir();
+    let removed = 0;
+    let names: string[];
+    try { names = await fs.promises.readdir(dir); } catch { return 0; }
+    for (const name of names) {
+      const full = path.join(dir, name);
+      try {
+        const st = await fs.promises.stat(full);
+        if (!st.isFile() || now - st.mtimeMs < maxAgeMs) continue;
+        await fs.promises.unlink(full);
+        removed++;
+      } catch { /* gone meanwhile, or not ours to remove */ }
+    }
+    return removed;
+  }
+
+  private lastIncomingSweep = 0;
+
+  /** Largest file accepted (bytes). */
+  maxFileSize(): number {
+    return MAX_FILE_SIZE;
+  }
+
+  /**
+   * Stores an uploaded file. The file was streamed to disk (`file.path`, in
+   * incomingDir()): it is hashed as a stream and renamed into the depot, never
+   * held in memory. The temporary file is always removed when it is refused.
+   */
   async upload(
     tenantId: number,
-    file: { originalname: string; buffer: Buffer; mimetype: string },
+    file: { originalname: string; path: string; size: number; mimetype: string },
+    platform: 'windows' | 'linux' | 'macos',
+    displayName: string | null,
+    uploadedBy: number,
+  ): Promise<SoftwareRepoPackage> {
+    let moved = false;
+    try {
+      const pkg = await this.storeUpload(tenantId, file, platform, displayName, uploadedBy);
+      moved = true;
+      return pkg;
+    } finally {
+      if (!moved) { try { fs.unlinkSync(file.path); } catch { /* already gone */ } }
+    }
+  }
+
+  private async storeUpload(
+    tenantId: number,
+    file: { originalname: string; path: string; size: number; mimetype: string },
     platform: 'windows' | 'linux' | 'macos',
     displayName: string | null,
     uploadedBy: number,
@@ -146,8 +207,9 @@ class SoftwareRepoService {
     if (!ALLOWED_EXTENSIONS.includes(ext)) {
       throw new RepoError(400, `File type ${ext} not allowed. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`);
     }
-    if (file.buffer.length > MAX_FILE_SIZE) {
-      throw new RepoError(413, `File too large (${(file.buffer.length / 1024 / 1024).toFixed(0)} MB). Max: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`);
+    const size = fs.statSync(file.path).size;
+    if (size > MAX_FILE_SIZE) {
+      throw new RepoError(413, `File too large (${(size / 1024 / 1024).toFixed(0)} MB). Max: ${(MAX_FILE_SIZE / 1024 / 1024).toFixed(0)} MB`);
     }
 
     // Depot must be enabled for this tenant (master can turn it off entirely).
@@ -157,12 +219,12 @@ class SoftwareRepoService {
     // already-stored packages + the incoming file.
     const settings = await this.getSettings(tenantId);
     if (settings.quotaBytes != null) {
-      const projected = settings.usedBytes + file.buffer.length;
+      const projected = settings.usedBytes + size;
       if (projected > settings.quotaBytes) {
         const mb = (n: number) => (n / 1024 / 1024).toFixed(0);
         throw new RepoError(
           413,
-          `Storage quota exceeded: ${mb(settings.usedBytes)} MB used + ${mb(file.buffer.length)} MB > ${mb(settings.quotaBytes)} MB quota.`,
+          `Storage quota exceeded: ${mb(settings.usedBytes)} MB used + ${mb(size)} MB > ${mb(settings.quotaBytes)} MB quota.`,
         );
       }
     }
@@ -185,24 +247,35 @@ class SoftwareRepoService {
       .replace(/[^\w. \-]/g, '_')
       .slice(0, 200) || `upload${ext}`;
 
-    const hash = crypto.createHash('sha256').update(file.buffer).digest('hex');
+    const hash = await new Promise<string>((resolve, reject) => {
+      const h = crypto.createHash('sha256');
+      fs.createReadStream(file.path)
+        .on('data', (chunk) => h.update(chunk))
+        .on('error', reject)
+        .on('end', () => resolve(h.digest('hex')));
+    });
 
     const [row] = await db('software_repo_packages').insert({
       tenant_id: tenantId,
       filename: safeFilename,
       display_name: displayName || safeFilename,
-      file_size: file.buffer.length,
+      file_size: size,
       file_hash: hash,
       mime_type: file.mimetype,
       platform,
       uploaded_by: uploadedBy,
     }).returning('*');
 
-    // Write to disk
+    // Into the depot (same volume: a rename)
     const dir = repoDir(tenantId);
     fs.mkdirSync(dir, { recursive: true });
     const filePath = path.join(dir, `${row.uuid}${ext}`);
-    fs.writeFileSync(filePath, file.buffer);
+    try {
+      fs.renameSync(file.path, filePath);
+    } catch (err) {
+      await db('software_repo_packages').where({ id: row.id, tenant_id: tenantId }).delete();
+      throw err;
+    }
 
     return this.rowToPackage(row);
   }
@@ -231,7 +304,9 @@ class SoftwareRepoService {
     const filePath = path.join(repoDir(row.tenant_id), `${row.uuid}${ext}`);
     if (!fs.existsSync(filePath)) return null;
 
-    return { filePath, filename: row.filename, mimeType: row.mime_type || 'application/octet-stream' };
+    // Always served as bytes: the type stored is the uploader's claim, and a
+    // download is never rendered by the browser.
+    return { filePath, filename: row.filename, mimeType: 'application/octet-stream' };
   }
 }
 

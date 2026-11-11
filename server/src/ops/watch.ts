@@ -42,6 +42,8 @@ async function raiseNotReady(ctx: JobContext<unknown>, failing: string[]): Promi
     message: `GET /health/ready answers 503 for 10 minutes or more. Failing checks: ${failing.join(', ')}.`.slice(0, 500),
     navigateTo: null,
     stableKey: 'ops:not-ready',
+    // An alert of the instance: the platform administrators' only, never the other members of the master tenant.
+    platformOnly: true,
   }));
 }
 

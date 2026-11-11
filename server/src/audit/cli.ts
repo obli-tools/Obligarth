@@ -238,7 +238,7 @@ async function spoolImport(all: string[]): Promise<number> {
   if (!dir) throw new CliExit(1, 'spool-import: --dir <folder> is required');
   const adminUrl = process.env.DATABASE_ADMIN_URL;
   if (!adminUrl) throw new CliExit(1, 'spool-import: DATABASE_ADMIN_URL (the administration DSN of the migrations) is required');
-  const { readSpoolFile, rejectedFiles, rewriteSpoolFile } = await import('./spool');
+  const { keepUnreadable, readSpoolFile, rejectedFiles, rewriteSpoolFile } = await import('./spool');
   const { buildBody } = await import('./body');
   const pg = (await import('pg')).default;
   const client = new pg.Client({ connectionString: adminUrl, application_name: 'obligarth-audit-spool-import' });
@@ -250,7 +250,9 @@ async function spoolImport(all: string[]): Promise<number> {
   try {
     await client.query('SET ROLE obligarth_owner');
     for (const file of rejectedFiles(path.resolve(dir))) {
-      const { lines } = readSpoolFile(file);
+      const { lines, unreadableLines } = readSpoolFile(file);
+      // Lines that do not parse are kept as they were (the rewrite below would drop them).
+      keepUnreadable(unreadableLines);
       const kept = [];
       for (const l of lines) {
         try {

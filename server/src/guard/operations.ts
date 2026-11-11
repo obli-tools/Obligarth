@@ -342,12 +342,18 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
   if (b.publishFleetShareFloor !== undefined) {
     input.publishFleetShareFloor = intIn(b.publishFleetShareFloor, 1, PUBLISH_APPROVAL_THRESHOLDS.fleetShareFloorMax, 'publishFleetShareFloor');
   }
+  // Review F115: the second factor of the bridge agent's commands, a boolean (off by default).
+  if (b.legacyAgentCommandsSensitive !== undefined) {
+    if (typeof b.legacyAgentCommandsSensitive !== 'boolean') throw new AppError(400, 'legacyAgentCommandsSensitive is true or false', 'invalidSettings');
+    input.legacyAgentCommandsSensitive = b.legacyAgentCommandsSensitive;
+  }
   const s = await readSettings(tenantId);
   const floor = await fleetShareFloor(db, tenantId);
   const changed = (input.hourlyCapPercent !== undefined && input.hourlyCapPercent !== s.hourly_cap_percent)
     || (input.hourlyCapMin !== undefined && input.hourlyCapMin !== s.hourly_cap_min)
     || (input.massApproverSide !== undefined && input.massApproverSide !== s.mass_approver_side)
-    || (input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floor);
+    || (input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floor)
+    || (input.legacyAgentCommandsSensitive !== undefined && input.legacyAgentCommandsSensitive !== s.legacy_agent_commands_sensitive);
   if (!changed) return null;
   const facts = await personFacts(userId, tenantId);
   const required = await requiredSideFor(facts, tenantId);
@@ -358,6 +364,8 @@ export async function requestSettings(req: Request, raw: unknown): Promise<Pendi
     input.massApproverSide !== undefined ? `approver of mass actions ${s.mass_approver_side} → ${input.massApproverSide}` : null,
     input.publishFleetShareFloor !== undefined && input.publishFleetShareFloor !== floor
       ? `share of the fleet counted from ${floor} → ${input.publishFleetShareFloor} devices` : null,
+    input.legacyAgentCommandsSensitive !== undefined && input.legacyAgentCommandsSensitive !== s.legacy_agent_commands_sensitive
+      ? `second factor on the Android agent commands ${s.legacy_agent_commands_sensitive ? 'on' : 'off'} → ${input.legacyAgentCommandsSensitive ? 'on' : 'off'}` : null,
   ].filter(Boolean);
   const approval = await fileGuardRequest(req, tenantId, 'guard_settings_change', `Guard settings: ${parts.join(', ')}`,
     { action: 'guard_settings_change', requiredSide: required.side, approverFallback: required.fallback, settings: input });

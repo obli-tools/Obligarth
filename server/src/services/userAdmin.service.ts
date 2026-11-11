@@ -218,10 +218,11 @@ export async function updateUserAccount(
   if (!roleChanged) {
     // A deactivation is protective (P4), any other change standard (P3).
     const deactivated = data.isActive === false && scoped.is_active;
+    const renamed = user.username !== scoped.username;
     await audit(actor, ctx, deactivated ? 'user.deactivated' : 'user.updated', targetId, {
       username: user.username,
-      before: { role: scoped.role, isActive: scoped.is_active },
-      after: { role: user.role, isActive: user.isActive },
+      before: { role: scoped.role, isActive: scoped.is_active, ...(renamed ? { username: scoped.username } : {}) },
+      after: { role: user.role, isActive: user.isActive, ...(renamed ? { username: user.username } : {}) },
     });
   }
   return user;
@@ -237,6 +238,8 @@ export async function deleteUserAccount(actor: ScopeActor, targetId: number, ctx
   if (scoped.role === 'admin' && (await otherActiveAdmins(targetId)) === 0) {
     throw new AppError(400, 'Cannot delete the last admin');
   }
+  // Still referenced by a row (a foreign key without ON DELETE): 409 userHasDependencies, the account unchanged
+  // (userService.delete; review F047).
   const deleted = await switchToIdentity(() => userService.delete(targetId));
   if (!deleted) throw new AppError(404, 'User not found');
   // P6: a deleted user's sessions would keep their role (admin bypasses).

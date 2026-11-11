@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useEffect, type FormEvent } from 'react';
+import { createContext, useContext, useRef, useState, useEffect, type FormEvent } from 'react';
 import {
  Plus,
  Pencil,
@@ -29,12 +29,14 @@ import type {
  DeviceSummary,
  UserTenantAssignment,
 } from '@obligarth/shared';
-import { DEFAULT_DEVICE_CAPABILITIES, DEVICE_CAPABILITIES, DEVICE_CAPABILITY_LABELS, isMasterTenant } from '@obligarth/shared';
+import { DEFAULT_DEVICE_CAPABILITIES, DEVICE_CAPABILITIES, DEVICE_CAPABILITY_LABELS, isMasterTenant, LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION } from '@obligarth/shared';
 import { usersApi, isPendingApproval } from '@/api/users.api';
 import { isStepUpHandled } from '@/api/client';
+import { apiErrorCode, translateErrorCode } from '@/utils/apiError';
 import { teamsApi } from '@/api/teams.api';
 import { groupsApi } from '@/api/groups.api';
 import { listManagedDevices } from '@/api/mdm.api';
+import { guardApi } from '@/api/guard.api';
 import { restrictionApi, type RestrictionLevel, type RestrictionMap, type RestrictableAction, type ScopeMode } from '@/api/restriction.api';
 import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
@@ -115,6 +117,17 @@ export function AdminUsersPage() {
  const [selectedTeamId, setSelectedTeamId] = useState<number | null>(null);
  const [teamMembers, setTeamMembers] = useState<number[]>([]);
  const [teamPermissions, setTeamPermissions] = useState<TeamPermission[]>([]);
+ // The members and permissions above are written back WHOLE (setMembers / setPermissions replace the lists):
+ // they must be those of the team selected. detailsTeamId is the team they were loaded for (null while
+ // loading), selectedTeamRef the team selected now (a late response of a previous one is dropped), and
+ // teamWriteRef serialises the writes (two quick clicks would both start from the same lists).
+ const [detailsTeamId, setDetailsTeamId] = useState<number | null>(null);
+ const selectedTeamRef = useRef<number | null>(null);
+ selectedTeamRef.current = selectedTeamId;
+ const teamWriteRef = useRef(false);
+ // Shown on the panels: while a write is sent (or the lists load), they are inactive, so that a click is never
+ // dropped without a sign (writeTeam ignores it then).
+ const [teamWriting, setTeamWriting] = useState(false);
  const [rightTab, setRightTab] = useState<'members' | 'permissions'>('members');
 
  // Team tenant filter (platform admin only). Defaults to the current tenant
@@ -171,15 +184,36 @@ export function AdminUsersPage() {
  const loadTeamDetails = async (teamId: number) => {
  try {
  const detail = await teamsApi.getById(teamId);
+ // Another team was selected meanwhile: these lists are not its own.
+ if (selectedTeamRef.current !== teamId) return;
  setTeamMembers(detail.memberIds);
  setTeamPermissions(detail.permissions);
+ setDetailsTeamId(teamId);
  } catch {
- toast.error(t('users.teams.failedMembers'));
+ if (selectedTeamRef.current === teamId) toast.error(t('users.teams.failedMembers'));
+ }
+ };
+
+ /** Runs a write of the selected team's lists: only once they are that team's, one at a time. */
+ const writeTeam = async (write: (teamId: number) => Promise<void>) => {
+ const teamId = selectedTeamRef.current;
+ if (teamId === null || detailsTeamId !== teamId || teamWriteRef.current) return;
+ teamWriteRef.current = true;
+ setTeamWriting(true);
+ try {
+ await write(teamId);
+ } finally {
+ teamWriteRef.current = false;
+ setTeamWriting(false);
  }
  };
 
  const selectTeam = (teamId: number) => {
+ selectedTeamRef.current = teamId;
  setSelectedTeamId(teamId);
+ setTeamMembers([]);
+ setTeamPermissions([]);
+ setDetailsTeamId(null);
  loadTeamDetails(teamId);
  // Narrow screens: the detail replaces the (possibly long, scrolled) list —
  // bring its back bar into view instead of landing mid-page.
@@ -284,7 +318,8 @@ export function AdminUsersPage() {
  toast.success(pending ? sentForApproval() : t('users.deleted'));
  load();
  } catch (err) {
- if (!isStepUpHandled(err)) toast.error(t('users.failedDelete'));
+ // A known refusal says why (userHasDependencies: still referenced, review F047); else the generic failure.
+ if (!isStepUpHandled(err)) toast.error(translateErrorCode(apiErrorCode(err)) ?? t('users.failedDelete'), { duration: 8000 });
  }
  };
 
@@ -437,23 +472,21 @@ export function AdminUsersPage() {
 
  // ── Members management ──
 
- const toggleMember = async (userId: number) => {
- if (!selectedTeamId) return;
+ const toggleMember = (userId: number) => writeTeam(async (teamId) => {
  const newMembers = teamMembers.includes(userId)
  ? teamMembers.filter((id) => id !== userId)
  : [...teamMembers, userId];
  try {
- await teamsApi.setMembers(selectedTeamId, { memberIds: newMembers });
- setTeamMembers(newMembers);
+ await teamsApi.setMembers(teamId, { memberIds: newMembers });
+ if (selectedTeamRef.current === teamId) setTeamMembers(newMembers);
  } catch {
  toast.error(t('users.teams.failedUpdateMembers'));
  }
- };
+ });
 
  // ── Permissions management ──
 
- const addPermission = async (scope: PermissionScope, scopeId: number, level: PermissionLevel) => {
- if (!selectedTeamId) return;
+ const addPermission = (scope: PermissionScope, scopeId: number, level: PermissionLevel) => writeTeam(async (selectedTeamId) => {
  const existing = teamPermissions.find((p) => p.scope === scope && p.scopeId === scopeId);
  // A row keeps its capabilities when its level changes; a new row gets the defaults.
  const defaultCaps: DeviceCapability[] = [...DEFAULT_DEVICE_CAPABILITIES];
@@ -487,17 +520,16 @@ export function AdminUsersPage() {
  toast.error(msg ? `${t('users.teams.failedAddPermission')}: ${msg}` : t('users.teams.failedAddPermission'));
  }
  }
- };
+ });
 
- const removePermission = async (permId: number) => {
- if (!selectedTeamId) return;
+ const removePermission = (permId: number) => writeTeam(async (teamId) => {
  try {
- await teamsApi.removePermission(selectedTeamId, permId);
- setTeamPermissions((prev) => prev.filter((p) => p.id !== permId));
+ await teamsApi.removePermission(teamId, permId);
+ if (selectedTeamRef.current === teamId) setTeamPermissions((prev) => prev.filter((p) => p.id !== permId));
  } catch {
  toast.error(t('users.teams.failedRemovePermission'));
  }
- };
+ });
 
  const togglePermissionLevel = async (perm: TeamPermission) => {
  const newLevel: PermissionLevel = perm.level === 'ro' ? 'rw' : 'ro';
@@ -507,8 +539,7 @@ export function AdminUsersPage() {
  // The device capabilities of one row (the MDM actions of integration-apple-edge §8.11): every row is sent
  // again with its own, the server writes the differences only. A destructive capability given to a team opens
  // a cooldown for its members (told by the editor).
- const setPermissionCapabilities = async (perm: TeamPermission, capabilities: DeviceCapability[]) => {
- if (!selectedTeamId) return;
+ const setPermissionCapabilities = (perm: TeamPermission, capabilities: DeviceCapability[]) => writeTeam(async (selectedTeamId) => {
  const defaultCaps: DeviceCapability[] = [...DEFAULT_DEVICE_CAPABILITIES];
  try {
  await teamsApi.setPermissions(selectedTeamId, {
@@ -523,10 +554,12 @@ export function AdminUsersPage() {
  const msg = err?.response?.data?.error || err?.message;
  toast.error(msg ? `${t('users.teams.failedUpdatePermission')}: ${msg}` : t('users.teams.failedUpdatePermission'));
  }
- };
+ });
 
  const selectedTeam = teams.find((t) => t.id === selectedTeamId);
  const teamDetailOpen = !!selectedTeam && tab === 'teams';
+ const teamPanelBusy = teamWriting || detailsTeamId !== selectedTeamId;
+ const teamPanelBusyClass = teamPanelBusy ? ' pointer-events-none opacity-60' : '';
 
  // The inline create/edit forms render above the list: on narrow screens
  // (one pane, long list) bring them into view after a row action.
@@ -1042,7 +1075,7 @@ export function AdminUsersPage() {
 
  {/* Members panel */}
  {rightTab === 'members' && (
- <div className="rounded-lg bg-bg-secondary divide-y divide-border lg:max-h-[60dvh] lg:supports-[not(height:100dvh)]:max-h-[60vh] lg:overflow-y-auto">
+ <div aria-busy={teamPanelBusy} className={`rounded-lg bg-bg-secondary divide-y divide-border lg:max-h-[60dvh] lg:supports-[not(height:100dvh)]:max-h-[60vh] lg:overflow-y-auto${teamPanelBusyClass}`}>
  {users.filter((u) => u.role !== 'admin').length === 0 ? (
  <p className="p-4 text-sm text-text-muted text-center">{t('users.teams.noUsers')}</p>
  ) : (
@@ -1081,7 +1114,7 @@ export function AdminUsersPage() {
 
  {/* Permissions panel — Hierarchical tree */}
  {rightTab === 'permissions' && (
- <div className="rounded-lg bg-bg-secondary lg:max-h-[70dvh] lg:supports-[not(height:100dvh)]:max-h-[70vh] lg:overflow-y-auto">
+ <div aria-busy={teamPanelBusy} className={`rounded-lg bg-bg-secondary lg:max-h-[70dvh] lg:supports-[not(height:100dvh)]:max-h-[70vh] lg:overflow-y-auto${teamPanelBusyClass}`}>
  {tree.length === 0 && ungroupedDevices.length === 0 ? (
  <p className="p-4 text-sm text-text-muted text-center">{t('users.teams.noResources')}</p>
  ) : (
@@ -1605,6 +1638,9 @@ function RestrictionsTab() {
  const [saving, setSaving] = useState(false);
  const [dirty, setDirty] = useState(false);
  const [scopeFor, setScopeFor] = useState<string | null>(null);
+ // Review F115: the row legacy_agent.commands_sensitive is used only while the tenant's guard setting
+ // legacyAgentCommandsSensitive is on (null: unknown, an older server or no right to read the guard settings).
+ const [commandsSensitiveOn, setCommandsSensitiveOn] = useState<boolean | null>(null);
 
  const [loadError, setLoadError] = useState<string | null>(null);
  const load = async () => {
@@ -1625,6 +1661,11 @@ function RestrictionsTab() {
  };
 
  useEffect(() => { load(); }, []);
+ useEffect(() => {
+ guardApi.settings()
+ .then((s) => setCommandsSensitiveOn(typeof s.legacyAgentCommandsSensitive === 'boolean' ? s.legacyAgentCommandsSensitive : null))
+ .catch(() => setCommandsSensitiveOn(null));
+ }, []);
 
  const setLevel = (key: string, level: 'none' | RestrictionLevel) => {
  setMap((cur) => {
@@ -1713,12 +1754,20 @@ function RestrictionsTab() {
  {acts.map((a) => {
  const entry = (map ?? {})[a.key];
  const level: 'none' | RestrictionLevel = entry ? entry.level : 'none';
+ const settingRow = a.key === LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION && commandsSensitiveOn !== null;
  return (
- <div key={a.key} className="flex flex-wrap md:flex-nowrap items-center gap-x-3 gap-y-2 px-3 py-2">
+ <div key={a.key} className={`flex flex-wrap md:flex-nowrap items-center gap-x-3 gap-y-2 px-3 py-2 ${settingRow && !commandsSensitiveOn ? 'opacity-60' : ''}`}>
  {/* Phones: label on its own full-width line (no truncation), controls below. */}
  <div className="flex-1 min-w-0 max-md:basis-full">
  <p className="text-sm text-text-primary md:truncate">{a.label}</p>
  <p className="text-[10px] text-text-muted font-mono">{a.key}</p>
+ {settingRow && (
+ <p className={`text-[11px] ${commandsSensitiveOn ? 'text-orange-400' : 'text-text-muted'}`}>
+ {commandsSensitiveOn
+ ? (t('users.restrictions.commandsSensitiveOn') || 'In use: the guard setting "Second factor on the Android agent commands" is on.')
+ : (t('users.restrictions.commandsSensitiveOff') || 'Not in use: the guard setting "Second factor on the Android agent commands" is off (Security, Guards tab).')}
+ </p>
+ )}
  </div>
 
  <div className="flex items-center gap-1 shrink-0">

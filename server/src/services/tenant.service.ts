@@ -118,6 +118,20 @@ async function auditContextOf(given: AuditWriteContext | undefined, chainTenantI
   return audit.fromDbActor(actor, chainTenantId, { ip });
 }
 
+/** 409 while the tenant still has phones enrolled with the Android bridge agent (not revoked). */
+export async function assertNoBridgeDevices(tenantId: number): Promise<void> {
+  const row = await switchToTenant(tenantId, () => db('legacy_agent_devices')
+    .where({ tenant_id: tenantId })
+    .whereNull('revoked_at')
+    .count({ n: '*' })
+    .first()) as { n: string | number } | undefined;
+  const n = Number(row?.n ?? 0);
+  if (n > 0) {
+    throw new AppError(409, `The tenant still has ${n} device(s) enrolled with the Android bridge agent: revoke them before deleting it`,
+      'tenantHasBridgeDevices', { devices: n });
+  }
+}
+
 export const tenantService = {
   async getAll(): Promise<Tenant[]> {
     const rows = await db('tenants').select<TenantRow[]>('*').orderBy('id');
@@ -237,6 +251,10 @@ export const tenantService = {
     // anything changes at apple-edge.
     // (imported here: the Android module imports the tenant registry, a static import would close a cycle)
     if (allowed) await (await import('../android/operations/offboarding')).assertTenantDeletable(id);
+    // Nor while phones of the Android bridge agent are still enrolled (agent-pont-android): the cascade would
+    // delete their identities and keys, and the devices in the field would be left administered by an agent
+    // that no server knows any more. They are revoked (or retired) first.
+    if (allowed) await assertNoBridgeDevices(id);
     const edge = allowed ? await switchToNone(() => appleTenants.retireBeforeDeletion(id, actor)) : 'no_edge_tenant';
     try {
       await tenantService.deleteHere(id, userId, ctx);
@@ -253,7 +271,8 @@ export const tenantService = {
     }
   },
 
-  /** The deletion in the brain (delete, above): one transaction, context 'none' of the caller. */
+  /** The deletion in the brain (delete, above): one transaction, context 'none' of the caller. Its callers check
+   *  first that the tenant can go (delete). */
   async deleteHere(id: number, userId: number | null, ctx: AuditWriteContext): Promise<void> {
     await switchToNone(() => db.transaction(async (trx) => {
       const tenant = await trx('tenants').where({ id }).first('id', 'slug') as { id: number; slug: string } | undefined;

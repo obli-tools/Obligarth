@@ -9,6 +9,7 @@ import { globalViewGrant } from '../db/platformAccess';
 import { AppError } from '../middleware/errorHandler';
 import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../audit';
+import { checkSecondFactor, sendStepUpFailure } from '../services/deviceKey/stepUpProof';
 
 // Database contexts (rls-tenant §8.2): these routes are outside the tenant
 // router. The list and one tenant: the request's base context (the tenants
@@ -186,11 +187,20 @@ router.put('/:id', async (req, res, next) => {
 });
 
 // ── Delete tenant (platform admin only, cannot delete tenant 1) ───────────
+// Irreversible (the tenant's data keys are crypto-shredded, its rows deleted
+// in cascade): a strict step-up of the platform administrator (a code never
+// used before, no "trusted IP" shortcut), like the vault's changes; the
+// identifier is digits only ("3abc" is not tenant 3).
 router.delete('/:id', async (req, res, next) => {
   try {
     if (req.session.role !== 'admin') throw new AppError(403, 'Admin only');
-    const id = parseInt(req.params.id);
-    if (id === 1) throw new AppError(400, 'Cannot delete the default tenant');
+    if (!/^[1-9][0-9]{0,9}$/.test(req.params.id)) throw new AppError(404, 'Tenant not found');
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id > 2147483647) throw new AppError(404, 'Tenant not found');
+    if (id === MASTER_TENANT_ID) throw new AppError(400, 'Cannot delete the default tenant');
+    if (!(await tenantService.getById(id))) throw new AppError(404, 'Tenant not found');
+    const step = await checkSecondFactor(req, { actionKey: 'tenant.delete', allowTrustedIp: false, allowDevice: true, requireNewStep: true });
+    if (!step.ok) { sendStepUpFailure(res, step); return; }
     await tenantService.delete(id, { auditCtx: await audit.fromRequest(req, MASTER_TENANT_ID) });
     res.json({ success: true });
   } catch (err) {

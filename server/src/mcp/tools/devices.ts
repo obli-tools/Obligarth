@@ -93,6 +93,48 @@ function maskLegacyDevice<T extends object>(d: T): T {
   return out as T;
 }
 
+/**
+ * The free search of a key without identifiers (review F053): the ids, among `within`, of the devices whose
+ * non-identifying fields match `text` (the fields of the console's search but the serial number: names, model, end
+ * user, uuid, tags for the registry; label and model for the bridge agents). Passed to the list as its visible ids,
+ * with the text itself: the list's own search then keeps exactly these, never a device matched on its serial number
+ * alone, whose presence in the answer (or the total) would disclose the serial the mask hides.
+ */
+export async function idsMatchingWithoutIdentifiers(tenantId: number, text: string, within: number[] | 'all',
+  fields: 'registry' | 'legacy'): Promise<number[]> {
+  if (within !== 'all' && within.length === 0) return [];
+  const pat = `%${text.trim().slice(0, 100).replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+  const q = db('devices').where('devices.tenant_id', tenantId);
+  if (within !== 'all') q.whereRaw('devices.id = ANY (?::int[])', [within]);
+  if (fields === 'legacy') {
+    q.where((w) => w.whereILike('devices.label', pat).orWhereILike('devices.model', pat));
+  } else {
+    q.leftJoin('end_users', function joinEndUser() {
+      this.on('end_users.id', '=', 'devices.end_user_id').andOn('end_users.tenant_id', '=', 'devices.tenant_id');
+    }).where(function search() {
+      this.whereILike('devices.label', pat)
+        .orWhereILike('devices.display_name', pat)
+        .orWhereILike('devices.device_name', pat)
+        .orWhereILike('devices.model', pat)
+        .orWhereILike('devices.model_name', pat)
+        .orWhereILike('end_users.display_name', pat)
+        .orWhereILike('end_users.email', pat)
+        .orWhereILike('end_users.external_id', pat)
+        .orWhereRaw('devices.uuid::text ILIKE ?', [pat])
+        .orWhereRaw('devices.tags::text ILIKE ?', [pat]);
+    });
+  }
+  return (await q.pluck('devices.id') as Array<number | string>).map(Number);
+}
+
+/** The visible ids of a list for the caller: its perimeter, narrowed by idsMatchingWithoutIdentifiers when the key may
+ *  not read identifiers and a text is searched. */
+async function searchScope(tenantId: number, q: string | undefined, within: number[] | 'all', allowed: boolean,
+  fields: 'registry' | 'legacy'): Promise<number[] | 'all'> {
+  if (allowed || !q || !q.trim()) return within;
+  return idsMatchingWithoutIdentifiers(tenantId, q, within, fields);
+}
+
 export function registerDeviceTools(): void {
   registerTool({
     name: 'search_devices', title: 'Search devices', scope: 'devices.read',
@@ -112,12 +154,13 @@ export function registerDeviceTools(): void {
       const f = await deviceFilter(caller, a.tenant_id);
       const l = a.limit ?? 50;
       const o = a.offset ?? 0;
+      const allowed = await identifiersAllowed(caller, a.tenant_id);
       const r = await deviceService.listDevices(a.tenant_id, {
         q: a.q, platform: a.platform, enrollmentState: a.enrollment_state, groupId: a.group_id, includeSubgroups: a.include_subgroups,
         ungrouped: a.ungrouped, tags: a.tags, lostMode: a.lost_mode, sortBy: a.sort_by, sortOrder: a.sort_order,
-        offset: o, pageSize: l, visibleIds: f.ids,
+        offset: o, pageSize: l, visibleIds: await searchScope(a.tenant_id, a.q, f.ids, allowed, 'registry'),
       }, { globalView: false });
-      const items = (await identifiersAllowed(caller, a.tenant_id)) ? r.items : r.items.map(maskRegistryDevice);
+      const items = allowed ? r.items : r.items.map(maskRegistryDevice);
       return page(items, o, l, r.total);
     }),
   });
@@ -177,10 +220,11 @@ export function registerDeviceTools(): void {
       const f = await deviceFilter(caller, a.tenant_id);
       const l = a.limit ?? 50;
       const o = a.offset ?? 0;
+      const allowed = await identifiersAllowed(caller, a.tenant_id);
       const r = await listDevices(a.tenant_id, {
         q: a.q, conflict: a.conflict, adminInactive: a.admin_inactive, silent: a.silent, revoked: a.revoked, limit: l, offset: o,
-      }, f.ids);
-      const items = (await identifiersAllowed(caller, a.tenant_id)) ? r.items : r.items.map(maskLegacyDevice);
+      }, await searchScope(a.tenant_id, a.q, f.ids, allowed, 'legacy'));
+      const items = allowed ? r.items : r.items.map(maskLegacyDevice);
       return page(items, o, l, r.total);
     }),
   });

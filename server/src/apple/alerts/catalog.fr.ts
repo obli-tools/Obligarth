@@ -44,6 +44,7 @@ export const APPLE_ALERTS_FR: Record<AppleAlertKind, { title: string; message: s
   'vpp.token_invalid': { title: 'Jeton de contenu invalide', message: 'Le jeton de contenu {label} n\'est plus valide : importez-en un nouveau.' },
   'vpp.operation_failed': { title: 'Opérations Apps and Books en échec', message: '{count} opération(s) de licence ont échoué.' },
   'vpp.notification_auth_failed': { title: 'Notifications Apps and Books refusées', message: '{count} notification(s) ont présenté un mauvais secret.' },
+  'vpp.platforms_kept': { title: 'Plateformes des apps non mises à jour', message: 'Le jeton de contenu {label} indique d\'autres plateformes pour {count} app(s) affectée(s) : leurs plateformes sont conservées tant qu\'elles ont des affectations.' },
   'deadline.apns_certificate': { title: 'Certificat push bientôt expiré', message: '{label} expire dans {daysLeft} jour(s) ({notAfter}).' },
   'deadline.ade_token': { title: 'Jeton ADE bientôt expiré', message: '{label} expire dans {daysLeft} jour(s) ({notAfter}).' },
   'deadline.vpp_token': { title: 'Jeton de contenu bientôt expiré', message: '{label} expire dans {daysLeft} jour(s) ({notAfter}).' },

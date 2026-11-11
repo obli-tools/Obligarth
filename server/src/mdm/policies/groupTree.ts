@@ -7,7 +7,7 @@ import { audit, type AuditWriteContext } from '../../audit';
 import { AppError } from '../../middleware/errorHandler';
 import { activeRequester, approvalService, refuse, type ApprovalExecution, type PendingApproval } from '../../services/approval.service';
 import { groupNotificationService } from '../../services/groupNotification.service';
-import { groupService } from '../../services/group.service';
+import { announceGroupChange, groupService } from '../../services/group.service';
 import { permissionService } from '../../services/permission.service';
 import { restrictionService } from '../../services/restriction.service';
 import { recordDirectChange } from './changeLedger';
@@ -162,10 +162,13 @@ export async function changeGroupTree(req: Request, group: DeviceGroup, change: 
     };
   }
   if (!done.result) throw new AppError(404, 'Group not found');
+  // Committed: the other consoles of the tenant follow the tree (the global view's echo to the master's admins).
   if (change.kind === 'group_delete') {
     groupNotificationService.removeGroup(change.groupId);
+    announceGroupChange('deleted', tenantId, { id: change.groupId });
     return { status: 200, body: { success: true, message: 'Group deleted' } };
   }
+  if (typeof done.result === 'object') announceGroupChange('moved', tenantId, done.result);
   return { status: 200, body: { success: true, data: done.result } };
 }
 
@@ -200,11 +203,18 @@ export async function executeGroupTreeChange(x: ApprovalExecution): Promise<void
     throw err;
   };
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
-  await withConfigurationLock(x.tenantId, async (trx) => {
+  const written = await withConfigurationLock(x.tenantId, async (trx) => {
     const now = await computeImpact(trx, x.tenantId, change).catch(stale);
     refuseUnlessAsApproved(approved!, now, 'request the change again');
     const done = await write(trx, change, { ctx, approvalId: x.approvalId, impact: now.impact }).catch(stale);
     if (!done) refuse('The group of this request no longer exists');
+    return done;
   }, { unbounded: true });
-  if (change.kind === 'group_delete') groupNotificationService.removeGroup(groupId);
+  // Committed with the lock's transaction: the other consoles of the tenant follow the tree.
+  if (change.kind === 'group_delete') {
+    groupNotificationService.removeGroup(groupId);
+    announceGroupChange('deleted', x.tenantId, { id: groupId });
+  } else if (written && typeof written === 'object') {
+    announceGroupChange('moved', x.tenantId, written);
+  }
 }

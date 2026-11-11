@@ -1,7 +1,7 @@
 import type { Request } from 'express';
 import { db } from '../db';
 import { logger } from '../utils/logger';
-import { getIO } from '../socket';
+import { getIO, approvalReadersRoom } from '../socket';
 import { userLabels } from './userLabels.service';
 import { audit, type AuditEntryInput, type AuditWriteContext } from '../audit';
 import { currentApprovalIds, runInApprovalScope } from './approvalContext';
@@ -163,8 +163,18 @@ function rowToApproval(r: any): PendingApproval {
   };
 }
 
+/** Who receives an approval live: the tenant's reviewers (approvalReadersRoom,
+ *  the rule of GET /api/approvals) and its requester, never every member of
+ *  the tenant (description and payload are the reviewers' to read). */
+export function approvalRooms(tenantId: unknown, requestedBy: unknown): string[] {
+  const rooms = [approvalReadersRoom(Number(tenantId))];
+  const requester = Number(requestedBy);
+  if (Number.isSafeInteger(requester) && requester > 0) rooms.push(`user:${requester}`);
+  return rooms;
+}
+
 function emitUpdated(row: any): void {
-  try { getIO().to(`tenant:${row.tenant_id}`).emit('APPROVAL_UPDATED', rowToApproval(row)); } catch {}
+  try { getIO().to(approvalRooms(row.tenant_id, row.requested_by)).emit('APPROVAL_UPDATED', rowToApproval(row)); } catch {}
 }
 
 function parseJson(v: unknown): any {
@@ -550,9 +560,9 @@ export const approvalService = {
     return rowToApproval(row);
   },
 
-  /** APPROVAL_CREATED to the tenant's room (a red badge appears at once). */
+  /** APPROVAL_CREATED to the tenant's reviewers and the requester (a red badge appears at once). */
   announceCreated(approval: PendingApproval): void {
-    try { getIO().to(`tenant:${approval.tenantId}`).emit('APPROVAL_CREATED', approval); } catch {}
+    try { getIO().to(approvalRooms(approval.tenantId, approval.requestedBy)).emit('APPROVAL_CREATED', approval); } catch {}
   },
 
   /** List pending approvals for a tenant (optionally all statuses).

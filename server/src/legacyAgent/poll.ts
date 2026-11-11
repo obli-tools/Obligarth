@@ -33,7 +33,8 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // after the device's, its remote.open delivered only while it awaits it, the
 // agent's result of it applied; the configuration follows the agent's version.
 // An agent below legacy_agent_min_version_code gets 426 agentTooOld with the
-// same body, whose commands are agent.update and inventory.refresh only.
+// same body, whose commands are the erase, the lock, agent.update and
+// inventory.refresh only (TOO_OLD_TYPES).
 // An agent 1.3.0 or later (lot PONT-POL §8.4): its policy report checked apart
 // (a refused one answers policyReport 'rejected', never a 400), recorded after
 // the events; its policy marked delivered when the answer carries it in full.
@@ -44,7 +45,10 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 // release explains raises legacy_agent.device_owner_lost. adbEnabled is copied.
 // =============================================================================
 
-const TOO_OLD_TYPES = ['agent.update', 'inventory.refresh'] as const;
+/** What an agent below the minimum version still gets: its update, its inventory, and the erase and the lock (review
+ *  F031: v0 types every agent knows; a lost or stolen phone that cannot update itself, without a licensed Knox, must
+ *  still be erased or locked, never left with a command queued that it is never given). */
+export const TOO_OLD_TYPES = ['device.wipe', 'device.lock', 'agent.update', 'inventory.refresh'] as const;
 
 /** The versionName of an agent build from its versionCode (major × 10000 + minor × 100 + patch, the rule of
  *  agent-android/app/build.gradle.kts): the name set at enrollment would otherwise stay after a self update. */

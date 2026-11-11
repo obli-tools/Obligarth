@@ -123,10 +123,12 @@ function LanguageStep({ selected, onSelect }: { selected: string; onSelect: (cod
 
 // ── Step 2: Profile ──────────────────────────────────────────────────────────
 function ProfileStep({
- displayName, email, emailError,
+ displayName, email, emailError, emailLocked,
  onDisplayName, onEmail,
 }: {
  displayName: string; email: string; emailError: string;
+ /** The account already has an address: it is changed from the profile only (the server refuses it here). */
+ emailLocked: boolean;
  onDisplayName: (v: string) => void; onEmail: (v: string) => void;
 }) {
  const { t } = useTranslation();
@@ -151,6 +153,8 @@ function ProfileStep({
  onChange={(e) => onEmail(e.target.value)}
  placeholder={t('enrollment.profile.emailPlaceholder')}
  required
+ readOnly={emailLocked}
+ aria-readonly={emailLocked}
  />
  {emailError ? (
  <p className="mt-1 text-xs text-status-down">{emailError}</p>
@@ -466,9 +470,11 @@ export function EnrollmentPage() {
  await checkSession();
  navigate('/', { replace: true });
  } catch (err: unknown) {
- const axiosErr = err as { response?: { data?: { error?: string } } };
+ const axiosErr = err as { response?: { data?: { error?: string; code?: string } } };
  const msg = axiosErr?.response?.data?.error ?? '';
- if (msg.toLowerCase().includes('email')) {
+ if (axiosErr?.response?.data?.code === 'emailChangeViaProfile') {
+ setError(t('enrollment.errors.failed'));
+ } else if (msg.toLowerCase().includes('email')) {
  setEmailError(t('enrollment.profile.emailInUse'));
  setStep('profile');
  } else {
@@ -513,6 +519,7 @@ export function EnrollmentPage() {
  displayName={data.displayName}
  email={data.email}
  emailError={emailError}
+ emailLocked={/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((user?.email ?? '').trim())}
  onDisplayName={(v) => setData((d) => ({ ...d, displayName: v }))}
  onEmail={(v) => setData((d) => ({ ...d, email: v }))}
  />

@@ -50,7 +50,9 @@ interface DeviceFacts {
   lostModeState: string;
   udid: string | null;
   certSha256: string | null;
-  last: Record<'device_info' | 'security_info' | 'apps' | 'profiles' | 'certificates', Date | null>;
+  /** The order of each kind of answer. `apps` is the installed list's, `managed_apps` the managed list's (review F004:
+   *  two answers of different natures, ingested later and possibly out of order, never set aside by each other). */
+  last: Record<'device_info' | 'security_info' | 'apps' | 'managed_apps' | 'profiles' | 'certificates', Date | null>;
 }
 
 const str = (v: unknown, max: number): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
@@ -67,7 +69,7 @@ async function factsOf(trx: Knex.Transaction, tenantId: number, deviceId: number
     .forUpdate('d')
     .first('d.ownership', 'd.management_mode', 'd.serial_number', 'd.supervised', 'd.os_version', 'd.platform', 'd.model_name',
       'd.device_name', 'd.lost_mode_state', 'a.udid', 'a.cert_sha256', 'a.last_device_info_at', 'a.last_security_info_at', 'a.last_apps_at',
-      'a.last_profiles_at', 'a.last_certificates_at') as Record<string, any> | undefined;
+      'a.last_managed_apps_at', 'a.last_profiles_at', 'a.last_certificates_at') as Record<string, any> | undefined;
   if (!r) return null;
   return {
     ownership: r.ownership, mode: r.management_mode, serial: r.serial_number ?? null, supervised: !!r.supervised,
@@ -76,7 +78,7 @@ async function factsOf(trx: Knex.Transaction, tenantId: number, deviceId: number
     certSha256: r.cert_sha256 ? String(r.cert_sha256).trim() : null,
     last: {
       device_info: r.last_device_info_at ?? null, security_info: r.last_security_info_at ?? null, apps: r.last_apps_at ?? null,
-      profiles: r.last_profiles_at ?? null, certificates: r.last_certificates_at ?? null,
+      managed_apps: r.last_managed_apps_at ?? null, profiles: r.last_profiles_at ?? null, certificates: r.last_certificates_at ?? null,
     },
   };
 }
@@ -274,7 +276,8 @@ async function catalogIds(trx: Knex.Transaction, tenantId: number, identifiers: 
 
 /**
  * InstalledApplicationList (§5.3, deferred): the complete list of its source. The 'installed_list' rows
- * absent from it are deleted, the others updated or inserted. With installedApps 'managed_only' (personal,
+ * absent from it are deleted (and the 'managed_list' rows no longer managed), the others updated or inserted (a
+ * 'managed_list' row listed takes the source 'installed_list'). With installedApps 'managed_only' (personal,
  * COPE), an app is kept only if it is known as managed: an unmanaged app is never stored.
  */
 export async function ingestInstalledApplicationList(trx: Knex.Transaction, tenantId: number, deviceId: number,
@@ -303,11 +306,19 @@ export async function ingestInstalledApplicationList(trx: Knex.Transaction, tena
     };
     await trx('device_apps').insert({ ...row, source: 'installed_list', first_seen_at: occurredAt })
       .onConflict(['tenant_id', 'device_id', 'identifier'])
-      .merge(appsMerge(trx, ['name', 'version', 'short_version', 'bundle_size', 'dynamic_size', 'is_validated', 'app_id', 'last_seen_at']));
+      .merge({
+        ...appsMerge(trx, ['name', 'version', 'short_version', 'bundle_size', 'dynamic_size', 'is_validated', 'app_id', 'last_seen_at']),
+        // A row the managed list created (an app installed by the MDM) is installed now: it follows this list from
+        // here on, and leaves the inventory once the device no longer lists it. A DDM status row keeps its source.
+        source: trx.raw(`CASE WHEN device_apps.source = 'managed_list' THEN 'installed_list' ELSE device_apps.source END`),
+      });
   }
-  // The rows of this source absent from the complete list leave the inventory.
+  // The rows of this source absent from the complete list leave the inventory, and so do the rows of the managed
+  // list that are no longer managed (an app the MDM installed then removed, never listed as installed since): an
+  // app the device no longer holds is not shown, counted nor matched by a dynamic group.
   const keep = items.map((i) => i.identifier);
-  const del = trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId, source: 'installed_list' });
+  const del = trx('device_apps').where({ tenant_id: tenantId, device_id: deviceId })
+    .where((w) => { w.where('source', 'installed_list').orWhere((m) => { m.where({ source: 'managed_list', managed: false }); }); });
   if (keep.length) del.whereNotIn('identifier', keep);
   await del.del();
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
@@ -330,7 +341,8 @@ export async function ingestManagedApplicationList(trx: Knex.Transaction, tenant
   apps: Record<string, Record<string, unknown>>, occurredAt: Date): Promise<IngestOutcome> {
   const f = await factsOf(trx, tenantId, deviceId);
   if (!f) return 'no_device';
-  if (!after(occurredAt, f.last.apps)) return 'stale';
+  // Its own order (F004): an installed list received meanwhile neither sets it aside nor is set aside by it.
+  if (!after(occurredAt, f.last.managed_apps)) return 'stale';
   const rules = await rulesOf(trx, tenantId, f);
   const entries = Object.entries(apps ?? {}).filter(([id]) => /^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$/.test(id));
   const ids = await catalogIds(trx, tenantId, entries.map(([id]) => id));
@@ -347,7 +359,8 @@ export async function ingestManagedApplicationList(trx: Knex.Transaction, tenant
   if (still.length) gone.whereNotIn('identifier', still);
   if (rules.installedApps === 'managed_only') await gone.del();
   else await gone.update({ managed: false, management_status: null });
-  await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
+  // last_apps_at stays the installed list's: the weekly refresh asks for one on it (apple/commands/inventory.ts).
+  await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_managed_apps_at: occurredAt, updated_at: new Date() });
   for (const fn of managedAppsHooks) await fn(trx, tenantId, deviceId);
   // The dynamic groups that read the applications (marked by the base, P0-5 T5).
   await requestGroupEvaluation(trx, tenantId, [deviceId]);

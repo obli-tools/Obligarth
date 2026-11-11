@@ -1,7 +1,8 @@
 import { z } from 'zod';
-import { MCP_SCOPE_KEYS, MCP_SCOPES, type DeviceCapability, type McpScope } from '@obligarth/shared';
+import { LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION, MCP_SCOPE_KEYS, MCP_SCOPES, type DeviceCapability, type McpScope } from '@obligarth/shared';
 import { db } from '../../db';
 import { asNone, userActor } from '../../db/context';
+import { readSettings } from '../../guard/settings';
 import { permissionService } from '../../services/permission.service';
 import { restrictionService } from '../../services/restriction.service';
 import { effectiveTenantsOf, holdsTenantCapability, targetIds, withTenant, type McpCaller } from '../caller';
@@ -74,6 +75,11 @@ async function tenantDetail(caller: McpCaller, t: { id: number; name: string; ro
     const restrictions: Record<string, string> = {};
     for (const s of caller.key.scopes) {
       for (const a of SCOPE_ACTIONS[s] ?? []) restrictions[a] = await restrictionService.getLevelFor({ tenantId: t.id, actionKey: a });
+    }
+    // Review F115: while the tenant's guard setting is on, restart, install, uninstall and agent update go through
+    // legacy_agent.commands_sensitive (a second factor at least): reported with the others.
+    if (caller.key.scopes.some((s) => s === 'commands.restart' || s === 'commands.apps') && (await readSettings(t.id)).legacy_agent_commands_sensitive) {
+      restrictions[LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION] = await restrictionService.getLevelFor({ tenantId: t.id, actionKey: LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION });
     }
     return {
       tenantId: t.id, name: t.name, role: t.role,

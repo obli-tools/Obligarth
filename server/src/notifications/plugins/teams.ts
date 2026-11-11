@@ -1,4 +1,5 @@
 import type { NotificationPlugin, NotificationPayload } from '../types';
+import { guardedPost } from '../../utils/ssrfGuard';
 
 interface StatusInfo {
   emoji: string;
@@ -145,17 +146,9 @@ export const teamsPlugin: NotificationPlugin = {
   async send(config, payload) {
     const body = buildAdaptiveCard(payload);
 
-    const res = await fetch(String(config.webhookUrl), {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10000),
-    });
-
-    if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error(`Teams returned ${res.status}${text ? `: ${text}` : ''}`);
-    }
+    // A public destination only, no redirect; the status alone in the error (never the remote page).
+    const res = await guardedPost(String(config.webhookUrl), { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }, 'public');
+    if (!res.ok) throw new Error(`Teams returned ${res.status}`);
   },
 
   async sendTest(config) {

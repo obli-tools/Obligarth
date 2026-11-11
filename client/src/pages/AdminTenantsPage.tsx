@@ -7,6 +7,10 @@ import { IconButton } from '@/components/common/IconButton';
 import { Modal } from '@/components/common/Modal';
 import { PageContainer } from '@/components/common/PageContainer';
 import { useConfirm } from '@/components/common/ConfirmDialog';
+import toast from 'react-hot-toast';
+import apiClient, { isStepUpHandled } from '@/api/client';
+import { apiErrorMessage } from '@/utils/apiError';
+import { useTenantStore } from '@/store/tenantStore';
 
 interface TenantMember {
  id: number;
@@ -14,7 +18,13 @@ interface TenantMember {
  display_name: string | null;
  role: string;
  is_active: boolean;
- tenantRole: 'admin' | 'member';
+ /** 'admin' or the slug of a permission set ('member', the pre-091 name, is the 'user' set). */
+ tenantRole: string;
+}
+
+interface RoleOption {
+ value: string;
+ label: string;
 }
 
 interface TenantWithMemberCount extends Tenant {
@@ -106,54 +116,94 @@ function MembersPanel({ tenantId, onClose }: { tenantId: number; onClose: () => 
  const [loading, setLoading] = useState(true);
  const [addingId, setAddingId] = useState<number | ''>('');
 
+ const [roles, setRoles] = useState<RoleOption[]>([]);
+ const [busy, setBusy] = useState(false);
+
+ // Every call goes through apiClient: the server's refusal is read and said (toast), and a second factor the
+ // server asks for is prompted by its interceptor.
  const fetchMembers = async () => {
- const res = await fetch(`/api/tenants/${tenantId}/members`, { credentials: 'include' });
- const d = await res.json();
- setMembers(d.data ?? []);
+ try {
+ const res = await apiClient.get<{ data?: TenantMember[] }>(`/tenants/${tenantId}/members`);
+ setMembers(res.data.data ?? []);
+ } catch (err) {
+ toast.error(apiErrorMessage(err));
+ } finally {
  setLoading(false);
+ }
  };
 
  const fetchUsers = async () => {
- const res = await fetch('/api/users', { credentials: 'include' });
- const d = await res.json();
- setAllUsers(d.data ?? []);
+ try {
+ const res = await apiClient.get<{ data?: { id: number; username: string }[] }>('/users');
+ setAllUsers(res.data.data ?? []);
+ } catch {
+ setAllUsers([]);
+ }
+ };
+
+ // The roles of a membership: tenant administrator, or one of the permission sets (their slug is stored).
+ const fetchRoles = async () => {
+ try {
+ const res = await apiClient.get<{ data?: { slug: string; name: string }[] }>('/permission-sets');
+ setRoles((res.data.data ?? []).filter((s) => s.slug !== 'admin').map((s) => ({ value: s.slug, label: s.name })));
+ } catch {
+ setRoles([]);
+ }
  };
 
  useEffect(() => {
  fetchMembers();
  fetchUsers();
+ fetchRoles();
  }, [tenantId]);
+
+ /** Runs one write, then re-reads the members (also after a refusal: the list shows what is stored). */
+ const write = async (run: () => Promise<unknown>) => {
+ if (busy) return;
+ setBusy(true);
+ try {
+ await run();
+ } catch (err) {
+ if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+ } finally {
+ setBusy(false);
+ void fetchMembers();
+ }
+ };
 
  const addMember = async () => {
  if (!addingId) return;
- await fetch(`/api/tenants/${tenantId}/members`, {
- method: 'POST',
- credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ userId: addingId, role: 'member' }),
- });
+ const userId = addingId;
+ await write(async () => {
+ await apiClient.post(`/tenants/${tenantId}/members`, { userId, role: 'member' });
  setAddingId('');
- fetchMembers();
+ });
  };
 
- const toggleRole = async (userId: number, currentRole: string) => {
- const newRole = currentRole === 'admin' ? 'member' : 'admin';
- await fetch(`/api/tenants/${tenantId}/members/${userId}`, {
- method: 'PUT',
- credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ role: newRole }),
- });
- fetchMembers();
+ /** The role options of one member: administrator, the permission sets, and its current role if none of them. */
+ const roleOptionsOf = (current: string): RoleOption[] => {
+ const base: RoleOption[] = [{ value: 'admin', label: t('tenant.roleAdministrator') || 'Administrator' }, ...roles];
+ if (!roles.some((r) => r.value === 'user')) base.push({ value: 'user', label: t('tenant.roleMember') || 'Member' });
+ const normalised = current === 'member' ? 'user' : current;
+ if (!base.some((r) => r.value === normalised)) base.push({ value: normalised, label: normalised });
+ return base;
+ };
+
+ const changeRole = async (member: TenantMember, newRole: string) => {
+ const current = member.tenantRole === 'member' ? 'user' : member.tenantRole;
+ if (newRole === current) return;
+ const label = roleOptionsOf(member.tenantRole).find((r) => r.value === newRole)?.label ?? newRole;
+ if (!(await confirm({
+ message: t('tenant.confirmRoleChange', { user: member.username, role: label }) || `Give ${member.username} the role "${label}" in this workspace?`,
+ danger: newRole === 'admin' || current === 'admin',
+ confirmLabel: t('common.confirm') || 'Confirm',
+ }))) return;
+ await write(() => apiClient.put(`/tenants/${tenantId}/members/${member.id}`, { role: newRole }));
  };
 
  const removeMember = async (userId: number) => {
  if (!(await confirm({ message: t('common.confirmDelete'), danger: true, confirmLabel: t('tenant.removeMember') }))) return;
- await fetch(`/api/tenants/${tenantId}/members/${userId}`, {
- method: 'DELETE',
- credentials: 'include',
- });
- fetchMembers();
+ await write(() => apiClient.delete(`/tenants/${tenantId}/members/${userId}`));
  };
 
  const nonMembers = allUsers.filter((u) => !members.find((m) => m.id === u.id));
@@ -183,7 +233,7 @@ function MembersPanel({ tenantId, onClose }: { tenantId: number; onClose: () => 
  <option key={u.id} value={u.id}>{u.username}</option>
  ))}
  </select>
- <Button size="sm" onClick={addMember} disabled={!addingId} className="shrink-0 coarse:min-h-10">
+ <Button size="sm" onClick={addMember} disabled={!addingId || busy} className="shrink-0 coarse:min-h-10">
  {t('tenant.addMember')}
  </Button>
  </>
@@ -203,17 +253,21 @@ function MembersPanel({ tenantId, onClose }: { tenantId: number; onClose: () => 
  )}
  </div>
  <div className="flex items-center gap-2 shrink-0">
- <button
- onClick={() => toggleRole(m.id, m.tenantRole)}
- className={`text-xs px-2 py-0.5 coarse:px-3 coarse:py-1.5 rounded-full border transition-colors ${
- m.tenantRole === 'admin'
- ? 'border-accent text-accent hover:bg-accent/10'
- : 'border-transparent text-text-muted hover:border-text-muted'
+ {/* The real roles (administrator or a permission set), changed after a confirmation: a one-click
+ toggle promoted any member to administrator and lost a particular permission set. */}
+ <select
+ value={m.tenantRole === 'member' ? 'user' : m.tenantRole}
+ disabled={busy}
+ onChange={(e) => { void changeRole(m, e.target.value); }}
+ aria-label={t('tenant.roleOf', { user: m.username }) || `Role of ${m.username}`}
+ className={`max-w-[10rem] rounded-lg bg-bg-primary px-2 py-0.5 coarse:py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-accent ${
+ m.tenantRole === 'admin' ? 'text-accent' : 'text-text-secondary'
  }`}
- title={t('tenant.toggleRole')}
  >
- {m.tenantRole}
- </button>
+ {roleOptionsOf(m.tenantRole).map((r) => (
+ <option key={r.value} value={r.value}>{r.label}</option>
+ ))}
+ </select>
  <IconButton
  label={t('tenant.removeMember')}
  icon={<X size={13} />}
@@ -243,9 +297,10 @@ export function AdminTenantsPage() {
  const fetchTenants = async () => {
  setLoading(true);
  try {
- const res = await fetch('/api/tenants', { credentials: 'include' });
- const d = await res.json();
- setTenants(d.data ?? []);
+ const res = await apiClient.get<{ data?: TenantWithMemberCount[] }>('/tenants');
+ setTenants(res.data.data ?? []);
+ } catch (err) {
+ toast.error(apiErrorMessage(err));
  } finally {
  setLoading(false);
  }
@@ -253,39 +308,56 @@ export function AdminTenantsPage() {
 
  useEffect(() => { fetchTenants(); }, []);
 
+ // The forms show the server's refusal under their fields.
+ const asFormError = (err: unknown): Error => new Error(apiErrorMessage(err) || t('common.error'));
+
  const handleCreate = async (name: string, slug: string) => {
- const res = await fetch('/api/tenants', {
- method: 'POST',
- credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ name, slug }),
- });
- if (!res.ok) {
- const d = await res.json();
- throw new Error(d.error ?? t('common.error'));
+ try {
+ await apiClient.post('/tenants', { name, slug });
+ } catch (err) {
+ throw asFormError(err);
  }
  setCreating(false);
  fetchTenants();
  };
 
  const handleUpdate = async (id: number, name: string, slug: string) => {
- const res = await fetch(`/api/tenants/${id}`, {
- method: 'PUT',
- credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ name, slug }),
- });
- if (!res.ok) {
- const d = await res.json();
- throw new Error(d.error ?? t('common.error'));
+ try {
+ await apiClient.put(`/tenants/${id}`, { name, slug });
+ } catch (err) {
+ throw asFormError(err);
  }
  setEditingId(null);
  fetchTenants();
  };
 
- const handleDelete = async (id: number) => {
- if (!(await confirm({ message: t('tenant.confirmDelete'), danger: true }))) return;
- await fetch(`/api/tenants/${id}`, { method: 'DELETE', credentials: 'include' });
+ const setTwoStepApproval = async (id: number, checked: boolean) => {
+ try {
+ await apiClient.put(`/tenants/${id}`, { twoStepApproval: checked });
+ } catch (err) {
+ if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+ }
+ fetchTenants();
+ };
+
+ // Irreversible (the tenant's keys are destroyed, its devices and data deleted): its slug is typed to
+ // confirm, then the server asks for a fresh second factor (the apiClient interceptor prompts for it).
+ const handleDelete = async (tenant: TenantWithMemberCount) => {
+ if (!(await confirm({
+ title: t('tenant.deleteTitle', { name: tenant.name }) || `Delete the workspace "${tenant.name}"`,
+ message: t('tenant.confirmDeleteTyped', { slug: tenant.slug }) || `All its data, its devices under management included, will be permanently removed. Type "${tenant.slug}" to confirm.`,
+ danger: true,
+ requireText: tenant.slug,
+ }))) return;
+ try {
+ await apiClient.delete(`/tenants/${tenant.id}`);
+ toast.success(t('tenant.deleted', { name: tenant.name }) || `Workspace "${tenant.name}" deleted`);
+ // The tenant switcher must not offer it any more.
+ void useTenantStore.getState().fetchTenants();
+ } catch (err) {
+ // A refusal (a linked Android enterprise: 409, a second factor declined…) is said, never swallowed.
+ if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 8000 });
+ }
  fetchTenants();
  };
 
@@ -349,16 +421,7 @@ export function AdminTenantsPage() {
  <input
  type="checkbox"
  checked={!!tenant.twoStepApproval}
- onChange={async (e) => {
- const checked = e.target.checked;
- await fetch(`/api/tenants/${tenant.id}`, {
- method: 'PUT',
- credentials: 'include',
- headers: { 'Content-Type': 'application/json' },
- body: JSON.stringify({ twoStepApproval: checked }),
- });
- fetchTenants();
- }}
+ onChange={(e) => { void setTwoStepApproval(tenant.id, e.target.checked); }}
  className="accent-accent shrink-0 coarse:h-5 coarse:w-5"
  />
  <span className="text-[11px] text-text-secondary">
@@ -385,7 +448,7 @@ export function AdminTenantsPage() {
  <IconButton
  label={t('common.delete')}
  icon={<Trash2 size={13} />}
- onClick={() => handleDelete(tenant.id)}
+ onClick={() => handleDelete(tenant)}
  className="rounded-md hover:text-red-400"
  />
  )}

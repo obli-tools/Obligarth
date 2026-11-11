@@ -18,6 +18,7 @@ import { currentServerKey } from './serverKey';
 import { enrollmentPlacement, enrollmentSiteInTx } from './tokens';
 import { fromB64url, p256PublicKey, sha256Hex } from './signature';
 import { clockReply, errorReply, signatureHolds, type Exchange, type Reply } from './surface';
+import { retireWipedInTx } from './wiped';
 
 // =============================================================================
 // POST /agent/v1/enroll (docs: agent-pont-android §4.4, RS-7, PB13): the
@@ -160,6 +161,14 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       // P0-13 (CNF-02, D14): the IMEIs are kept only when the tenant's corporate privacy profile collects the hardware
       // identifiers (they still check the conflicts below, never stored otherwise); the serial number always (PB13).
       const keepImei = (await legacyAgentPrivacyRulesFor(trx, tenantId)).imei;
+      // Review F032: the records this phone left by an erase (its wipe acknowledged, no interrogation since) leave
+      // management first: its serial number and IMEIs are then its own again, not a conflict.
+      const previous = [
+        ...(serial ? await trx('devices').where({ tenant_id: tenantId, serial_number: serial, management_channel: 'legacy_agent' }).pluck('id') as number[] : []),
+        ...(imeis.length > 0 ? await trx('legacy_agent_devices').where({ tenant_id: tenantId }).whereNull('revoked_at')
+          .whereRaw('imeis && ?::text[]', [imeis]).pluck('device_id') as number[] : []),
+      ].map(Number);
+      if (previous.length > 0) await retireWipedInTx(trx, tenantId, [...new Set(previous)]);
       // PB13: a serial or an IMEI never takes the record of a device still under management.
       let conflict = false;
       if (serial) {

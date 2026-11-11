@@ -253,14 +253,27 @@ function cursorOf(raw: unknown): { at: Date; id: string } | null {
   return { at: d, id };
 }
 
-async function commandView(tenantId: number, row: Record<string, any>): Promise<MdmCommandView> {
-  const counts = await db('mdm_command_targets').where({ tenant_id: tenantId, command_id: row.id }).groupBy('state')
+/**
+ * A command as the caller may see it (review F019): for a caller whose scope is limited, the counts of its targets
+ * cover the devices it sees only, and the reason and ticket of a command that also touches devices outside that
+ * scope are shown to its requester only.
+ */
+async function commandView(tenantId: number, row: Record<string, any>, seen: number[] | 'all' = 'all', callerId?: number): Promise<MdmCommandView> {
+  const countsQ = db('mdm_command_targets').where({ tenant_id: tenantId, command_id: row.id });
+  if (seen !== 'all') countsQ.whereRaw('device_id = ANY (?::int[])', [seen]);
+  const counts = await countsQ.groupBy('state')
     .select('state').count('* as n') as unknown as Array<{ state: MdmTargetState; n: string | number }>;
+  let hideNotes = false;
+  if (seen !== 'all' && Number(row.requested_by) !== Number(callerId)) {
+    const outside = await db('mdm_command_targets').where({ tenant_id: tenantId, command_id: row.id })
+      .whereRaw('NOT (device_id = ANY (?::int[]))', [seen]).first('device_id');
+    hideNotes = !!outside;
+  }
   return {
     id: String(row.id).toLowerCase(), batchId: row.batch_id ? String(row.batch_id).toLowerCase() : null,
     ...(row.platform && row.platform !== 'apple' ? { platform: String(row.platform) } : {}), requestType: row.request_type, origin: row.origin,
     createdAt: iso(row.created_at) as string, notBefore: iso(row.not_before), expiresAt: iso(row.expires_at) as string, submitState: row.submit_state,
-    reason: row.reason ?? null, ticket: row.ticket ?? null,
+    reason: hideNotes ? null : row.reason ?? null, ticket: hideNotes ? null : row.ticket ?? null,
     requestedBy: row.requested_by ? { id: Number(row.requested_by), name: row.requested_by_name ?? `#${row.requested_by}` } : null,
     approvalId: row.approval_id ?? null, guardActionUuid: row.guard_action_uuid ? String(row.guard_action_uuid).toLowerCase() : null,
     counts: Object.fromEntries(counts.map((c) => [c.state, Number(c.n)])) as MdmCommandView['counts'],
@@ -521,14 +534,14 @@ router.get('/commands', requireTenantCapability('devices.manage'), async (req, r
     if (cursor) q = q.whereRaw('(c.created_at, c.id) < (?::timestamptz, ?::uuid)', [cursor.at, cursor.id]);
     const rows = await q.orderBy('c.created_at', 'desc').orderBy('c.id', 'desc').limit(50).select(COMMAND_COLUMNS) as Array<Record<string, any>>;
     const data: MdmCommandView[] = [];
-    for (const r of rows) data.push(await commandView(tenantId, r));
+    for (const r of rows) data.push(await commandView(tenantId, r, seen, req.session.userId));
     const last = rows[rows.length - 1];
     res.json({ data, nextCursor: rows.length === 50 && last ? `${iso(last.created_at)}|${String(last.id).toLowerCase()}` : null });
   } catch (err) { next(err); }
 });
 
 /** A command of the tenant with the targets the caller sees; 404 when it sees none. */
-async function commandOf(req: Request): Promise<{ row: Record<string, any>; deviceIds: number[]; spec: CommandSpec<any> | undefined }> {
+async function commandOf(req: Request): Promise<{ row: Record<string, any>; deviceIds: number[]; spec: CommandSpec<any> | undefined; seen: number[] | 'all' }> {
   const id = String(req.params.commandId ?? '');
   if (!UUID_RE.test(id)) throw new AppError(404, 'Command not found');
   const tenantId = req.tenantId!;
@@ -539,18 +552,18 @@ async function commandOf(req: Request): Promise<{ row: Record<string, any>; devi
   const seen = await visible(req);
   if (seen !== 'all') deviceIds = deviceIds.filter((d) => seen.includes(d));
   if (deviceIds.length === 0) throw new AppError(404, 'Command not found');
-  return { row, deviceIds, spec: commandSpecOrNull(row.request_type) };
+  return { row, deviceIds, spec: commandSpecOrNull(row.request_type), seen };
 }
 
 // GET /api/apple/commands/:commandId?cursor=<device id>
 router.get('/commands/:commandId', async (req, res, next) => {
   try {
-    const { row, deviceIds } = await commandOf(req);
+    const { row, deviceIds, seen } = await commandOf(req);
     const after = parseRequestDeviceId(req.query.cursor) ?? 0;
     const page = deviceIds.filter((d) => d > after).sort((a, b) => a - b).slice(0, 100);
     const rows = page.length === 0 ? [] : await targetsQuery(req.tenantId!).where('t.command_id', row.id).whereRaw('t.device_id = ANY (?::int[])', [page])
       .orderBy('t.device_id').select(TARGET_COLUMNS) as Array<Record<string, any>>;
-    res.json({ data: { command: await commandView(req.tenantId!, row), targets: rows.map(targetView), nextCursor: page.length === 100 ? page[page.length - 1] : null } });
+    res.json({ data: { command: await commandView(req.tenantId!, row, seen, req.session.userId), targets: rows.map(targetView), nextCursor: page.length === 100 ? page[page.length - 1] : null } });
   } catch (err) { next(err); }
 });
 

@@ -2,6 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { passwordResetService } from '../services/passwordReset.service';
 import { AppError } from '../middleware/errorHandler';
+import { logger } from '../utils/logger';
 
 const forgotSchema = z.object({ email: z.string().email() });
 const validateSchema = z.object({ token: z.string().min(1) });
@@ -16,9 +17,13 @@ export const passwordResetController = {
       const parsed = forgotSchema.safeParse(req.body);
       if (!parsed.success) throw new AppError(400, 'Invalid email address');
 
-      // Always return 200 — no email enumeration
-      await passwordResetService.requestReset(parsed.data.email);
+      // Always the same 200, at once — no email enumeration: the lookup and the
+      // SMTP delivery run after the answer, so neither the response time nor
+      // an SMTP failure (logged, never answered) tells a known address.
       res.json({ success: true, message: 'If an account with that email exists, a reset link has been sent.' });
+      void passwordResetService.requestReset(parsed.data.email).catch((err: unknown) => {
+        logger.warn({ err: { name: (err as Error | null)?.name, message: (err as Error | null)?.message } }, 'password reset request failed');
+      });
     } catch (err) {
       next(err);
     }

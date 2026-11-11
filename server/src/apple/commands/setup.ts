@@ -112,7 +112,15 @@ async function setupTimeout(ctx: JobContext<Timeout>): Promise<JobResult> {
     if (!plan || plan.state !== 'running') return plan?.state ?? 'no_plan';
     if (new Date(plan.started_at).getTime() !== new Date(ctx.payload.startedAt).getTime()) return 'another_plan';
     if (new Date(plan.deadline_at).getTime() > Date.now() + 1000) return 'not_due';
-    if (!plan.device_configured_command_id) await sendDeviceConfigured(trx, tenantId, deviceId, `j:${ctx.name}`);
+    // Review F016: a DeviceConfigured already sent whose target was closed without its acknowledgement (cancelled,
+    // expired, refused) releases nothing: sent again, or the device would wait in the setup assistant for ever.
+    let resend = !plan.device_configured_command_id;
+    if (!resend) {
+      const t = await trx('mdm_command_targets').where({ tenant_id: tenantId, device_id: deviceId, command_id: plan.device_configured_command_id })
+        .first('state') as { state: string } | undefined;
+      resend = !t || !['pending', 'queued', 'sent', 'notnow', 'acknowledged'].includes(t.state);
+    }
+    if (resend) await sendDeviceConfigured(trx, tenantId, deviceId, `j:${ctx.name}`);
     await trx('apple_setup_plans').where({ tenant_id: tenantId, device_id: deviceId })
       .update({ state: 'timed_out', completed_at: new Date(), outcome_code: 'timeout' });
     await raiseInTx(trx, tenantId, 'enrollment.setup_timeout', { discriminant: deviceId, navigateTo: `/devices/${deviceId}` });

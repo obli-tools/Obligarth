@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Heslo nemůže obsahovat pouze mezery. Chcete-li heslo odebrat, ponechte pole prázdné."
+    },
+    "reconcileHold": {
+      "help": "Poslední sesouhlasení nenašlo u Googlu {{count}} z {{managed}} spravovaných zařízení: žádné nebylo vyřazeno ze správy. Nejprve zkontrolujte podnik u Googlu; potvrďte jen tehdy, pokud tato zařízení opravdu zmizela.",
+      "confirm": "Potvrdit zmizení zařízení ({{count}})…",
+      "confirmTitle": "Potvrdit zmizelá zařízení",
+      "confirmMessage": "Vyřadit ze správy zařízení ({{count}})? Udělejte to jen tehdy, pokud byla u Googlu opravdu odebrána: vyžádá se druhý faktor.",
+      "confirmed": "Potvrzení zaznamenáno: sesouhlasení proběhne do minuty."
+    }
+  },
   "common": {
     "save": "Uložit",
     "cancel": "Zrušit",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Na tento pracovní prostor nelze přepnout.",
+    "roleAdministrator": "Správce",
+    "roleMember": "Člen",
+    "confirmRoleChange": "Přidělit uživateli {{user}} roli „{{role}}“ v tomto pracovním prostoru?",
+    "roleOf": "Role uživatele {{user}}",
+    "deleteTitle": "Smazat pracovní prostor „{{name}}“",
+    "confirmDeleteTyped": "Všechna jeho data včetně spravovaných zařízení budou trvale odstraněna. Pro potvrzení napište „{{slug}}“.",
+    "deleted": "Pracovní prostor „{{name}}“ byl smazán",
     "pageTitle": "Pracovní prostory",
     "pageDesc": "Spravujte pracovní prostory a jejich členy pro nasazení s více nájemci.",
     "create": "Nový pracovní prostor",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Přepnout pracovní prostor"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Ostatní skupiny"
+    },
     "tabApiKeys": "API klíče",
     "viewDevice": "Zobrazit zařízení",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "Používá se: ochranné nastavení „Druhý faktor pro příkazy agenta Android“ je zapnuto.",
+      "commandsSensitiveOff": "Nepoužívá se: ochranné nastavení „Druhý faktor pro příkazy agenta Android“ je vypnuto (Zabezpečení, karta Ochrany)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Chyba"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Znovu načíst verzi uloženou na serveru? Neuložené změny budou ztraceny.",
+      "noLongerDraft": "Tato verze již není koncept (byla odeslána nebo zveřejněna jinde): načtěte ji znovu.",
+      "confirmOverwrite": "Tento koncept od jeho otevření změnil někdo jiný. Přesto uložit vaši verzi? Jeho změny budou ztraceny.",
+      "reviewBeforePublish": "Tato verze byla změněna jinde: nyní se zobrazuje její aktuální obsah, před zveřejněním jej zkontrolujte.",
+      "changedElsewhere": "Tato verze byla od otevření změněna jinde. Uložení by tyto změny nahradilo.",
+      "reloadVersion": "Znovu načíst",
+      "savedElsewhere": "Tento koncept byl mezitím uložen jinde: nic nebylo uloženo. Načtěte ho znovu, abyste viděli ostatní změny (vaše se ztratí)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Skupina přesunuta, ale její pozici mezi novými sourozeneckými skupinami se nepodařilo uložit",
+    "crossTenantMove": "Skupina zůstává ve svém pracovním prostoru: přetáhněte ji mezi skupiny stejného prostoru.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Oznámení smazáno",
+      "live_alert_cleared": "Oznámení vymazána",
+      "sso_sync_delete_blocked": "Smazání účtu službou Obligate zablokováno (stále odkazován): deaktivován, smažte ručně",
+      "android_mass_missing_confirmed": "Android: hromadné zmizení potvrzeno",
+      "legacy_agent_package_confirmed": "Potvrzen APK odeslaný zpět zařízením"
+    },
+    "families": {
+      "legacy_agent": "Agent Android"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Před změnou platforem této aplikace odeberte její přiřazení.",
+    "exportBusy": "Probíhá příliš mnoho exportů PDF: zkuste to za chvíli znovu.",
+    "exportTooLarge": "Příliš mnoho řádků pro export PDF (nejvýše 2000): zužte filtry nebo exportujte jako CSV či XLSX.",
+    "exportTimeout": "Export PDF trval příliš dlouho: exportujte jako CSV či XLSX nebo zužte filtry.",
+    "tenantHasBridgeDevices": "Tento prostor má stále {{devices}} zařízení zaregistrovaných s agentem mostu Android: nejprve je odvolejte, potom prostor smažte.",
+    "deadLetterAlreadyApplied": "Tato nedoručitelná zpráva už byla znovu použita: nepoužije se dvakrát.",
+    "userHasDependencies": "Na tento účet stále odkazují jiné záznamy: raději ho deaktivujte, nebo nejprve odstraňte to, co na něj odkazuje.",
+    "invalidConfirmMissing": "Potvrzení musí uvádět přesný počet zadržených zařízení (kladné celé číslo).",
+    "adminRequired": "Destruktivní příkaz může uvolnit pouze administrátor tenanta.",
+    "releaseRateLimited": "Za poslední hodinu bylo uvolněno příliš mnoho destruktivních příkazů: zkuste to později.",
+    "policyVersionChanged": "Verze se od náhledu změnila: zkontrolujte ji znovu.",
+    "twoFactorSetupRequired": "Je vyžadován druhý faktor: nejprve si v profilu nastavte ověřovací aplikaci.",
+    "packageNotConfirmed": "Tento APK odeslalo zpět zařízení: před instalací jej potvrďte na kartě Balíčky agenta Android.",
+    "capabilityMissing": "Váš tým nemá oprávnění, které tato akce vyžaduje."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Nepovoleno: nemáte právo zápisu k těmto zařízením.",
+      "status": {
+        "governed": "Řízená změna: přejmenujte v kartě zařízení"
+      },
+      "governedHint": "Řízená změna: nový název by zařízení přesunul do dynamické skupiny, na kterou míří přiřazení, nebo z ní. Přejmenujte ho v jeho kartě, kde se zobrazí náhled dopadu."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Stav",
+      "toConfirm": "K potvrzení",
+      "toConfirmHint": "Odesláno zpět zařízením: nelze nainstalovat, dokud jej osoba nepotvrdí.",
+      "confirmedState": "Potvrzeno",
+      "confirm": "Potvrdit",
+      "confirmTitle": "Potvrdit tento APK",
+      "confirmMessage": "Tento APK ({{packageName}}, {{version}}) odeslalo zpět zařízení, nenahrála jej osoba. Po potvrzení jej lze instalovat na zařízení tenanta.",
+      "confirmCheck": "Před potvrzením zkontrolujte, že název balíčku, verze a podepisující jsou ty, které očekáváte.",
+      "signerShort": "Podepisující",
+      "confirmed": "APK potvrzen: nyní jej lze nainstalovat.",
+      "fromDevice": "Ze zařízení",
+      "unconfirmedHint": "Balíčky odeslané zpět zařízením ({{count}}) je nutné potvrdit na kartě Balíčky, než je bude možné nainstalovat."
+    },
+    "awaitingApproval": "Žádost odeslána ke schválení"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Nemáte oprávnění tato oznámení smazat: sdílí je celý tenant."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Platformy aplikací nebyly aktualizovány",
+          "message": "Token obsahu {{label}} uvádí jiné platformy pro {{count}} přiřazených aplikací: jejich platformy zůstávají, dokud mají přiřazení."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: hromadné zmizení u Googlu zadrženo",
+        "message": "Sesouhlasení nenašlo u Googlu {{count}} z {{managed}} spravovaných zařízení: žádné nebylo vyřazeno ze správy. Zkontrolujte podnik a pak potvrďte na kartě Android Enterprise, pokud opravdu zmizela."
+      },
+      "google_unreachable": {
+        "title": "Android: Google je nedostupný",
+        "message": "Obligarth se nedostane k Android Management API od Google: registrace, zásady a příkazy Android čekají."
+      },
+      "google_auth_failed": {
+        "title": "Android: identita odmítnuta Googlem",
+        "message": "Google odmítl účet služby (odvolaný klíč nebo chybějící oprávnění): propojení Android je zastaveno."
+      },
+      "google_key_expiring": {
+        "title": "Android: klíči účtu služby brzy vyprší platnost",
+        "message": "Platnost klíče účtu služby Google vyprší za {{days}} d.: nahraďte jej."
+      },
+      "quota_warning": {
+        "title": "Android: kvóta zařízení na 80 %",
+        "message": "Zařízení Android v projektu Google: {{count}}. Je využito 80 % kvóty."
+      },
+      "quota_exhausted": {
+        "title": "Android: kvóta zařízení vyčerpána",
+        "message": "Zařízení Android: {{count}}. Kvóta projektu Google je vyčerpána, nové registrace jsou odmítány."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: oznámení v nedoručitelných zprávách",
+        "message": "Oznámení Google tenanta {{tenantId}} nebylo možné zpracovat ({{code}}) a bylo přesunuto do nedoručitelných zpráv."
+      },
+      "retention_risk": {
+        "title": "Android: oznámením hrozí vypršení",
+        "message": "Již {{days}} d. nebylo vyzvednuto žádné oznámení Google: nejstarší mohou vypršet dříve, než budou přečtena."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: zprávy neznámých podniků",
+        "message": "Zprávy Pub/Sub za poslední hodinu od podniků, které Obligarth nezná: {{lastHour}}."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: chybí testovací zpráva Pub/Sub",
+        "message": "Testovací zpráva Pub/Sub podniku tenanta {{tenantId}} nedorazila: zkontrolujte oprávnění tématu."
+      },
+      "ownership_violation": {
+        "title": "Android: volání odmítnuto kontrolou příslušnosti",
+        "message": "Volání na Google bylo odmítnuto kontrolou příslušnosti ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: podnik projektu chybí v registru",
+        "message": "Podnik projektu Google ({{ref}}) není v registru Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: odmítnutá zpětná volání registrace",
+        "message": "Odmítnutá zpětná volání registrace podniku za poslední hodinu: {{lastHour}}."
+      },
+      "domain_claimed": {
+        "title": "Android: registrace domény nárokované jiným tenantem",
+        "message": "Tenant {{tenantId}} se pokusil zaregistrovat podnik pro doménu nárokovanou jiným tenantem."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: dosažen krajní limit destruktivních operací",
+        "message": "Byl dosažen krajní limit destruktivních operací Android ({{kind}}, {{count}}): další jsou odmítány."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: podnik odpojen mimo Obligarth",
+        "message": "Podnik Android tohoto tenanta byl odpojen mimo Obligarth: jeho zařízení již nejsou spravována."
+      },
+      "signup_failed": {
+        "title": "Android: registrace podniku selhala",
+        "message": "Registrace podniku Android selhala ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: registrace podniku přerušena",
+        "message": "Registrace podniku Android byla přerušena před dokončením: spusťte ji znovu."
+      },
+      "device_api_too_low": {
+        "title": "Android: zařízení pod minimální úrovní API profilu",
+        "message": "Zařízení Android pod minimální úrovní API svého registračního profilu bylo umístěno do karantény."
+      },
+      "enrollment_spike": {
+        "title": "Android: špička registrací na dlouhém tokenu",
+        "message": "Registrace za poslední hodinu na dlouhém tokenu {{tokenId}}: {{perHour}}. Další mohou vyžadovat schválení."
+      },
+      "policy_push_failed": {
+        "title": "Android: zásady odmítnuty Googlem",
+        "message": "Google odmítl zásady zařízení {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: ohrožená integrita zařízení",
+        "message": "Zařízení {{deviceId}} neprošlo kontrolou integrity: může být kompromitováno."
+      },
+      "device_pending_approval": {
+        "title": "Android: zařízení čekají na schválení",
+        "message": "Zařízení Android čekají na schválení."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: dosažen limit registrací v karanténě",
+        "message": "Byl dosažen limit registrací Android v karanténě: další jsou odmítány."
+      },
+      "device_offline_long": {
+        "title": "Android: zařízení bez kontaktu 240 dní",
+        "message": "Zařízení Android bez kontaktu 240 dní: {{count}}."
+      },
+      "device_presumed_gone": {
+        "title": "Android: zařízení pravděpodobně zmizela",
+        "message": "Zařízení Android pravděpodobně zmizelá (chybí u Google): {{count}}. Potvrďte je nebo obnovte."
+      },
+      "token_expiring": {
+        "title": "Android: dlouhé registrační tokeny k obnovení",
+        "message": "Dlouhé registrační tokeny, kterým brzy vyprší platnost: {{count}}. Obnovte je."
+      },
+      "byod_code_flood": {
+        "title": "Android: příliš mnoho chybných kódů pozvánek BYOD",
+        "message": "Více než {{perHour}} chybných kódů pozvánek BYOD za hodinu: všechny kódy tenanta jsou do konce hodiny odmítány."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Registrace bez tokenu tohoto tenanta",
+        "message": "Byla nalezena zařízení Android bez registračního tokenu tohoto tenanta: zkontrolujte karanténu."
+      },
+      "ownership_mismatch": {
+        "title": "Vlastnictví nebo režim se liší od registračního profilu",
+        "message": "Zařízení Android se zaregistrovalo s vlastnictvím nebo režimem, které jeho registrační profil nepovoluje: je v karanténě."
+      },
+      "duplicate_serial": {
+        "title": "Sériové číslo již používá spravované zařízení",
+        "message": "Zařízení Android se zaregistrovalo se sériovým číslem zařízení {{deviceId}}, které je již spravováno."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Potvrdit zařízení Android zmizelá u Googlu",
+      "androidReleaseHeld": "Uvolnit zadržený příkaz Android"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Žádost o schválení již neexistuje.",
+      "batchGone": "Dávka změn vypršela nebo už byla použita: požádejte agenta znovu.",
+      "capabilityMissing": "Váš tým nemá oprávnění, které tato akce vyžaduje.",
+      "detachOneByOne": "Agent nemůže odpojit více zařízení od jejich lokality najednou: odpojte je v konzoli jedno po druhém.",
+      "executionFailed": "Schválená akce při provedení selhala.",
+      "keyInactive": "Přístupový klíč již není aktivní.",
+      "perimeterLost": "Akce je nyní mimo váš rozsah nebo rozsah klíče.",
+      "planChanged": "Plán se od schválení změnil: nic nebylo použito.",
+      "policyChanged": "Zásada se od žádosti změnila: nic nebylo použito.",
+      "unknownTool": "Neznámý nástroj.",
+      "refusedStatus": "Odmítnuto konzolí (HTTP {{status}})",
+      "interrupted": "Akce byla přerušena před dokončením: před novým požadavkem zkontrolujte její výsledek.",
+      "cancelFailed": "Zrušení ještě není dokončeno: opakuje se každou minutu.",
+      "stepUpRequired": "Akce vyžaduje čerstvý druhý faktor: schvalte ji znovu z konzole.",
+      "impactChanged": "Dopad se změnil od chvíle, kdy jste jej viděli: nic nebylo provedeno."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Druhý faktor pro příkazy agenta Android",
+      "legacyAgentCommandsSensitiveHelp": "Instalace nebo odinstalace aplikace, aktualizace agenta, restart zařízení a pozastavení jeho kiosku vyžadují druhý faktor osoby, která je odesílá (konzole a MCP). Ve výchozím stavu vypnuto. Stejně jako u ostatních nastavení změnu schvaluje druhá osoba.",
+      "pending": "Změna čeká na schválení (žádost č. {{id}})",
+      "pendingOpen": "Otevřít schválení",
+      "on": "zapnuto",
+      "off": "vypnuto"
     }
   }
 }

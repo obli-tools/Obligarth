@@ -17,7 +17,11 @@ import { HARVEST_JOB, harvestApks } from './harvest';
 //   legacy-agent.silence-check    every hour: per tenant, the agents enrolled
 //                                 and not revoked that have not interrogated
 //                                 for 24 hours (alert legacy_agent.silent,
-//                                 resolved when none is left)
+//                                 resolved when none is left). A silence after
+//                                 an acknowledged wipe never retires the device
+//                                 (review F032: the erase may have failed after
+//                                 the acknowledgement; only a new enrollment of
+//                                 the same phone proves it, wiped.ts)
 //   legacy-agent.auto-update      every 10 minutes: the enrolled agents older
 //                                 than the latest version not withdrawn get
 //                                 an agent.update, in batches (autoUpdate.ts,

@@ -44,7 +44,9 @@ export function connectSocket(userId: number, tenantId?: number): Socket {
     withCredentials: true,
   });
 
-  const { setStatus } = useSocketStore.getState();
+  const { setStatus, bumpGeneration } = useSocketStore.getState();
+  // A new instance: useSocket() re-binds the app-wide listeners to it.
+  bumpGeneration();
 
   socket.on('connect', () => {
     console.log('Socket connected');

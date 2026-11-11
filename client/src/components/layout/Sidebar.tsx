@@ -40,7 +40,7 @@ import { IconButton } from '@/components/common/IconButton';
 import { useTenantStore } from '@/store/tenantStore';
 import { useMcpAuthorizationsStore, livePending } from '@/store/mcpAuthorizationsStore';
 import { groupsApi } from '@/api/groups.api';
-import { getSocket } from '@/socket/socketClient';
+import { registerSocketListener } from '@/socket/socketListeners';
 import type { DeviceGroupTreeNode } from '@obligarth/shared';
 import { SocketEvents, MASTER_TENANT_ID, isMasterTenant } from '@obligarth/shared';
 
@@ -419,28 +419,21 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
       } catch { /* ignore */ }
     };
     load();
-    const socket = getSocket();
+    // Through the registry: the listeners follow the socket when a tenant switch replaces it.
     const handler = () => load();
-    if (socket) {
-      socket.on('APPROVAL_CREATED', handler);
-      socket.on('APPROVAL_UPDATED', handler);
-    }
+    const offs = ['APPROVAL_CREATED', 'APPROVAL_UPDATED'].map((ev) => registerSocketListener(ev, handler));
     const tick = setInterval(load, 60_000);
     return () => {
       cancelled = true;
       clearInterval(tick);
-      if (socket) {
-        socket.off('APPROVAL_CREATED', handler);
-        socket.off('APPROVAL_UPDATED', handler);
-      }
+      offs.forEach((off) => off());
     };
   }, [admin, currentTenantId]);
 
   // ── Real-time group updates ────────────────────────────────────────────────
+  // Through the registry, like GroupSidePanel: the sidebar stays mounted across a tenant switch, which replaces
+  // the socket.
   useEffect(() => {
-    const socket = getSocket();
-    if (!socket) return;
-
     const onGroupChanged = () => {
       const key = currentSidebarCacheKey();
       groupsApi.tree()
@@ -448,17 +441,9 @@ export function Sidebar({ variant = 'default', onRequestClose }: SidebarProps = 
         .catch(() => {});
     };
 
-    socket.on(SocketEvents.GROUP_CREATED, onGroupChanged);
-    socket.on(SocketEvents.GROUP_UPDATED, onGroupChanged);
-    socket.on(SocketEvents.GROUP_DELETED, onGroupChanged);
-    socket.on(SocketEvents.GROUP_MOVED, onGroupChanged);
-
-    return () => {
-      socket.off(SocketEvents.GROUP_CREATED, onGroupChanged);
-      socket.off(SocketEvents.GROUP_UPDATED, onGroupChanged);
-      socket.off(SocketEvents.GROUP_DELETED, onGroupChanged);
-      socket.off(SocketEvents.GROUP_MOVED, onGroupChanged);
-    };
+    const offs = [SocketEvents.GROUP_CREATED, SocketEvents.GROUP_UPDATED, SocketEvents.GROUP_DELETED, SocketEvents.GROUP_MOVED]
+      .map((ev) => registerSocketListener(ev, onGroupChanged));
+    return () => offs.forEach((off) => off());
   }, [setGroupTree]);
 
   // ── Split column resize ────────────────────────────────────────────────────

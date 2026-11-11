@@ -58,17 +58,71 @@ type SealRow = {
   leaf_index: number; chain_seq: string | number; chain_hash: Buffer; proof: Buffer[];
 };
 
-/** Lines of a JSONL export, written to `out`; returns the counts. */
+/** The export stream closed or failed before its end (the client cut the download). */
+export class ExportStreamClosedError extends Error {
+  constructor(cause?: unknown) {
+    super('export stream closed before its end');
+    this.name = 'ExportStreamClosedError';
+    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
+  }
+}
+
+/**
+ * Writes to `out` with its back-pressure (review F057): a write the stream cannot take waits for 'drain', and fails as
+ * soon as the stream closes or errs (a client that cuts the download: a destroyed response emits neither 'drain' nor
+ * 'error', only 'close'), so that the export ends and its outcome is journaled. One listener of each kind, set once and
+ * removed by done().
+ */
+export function backpressureWriter(out: Writable): { write(text: string): Promise<void>; done(): void } {
+  let failure: Error | null = null;
+  let waiting: { resolve: () => void; reject: (e: Error) => void } | null = null;
+  const fail = (err?: unknown): void => {
+    if (!failure) failure = new ExportStreamClosedError(err);
+    if (waiting) { const w = waiting; waiting = null; w.reject(failure); }
+  };
+  const onClose = (): void => { if (!out.writableFinished) fail(); };
+  const onError = (err: unknown): void => fail(err);
+  const onDrain = (): void => { if (waiting) { const w = waiting; waiting = null; w.resolve(); } };
+  out.on('close', onClose);
+  out.on('error', onError);
+  out.on('drain', onDrain);
+  return {
+    write(text: string): Promise<void> {
+      if (!failure && (out.destroyed || out.writableEnded)) fail();
+      if (failure) return Promise.reject(failure);
+      if (out.write(text, 'utf8')) return Promise.resolve();
+      return new Promise<void>((resolve, reject) => { waiting = { resolve, reject }; });
+    },
+    done(): void {
+      out.off('close', onClose);
+      out.off('error', onError);
+      out.off('drain', onDrain);
+    },
+  };
+}
+
+/** Lines of a JSONL export, written to `out`; returns the counts. Rejects (ExportStreamClosedError) when the stream
+ *  closes before the end. */
 export async function writeJsonlExport(out: Writable, p: {
   tenantId: number; tenantSlug: string | null; instance: string; exportedBy: string; range: ExportRange;
 }): Promise<{ entries: number; seals: number }> {
+  const w = backpressureWriter(out);
+  try {
+    return await jsonlLines(w.write, p);
+  } finally {
+    w.done();
+  }
+}
+
+async function jsonlLines(writeText: (text: string) => Promise<void>, p: {
+  tenantId: number; tenantSlug: string | null; instance: string; exportedBy: string; range: ExportRange;
+}): Promise<{ entries: number; seals: number }> {
   const sha = createHash('sha256');
-  const write = (o: unknown): Promise<void> => new Promise((resolve, reject) => {
+  const write = (o: unknown): Promise<void> => {
     const line = `${JSON.stringify(o)}\n`;
     sha.update(line, 'utf8');
-    if (out.write(line, 'utf8')) resolve();
-    else { out.once('drain', resolve); out.once('error', reject); }
-  });
+    return writeText(line);
+  };
   const { fromSeq, toSeq } = p.range;
   await write({
     type: 'header', format: 'obligarth.audit-export/1', instance: p.instance, tenant: p.tenantId, tenantSlug: p.tenantSlug,
@@ -119,7 +173,7 @@ export async function writeJsonlExport(out: Writable, p: {
   }
   const digest = sha.digest('hex');
   const footer = `${JSON.stringify({ type: 'footer', entries, seals: seals.length, sha256: digest })}\n`;
-  await new Promise<void>((resolve) => { if (out.write(footer, 'utf8')) resolve(); else out.once('drain', resolve); });
+  await writeText(footer);
   return { entries, seals: seals.length };
 }
 
@@ -132,9 +186,15 @@ function cell(v: unknown): string {
 
 /** A readable CSV of the range (not verifiable). */
 export async function writeCsvExport(out: Writable, p: { tenantId: number; range: ExportRange }): Promise<{ entries: number }> {
-  const write = (line: string): Promise<void> => new Promise((resolve) => {
-    if (out.write(line, 'utf8')) resolve(); else out.once('drain', resolve);
-  });
+  const w = backpressureWriter(out);
+  try {
+    return await csvLines(w.write, p);
+  } finally {
+    w.done();
+  }
+}
+
+async function csvLines(write: (line: string) => Promise<void>, p: { tenantId: number; range: ExportRange }): Promise<{ entries: number }> {
   await write(['seq', 'recorded_at', 'occurred_at', 'action', 'outcome', 'criticality', 'actor', 'side', 'role', 'target', 'target_count',
     'reason', 'ticket', 'ip_address'].join(',') + '\n');
   let entries = 0;

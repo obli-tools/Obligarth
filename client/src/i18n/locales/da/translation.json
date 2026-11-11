@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Adgangskoden kan ikke kun bestå af mellemrum. Lad feltet være tomt for at fjerne adgangskoden."
+    },
+    "reconcileHold": {
+      "help": "Den seneste afstemning fandt ikke {{count}} af de {{managed}} administrerede enheder hos Google: ingen blev taget ud af administration. Kontrollér først virksomheden hos Google; bekræft kun, hvis disse enheder virkelig er væk.",
+      "confirm": "Bekræft {{count}} enhed(er) som væk…",
+      "confirmTitle": "Bekræft de forsvundne enheder",
+      "confirmMessage": "Tage {{count}} enhed(er) ud af administration? Gør det kun, hvis de virkelig er fjernet hos Google: der bedes om en anden faktor.",
+      "confirmed": "Bekræftelse registreret: afstemningen kører inden for et minut."
+    }
+  },
   "common": {
     "save": "Gem",
     "cancel": "Annuller",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Kunne ikke skifte til dette arbejdsområde.",
+    "roleAdministrator": "Administrator",
+    "roleMember": "Medlem",
+    "confirmRoleChange": "Giv {{user}} rollen \"{{role}}\" i dette arbejdsområde?",
+    "roleOf": "Rolle for {{user}}",
+    "deleteTitle": "Slet arbejdsområdet \"{{name}}\"",
+    "confirmDeleteTyped": "Alle dets data, inklusive administrerede enheder, slettes permanent. Skriv \"{{slug}}\" for at bekræfte.",
+    "deleted": "Arbejdsområdet \"{{name}}\" er slettet",
     "pageTitle": "Arbejdsområder",
     "pageDesc": "Administrer arbejdsområder og deres medlemmer til multi-tenant-deployments.",
     "create": "Nyt arbejdsområde",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Skift arbejdsområde"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Andre grupper"
+    },
     "tabApiKeys": "API-nøgler",
     "viewDevice": "Vis enhed",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "I brug: beskyttelsesindstillingen \"Anden faktor på Android-agentens kommandoer\" er slået til.",
+      "commandsSensitiveOff": "Ikke i brug: beskyttelsesindstillingen \"Anden faktor på Android-agentens kommandoer\" er slået fra (Sikkerhed, fanen Beskyttelser)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Fejl"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Genindlæs den version, der er gemt på serveren? Dine ikke-gemte ændringer går tabt.",
+      "noLongerDraft": "Denne version er ikke længere en kladde (den er indsendt eller udgivet andetsteds): genindlæs den.",
+      "confirmOverwrite": "Denne kladde er blevet ændret af en anden, siden du åbnede den. Gem din version alligevel? Deres ændringer går tabt.",
+      "reviewBeforePublish": "Denne version er blevet ændret andetsteds: dens aktuelle indhold vises nu, gennemgå det før udgivelse.",
+      "changedElsewhere": "Denne version er blevet ændret andetsteds, siden du åbnede den. At gemme ville erstatte de ændringer.",
+      "reloadVersion": "Genindlæs",
+      "savedElsewhere": "Dette udkast blev gemt et andet sted i mellemtiden: intet blev gemt. Genindlæs det for at se de andre ændringer (dine går så tabt)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Gruppen er flyttet, men dens placering blandt de nye søskendegrupper kunne ikke gemmes",
+    "crossTenantMove": "En gruppe bliver i sit arbejdsområde: slip den blandt grupperne i samme arbejdsområde.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Notifikation slettet",
+      "live_alert_cleared": "Notifikationer ryddet",
+      "sso_sync_delete_blocked": "Sletning af kontoen fra Obligate blokeret (stadig refereret): deaktiveret, slet den manuelt",
+      "android_mass_missing_confirmed": "Android: massiv forsvinding bekræftet",
+      "legacy_agent_package_confirmed": "APK sendt tilbage af en enhed bekræftet"
+    },
+    "families": {
+      "legacy_agent": "Android-agent"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Fjern denne apps tildelinger, før du ændrer dens platforme.",
+    "exportBusy": "For mange PDF-eksporter i gang: prøv igen om et øjeblik.",
+    "exportTooLarge": "For mange rækker til en PDF-eksport (højst 2.000): indsnævr filtrene, eller eksportér som CSV eller XLSX.",
+    "exportTimeout": "PDF-eksporten tog for lang tid: eksportér som CSV eller XLSX, eller indsnævr filtrene.",
+    "tenantHasBridgeDevices": "Dette arbejdsområde har stadig {{devices}} enhed(er) tilmeldt med Android-broagenten: tilbagekald dem først, og slet derefter arbejdsområdet.",
+    "deadLetterAlreadyApplied": "Denne døde besked er allerede anvendt igen: den anvendes ikke to gange.",
+    "userHasDependencies": "Denne konto refereres stadig af andre poster: deaktivér den i stedet, eller fjern først det, der henviser til den.",
+    "invalidConfirmMissing": "Bekræftelsen skal angive det nøjagtige antal tilbageholdte enheder (et positivt heltal).",
+    "adminRequired": "Kun en administrator af lejeren kan frigive en destruktiv kommando.",
+    "releaseRateLimited": "For mange destruktive kommandoer frigivet den seneste time: prøv igen senere.",
+    "policyVersionChanged": "Versionen er ændret siden forhåndsvisningen: gennemgå den igen.",
+    "twoFactorSetupRequired": "En anden faktor er påkrævet: opsæt først en godkendelsesapp på din profil.",
+    "packageNotConfirmed": "Denne APK blev sendt tilbage af en enhed: bekræft den på fanen Pakker for Android-agenten, før du installerer den.",
+    "capabilityMissing": "Dit team har ikke den kompetence, som denne handling kræver."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Ikke tilladt: du har ikke skriveadgang til disse enheder.",
+      "status": {
+        "governed": "Styret ændring: omdøb fra enhedens kort"
+      },
+      "governedHint": "Styret ændring: det nye navn ville flytte enheden ind i eller ud af en dynamisk gruppe, som en tildeling retter sig mod. Omdøb den fra enhedens kort, hvor virkningen vises på forhånd."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Status",
+      "toConfirm": "Skal bekræftes",
+      "toConfirmHint": "Sendt tilbage af en enhed: kan ikke installeres, før en person har bekræftet den.",
+      "confirmedState": "Bekræftet",
+      "confirm": "Bekræft",
+      "confirmTitle": "Bekræft denne APK",
+      "confirmMessage": "Denne APK ({{packageName}}, {{version}}) blev sendt tilbage af en enhed, ikke uploadet af en person. Når den er bekræftet, kan den installeres på lejerens enheder.",
+      "confirmCheck": "Kontrollér, at pakkenavnet, versionen og underskriveren er de forventede, før du bekræfter.",
+      "signerShort": "Underskriver",
+      "confirmed": "APK bekræftet: den kan nu installeres.",
+      "fromDevice": "Fra enheden",
+      "unconfirmedHint": "{{count}} pakke(r) sendt tilbage af en enhed skal bekræftes på fanen Pakker, før de kan installeres."
+    },
+    "awaitingApproval": "Anmodning sendt til godkendelse"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Du har ikke tilladelse til at slette disse notifikationer: de deles af hele lejeren."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "App-platforme ikke opdateret",
+          "message": "Indholdstokenet {{label}} angiver andre platforme for {{count}} tildelt(e) app(s): deres platforme bevares, så længe de har tildelinger."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: massiv forsvinding hos Google tilbageholdt",
+        "message": "En afstemning fandt ikke {{count}} af de {{managed}} administrerede enheder hos Google: ingen blev taget ud af administration. Kontrollér virksomheden, og bekræft derefter på kortet Android Enterprise, hvis de virkelig er væk."
+      },
+      "google_unreachable": {
+        "title": "Android: Google kan ikke nås",
+        "message": "Obligarth kan ikke nå Googles Android Management API: Android-tilmeldinger, -politikker og -kommandoer venter."
+      },
+      "google_auth_failed": {
+        "title": "Android: identitet afvist af Google",
+        "message": "Google afviste tjenestekontoen (tilbagekaldt nøgle eller manglende tilladelse): Android-forbindelsen er stoppet."
+      },
+      "google_key_expiring": {
+        "title": "Android: tjenestekontoens nøgle udløber snart",
+        "message": "Nøglen til Google-tjenestekontoen udløber om {{days}} dag(e): udskift den."
+      },
+      "quota_warning": {
+        "title": "Android: enhedskvote på 80 %",
+        "message": "{{count}} Android-enheder i Google-projektet: 80 % af kvoten er brugt."
+      },
+      "quota_exhausted": {
+        "title": "Android: enhedskvote nået",
+        "message": "{{count}} Android-enheder: Google-projektets kvote er nået, nye tilmeldinger afvises."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: notifikation blandt de døde beskeder",
+        "message": "En Google-notifikation for lejer {{tenantId}} kunne ikke behandles ({{code}}) og blev flyttet til de døde beskeder."
+      },
+      "retention_risk": {
+        "title": "Android: notifikationer risikerer at udløbe",
+        "message": "Ingen Google-notifikation er hentet i {{days}} dag(e): de ældste kan udløbe, før de læses."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: beskeder fra ukendte virksomheder",
+        "message": "{{lastHour}} Pub/Sub-besked(er) fra den seneste time kom fra virksomheder, som Obligarth ikke kender."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: Pub/Sub-testbesked mangler",
+        "message": "Pub/Sub-testbeskeden for virksomheden hos lejer {{tenantId}} er ikke ankommet: kontrollér emnets tilladelser."
+      },
+      "ownership_violation": {
+        "title": "Android: kald afvist af ejerskabskontrollen",
+        "message": "Et kald til Google blev afvist af ejerskabskontrollen ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: projektets virksomhed mangler i registret",
+        "message": "En virksomhed i Google-projektet ({{ref}}) findes ikke i Obligarths register."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: tilmeldingstilbagekald afvist",
+        "message": "{{lastHour}} tilbagekald for virksomhedstilmelding blev afvist i den seneste time."
+      },
+      "domain_claimed": {
+        "title": "Android: tilmelding af et domæne, som en anden lejer gør krav på",
+        "message": "Lejer {{tenantId}} forsøgte at tilmelde en virksomhed for et domæne, som en anden lejer gør krav på."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: sidste loft for destruktive handlinger nået",
+        "message": "Det sidste loft for destruktive Android-handlinger er nået ({{kind}}, {{count}}): de næste afvises."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: virksomhed frakoblet uden for Obligarth",
+        "message": "Denne lejers Android-virksomhed blev frakoblet uden for Obligarth: dens enheder administreres ikke længere."
+      },
+      "signup_failed": {
+        "title": "Android: tilmelding af virksomheden mislykkedes",
+        "message": "Tilmeldingen af Android-virksomheden mislykkedes ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: tilmelding af virksomheden afbrudt",
+        "message": "En tilmelding af en Android-virksomhed blev afbrudt, før den var færdig: start den igen."
+      },
+      "device_api_too_low": {
+        "title": "Android: enhed under profilens mindste API-niveau",
+        "message": "En Android-enhed under det mindste API-niveau i sin tilmeldingsprofil blev sat i karantæne."
+      },
+      "enrollment_spike": {
+        "title": "Android: spids i tilmeldinger på et langt token",
+        "message": "{{perHour}} tilmeldinger i den seneste time på det lange token {{tokenId}}: de næste kan kræve en godkendelse."
+      },
+      "policy_push_failed": {
+        "title": "Android: politik afvist af Google",
+        "message": "Google afviste politikken for enheden {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: enhedens integritet truet",
+        "message": "Enheden {{deviceId}} bestod ikke sin integritetskontrol: den kan være kompromitteret."
+      },
+      "device_pending_approval": {
+        "title": "Android: enheder venter på godkendelse",
+        "message": "Android-enheder venter på deres godkendelse."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: loftet for tilmeldinger i karantæne nået",
+        "message": "Loftet for Android-tilmeldinger i karantæne er nået: de næste afvises."
+      },
+      "device_offline_long": {
+        "title": "Android: enheder uden kontakt i 240 dage",
+        "message": "{{count}} Android-enhed(er) uden kontakt i 240 dage."
+      },
+      "device_presumed_gone": {
+        "title": "Android: enheder formodet forsvundet",
+        "message": "{{count}} Android-enhed(er) formodet forsvundet (mangler hos Google): bekræft eller gendan dem."
+      },
+      "token_expiring": {
+        "title": "Android: lange tilmeldingstokens skal fornyes",
+        "message": "{{count}} lang(e) tilmeldingstoken(s) udløber snart: forny dem."
+      },
+      "byod_code_flood": {
+        "title": "Android: for mange forkerte BYOD-invitationskoder",
+        "message": "Mere end {{perHour}} forkerte BYOD-invitationskoder på en time: alle lejerens koder afvises, indtil timen er gået."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Tilmeldinger uden token fra denne lejer",
+        "message": "Der blev fundet Android-enheder uden tilmeldingstoken fra denne lejer: kontrollér karantænen."
+      },
+      "ownership_mismatch": {
+        "title": "Ejerskab eller tilstand afviger fra tilmeldingsprofilen",
+        "message": "En Android-enhed tilmeldte sig med et ejerskab eller en tilstand, som tilmeldingsprofilen ikke tillader: den er i karantæne."
+      },
+      "duplicate_serial": {
+        "title": "Serienummer allerede brugt af en administreret enhed",
+        "message": "En Android-enhed tilmeldte sig med serienummeret for enheden {{deviceId}}, der allerede administreres."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Bekræft Android-enheder forsvundet hos Google",
+      "androidReleaseHeld": "Frigiv en tilbageholdt Android-kommando"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Godkendelsesanmodningen findes ikke længere.",
+      "batchGone": "Ændringsbatchen er udløbet eller allerede brugt: spørg agenten igen.",
+      "capabilityMissing": "Dit team har ikke den kapabilitet, som denne handling kræver.",
+      "detachOneByOne": "En agent kan ikke frakoble flere enheder fra deres lokation på én gang: frakobl dem én ad gangen i konsollen.",
+      "executionFailed": "Den godkendte handling mislykkedes under udførelsen.",
+      "keyInactive": "Adgangsnøglen er ikke længere aktiv.",
+      "perimeterLost": "Handlingen ligger nu uden for dit område eller nøglens.",
+      "planChanged": "Planen er ændret siden godkendelsen: intet blev anvendt.",
+      "policyChanged": "Politikken er ændret siden anmodningen: intet blev anvendt.",
+      "unknownTool": "Ukendt værktøj.",
+      "refusedStatus": "Afvist af konsollen (HTTP {{status}})",
+      "interrupted": "Handlingen blev afbrudt, før den var færdig: kontrollér resultatet, før du beder om den igen.",
+      "cancelFailed": "Annulleringen er ikke færdig endnu: den forsøges igen hvert minut.",
+      "stepUpRequired": "Handlingen kræver en frisk anden faktor: godkend den igen fra konsollen.",
+      "impactChanged": "Virkningen har ændret sig, siden du så den: intet blev udført."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Anden faktor på Android-agentens kommandoer",
+      "legacyAgentCommandsSensitiveHelp": "At installere eller afinstallere en app, opdatere agenten, genstarte en enhed og suspendere dens kiosk kræver den anden faktor fra den person, der sender dem (konsol og MCP). Slået fra som standard. Som ved de andre indstillinger godkendes ændringen af en anden person.",
+      "pending": "Ændring venter på godkendelse (anmodning nr. {{id}})",
+      "pendingOpen": "Åbn godkendelserne",
+      "on": "til",
+      "off": "fra"
     }
   }
 }

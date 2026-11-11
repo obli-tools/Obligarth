@@ -9,7 +9,8 @@ import { safeErr } from '../../jobs';
 import { logger } from '../../utils/logger';
 import { EDGE_INTEGRATION } from '../actors';
 import { raiseAlert } from '../alerts/service';
-import { HEADER_SIGNATURE, HEADER_TIMESTAMP, signRelay, verifyRelay } from '../edge/hmac';
+import { HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP, answerSignatureHeaders, relayNonce, verifyRelay,
+  type SignedRequest } from '../edge/hmac';
 import { readHmacKeyFile } from '../edge/secrets';
 import { appleTenants } from '../tenants/registry';
 import { isMdmKey } from '../tenants/key';
@@ -44,7 +45,11 @@ import type { DroppedDeclaration } from './validate';
 //   5. the endpoint: tokens, declaration-items, declaration/<family>/<id>,
 //      status (stored in the inbox, ingested by a job: 204).
 // Every answer to an authenticated request is signed over its exact bytes
-// (canonical JSON, or empty). The reads a device repeats (tokens,
+// (canonical JSON, or empty): v1 in X-Edge-Signature, unchanged, and v2 in
+// X-Edge-Response-Signature, which binds the answer (status, body) to its
+// request (timestamp, X-Edge-Nonce, body; review F100, see edge/hmac.ts). An
+// apple-edge of an older version ignores v2 and sends no nonce (signed as
+// empty), so either container may restart first. The reads a device repeats (tokens,
 // declaration-items, a declaration) cost one statement in the tenant's
 // context, outside any transaction; under a burst, the pure reads (tokens, a
 // declaration) of one tenant that arrive in the same turn of the event loop
@@ -402,11 +407,9 @@ async function serve(tenantId: number, body: z.infer<typeof RelayBody>): Promise
   });
 }
 
-function send(res: Response, key: Buffer, a: Answer): void {
-  const ts = String(Math.floor(Date.now() / 1000));
+function send(res: Response, key: Buffer, request: SignedRequest, a: Answer): void {
   res.status(a.status);
-  res.setHeader(HEADER_TIMESTAMP, ts);
-  res.setHeader(HEADER_SIGNATURE, signRelay(key, ts, a.body));
+  for (const [name, value] of Object.entries(answerSignatureHeaders(key, request, a.status, a.body))) res.setHeader(name, value);
   if (a.status === 204) {
     res.end();
     return;
@@ -462,7 +465,7 @@ async function handle(req: Request, res: Response): Promise<void> {
     logger.warn({ endpoint: kind, tenantId, err: safeErr(err) }, 'DDM relay: request failed');
     answer = error(503, 'unavailable');
   }
-  send(res, key, answer);
+  send(res, key, { timestamp: ts, nonce: relayNonce(req.get(HEADER_NONCE)), body: raw }, answer);
   const ms = Number(process.hrtime.bigint() - started) / 1e6;
   ddmMetrics.relayRequest(kind, answer.status, ms);
   const fields = { endpoint: kind, tenantId, status: answer.status, outcome: answer.outcome, ms: Math.round(ms) };

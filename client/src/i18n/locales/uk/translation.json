@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Пароль не може складатися лише з пробілів. Залиште поле порожнім, щоб видалити пароль."
+    },
+    "reconcileHold": {
+      "help": "Остання звірка не знайшла в Google {{count}} з {{managed}} керованих пристроїв: жоден не виведено з керування. Спершу перевірте підприємство в Google; підтверджуйте, лише якщо ці пристрої справді зникли.",
+      "confirm": "Підтвердити зникнення пристроїв ({{count}})…",
+      "confirmTitle": "Підтвердити зниклі пристрої",
+      "confirmMessage": "Вивести пристрої ({{count}}) з керування? Робіть це, лише якщо їх справді видалено в Google: буде запитано другий фактор.",
+      "confirmed": "Підтвердження записано: звірка запуститься протягом хвилини."
+    }
+  },
   "common": {
     "save": "Зберегти",
     "cancel": "Скасувати",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Не вдалося перейти до цього робочого простору.",
+    "roleAdministrator": "Адміністратор",
+    "roleMember": "Учасник",
+    "confirmRoleChange": "Призначити {{user}} роль «{{role}}» у цьому робочому просторі?",
+    "roleOf": "Роль {{user}}",
+    "deleteTitle": "Видалити робочий простір «{{name}}»",
+    "confirmDeleteTyped": "Усі його дані, зокрема керовані пристрої, буде остаточно видалено. Введіть «{{slug}}» для підтвердження.",
+    "deleted": "Робочий простір «{{name}}» видалено",
     "pageTitle": "Робочі простори",
     "pageDesc": "Управляйте робочими просторами та їх учасниками для мультитенантних розгортань.",
     "create": "Новий робочий простір",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Змінити робочий простір"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Інші групи"
+    },
     "tabApiKeys": "API-ключі",
     "viewDevice": "Переглянути пристрій",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "Використовується: захисне налаштування «Другий фактор для команд агента Android» увімкнено.",
+      "commandsSensitiveOff": "Не використовується: захисне налаштування «Другий фактор для команд агента Android» вимкнено (Безпека, вкладка «Захист»)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Помилка"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Перезавантажити версію, збережену на сервері? Незбережені зміни буде втрачено.",
+      "noLongerDraft": "Ця версія вже не чернетка (її надіслано або опубліковано в іншому місці): перезавантажте її.",
+      "confirmOverwrite": "Відколи ви відкрили цю чернетку, її змінив хтось інший. Усе одно зберегти вашу версію? Його зміни буде втрачено.",
+      "reviewBeforePublish": "Цю версію змінено в іншому місці: тепер показано її поточний вміст, перевірте його перед публікацією.",
+      "changedElsewhere": "Відколи ви відкрили цю версію, її змінено в іншому місці. Збереження замінить ці зміни.",
+      "reloadVersion": "Перезавантажити",
+      "savedElsewhere": "Цю чернетку тим часом збережено в іншому місці: нічого не збережено. Перезавантажте її, щоб побачити інші зміни (ваші буде втрачено)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Групу переміщено, але її позицію серед нових сусідніх груп не вдалося зберегти",
+    "crossTenantMove": "Група залишається у своєму робочому просторі: перетягніть її до груп того самого простору.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Сповіщення видалено",
+      "live_alert_cleared": "Сповіщення очищено",
+      "sso_sync_delete_blocked": "Видалення облікового запису через Obligate заблоковано (на нього ще посилаються): вимкнено, видаліть вручну",
+      "android_mass_missing_confirmed": "Android: масове зникнення підтверджено",
+      "legacy_agent_package_confirmed": "Підтверджено APK, надісланий пристроєм"
+    },
+    "families": {
+      "legacy_agent": "Агент Android"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Видаліть призначення цього застосунку, перш ніж змінювати його платформи.",
+    "exportBusy": "Виконується забагато експортів PDF: спробуйте ще раз за мить.",
+    "exportTooLarge": "Забагато рядків для експорту PDF (не більше 2000): звузьте фільтри або експортуйте в CSV чи XLSX.",
+    "exportTimeout": "Експорт PDF тривав надто довго: експортуйте в CSV чи XLSX або звузьте фільтри.",
+    "tenantHasBridgeDevices": "У цьому просторі ще є пристрої, зареєстровані агентом-мостом Android ({{devices}}): спершу відкличте їх, потім видаліть простір.",
+    "deadLetterAlreadyApplied": "Це недоставлене повідомлення вже застосовано повторно: воно не застосовується двічі.",
+    "userHasDependencies": "На цей обліковий запис досі посилаються інші записи: замість видалення вимкніть його або спершу видаліть те, що на нього посилається.",
+    "invalidConfirmMissing": "Підтвердження має містити точну кількість утриманих пристроїв (додатне ціле число).",
+    "adminRequired": "Лише адміністратор орендаря може розблокувати деструктивну команду.",
+    "releaseRateLimited": "За останню годину розблоковано забагато деструктивних команд: спробуйте пізніше.",
+    "policyVersionChanged": "Версія змінилася після попереднього перегляду: перегляньте її знову.",
+    "twoFactorSetupRequired": "Потрібен другий фактор: спершу налаштуйте застосунок-автентифікатор у своєму профілі.",
+    "packageNotConfirmed": "Цей APK надіслав назад пристрій: підтвердьте його на вкладці «Пакети» агента Android перед встановленням.",
+    "capabilityMissing": "Ваша команда не має повноваження, потрібного для цієї дії."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "Не дозволено: у вас немає права запису на ці пристрої.",
+      "status": {
+        "governed": "Кероване змінення: перейменуйте в картці пристрою"
+      },
+      "governedHint": "Кероване змінення: нова назва перемістить пристрій до динамічної групи, на яку націлене призначення, або з неї. Перейменуйте його в картці пристрою, де показано попередній перегляд наслідків."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Стан",
+      "toConfirm": "Потребує підтвердження",
+      "toConfirmHint": "Надіслано назад пристроєм: його не можна встановити, доки людина його не підтвердить.",
+      "confirmedState": "Підтверджено",
+      "confirm": "Підтвердити",
+      "confirmTitle": "Підтвердити цей APK",
+      "confirmMessage": "Цей APK ({{packageName}}, {{version}}) надіслав назад пристрій, а не завантажила людина. Після підтвердження його можна встановлювати на пристрої клієнта.",
+      "confirmCheck": "Перед підтвердженням перевірте, що назва пакета, версія і підписант ті, які ви очікуєте.",
+      "signerShort": "Підписант",
+      "confirmed": "APK підтверджено: тепер його можна встановлювати.",
+      "fromDevice": "З пристрою",
+      "unconfirmedHint": "Пакети, надіслані назад пристроєм ({{count}}), треба підтвердити на вкладці «Пакети», перш ніж їх можна буде встановити."
+    },
+    "awaitingApproval": "Запит надіслано на затвердження"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Ви не маєте права видаляти ці сповіщення: вони спільні для всього клієнта."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Платформи застосунків не оновлено",
+          "message": "Токен вмісту {{label}} вказує інші платформи для призначених застосунків ({{count}}): їхні платформи зберігаються, доки вони мають призначення."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: масове зникнення в Google утримано",
+        "message": "Звірка не знайшла в Google {{count}} з {{managed}} керованих пристроїв: жоден не виведено з керування. Перевірте підприємство, потім підтвердьте на картці Android Enterprise, якщо вони справді зникли."
+      },
+      "google_unreachable": {
+        "title": "Android: Google недоступний",
+        "message": "Obligarth не може з’єднатися з Android Management API Google: реєстрації, політики й команди Android чекають."
+      },
+      "google_auth_failed": {
+        "title": "Android: Google відхилив посвідчення",
+        "message": "Google відхилив сервісний обліковий запис (ключ відкликано або бракує дозволу): зв’язок з Android зупинено."
+      },
+      "google_key_expiring": {
+        "title": "Android: строк ключа сервісного облікового запису спливає",
+        "message": "Ключ сервісного облікового запису Google спливає через {{days}} дн.: замініть його."
+      },
+      "quota_warning": {
+        "title": "Android: квота пристроїв на 80 %",
+        "message": "Пристроїв Android у проєкті Google: {{count}}. Використано 80 % квоти."
+      },
+      "quota_exhausted": {
+        "title": "Android: квоту пристроїв вичерпано",
+        "message": "Пристроїв Android: {{count}}. Квоту проєкту Google вичерпано, нові реєстрації відхиляються."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: сповіщення в недоставлених повідомленнях",
+        "message": "Сповіщення Google клієнта {{tenantId}} не вдалося обробити ({{code}}), його переміщено до недоставлених повідомлень."
+      },
+      "retention_risk": {
+        "title": "Android: сповіщенням загрожує спливання строку",
+        "message": "Сповіщення Google не забиралися {{days}} дн.: найстаріші можуть сплисти до прочитання."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: повідомлення невідомих організацій",
+        "message": "Повідомлень Pub/Sub за останню годину від організацій, невідомих Obligarth: {{lastHour}}."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: немає тестового повідомлення Pub/Sub",
+        "message": "Тестове повідомлення Pub/Sub організації клієнта {{tenantId}} не надійшло: перевірте дозволи теми."
+      },
+      "ownership_violation": {
+        "title": "Android: виклик відхилено перевіркою належності",
+        "message": "Виклик до Google відхилено перевіркою належності ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: організації проєкту немає в реєстрі",
+        "message": "Організації проєкту Google ({{ref}}) немає в реєстрі Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: зворотні виклики реєстрації відхилено",
+        "message": "Зворотних викликів реєстрації організацій, відхилених за останню годину: {{lastHour}}."
+      },
+      "domain_claimed": {
+        "title": "Android: реєстрація домену, заявленого іншим клієнтом",
+        "message": "Клієнт {{tenantId}} намагався зареєструвати організацію для домену, заявленого іншим клієнтом."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: досягнуто крайньої межі руйнівних операцій",
+        "message": "Досягнуто крайньої межі руйнівних операцій Android ({{kind}}, {{count}}): наступні відхиляються."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: організацію від’єднано поза Obligarth",
+        "message": "Організацію Android цього клієнта від’єднано поза Obligarth: її пристрої більше не керуються."
+      },
+      "signup_failed": {
+        "title": "Android: реєстрація організації не вдалася",
+        "message": "Реєстрація організації Android не вдалася ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: реєстрацію організації перервано",
+        "message": "Реєстрацію організації Android перервано до завершення: запустіть її знову."
+      },
+      "device_api_too_low": {
+        "title": "Android: пристрій нижче мінімального рівня API профілю",
+        "message": "Пристрій Android нижче мінімального рівня API свого профілю реєстрації поміщено в карантин."
+      },
+      "enrollment_spike": {
+        "title": "Android: сплеск реєстрацій за довгим токеном",
+        "message": "Реєстрацій за останню годину за довгим токеном {{tokenId}}: {{perHour}}. Наступні можуть потребувати схвалення."
+      },
+      "policy_push_failed": {
+        "title": "Android: Google відхилив політику",
+        "message": "Google відхилив політику пристрою {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android: цілісність пристрою під загрозою",
+        "message": "Пристрій {{deviceId}} не пройшов перевірку цілісності: можливо, його скомпрометовано."
+      },
+      "device_pending_approval": {
+        "title": "Android: пристрої чекають на схвалення",
+        "message": "Пристрої Android чекають на схвалення."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: досягнуто межі реєстрацій у карантині",
+        "message": "Досягнуто межі реєстрацій Android у карантині: наступні відхиляються."
+      },
+      "device_offline_long": {
+        "title": "Android: пристрої без зв’язку 240 днів",
+        "message": "Пристроїв Android без зв’язку 240 днів: {{count}}."
+      },
+      "device_presumed_gone": {
+        "title": "Android: пристрої імовірно зникли",
+        "message": "Пристроїв Android, що імовірно зникли (немає в Google): {{count}}. Підтвердьте або відновіть їх."
+      },
+      "token_expiring": {
+        "title": "Android: довгі токени реєстрації треба поновити",
+        "message": "Довгих токенів реєстрації, строк яких незабаром спливає: {{count}}. Поновіть їх."
+      },
+      "byod_code_flood": {
+        "title": "Android: забагато хибних кодів запрошення BYOD",
+        "message": "Понад {{perHour}} хибних кодів запрошення BYOD за годину: усі коди клієнта відхиляються до кінця години."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Реєстрації без токена цього клієнта",
+        "message": "Знайдено пристрої Android без токена реєстрації цього клієнта: перевірте карантин."
+      },
+      "ownership_mismatch": {
+        "title": "Власність або режим відрізняються від профілю реєстрації",
+        "message": "Пристрій Android зареєструвався з власністю або режимом, яких його профіль реєстрації не дозволяє: він у карантині."
+      },
+      "duplicate_serial": {
+        "title": "Серійний номер уже має керований пристрій",
+        "message": "Пристрій Android зареєструвався із серійним номером уже керованого пристрою {{deviceId}}."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Підтвердити зниклі в Google пристрої Android",
+      "androidReleaseHeld": "Розблокувати утриману команду Android"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Запит на схвалення більше не існує.",
+      "batchGone": "Пакет змін закінчився або вже використаний: попросіть агента знову.",
+      "capabilityMissing": "Ваша команда не має можливості, потрібної для цієї дії.",
+      "detachOneByOne": "Агент не може відв'язати кілька пристроїв від їхнього майданчика одночасно: відв'яжіть їх по одному в консолі.",
+      "executionFailed": "Схвалена дія завершилася помилкою під час виконання.",
+      "keyInactive": "Ключ доступу більше не активний.",
+      "perimeterLost": "Дія тепер виходить за межі вашої області або області ключа.",
+      "planChanged": "План змінився після схвалення: нічого не застосовано.",
+      "policyChanged": "Політика змінилася після запиту: нічого не застосовано.",
+      "unknownTool": "Невідомий інструмент.",
+      "refusedStatus": "Відхилено консоллю (HTTP {{status}})",
+      "interrupted": "Дію перервано до завершення: перевірте її результат, перш ніж запитувати знову.",
+      "cancelFailed": "Скасування ще не завершено: його повторюють щохвилини.",
+      "stepUpRequired": "Дія потребує свіжого другого фактора: знову схваліть її в консолі.",
+      "impactChanged": "Вплив змінився відтоді, як ви його бачили: нічого не зроблено."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Другий фактор для команд агента Android",
+      "legacyAgentCommandsSensitiveHelp": "Встановлення або видалення застосунку, оновлення агента, перезапуск пристрою і призупинення його кіоску потребують другого фактора відправника (консоль і MCP). Типово вимкнено. Як і для інших налаштувань, зміну схвалює друга людина.",
+      "pending": "Зміна чекає на схвалення (запит № {{id}})",
+      "pendingOpen": "Відкрити схвалення",
+      "on": "увімк.",
+      "off": "вимк."
     }
   }
 }

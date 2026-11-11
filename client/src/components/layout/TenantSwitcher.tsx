@@ -1,9 +1,9 @@
 import { useRef, useState } from 'react';
 import { ChevronDown, Building2, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useTenantStore, emitTenantChanged } from '@/store/tenantStore';
-import { disconnectSocket, connectSocket } from '@/socket/socketClient';
-import { useAuthStore } from '@/store/authStore';
+import toast from 'react-hot-toast';
+import { useTenantStore } from '@/store/tenantStore';
+import { switchTenant } from '@/store/tenantSwitch';
 import { Drawer } from '@/components/common/Drawer';
 import { useClickOutside } from '@/hooks/useClickOutside';
 import { useNativeBack } from '@/hooks/useNativeBack';
@@ -12,8 +12,7 @@ import { cn } from '@/utils/cn';
 
 export function TenantSwitcher() {
   const { t } = useTranslation();
-  const { currentTenantId, tenants, setCurrentTenant } = useTenantStore();
-  const { user } = useAuthStore();
+  const { currentTenantId, tenants } = useTenantStore();
   const [open, setOpen] = useState(false);
   const [switching, setSwitching] = useState(false);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -46,16 +45,9 @@ export function TenantSwitcher() {
     setOpen(false);
 
     try {
-      await setCurrentTenant(tenantId);
-
-      // Tenant-scoped stores reload themselves on this event (in parallel)
-      await emitTenantChanged(tenantId);
-
-      // Reconnect socket with new tenantId
-      if (user) {
-        disconnectSocket();
-        connectSocket(user.id, tenantId);
-      }
+      // Server switch, permissions, socket and tenant-scoped stores: one place (store/tenantSwitch.ts).
+      const ok = await switchTenant(tenantId);
+      if (!ok) toast.error(t('tenant.switchFailed') || 'Could not switch to this workspace.');
     } finally {
       setSwitching(false);
     }

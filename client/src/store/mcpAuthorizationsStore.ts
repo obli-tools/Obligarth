@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { SocketEvents, type McpAuthorizationChanged, type McpKeyNewNetwork } from '@obligarth/shared';
 import { accessKeysApi } from '@/api/accessKeys.api';
 import { registerSocketListener } from '@/socket/socketListeners';
+import { onSessionReset } from './sessionReset';
 
 // The user's own MCP notices (docs: specs mcp-server §6.3): the authorizations his AI agents wait for (a sensitive
 // action he approves with a second factor) and the "key used from a new network" notices. They are user-scoped
@@ -51,6 +52,9 @@ export const useMcpAuthorizationsStore = create<McpAuthorizationsState>((set, ge
   dismissNotice: (id) => set((s) => ({ notices: s.notices.filter((n) => n.id !== id) })),
   clearNotices: () => set({ notices: [] }),
 }));
+
+// Another account signing in in the same tab must not see these (key names, network addresses).
+onSessionReset(() => useMcpAuthorizationsStore.setState({ pending: [], notices: [], loaded: false }));
 
 /** The authorizations still waiting, the expired ones dropped (their expiry may pass before the minute step). */
 export function livePending(pending: PendingMcpAuthorization[], now = Date.now()): PendingMcpAuthorization[] {

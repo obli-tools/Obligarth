@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 	"unicode"
 
@@ -44,6 +45,7 @@ type Guard struct {
 	metrics  *obs.Metrics
 	holds    chan struct{}
 	now      func() time.Time
+	events   *dedup
 
 	// namespace derives the stored identifiers; only tests replace it
 	// (simulated upstream regression).
@@ -57,7 +59,7 @@ func NewGuard(next service.CheckinAndCommandService, upstream Upstream, db *sql.
 	policy string, logger *obs.Logger, m *obs.Metrics, poolSize int) *Guard {
 	return &Guard{next: next, upstream: upstream, db: db, out: out, secrets: secrets, policy: policy,
 		logger: logger.With("component", "guard"), metrics: m, holds: make(chan struct{}, max(1, poolSize/4)),
-		now: time.Now, namespace: ids.Namespace}
+		now: time.Now, events: newDedup(eventInterval), namespace: ids.Namespace}
 }
 
 func httpErr(code int, msg string) error {
@@ -129,7 +131,7 @@ func (g *Guard) prepare(r *mdm.Request, e *mdm.Enrollment, messageType, topic st
 		if len(p.t.Topics) == 0 {
 			reason = "no_push_certificate"
 		}
-		g.security(r.Context(), outbox.T(p.t.Key, "security.topic_mismatch", map[string]any{"reason": reason, "presented_topic": topic}))
+		g.security(r.Context(), p, messageType, outbox.T(p.t.Key, "security.topic_mismatch", map[string]any{"reason": reason, "presented_topic": topic}))
 		g.metrics.Checkins.Inc(p.t.Key, messageType, "refused_topic")
 		return nil, errTopic
 	}
@@ -149,8 +151,13 @@ func (g *Guard) prepare(r *mdm.Request, e *mdm.Enrollment, messageType, topic st
 	return p, nil
 }
 
-// security emits a security event in its own transaction.
-func (g *Guard) security(ctx context.Context, evs ...outbox.Event) {
+// security emits security events (one refusal at one step of the protocol,
+// "Authenticate" or "TokenUpdate") in their own transaction. The same
+// refusal of the same identity at the same step is emitted at most once per
+// eventInterval, like the verifier's events; repetitions are only counted in
+// the metric. A device retrying in a loop must not grow the outbox and the
+// audit log of another tenant without limit (review F096).
+func (g *Guard) security(ctx context.Context, p *prep, step string, evs ...outbox.Event) {
 	for _, ev := range evs {
 		t := ev.Tenant
 		if ev.Scope == outbox.ScopePlatform {
@@ -158,9 +165,41 @@ func (g *Guard) security(ctx context.Context, evs ...outbox.Event) {
 		}
 		g.metrics.SecurityEvents.Inc(t, ev.Type)
 	}
+	if !g.events.first(securityKey(p, step, evs), g.now()) {
+		return
+	}
 	if err := g.out.Emit(context.WithoutCancel(ctx), evs...); err != nil {
 		g.logger.Error("msg", "security event", "err", err)
 	}
+}
+
+// securityKey identifies a refusal for the deduplication: the requesting
+// tenant, identity and step, then the scope, tenant, type and outcome of each
+// event. The identifier sent by the device enters the key only for a refusal
+// that reaches another tenant (a conflict, which needs an identifier really
+// active there): otherwise an identity changing its identifier on every
+// request would escape the deduplication. No other value chosen by the
+// device, such as a topic, enters the key.
+func securityKey(p *prep, step string, evs []outbox.Event) string {
+	var b strings.Builder
+	b.WriteString(p.t.Key + "\xff" + p.st.certSHA + "\xff" + step + "\xff" + p.kind)
+	for _, ev := range evs {
+		if ev.Scope == outbox.ScopePlatform || ev.Tenant != p.t.Key {
+			b.WriteString("\xff" + p.raw)
+			break
+		}
+	}
+	for _, ev := range evs {
+		b.WriteString("\xff" + ev.Scope + "/" + ev.Tenant + "/" + ev.Type)
+		if m, ok := ev.Payload.(map[string]any); ok {
+			for _, f := range []string{"outcome", "reason", "field"} {
+				if s, ok := m[f].(string); ok {
+					b.WriteString("/" + s)
+				}
+			}
+		}
+	}
+	return b.String()
 }
 
 // commit writes events (and fn's changes) in one transaction after the
@@ -246,7 +285,7 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 			field = "serial"
 		}
 		if field != "" {
-			g.security(ctx, outbox.T(t.Key, "security.identity_mismatch", map[string]any{"field": field}).WithEnrollment(p.enrollmentID))
+			g.security(ctx, p, "Authenticate", outbox.T(t.Key, "security.identity_mismatch", map[string]any{"field": field}).WithEnrollment(p.enrollmentID))
 			g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_identity")
 			return errMismatch
 		}
@@ -295,7 +334,7 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 		}
 		if refuse {
 			_ = tx.Rollback()
-			g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
+			g.security(ctx, p, "Authenticate", kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
 			g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_kind")
 			return errKindConflict
 		}
@@ -332,7 +371,7 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 			}
 			if !reenrollAllowed {
 				_ = tx.Rollback()
-				g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedReenroll))
+				g.security(ctx, p, "Authenticate", kindConflictEvent(t.Key, p, OutcomeRefusedReenroll))
 				g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_reenroll")
 				return errKindConflict
 			}
@@ -347,7 +386,7 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 	d := Decide(t.Key, p.kind, proof, g.policy, holder, transfer)
 	if !d.Accept {
 		_ = tx.Rollback()
-		g.security(ctx, conflictEvents(t.Key, holder.Tenant, d, p.kind, m.SerialNumber, g.policy)...)
+		g.security(ctx, p, "Authenticate", conflictEvents(t.Key, holder.Tenant, d, p.kind, m.SerialNumber, g.policy)...)
 		g.metrics.Checkins.Inc(t.Key, "Authenticate", "refused_conflict")
 		return errConflict
 	}
@@ -402,6 +441,15 @@ func (g *Guard) Authenticate(r *mdm.Request, m *mdm.Authenticate) error {
 				}
 				if released {
 					evs = append(evs, outbox.T(holder.Tenant, "device.id_released", map[string]any{"id_kind": p.kind, "reason": d.ReleaseReason}).WithEnrollment(holder.EnrollmentID))
+				}
+			}
+			// An evicted holder (ADE proof, approved transfer) loses its
+			// identities too: otherwise its TokenUpdate would activate the
+			// identifier anew in its tenant before this device's TokenUpdate,
+			// and defeat the proof (review F095).
+			if d.DisableHolder {
+				if _, err := nanomdmsql.DropCertHashes(ctx, tx, holder.EnrollmentID); err != nil {
+					return nil, err
 				}
 			}
 			if d.Transfer != nil {
@@ -530,6 +578,11 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 		return err
 	}
 	activated := true
+	// The holder in another tenant superseded here by the ADE proof, as at
+	// Authenticate (review F095): a holder that activated the identifier
+	// anew between the Authenticate of this device and its TokenUpdate.
+	var superseded *store.ActiveID
+	supersededReleased := false
 	if err := store.ActivateDeviceID(ctx, tx, t.Key, p.kind, p.raw, p.deviceID, proof); err != nil {
 		_ = tx.Rollback()
 		switch {
@@ -541,7 +594,7 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 			if holder == nil { // released in the meantime: let the device retry
 				return errBusy
 			}
-			if g.policy == config.PolicyAllow && p.kind == store.KindUDID {
+			if g.policy == config.PolicyAllow && p.kind == store.KindUDID && proof != store.ProofADE {
 				activated = false
 				if tx, err = g.db.BeginTx(ctx, nil); err != nil {
 					return err
@@ -552,8 +605,32 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 				}
 				break
 			}
+			if proof == store.ProofADE && p.kind == store.KindUDID && holder.Tenant != t.Key {
+				if tx, err = g.db.BeginTx(ctx, nil); err != nil {
+					return err
+				}
+				defer tx.Rollback()
+				if err := lockDeviceChannel(ctx, tx, p.deviceID); err != nil {
+					return err
+				}
+				released, err := store.ReleaseDeviceID(ctx, tx, holder.Tenant, p.kind, p.raw, "superseded_by_proof")
+				if err != nil {
+					return err
+				}
+				if _, err := nanomdmsql.DropCertHashes(ctx, tx, holder.EnrollmentID); err != nil {
+					return err
+				}
+				if err := store.ActivateDeviceID(ctx, tx, t.Key, p.kind, p.raw, p.deviceID, proof); err != nil {
+					if errors.Is(err, store.ErrIDConflict) || store.IsLockTimeout(err) {
+						return errBusy // the holder changed in the meantime: let the device retry
+					}
+					return err
+				}
+				superseded, supersededReleased = holder, released
+				break
+			}
 			d := Decision{Conflict: true, RequesterOutcome: OutcomeRefused, HolderOutcome: OutcomeKept}
-			g.security(ctx, conflictEvents(t.Key, holder.Tenant, d, p.kind, "", g.policy)...)
+			g.security(ctx, p, "TokenUpdate", conflictEvents(t.Key, holder.Tenant, d, p.kind, "", g.policy)...)
 			g.metrics.Checkins.Inc(t.Key, "TokenUpdate", "refused_conflict")
 			return errConflict
 		case store.IsLockTimeout(err):
@@ -573,7 +650,7 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	if otherKind != nil {
 		if proof != store.ProofADE {
 			_ = tx.Rollback()
-			g.security(ctx, kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
+			g.security(ctx, p, "TokenUpdate", kindConflictEvent(t.Key, p, OutcomeRefusedOtherKind))
 			g.metrics.Checkins.Inc(t.Key, "TokenUpdate", "refused_kind")
 			return errKindConflict
 		}
@@ -587,6 +664,16 @@ func (g *Guard) TokenUpdate(r *mdm.Request, m *mdm.TokenUpdate) error {
 	}
 	if err := g.next.TokenUpdate(r, m); err != nil {
 		return upstreamErr(err)
+	}
+	if superseded != nil {
+		if err := g.upstream.DisableEnrollment(ctx, superseded.EnrollmentID); err != nil {
+			return err
+		}
+		if supersededReleased {
+			kindEvents = append(kindEvents, outbox.T(superseded.Tenant, "device.id_released", map[string]any{"id_kind": p.kind, "reason": "superseded_by_proof"}).WithEnrollment(superseded.EnrollmentID))
+		}
+		d := Decide(t.Key, p.kind, proof, g.policy, superseded, nil)
+		kindEvents = append(kindEvents, conflictEvents(t.Key, superseded.Tenant, d, p.kind, "", g.policy)...)
 	}
 	// The identifier activated anew: the identity of this TokenUpdate is the
 	// only one of the enrollment from now on (lot C0). An Authenticate on the

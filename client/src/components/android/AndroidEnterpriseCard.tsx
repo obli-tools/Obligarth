@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { CheckCircle2, CircleDashed, ExternalLink, Link2, RefreshCw, Smartphone, Unlink } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, CircleDashed, ExternalLink, Link2, RefreshCw, Smartphone, Unlink } from 'lucide-react';
 import {
   ANDROID_PUBLISHER_TERMS_VERSION, ANDROID_SIGNIN_PERSONAL_USAGE,
   type AndroidDeadline, type AndroidOffboardingView, type AndroidOnboardingView, type AndroidSigninConfig,
 } from '@obligarth/shared';
-import { androidApi, type AndroidEnterpriseCard as Enterprise } from '@/api/android.api';
+import { androidApi, type AndroidEnterpriseCard as Enterprise, type AndroidReconcileHold } from '@/api/android.api';
 import { Button } from '@/components/common/Button';
 import { Modal } from '@/components/common/Modal';
-import { usePrompt } from '@/components/common/ConfirmDialog';
+import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
 import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { useAuthStore } from '@/store/authStore';
 import { trCode } from '@/utils/apiError';
@@ -37,6 +37,7 @@ const ONBOARD_FALLBACK: Record<string, string> = {
 export function AndroidEnterpriseCard() {
   const { t } = useTranslation();
   const prompt = usePrompt();
+  const confirm = useConfirm();
   const { isAdmin, permissions } = useAuthStore();
   const canManage = isAdmin() || (permissions?.tenantCapabilities ?? []).includes('mdm.integrations.manage');
   const [e, setE] = useState<Enterprise | null | undefined>(undefined);
@@ -45,6 +46,7 @@ export function AndroidEnterpriseCard() {
   const [deadlines, setDeadlines] = useState<AndroidDeadline[]>([]);
   const [offboarding, setOffboarding] = useState<AndroidOffboardingView | null>(null);
   const [signin, setSignin] = useState<AndroidSigninConfig | null>(null);
+  const [hold, setHold] = useState<AndroidReconcileHold | null>(null);
   const [wizard, setWizard] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -54,16 +56,18 @@ export function AndroidEnterpriseCard() {
       setE(card);
       setDisabled(null);
       const live = card && card.state !== 'unlinked';
-      const [o, d, off, s] = await Promise.all([
+      const [o, d, off, s, h] = await Promise.all([
         androidApi.onboarding().catch(() => null),
         live ? androidApi.deadlines().catch(() => []) : Promise.resolve([] as AndroidDeadline[]),
         live || card?.state === 'unlinked' ? androidApi.offboarding().catch(() => null) : Promise.resolve(null),
         card?.state === 'linked' ? androidApi.signin().catch(() => null) : Promise.resolve(null),
+        card?.state === 'linked' ? androidApi.reconcileHold().catch(() => null) : Promise.resolve(null),
       ]);
       setOnboarding(o);
       setDeadlines(d);
       setOffboarding(off);
       setSignin(s);
+      setHold(h);
     } catch (err) {
       const code = (err as { response?: { data?: { code?: string } } })?.response?.data?.code;
       setE(null);
@@ -89,6 +93,22 @@ export function AndroidEnterpriseCard() {
   const forceUnlink = async () => {
     const reason = await askReason(t('android.enterprise.forceUnlinkTitle') || 'Go on without the devices left');
     if (reason) await run(() => androidApi.forceUnlink(reason), t('android.enterprise.unlinkRequested') || 'Unlink requested: a second approver must approve it.');
+  };
+
+  // Review F023: a held mass disappearance is released only by an explicit confirmation of its exact count, under a
+  // fresh second factor (the interceptor asks it); the devices then leave management at the next pass.
+  const confirmMissing = async () => {
+    if (!hold) return;
+    const ok = await confirm({
+      title: t('android.reconcileHold.confirmTitle') || 'Confirm the devices gone',
+      message: t('android.reconcileHold.confirmMessage', { count: hold.heldMissing })
+        || `Take ${hold.heldMissing} device(s) out of management? Do it only if they were really removed at Google: a second factor is asked.`,
+      confirmLabel: t('common.confirm') || 'Confirm',
+      danger: true,
+    });
+    if (!ok) return;
+    await run(() => androidApi.reconcile(hold.heldMissing),
+      t('android.reconcileHold.confirmed') || 'Confirmation recorded: the reconciliation runs within the minute.');
   };
 
   const state = e?.state ?? 'none';
@@ -166,6 +186,23 @@ export function AndroidEnterpriseCard() {
       {signin && <SigninPanel config={signin} canManage={canManage} onSaved={setSignin} />}
       {offboarding && <Offboarding view={offboarding} canManage={canManage} busy={busy} onForce={() => void forceUnlink()} />}
 
+      {e?.state === 'linked' && hold && (
+        <div className="space-y-2 rounded border border-red-500/30 bg-red-500/5 p-2 text-sm">
+          <p className="flex items-start gap-2 text-text-secondary">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-400" />
+            <span>
+              {t('android.reconcileHold.help', { count: hold.heldMissing, managed: hold.managed })
+                || `The last reconciliation found ${hold.heldMissing} of ${hold.managed} managed device(s) missing at Google: none was taken out of management. Check the enterprise at Google first; confirm only if these devices are really gone.`}
+              {hold.at && <span className="ml-1 text-xs text-text-muted">{dateOf(hold.at)}</span>}
+            </span>
+          </p>
+          {canManage && (
+            <Button size="sm" variant="danger" disabled={busy} onClick={() => void confirmMissing()}>
+              {t('android.reconcileHold.confirm', { count: hold.heldMissing }) || `Confirm ${hold.heldMissing} device(s) gone…`}
+            </Button>
+          )}
+        </div>
+      )}
       {canManage && e?.state === 'linked' && (
         <div className="flex flex-wrap gap-2 border-t border-border pt-3">
           <Button size="sm" variant="secondary" disabled={busy} onClick={() => void run(() => androidApi.reconcile(), t('android.enterprise.reconcileRequested') || 'Reconciliation requested: it runs within the minute.')}>

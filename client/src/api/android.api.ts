@@ -66,6 +66,10 @@ export interface AndroidSignupRequest {
 /** A restricted request filed (unlink, forced end, adoption): a second approver decides. */
 export interface AndroidApprovalFiled { approvalId: number; status: string }
 
+/** GET /api/android/reconcile, `held` (review F023): a reconciliation that found most of the fleet absent at Google
+ *  marked nothing gone; `heldMissing` devices of `managed` wait for an operator's confirmation. */
+export interface AndroidReconcileHold { heldMissing: number; managed: number; at: string | null }
+
 const data = <T>(r: { data: ApiResponse<T> }): T => r.data.data as T;
 
 export const androidApi = {
@@ -97,8 +101,15 @@ export const androidApi = {
   async recheck(): Promise<{ result: string }> {
     return data(await apiClient.post<ApiResponse<{ result: string }>>('/android/enterprise/recheck', {}));
   },
-  async reconcile(): Promise<void> {
-    await apiClient.post('/android/reconcile', {});
+  /** `confirmMissing`: the exact count of a held mass disappearance (reconcileHold) the operator confirms, which
+   *  takes those devices out of management (a fresh second factor, asked by the interceptor; review F023). Without
+   *  it, a held disappearance stays held. */
+  async reconcile(confirmMissing?: number): Promise<void> {
+    await apiClient.post('/android/reconcile', confirmMissing !== undefined ? { confirmMissing } : {});
+  },
+  /** The mass disappearance the last reconciliation held (most of the fleet absent at Google), or null. */
+  async reconcileHold(): Promise<AndroidReconcileHold | null> {
+    return data(await apiClient.get<ApiResponse<{ held: AndroidReconcileHold | null }>>('/android/reconcile'))?.held ?? null;
   },
   async presumedGone(): Promise<AndroidPresumedGoneView[]> {
     return data(await apiClient.get<ApiResponse<AndroidPresumedGoneView[]>>('/android/devices/presumed-gone'));

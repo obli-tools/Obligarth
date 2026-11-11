@@ -39,11 +39,28 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
   const items = useMemo(() => (view?.report?.items ?? []).filter((i) => filter === 'all' || shown(i) === filter), [view, filter]);
   const act = (type: 'policy.reapply' | 'kiosk.suspend') => actions.find((a) => a.type === type);
 
-  if (error) return <p className="text-sm text-red-400">{error}</p>;
-  if (!view) return <p className="text-sm italic text-text-muted">{t('common.loading') || 'Loading…'}</p>;
+  const refreshButton = (
+    <button type="button" onClick={load} aria-label={t('common.refresh') || 'Refresh'} className="rounded-lg p-2 text-text-muted hover:bg-bg-tertiary hover:text-text-primary">
+      <RefreshCw className="h-4 w-4" />
+    </button>
+  );
+  // A failed read never hides the tab: the error is a banner above what was shown, the refresh button and the
+  // runner's dialogs stay (a passing 502 must not leave the operator without a way to read again).
+  const errorBanner = error ? <p role="alert" className="text-sm text-red-400">{error}</p> : null;
+  if (!view) {
+    return (
+      <div className="space-y-2">
+        {errorBanner
+          ? <div className="flex items-center gap-2">{errorBanner}{refreshButton}</div>
+          : <p className="text-sm italic text-text-muted">{t('common.loading') || 'Loading…'}</p>}
+        {runner.dialogs}
+      </div>
+    );
+  }
   const r = view.report;
   return (
     <div className="space-y-4">
+      {errorBanner}
       <div className="flex flex-wrap items-center gap-2">
         {!view.supported && (
           <span className="inline-flex items-center gap-1 rounded-full bg-amber-400/10 px-2 py-0.5 text-[11px] text-amber-400">
@@ -62,9 +79,7 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
               </Button>
             );
           })}
-          <button type="button" onClick={load} aria-label={t('common.refresh') || 'Refresh'} className="rounded-lg p-2 text-text-muted hover:bg-bg-tertiary hover:text-text-primary">
-            <RefreshCw className="h-4 w-4" />
-          </button>
+          {refreshButton}
         </span>
       </div>
 

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { LiveAlert as SharedLiveAlert } from '@obligarth/shared';
+import { onSessionReset } from './sessionReset';
 
 export type AlertSeverity = 'info' | 'warning' | 'critical' | 'down' | 'up';
 
@@ -53,10 +54,10 @@ interface LiveAlertsState extends AlertPrefs {
   markAlertRead: (id: number) => Promise<void>;
   /** Mark all current-tenant alerts as read (server + local). */
   markAllRead: () => Promise<void>;
-  /** Delete one alert (server + local). */
-  removeAlert: (id: number) => Promise<void>;
-  /** Clear all alerts for current tenant (server + local). */
-  clearAll: () => Promise<void>;
+  /** Delete one alert (server + local). False when the server refused (the alert is back). */
+  removeAlert: (id: number) => Promise<boolean>;
+  /** Clear all alerts for current tenant (server + local). False when the server refused. */
+  clearAll: () => Promise<boolean>;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -103,8 +104,14 @@ async function apiPatch(path: string): Promise<void> {
 async function apiPost(path: string): Promise<void> {
   await fetch(path, { method: 'POST', credentials: 'include' });
 }
-async function apiDelete(path: string): Promise<void> {
-  await fetch(path, { method: 'DELETE', credentials: 'include' });
+/** True when the server deleted (a member without the right is refused 403). */
+async function apiDelete(path: string): Promise<boolean> {
+  try {
+    const res = await fetch(path, { method: 'DELETE', credentials: 'include' });
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
 
 // ─── Store ────────────────────────────────────────────────────────────────────
@@ -204,14 +211,23 @@ export const useLiveAlertsStore = create<LiveAlertsState>()(
       removeAlert: async (id) => {
         rememberGone([id]);
         set((s) => ({ alerts: s.alerts.filter((a) => a.id !== id) }));
-        await apiDelete(`/api/live-alerts/${id}`);
+        if (!(await apiDelete(`/api/live-alerts/${id}`))) {
+          // Not deleted (alerts are shared by the tenant: deleting one is a
+          // management right): it comes back with the server's list.
+          goneIds.delete(id);
+          await get().fetchAlerts();
+          return false;
+        }
+        return true;
       },
 
       clearAll: async () => {
         set({ alerts: [] });
-        await apiDelete('/api/live-alerts');
-        // Reload to restore cross-tenant alerts that weren't in the cleared tenant
+        const ok = await apiDelete('/api/live-alerts');
+        // Reload to restore cross-tenant alerts that weren't in the cleared
+        // tenant (and the tenant's own when the server refused).
         await get().fetchAlerts();
+        return ok;
       },
     }),
     {
@@ -225,6 +241,13 @@ export const useLiveAlertsStore = create<LiveAlertsState>()(
     },
   ),
 );
+
+// The alert list belongs to the signed-in account (the toast preferences stay: they are the browser's).
+onSessionReset(() => {
+  goneIds.clear();
+  arrivals.clear();
+  useLiveAlertsStore.setState({ alerts: [] });
+});
 
 // ─── Computed helpers (exported for components) ───────────────────────────────
 

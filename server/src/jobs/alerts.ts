@@ -5,8 +5,9 @@ import { logger } from '../utils/logger';
 import { safeErr } from './errors';
 
 // =============================================================================
-// Alerts of the jobs: live alerts of the master tenant (the MSP), deduplicated
-// on an unread alert of the same stable key, and an error line in the log.
+// Alerts of the jobs: live alerts of the platform (master tenant, platform
+// administrators only), deduplicated on an unread alert of the same stable
+// key, and an error line in the log.
 // Short English texts, no personal data nor client name. Routing to e-mail
 // and ObliDesk belongs to the observability work (FND-14).
 // =============================================================================
@@ -28,6 +29,8 @@ export async function raiseJobAlert(actor: DbActor, alert: JobAlert): Promise<vo
       message: alert.message.slice(0, 500),
       navigateTo: null,
       stableKey: alert.stableKey,
+      // The platform administrators' only, never the other members of the master tenant.
+      platformOnly: true,
     }));
   } catch (err) {
     logger.error({ err: safeErr(err), alert: alert.stableKey }, 'job alert not written');

@@ -51,6 +51,13 @@ export function useAndroidActionRunner({ deviceId, ownership, onQueued }: { devi
     const spec = PARAMS[a.type];
     const out: Record<string, unknown> = {};
     for (const f of spec?.fields ?? []) {
+      // A password is an exact value: sent as typed, its spaces included (only an empty field means "removed";
+      // a field of spaces only is refused before, see passwordBlank).
+      if (f === 'newPassword') {
+        const p = values[f] ?? '';
+        if (p !== '') out[f] = p;
+        continue;
+      }
       const v = (values[f] ?? '').trim();
       if (!v) continue;
       out[f] = f === 'packageNames' ? v.split(/[\s,;]+/).filter(Boolean) : v;
@@ -90,7 +97,9 @@ export function useAndroidActionRunner({ deviceId, ownership, onQueued }: { devi
   };
 
   const spec = paramsFor ? PARAMS[paramsFor.type] : null;
-  const paramsOk = !spec?.needsOne || spec.needsOne.some((f) => (values[f] ?? '').trim().length > 0);
+  // A new password made of spaces only would be neither a usable password nor an intended removal (empty field).
+  const passwordBlank = !!spec?.fields.includes('newPassword') && (values.newPassword ?? '') !== '' && (values.newPassword ?? '').trim() === '';
+  const paramsOk = !passwordBlank && (!spec?.needsOne || spec.needsOne.some((f) => (values[f] ?? '').trim().length > 0));
 
   const dialogs = (
     <>
@@ -123,6 +132,9 @@ export function useAndroidActionRunner({ deviceId, ownership, onQueued }: { devi
               <input type="checkbox" checked={factoryReset} onChange={(e) => setFactoryReset(e.target.checked)} className="accent-accent" />
               {t('android.commands.factoryReset') || 'Factory reset the device (otherwise only the work profile is removed and the device is handed to its user)'}
             </label>
+          )}
+          {passwordBlank && (
+            <p role="alert" className="text-[11px] text-red-400">{t('android.commands.passwordBlank') || 'The password cannot be made of spaces only. Leave the field empty to remove the password.'}</p>
           )}
           {spec?.needsOne && paramsFor?.type === 'START_LOST_MODE' && (
             <p className="text-[11px] text-text-muted">{t('android.commands.lostModeContact') || 'A message, a phone number, an e-mail or an address is required: it is shown on the locked device.'}</p>

@@ -21,6 +21,7 @@ import { apiLimiter } from './middleware/rateLimiter';
 import { captureStepUpProof } from './middleware/captureStepUpProof';
 import { sessionUserGuard } from './middleware/sessionUserGuard';
 import { deviceKeySession } from './middleware/deviceKeySession';
+import { force2faGate } from './middleware/force2fa';
 import { dbContextBase } from './middleware/dbContext';
 import { routes } from './routes';
 import { createDdmRelayRouter } from './apple/ddm/relay';
@@ -49,13 +50,15 @@ export function createApp() {
   const app = express();
 
   // Trust the first hop only (the client container's nginx): X-Forwarded-Proto
-  // for the `secure` session cookie, and req.ip = the address that nginx saw.
-  // req.ip is the RATE-LIMIT key: a client can never choose it (behind an
-  // edge proxy every user shares it, as before). The client's real address
-  // (audit, 2FA "trust this IP") comes from
-  // clientIp(req) (utils/clientIp.ts), which walks further through
-  // TRUSTED_PROXIES — a walk a client can steer when it reaches the client
-  // container from a trusted range, so it must never key a rate limit.
+  // for the `secure` session cookie, and req.ip = the address that nginx saw
+  // (behind an edge proxy, the proxy's, shared by every user). The client's
+  // real address (audit, 2FA "trust this IP", and the key of the anonymous
+  // rate limits: limiterClientKey, middleware/rateLimiter.ts) comes from
+  // clientAddress(req) (utils/clientIp.ts), which walks further through
+  // TRUSTED_PROXIES and at most TRUSTED_PROXY_HOPS hops. Only a client that
+  // reaches the client container from a trusted range can steer that walk:
+  // for a limiter it then only spreads itself over more buckets; a relay
+  // address falls back on req.ip's shared bucket.
   app.set('trust proxy', 1);
 
   // HTTP metrics (P0-13 T8, ops/http.ts): every response counted by the pattern of the route that answered, never
@@ -205,6 +208,12 @@ export function createApp() {
   // limiter: an unauthenticated request refused by it never reaches the
   // key lookup (no database query before the rate limit).
   app.use('/api', deviceKeySession);
+
+  // "Force 2FA" enforced here, not only announced to the console: a local
+  // account without a second factor reaches its profile, the 2FA set-up and
+  // the sign-in routes only (403 twoFactorSetupRequired elsewhere). Never an
+  // Obligate SSO account. See middleware/force2fa.ts.
+  app.use('/api', force2faGate);
 
   // Obligate SSO callback (browser redirect, NOT under /api)
   const obligateCallback = require('./routes/obligateCallback.routes').default;

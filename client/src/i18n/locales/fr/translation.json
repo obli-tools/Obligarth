@@ -281,6 +281,8 @@
     }
   },
   "groups": {
+    "movedOrderFailed": "Groupe déplacé, mais sa position parmi ses nouveaux voisins n'a pas pu être enregistrée",
+    "crossTenantMove": "Un groupe reste dans son espace de travail : déposez-le parmi les groupes du même espace.",
     "new": "Nouveau groupe",
     "edit": "Modifier le groupe",
     "backToGroup": "Retour à {{name}}",
@@ -717,7 +719,9 @@
       "scopeInclude": "Uniquement ceux-ci",
       "scopeExclude": "Tous sauf ceux-ci",
       "searchDevices": "Rechercher des appareils…",
-      "devicesTruncated": "Affichage des {{count}} premiers appareils — affinez la recherche pour trouver les autres."
+      "devicesTruncated": "Affichage des {{count}} premiers appareils — affinez la recherche pour trouver les autres.",
+      "commandsSensitiveOn": "En service : le réglage de garde « Second facteur sur les commandes de l'agent Android » est activé.",
+      "commandsSensitiveOff": "Hors service : le réglage de garde « Second facteur sur les commandes de l'agent Android » est désactivé (Sécurité, onglet Garde-fous)."
     },
     "permissionSets": "Ensembles de permissions",
     "tabPermissionSets": "Permissions",
@@ -856,6 +860,14 @@
     "otherApps": "Autres applications"
   },
   "tenant": {
+    "switchFailed": "Impossible de passer à cet espace de travail.",
+    "roleAdministrator": "Administrateur",
+    "roleMember": "Membre",
+    "confirmRoleChange": "Donner à {{user}} le rôle « {{role}} » dans cet espace de travail ?",
+    "roleOf": "Rôle de {{user}}",
+    "deleteTitle": "Supprimer l'espace de travail « {{name}} »",
+    "confirmDeleteTyped": "Toutes ses données, appareils gérés compris, seront définitivement supprimées. Saisissez « {{slug}} » pour confirmer.",
+    "deleted": "Espace de travail « {{name}} » supprimé",
     "pageTitle": "Espaces de travail",
     "pageDesc": "Gérez les espaces de travail et leurs membres pour les déploiements multi-locataires.",
     "create": "Nouvel espace de travail",
@@ -973,6 +985,7 @@
       "xlsx": "Exporter en Excel (xlsx)"
     },
     "list": {
+      "otherGroups": "Autres groupes",
       "count_one": "{{count}} appareil",
       "count_other": "{{count}} appareils"
     },
@@ -1387,6 +1400,12 @@
       "command": "réglage"
     },
     "editor": {
+      "confirmReload": "Recharger la version enregistrée sur le serveur ? Vos modifications non enregistrées seront perdues.",
+      "noLongerDraft": "Cette version n'est plus un brouillon (elle a été soumise ou publiée ailleurs) : rechargez-la.",
+      "confirmOverwrite": "Ce brouillon a été modifié par quelqu'un d'autre depuis que vous l'avez ouvert. Enregistrer quand même votre version ? Ses modifications seront perdues.",
+      "reviewBeforePublish": "Cette version a été modifiée ailleurs : son contenu actuel est maintenant affiché, relisez-le avant de publier.",
+      "changedElsewhere": "Cette version a été modifiée ailleurs depuis que vous l'avez ouverte. L'enregistrer remplacerait ces modifications.",
+      "reloadVersion": "Recharger",
       "publishedVersion": "publiée : v{{version}}",
       "archive": "Archiver",
       "archived": "Politique archivée",
@@ -1438,7 +1457,8 @@
       "importedSuspect_other": "{{count}} clés ressemblent à des secrets mais sont restées en clair dans la politique (le profil part tout de même chiffré pour chaque appareil). Vérifiez-les avant de publier ; supprimez l'élément pour les retirer.",
       "importedSignedTrusted": "Le fichier était signé par {{signer}} : la signature est valide et son certificat remonte à une racine publique. La signature a été retirée : le profil est livré par ce serveur, chiffré pour chaque appareil.",
       "importedSignedUntrusted": "Le fichier était signé par {{signer}} : la signature est valide, mais son certificat ne remonte pas à une racine publique. La signature a été retirée : le profil est livré par ce serveur, chiffré pour chaque appareil.",
-      "importedSignedUnverified": "Le fichier était signé avec un algorithme que ce serveur ne vérifie pas : la signature a été retirée sans contrôle. Le profil est livré par ce serveur, chiffré pour chaque appareil."
+      "importedSignedUnverified": "Le fichier était signé avec un algorithme que ce serveur ne vérifie pas : la signature a été retirée sans contrôle. Le profil est livré par ce serveur, chiffré pour chaque appareil.",
+      "savedElsewhere": "Ce brouillon a été enregistré ailleurs entre-temps : rien n'a été enregistré. Rechargez-le pour voir les autres modifications (les vôtres sont alors perdues)."
     }
   },
   "supervision": {
@@ -1891,7 +1911,12 @@
       "site_archived": "Site archivé",
       "site_restored": "Site rétabli",
       "site_imported": "Sites importés",
-      "device_site_changed": "Site d’un appareil changé"
+      "device_site_changed": "Site d’un appareil changé",
+      "live_alert_deleted": "Notification supprimée",
+      "live_alert_cleared": "Notifications effacées",
+      "sso_sync_delete_blocked": "Suppression du compte par Obligate bloquée (encore référencé) : désactivé, à supprimer à la main",
+      "android_mass_missing_confirmed": "Android : disparition massive confirmée",
+      "legacy_agent_package_confirmed": "APK renvoyé par un appareil confirmé"
     },
     "families": {
       "auth": "Authentification",
@@ -1921,7 +1946,8 @@
       "mdm": "Commandes MDM",
       "enrollment": "Enrôlement",
       "privacy": "Confidentialité",
-      "ops": "Exploitation"
+      "ops": "Exploitation",
+      "legacy_agent": "Agent Android"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -1969,7 +1995,8 @@
     "agoSeconds": "il y a {{count}} s",
     "agoMinutes": "il y a {{count}} min",
     "agoHours": "il y a {{count}} h",
-    "agoDays": "il y a {{count}} j"
+    "agoDays": "il y a {{count}} j",
+    "deleteRefused": "Vous n'êtes pas autorisé à supprimer ces notifications : elles sont partagées par le tenant."
   },
   "liveAlerts": {
     "dismiss": "Ignorer"
@@ -1997,7 +2024,9 @@
     "passwordLabel": "Mot de passe actuel",
     "actions": {
       "totpManage": "Modifier votre application d'authentification",
-      "emailOtpManage": "Modifier vos codes de connexion par e-mail"
+      "emailOtpManage": "Modifier vos codes de connexion par e-mail",
+      "androidReconcileConfirmMissing": "Confirmer la disparition d'appareils Android chez Google",
+      "androidReleaseHeld": "Libérer une commande Android retenue"
     },
     "passwordOrCodeInvalid": "Mot de passe ou code incorrect."
   },
@@ -2548,7 +2577,13 @@
       "requested": "Changement demandé : en attente d'un approbateur",
       "unchanged": "Rien n'a changé",
       "fleetShareFloor": "Second approbateur : 10 % du parc comptés à partir de (appareils)",
-      "fleetShareFloorHelp": "Un changement de la configuration demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
+      "fleetShareFloorHelp": "Un changement de la configuration demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils.",
+      "legacyAgentCommandsSensitive": "Second facteur sur les commandes de l'agent Android",
+      "legacyAgentCommandsSensitiveHelp": "L'installation ou la désinstallation d'une app, la mise à jour de l'agent, le redémarrage d'un appareil et la suspension de son kiosque demandent le second facteur de la personne qui les envoie (console et MCP). Désactivé par défaut. Comme pour les autres réglages, le changement est approuvé par une seconde personne.",
+      "pending": "Changement en attente d'approbation (demande n° {{id}})",
+      "pendingOpen": "Ouvrir les approbations",
+      "on": "activé",
+      "off": "désactivé"
     },
     "quota": "Budget horaire : reste {{remaining}} appareils sur {{cap}}",
     "approval": {
@@ -2873,6 +2908,10 @@
         "notification_auth_failed": {
           "title": "Notifications Apps and Books refusées",
           "message": "{{count}} notification(s) ont présenté un mauvais secret."
+        },
+        "platforms_kept": {
+          "title": "Plateformes des apps non mises à jour",
+          "message": "Le jeton de contenu {{label}} indique d'autres plateformes pour {{count}} app(s) affectée(s) : leurs plateformes sont conservées tant qu'elles ont des affectations."
         }
       },
       "deadline": {
@@ -4211,7 +4250,7 @@
     "invalidRule": "Le filtre avancé n'est pas valide.",
     "invalidIpAllow": "Une entrée de la liste d’adresses n’est ni une adresse ni un réseau.",
     "ipPrefixTooWide": "Un réseau de la liste d’adresses est trop large.",
-    "twoFactorSetupRequired": "Configurez un second facteur (application d’authentification) sur votre profil avant de créer une clé d’accès.",
+    "twoFactorSetupRequired": "Un second facteur est exigé : configurez d'abord une application d'authentification sur votre profil.",
     "tenantNotAllowed": "Un tenant de la clé n’est pas un tenant que vous pouvez lui donner.",
     "scopeNotHeld": "Vous ne détenez pas ce droit dans les tenants choisis : {{scope}}.",
     "scopeUnknown": "Droit inconnu.",
@@ -4246,7 +4285,19 @@
     "batchGone": "Ce lot n’existe plus ou a déjà été appliqué.",
     "siteOutsidePerimeter": "Des téléphones de ce site ({{devices}}) sont hors de vos droits : un administrateur modifie ses valeurs.",
     "sitePolicyRightMissing": "Modifier les valeurs des sites demande le droit de gérer les politiques.",
-    "importTooLargeBytes": "Ce fichier est trop volumineux une fois encodé : découpez-le en plusieurs imports."
+    "importTooLargeBytes": "Ce fichier est trop volumineux une fois encodé : découpez-le en plusieurs imports.",
+    "appPlatformsHaveAssignments": "Retirez les affectations de cette app avant de changer ses plateformes.",
+    "exportBusy": "Trop d'exports PDF en cours : réessayez dans un instant.",
+    "exportTooLarge": "Trop de lignes pour un export PDF (2 000 au plus) : affinez les filtres, ou exportez en CSV ou XLSX.",
+    "exportTimeout": "L'export PDF a pris trop de temps : exportez en CSV ou XLSX, ou affinez les filtres.",
+    "tenantHasBridgeDevices": "Cet espace a encore {{devices}} appareil(s) inscrit(s) avec l'agent pont Android : révoquez-les d'abord, puis supprimez l'espace.",
+    "deadLetterAlreadyApplied": "Cette lettre morte a déjà été rejouée et appliquée : elle n'est pas appliquée deux fois.",
+    "userHasDependencies": "Ce compte est encore référencé par d'autres enregistrements : désactivez-le plutôt, ou retirez d'abord ce qui y fait référence.",
+    "invalidConfirmMissing": "La confirmation doit donner le nombre exact d'appareils retenus (un entier positif).",
+    "adminRequired": "Seul un administrateur du tenant peut libérer une commande destructrice.",
+    "releaseRateLimited": "Trop de commandes destructrices libérées depuis une heure : réessayez plus tard.",
+    "packageNotConfirmed": "Cet APK a été renvoyé par un appareil : confirmez-le dans l'onglet Paquets de l'agent Android avant de l'installer.",
+    "capabilityMissing": "Votre équipe n'a pas la capacité exigée par cette action (sur cet appareil, pour une commande d'appareil)."
   },
   "deviceEnrollment": {
     "title": "Inscription des appareils",
@@ -4668,6 +4719,7 @@
       "revoked": "Inclure les révoqués"
     },
     "importNames": {
+      "forbiddenHint": "Non autorisé : vous n'avez pas le droit d'écriture sur ces appareils.",
       "button": "Importer les noms",
       "title": "Importer les noms des appareils",
       "orPaste": "ou coller le contenu",
@@ -4693,7 +4745,8 @@
         "ambiguous": "Plusieurs appareils",
         "duplicate": "Doublon",
         "forbidden": "Non autorisé",
-        "invalid": "Ligne invalide"
+        "invalid": "Ligne invalide",
+        "governed": "Changement gouverné : renommez depuis la fiche de l'appareil"
       },
       "format": "Format de l'export",
       "file": "Fichier",
@@ -4705,7 +4758,8 @@
         "omnissa": "Export CSV de la liste des appareils : « Friendly Name », « IMEI » et « Serial Number ».",
         "csvLabel": "Autre CSV",
         "csv": "N'importe quel CSV : choisissez la colonne du nom, et celle de l'IMEI ou du numéro de série."
-      }
+      },
+      "governedHint": "Changement gouverné : le nouveau nom ferait entrer ou sortir l'appareil d'un groupe dynamique ciblé par une affectation. Renommez-le depuis sa fiche, où l'impact est prévisualisé."
     },
     "actions": {
       "message": "Message",
@@ -4776,7 +4830,19 @@
       "size": "Taille",
       "mib": "{{size}} Mio",
       "empty": "Aucun paquet pour l'instant.",
-      "chooseApk": "Choisir un APK"
+      "chooseApk": "Choisir un APK",
+      "state": "État",
+      "toConfirm": "À confirmer",
+      "toConfirmHint": "Renvoyé par un appareil : il ne peut pas être installé tant qu'une personne ne l'a pas confirmé.",
+      "confirmedState": "Confirmé",
+      "confirm": "Confirmer",
+      "confirmTitle": "Confirmer cet APK",
+      "confirmMessage": "Cet APK ({{packageName}}, {{version}}) a été renvoyé par un appareil, il n'a pas été téléversé par une personne. Une fois confirmé, il peut être installé sur les appareils du tenant.",
+      "confirmCheck": "Vérifiez que le nom du paquet, la version et le signataire sont bien ceux que vous attendez avant de confirmer.",
+      "signerShort": "Signataire",
+      "confirmed": "APK confirmé : il peut maintenant être installé.",
+      "fromDevice": "Depuis l'appareil",
+      "unconfirmedHint": "{{count}} paquet(s) renvoyé(s) par un appareil doivent être confirmés dans l'onglet Paquets avant de pouvoir être installés."
     },
     "releases": {
       "choose": "Version de l'agent",
@@ -5025,6 +5091,7 @@
       "until": "jusqu'au {{at}}"
     },
     "commands": {
+      "passwordBlank": "Le mot de passe ne peut pas être fait uniquement d'espaces. Laissez le champ vide pour supprimer le mot de passe.",
       "queued": "Commande en file : Google la remet à l'appareil.",
       "passwordHint": "Scellé aussitôt dans le coffre, jamais réaffiché. Vide : le mot de passe est retiré.",
       "packagesHint": "Paquets séparés par des espaces ou des virgules.",
@@ -5474,6 +5541,13 @@
         "DEVICE_INCOMPATIBLE": "appareil incompatible",
         "PROJECT_NOT_PERMITTED": "non permis pour ce projet"
       }
+    },
+    "reconcileHold": {
+      "help": "La dernière réconciliation n'a pas trouvé chez Google {{count}} des {{managed}} appareil(s) gérés : aucun n'a été retiré de la gestion. Vérifiez d'abord l'entreprise chez Google ; ne confirmez que si ces appareils ont vraiment disparu.",
+      "confirm": "Confirmer la disparition de {{count}} appareil(s)…",
+      "confirmTitle": "Confirmer la disparition des appareils",
+      "confirmMessage": "Retirer {{count}} appareil(s) de la gestion ? Ne le faites que s'ils ont vraiment été supprimés chez Google : un second facteur est demandé.",
+      "confirmed": "Confirmation enregistrée : la réconciliation s'exécute dans la minute."
     }
   },
   "androidApps": {
@@ -6682,6 +6756,23 @@
       "cancelled": "Annulée",
       "filed": "Envoyée en approbation",
       "interrupted": "Interrompue"
+    },
+    "errors": {
+      "approvalMissing": "La demande d'approbation n'existe plus.",
+      "batchGone": "Le lot de modifications a expiré ou a déjà servi : redemandez à l'agent.",
+      "capabilityMissing": "Votre équipe n'a pas la capacité exigée par cette action.",
+      "detachOneByOne": "Un agent ne peut pas détacher plusieurs appareils de leur site à la fois : détachez-les un par un dans la console.",
+      "executionFailed": "L'action approuvée a échoué à son exécution.",
+      "keyInactive": "La clé d'accès n'est plus active.",
+      "perimeterLost": "L'action sort désormais de votre périmètre ou de celui de la clé.",
+      "planChanged": "Le plan a changé depuis son approbation : rien n'a été appliqué.",
+      "policyChanged": "La politique a changé depuis la demande : rien n'a été appliqué.",
+      "unknownTool": "Outil inconnu.",
+      "refusedStatus": "Refusé par la console (HTTP {{status}})",
+      "interrupted": "L'action a été interrompue avant la fin : vérifiez son résultat avant de la redemander.",
+      "cancelFailed": "L'annulation n'est pas encore terminée : elle est relancée chaque minute.",
+      "stepUpRequired": "L'action demande un second facteur récent : approuvez-la de nouveau depuis la console.",
+      "impactChanged": "L'impact a changé depuis que vous l'avez vu : rien n'a été fait."
     }
   },
   "legacyAgentPolicy": {
@@ -7531,6 +7622,136 @@
       "step": "Touchez « Scanner le QR code d’inscription » et visez cet écran avec l’appareil photo.",
       "validUntil_one": "Valable jusqu’au {{date}}, pour {{count}} téléphone.",
       "validUntil_other": "Valable jusqu’au {{date}}, pour {{count}} téléphones."
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android : disparition massive chez Google retenue",
+        "message": "Une réconciliation n'a pas trouvé chez Google {{count}} des {{managed}} appareil(s) gérés : aucun n'a été retiré de la gestion. Vérifiez l'entreprise, puis confirmez sur la carte Android Enterprise s'ils ont vraiment disparu."
+      },
+      "google_unreachable": {
+        "title": "Android : Google injoignable",
+        "message": "Obligarth ne joint pas l'API Android Management de Google : les inscriptions, politiques et commandes Android attendent."
+      },
+      "google_auth_failed": {
+        "title": "Android : identité refusée par Google",
+        "message": "Google a refusé le compte de service (clé révoquée ou permission manquante) : le lien Android est arrêté."
+      },
+      "google_key_expiring": {
+        "title": "Android : clé du compte de service bientôt expirée",
+        "message": "La clé du compte de service Google expire dans {{days}} jour(s) : remplacez-la."
+      },
+      "quota_warning": {
+        "title": "Android : quota d'appareils à 80 %",
+        "message": "{{count}} appareils Android dans le projet Google : 80 % de son quota est atteint."
+      },
+      "quota_exhausted": {
+        "title": "Android : quota d'appareils atteint",
+        "message": "{{count}} appareils Android : le quota du projet Google est atteint, les nouvelles inscriptions sont refusées."
+      },
+      "inbox_dead_letter": {
+        "title": "Android : notification en lettres mortes",
+        "message": "Une notification Google du tenant {{tenantId}} n'a pas pu être traitée ({{code}}) et a été mise en lettres mortes."
+      },
+      "retention_risk": {
+        "title": "Android : notifications menacées d'expiration",
+        "message": "Aucune notification Google relevée depuis {{days}} jour(s) : les plus anciennes peuvent expirer avant d'être lues."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android : messages d'entreprises inconnues",
+        "message": "{{lastHour}} message(s) Pub/Sub de la dernière heure viennent d'entreprises inconnues d'Obligarth."
+      },
+      "pubsub_test_missing": {
+        "title": "Android : message de test Pub/Sub manquant",
+        "message": "Le message de test Pub/Sub de l'entreprise du tenant {{tenantId}} n'est pas arrivé : vérifiez les permissions du sujet."
+      },
+      "ownership_violation": {
+        "title": "Android : appel refusé par le contrôle d'appartenance",
+        "message": "Un appel à Google a été refusé par le contrôle d'appartenance ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android : entreprise du projet absente du registre",
+        "message": "Une entreprise du projet Google ({{ref}}) n'est pas dans le registre d'Obligarth."
+      },
+      "signup_callback_rejected": {
+        "title": "Android : retours d'inscription rejetés",
+        "message": "{{lastHour}} retours d'inscription d'entreprise ont été rejetés dans la dernière heure."
+      },
+      "domain_claimed": {
+        "title": "Android : inscription d'un domaine revendiqué par un autre tenant",
+        "message": "Le tenant {{tenantId}} a tenté d'inscrire une entreprise pour un domaine revendiqué par un autre tenant."
+      },
+      "gateway_cap_reached": {
+        "title": "Android : plafond de dernier recours des opérations destructrices atteint",
+        "message": "Le plafond de dernier recours des opérations Android destructrices est atteint ({{kind}}, {{count}}) : les suivantes sont refusées."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android : entreprise dissociée hors d'Obligarth",
+        "message": "L'entreprise Android de ce tenant a été dissociée hors d'Obligarth : ses appareils ne sont plus gérés."
+      },
+      "signup_failed": {
+        "title": "Android : échec de l'inscription de l'entreprise",
+        "message": "L'inscription de l'entreprise Android a échoué ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android : inscription de l'entreprise interrompue",
+        "message": "Une inscription d'entreprise Android a été interrompue avant la fin : relancez-la."
+      },
+      "device_api_too_low": {
+        "title": "Android : appareil sous le niveau d'API minimal de son profil",
+        "message": "Un appareil Android sous le niveau d'API minimal de son profil d'inscription a été mis en quarantaine."
+      },
+      "enrollment_spike": {
+        "title": "Android : pic d'inscriptions sur un jeton long",
+        "message": "{{perHour}} inscriptions dans la dernière heure sur le jeton long {{tokenId}} : les suivantes peuvent demander une approbation."
+      },
+      "policy_push_failed": {
+        "title": "Android : politique refusée par Google",
+        "message": "Google a refusé la politique de l'appareil {{deviceId}}."
+      },
+      "integrity_compromised": {
+        "title": "Android : intégrité de l'appareil menacée",
+        "message": "L'appareil {{deviceId}} a échoué à son contrôle d'intégrité : il est peut-être compromis."
+      },
+      "device_pending_approval": {
+        "title": "Android : appareils en attente d'approbation",
+        "message": "Des appareils Android attendent leur approbation."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android : plafond des inscriptions en quarantaine atteint",
+        "message": "Le plafond des inscriptions Android en quarantaine est atteint : les suivantes sont refusées."
+      },
+      "device_offline_long": {
+        "title": "Android : appareils sans contact depuis 240 jours",
+        "message": "{{count}} appareil(s) Android sans contact depuis 240 jours."
+      },
+      "device_presumed_gone": {
+        "title": "Android : appareils présumés disparus",
+        "message": "{{count}} appareil(s) Android présumé(s) disparu(s) (absents chez Google) : confirmez-les ou restaurez-les."
+      },
+      "token_expiring": {
+        "title": "Android : jetons d'inscription longs à renouveler",
+        "message": "{{count}} jeton(s) d'inscription long(s) expire(nt) bientôt : renouvelez-les."
+      },
+      "byod_code_flood": {
+        "title": "Android : trop de codes d'invitation BYOD erronés",
+        "message": "Plus de {{perHour}} codes d'invitation BYOD erronés en une heure : tous les codes du tenant sont refusés jusqu'à la fin de l'heure."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Inscriptions sans jeton de ce tenant",
+        "message": "Des appareils Android ont été trouvés sans jeton d'inscription de ce tenant : vérifiez la quarantaine."
+      },
+      "ownership_mismatch": {
+        "title": "Propriété ou mode différent du profil d'inscription",
+        "message": "Un appareil Android s'est inscrit avec une propriété ou un mode que son profil d'inscription n'autorise pas : il est en quarantaine."
+      },
+      "duplicate_serial": {
+        "title": "Numéro de série déjà porté par un appareil géré",
+        "message": "Un appareil Android s'est inscrit avec le numéro de série de l'appareil {{deviceId}}, déjà géré."
+      }
     }
   }
 }

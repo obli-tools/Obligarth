@@ -145,7 +145,10 @@ export function createGuardRouter(): Router {
     } catch (err) { fail(err, res, next); }
   });
 
-  router.get('/settings', async (req, res, next) => {
+  // The readers of the guard only (review F054): the reason and the author of a freeze, the side of the bulk approver,
+  // the loss of a customer approver are not for every member of the tenant (the freeze banner gets its state from
+  // GUARD_STATE_CHANGED, without them).
+  router.get('/settings', requireGuardReader, async (req, res, next) => {
     try {
       res.json({ data: settingsToDto(await readSettings(req.tenantId!), await fallbackHold(req.tenantId!), await fleetShareFloor(db, req.tenantId!)) });
     } catch (err) { next(err); }

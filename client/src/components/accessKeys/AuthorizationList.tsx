@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import i18n from 'i18next';
+import toast from 'react-hot-toast';
 import { Bot, ChevronRight, RefreshCw } from 'lucide-react';
 import { SocketEvents, type McpAuthorizationView } from '@obligarth/shared';
 import { accessKeysApi } from '@/api/accessKeys.api';
@@ -24,7 +26,11 @@ export async function openAuthorization(navigate: (to: string) => void, a: { id:
   const to = `/access-keys/authorizations/${a.id}`;
   const { currentTenantId, setCurrentTenant } = useTenantStore.getState();
   if (a.tenantId !== currentTenantId) {
-    await setCurrentTenant(a.tenantId);
+    // A refused switch would open the page under the wrong tenant (not found): stay here and say so.
+    if (!(await setCurrentTenant(a.tenantId))) {
+      toast.error(i18n.t('tenant.switchFailed') || 'Could not switch to this workspace.');
+      return;
+    }
     window.location.href = to;
     return;
   }

@@ -375,7 +375,8 @@ export async function privilegeWatch(ctx: JobContext<Record<string, never>>): Pr
         message,
         stableKey: g.cause === 'credentials_reset' ? `guard:credentials:${g.id}` : `guard:grant:${g.id}`,
         navigateTo: '/admin/security?tab=guard',
-      });
+        // A grant without a tenant (platform administrator) is the platform's.
+      }, { platform: !g.tenant_id });
     });
     if (done === 'done') alerted++;
   }

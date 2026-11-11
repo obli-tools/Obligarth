@@ -9,7 +9,7 @@ import { approvalService } from '../../services/approval.service';
 import { permissionService } from '../../services/permission.service';
 import { beyondThresholds } from '../../legacyAgent/policyRoutes';
 import { consumeBatch, insertBatch, purgeTenantBatches, usableBatch } from '../../sites/batches';
-import { POLICY_MANAGE, SITES_APPLY, SITE_WRITE_APPROVAL, prevDigestOf, type SiteWriteSealed } from '../../sites/guard';
+import { POLICY_MANAGE, SITES_APPLY, SITES_DEVICE_SITE, SITE_WRITE_APPROVAL, prevDigestOf, type SiteWriteSealed } from '../../sites/guard';
 import { checkSite, type SiteRow } from '../../sites/model';
 import {
   applyFromDevices, applyImport, archiveSite, createSite, existingSites, fromDevicesImpact, fromDevicesUpdatedSites, importImpactChange,
@@ -38,7 +38,10 @@ import type { ExecContext, ExecResult } from './writes';
 // needs, as in the console (sites/guard.ts), mdm.policies.manage and the human's rights on every device of the sites
 // changed, then at approval the restrictable action sites.apply and, beyond the publication thresholds of its policy
 // impact, a second person (the console's approval site_write, filed by the approval: state 'filed').
-// set_device_site needs every device inside the key and the human's write access on it. Attaching a device to a site
+// set_device_site needs every device inside the key and the human's write access on it; when it rewrites their agent
+// policy, the rule of the console (guardSetDeviceSite: sites.device_site for one device, mdm.policies.manage, sites.apply
+// and the thresholds for several). The values of the sites are read by the holders of devices.manage or
+// mdm.policies.manage only (readsSiteValues, review F034). Attaching a device to a site
 // never moves it between groups (move_devices_to_group, always a human, does). The values of a site are customer data:
 // stored in the batch, never in a summary nor an audit entry (keys only).
 // =============================================================================
@@ -104,6 +107,33 @@ async function requirePolicyManage(who: Who, tenant: number): Promise<void> {
     throw new AppError(403, 'Changing the values of sites needs the right to manage the policies', 'capabilityMissing');
   }
 }
+
+/**
+ * The values of the sites are data of the client (review F034, as GET /api/sites): read by the holders of
+ * devices.manage or mdm.policies.manage (a platform administrator); any other human sees the sites without them.
+ */
+export async function readsSiteValues(who: Who, tenant: number): Promise<boolean> {
+  if (who.isPlatformAdmin) return true;
+  return (await holdsTenantCapability(who, tenant, 'devices.manage')) || (await holdsTenantCapability(who, tenant, POLICY_MANAGE));
+}
+const withoutValues = <T extends { values: Record<string, string> }>(s: T): T => ({ ...s, values: {} });
+
+/**
+ * The two reads of the database the guard of set_device_site makes besides the services (restrictionService,
+ * approvalService): an object so that the local tests replace them (mock.method), never reassigned by the code.
+ *   impact  the agent policy of how many of these devices a change of their site rewrites (sites/service.ts sitePolicyImpact);
+ *   beyond  is this impact beyond the publication thresholds of the tenant (a second person)?
+ */
+export const siteGuardDeps = {
+  impact: (tenant: number, ids: number[], site: SiteRow | null): Promise<number> =>
+    sitePolicyImpact(db, tenant, { attach: ids.map((deviceId) => ({ deviceId, site })) }),
+  beyond: (tenant: number, impact: number): Promise<boolean> => beyondThresholds(db, tenant, impact),
+};
+const attachImpact = (tenant: number, ids: number[], site: SiteRow | null): Promise<number> => siteGuardDeps.impact(tenant, ids, site);
+
+/** set_device_site with dry_run false: several devices whose agent policy changes need mdm.policies.manage at once
+ *  (asked again at the approval); one device goes through sites.device_site at the approval only, as the console. */
+export const stagingNeedsPolicyManage = (devices: number, policyImpact: number): boolean => devices > 1 && policyImpact > 0;
 
 /** Write access of the human on the group a site names (the group must be of the tenant: 404 otherwise). */
 async function requireGroupOf(who: Who, tenant: number, groupId: number | null | undefined): Promise<void> {
@@ -177,7 +207,7 @@ async function planArchive(q: Q, tenant: number, a: ArchiveArgs): Promise<SmallP
   };
 }
 
-async function planSet(q: Q, tenant: number, a: SetArgs): Promise<SmallPlan & { ids: number[] }> {
+async function planSet(q: Q, tenant: number, a: SetArgs): Promise<SmallPlan & { ids: number[]; site: SiteRow | null }> {
   const ids = [...new Set(a.device_ids)].sort((x, y) => x - y);
   const site = a.site_id === null ? null : (await existingSites(q, tenant)).find((s) => s.id === a.site_id!.toLowerCase());
   if (a.site_id !== null && !site) throw siteNotFound();
@@ -188,7 +218,7 @@ async function planSet(q: Q, tenant: number, a: SetArgs): Promise<SmallPlan & { 
   const change = rows.filter((r) => (r.site_id ?? null) !== target).map((r) => Number(r.id));
   const outsideGroup = site?.groupId ? rows.filter((r) => Number(r.group_id) !== site.groupId).map((r) => Number(r.id)) : [];
   return {
-    ids, digest: digestOf('set_device_site', { ...strip(a), device_ids: ids }, { target, current: rows.map((r) => [Number(r.id), r.site_id ?? null]) }),
+    ids, site: site ?? null, digest: digestOf('set_device_site', { ...strip(a), device_ids: ids }, { target, current: rows.map((r) => [Number(r.id), r.site_id ?? null]) }),
     answer: {
       action: change.length ? 'attach' : 'unchanged', siteId: target, code: site?.code ?? null, changed: change, unchanged: ids.filter((i) => !change.includes(i)),
       siteGroupId: site?.groupId ?? null, outsideGroup,
@@ -259,7 +289,7 @@ const IMPORT_HELP = 'CSV text with a header line, separator ";" or ",". Column c
 export function registerSiteTools(): void {
   registerTool({
     name: 'list_sites', title: 'List the sites', scope: 'devices.read',
-    description: 'The sites of the tenant (code, name, city, contact, group, values) with the counts of their devices within this key: ready, todo, stale (no contact for 24 h) and fileNotCreated (a variable of a file template of the agent has no value: the file of the store apps is not deposited).',
+    description: 'The sites of the tenant (code, name, city, contact, group, values) with the counts of their devices within this key: ready, todo, stale (no contact for 24 h) and fileNotCreated (a variable of a file template of the agent has no value: the file of the store apps is not deposited). The values are empty unless the human who owns this key holds devices.manage or mdm.policies.manage in the tenant: they follow his rights, as in the console, whatever the scopes of the key.',
     inputSchema: js.obj({
       tenant_id: js.tenant, q: js.str('Search on the code, the name and the city.', { maxLength: 100 }),
       archived: js.bool('Include the archived sites.'), limit: js.limit, offset: js.offset,
@@ -270,7 +300,8 @@ export function registerSiteTools(): void {
     run: (caller, a) => withTenant(caller, a.tenant_id, async () => {
       await requireScope(caller, a.tenant_id, 'devices.read');
       const { ids } = await deviceFilter(caller, a.tenant_id);
-      const all = await listSites(a.tenant_id, { q: a.q, archived: a.archived, visible: ids });
+      const listed = await listSites(a.tenant_id, { q: a.q, archived: a.archived, visible: ids });
+      const all = (await readsSiteValues(caller, a.tenant_id)) ? listed : listed.map(withoutValues);
       const o = a.offset ?? 0; const l = a.limit ?? 50;
       return page(all.slice(o, o + l), o, l, all.length);
     }),
@@ -278,14 +309,15 @@ export function registerSiteTools(): void {
 
   registerTool({
     name: 'get_site', title: 'Get a site', scope: 'devices.read',
-    description: 'One site: its fields and values, its devices within this key with their state (ready, todo, stale), the reasons (no_contact, agent_too_old, admin_inactive, low_storage, file_not_created: a file template lacks a value, appconfig_unresolved: a managed configuration of an app lacks one) and the variables their templates lack (missingVariables for the files, missingAppConfigVariables for the managed configurations).',
+    description: 'One site: its fields and values, its devices within this key with their state (ready, todo, stale), the reasons (no_contact, agent_too_old, admin_inactive, low_storage, file_not_created: a file template lacks a value, appconfig_unresolved: a managed configuration of an app lacks one) and the variables their templates lack (missingVariables for the files, missingAppConfigVariables for the managed configurations). The values are empty unless the human who owns this key holds devices.manage or mdm.policies.manage in the tenant: they follow his rights, as in the console, whatever the scopes of the key.',
     inputSchema: js.obj({ tenant_id: js.tenant, site_id: js.str('The site id (uuid).', { format: 'uuid' }) }, ['tenant_id', 'site_id']),
     args: z.object({ tenant_id: tenantId, site_id: z.string().uuid() }).strict(),
     annotations: { title: 'Get a site', ...READ },
     run: (caller, a) => withTenant(caller, a.tenant_id, async () => {
       await requireScope(caller, a.tenant_id, 'devices.read');
       const { ids } = await deviceFilter(caller, a.tenant_id);
-      return siteDetail(a.tenant_id, a.site_id, ids);
+      const site = await siteDetail(a.tenant_id, a.site_id, ids);
+      return (await readsSiteValues(caller, a.tenant_id)) ? site : withoutValues(site);
     }),
   });
 
@@ -395,8 +427,12 @@ export function registerSiteTools(): void {
       await assertDevicesInPerimeter(caller, a.tenant_id, ids);
       await requireDeviceWrites(caller, a.tenant_id, ids);
       const plan = await planSet(db, a.tenant_id, a);
-      if (a.dry_run !== false) return { dryRun: true, ...plan.answer, digest: plan.digest };
+      // The devices whose agent policy the change rewrites (reviews F029/F116): several of them need, as POST
+      // /api/sites/:id/devices, the right to manage the policies (asked now, checked again at approval).
+      const policyImpact = plan.answer.action === 'unchanged' ? 0 : await attachImpact(a.tenant_id, plan.ids, plan.site);
+      if (a.dry_run !== false) return { dryRun: true, ...plan.answer, policyImpact, digest: plan.digest };
       if (plan.answer.action === 'unchanged') return { dryRun: false, status: 'nothing_to_apply', ...plan.answer };
+      if (stagingNeedsPolicyManage(plan.ids.length, policyImpact)) await requirePolicyManage(caller, a.tenant_id);
       return stage(caller, a.tenant_id, 'set_device_site', strip(a), plan.digest, plan.summary, ids);
     }),
   });
@@ -412,6 +448,14 @@ interface ApprovedGuard {
   sealed: SiteWriteSealed;
 }
 
+/** What the execution of a batch answers for a gate that did not let it run (an approval filed, or refused). */
+function heldBy(gate: Awaited<ReturnType<ExecContext['gate']['check']>>): ExecResult | null {
+  if (gate.ok) return null;
+  if (gate.kind === 'approval') return { state: 'filed', outcome: { approvalId: gate.approvalId } };
+  const body = (gate.kind === 'refused' ? gate.body : {}) as { twoFactorRequired?: unknown };
+  return { state: 'failed', errorCode: body.twoFactorRequired ? 'stepUpRequired' : gate.kind === 'refused' ? `refused${gate.status}` : 'refused' };
+}
+
 /**
  * The console's guard of a write that changes what the templates read (sites/guard.ts), at the approval: the
  * restrictable action sites.apply (its 'sensitive' step stands proven by the fresh factor of the approval; 'restricted'
@@ -421,22 +465,62 @@ interface ApprovedGuard {
 async function guardApproved(x: ExecContext, tenant: number, g: ApprovedGuard): Promise<ExecResult | null> {
   const payload = { action: SITES_APPLY, ...g.payload, policyImpact: g.impact, deviceIds: g.deviceIds.slice(0, 500), source: 'mcp' };
   const description = (x.descriptionPrefix ?? '') + g.description;
-  const gate = await x.gate.check({
+  const held = heldBy(await x.gate.check({
     tenantId: tenant, actionKey: SITES_APPLY, deviceIds: g.deviceIds, approvalRequestType: SITE_WRITE_APPROVAL,
     approvalDescription: g.description, approvalPayload: payload, approvalSealed: g.sealed,
-  });
-  if (!gate.ok) {
-    if (gate.kind === 'approval') return { state: 'filed', outcome: { approvalId: gate.approvalId } };
-    const body = (gate.kind === 'refused' ? gate.body : {}) as { twoFactorRequired?: unknown };
-    return { state: 'failed', errorCode: body.twoFactorRequired ? 'stepUpRequired' : gate.kind === 'refused' ? `refused${gate.status}` : 'refused' };
-  }
-  if (await beyondThresholds(db, tenant, g.impact)) {
+  }));
+  if (held) return held;
+  if (await siteGuardDeps.beyond(tenant, g.impact)) {
     const approval = await approvalService.create({
       tenantId: tenant, userId: x.consoleCaller.userId, requestType: SITE_WRITE_APPROVAL, description, payload, sealed: g.sealed,
     });
     return { state: 'filed', outcome: { approvalId: approval.id, policyImpact: g.impact } };
   }
   return null;
+}
+
+/**
+ * The guard of set_device_site at the approval, the rule of the console's routes (sites/routes.ts, reviews F029/F116),
+ * only when the change rewrites the agent policy of a device:
+ *   - one device: the restrictable action sites.device_site (opt-in, no level by default), sealed 'device_site';
+ *   - several devices attached to a site: mdm.policies.manage, then sites.apply and the publication thresholds
+ *     (guardApproved), sealed 'attach' as POST /api/sites/:id/devices;
+ *   - several devices detached (no console equivalent): the same as an attachment, the sealed 'attach' with a null
+ *     site (sites/guard.ts): mdm.policies.manage, sites.apply and the thresholds (guardApproved), a second person
+ *     approving the sealed detachment when the level or the impact asks one (review R1, round 3).
+ * null: the write may run now.
+ */
+export async function guardSetDeviceSite(x: ExecContext, tenant: number, ids: number[], site: SiteRow | null,
+  policyRights: () => Promise<boolean>): Promise<ExecResult | null> {
+  const impact = await attachImpact(tenant, ids, site);
+  if (impact === 0) return null;
+  if (ids.length === 1) {
+    const description = site ? `Attach the device ${ids[0]} to the site ${site.code} (its agent policy changes)`
+      : `Detach the device ${ids[0]} from its site (its agent policy changes)`;
+    return heldBy(await x.gate.check({
+      tenantId: tenant, actionKey: SITES_DEVICE_SITE, deviceIds: ids, approvalRequestType: SITE_WRITE_APPROVAL,
+      approvalDescription: description,
+      approvalPayload: { action: SITES_DEVICE_SITE, siteId: site?.id ?? null, code: site?.code ?? null, deviceIds: ids, policyImpact: impact, source: 'mcp' },
+      approvalSealed: { op: 'device_site', siteId: site?.id ?? null, deviceId: ids[0], source: 'mcp' },
+    }));
+  }
+  if (!(await policyRights())) return { state: 'failed', errorCode: 'capabilityMissing' };
+  if (site) {
+    return guardApproved(x, tenant, {
+      deviceIds: ids, impact,
+      description: `Attach ${ids.length} device(s) to the site ${site.code} (${impact} device(s) whose agent policy changes)`,
+      payload: { op: 'attach', siteId: site.id, code: site.code, devices: ids.length },
+      sealed: { op: 'attach', siteId: site.id, deviceIds: ids, source: 'mcp' },
+    });
+  }
+  // Several devices detached: the sealed 'attach' takes a null site (sites/guard.ts), so a second person approves it
+  // like an attachment (round 3); detachOneByOne is gone, every branch has an approval path.
+  return guardApproved(x, tenant, {
+    deviceIds: ids, impact,
+    description: `Detach ${ids.length} device(s) from their site (${impact} device(s) whose agent policy changes)`,
+    payload: { op: 'detach', siteId: null, code: null, devices: ids.length },
+    sealed: { op: 'attach', siteId: null, deviceIds: ids, source: 'mcp' },
+  });
 }
 
 /**
@@ -562,6 +646,8 @@ export async function executeSiteBatch(x: ExecContext): Promise<ExecResult> {
         await requireDeviceWrites(who, tenant, a.device_ids);
         const plan = await planSet(db, tenant, a);
         if (plan.digest !== digest) return changed();
+        const held = await guardSetDeviceSite(x, tenant, plan.ids, plan.site, policyRights);
+        if (held) return held;
         const r = await setDevicesSite(tenant, plan.ids, a.site_id, ctx, (trx, o) => close(trx, { changed: o.changed.length }), {
           before: async (trx) => { if ((await planSet(trx, tenant, a)).digest !== digest) throw planChanged(); },
         });

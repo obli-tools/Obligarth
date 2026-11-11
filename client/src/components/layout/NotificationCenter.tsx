@@ -1,6 +1,7 @@
 import { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import toast from 'react-hot-toast';
 import { liveAlertMessage, liveAlertTitle } from '@/components/guard/alertTitle';
 import { Bell, X, Trash2, CheckCheck } from 'lucide-react';
 import { useLiveAlertsStore, countUnread } from '@/store/liveAlertsStore';
@@ -199,8 +200,12 @@ export function NotificationCenter() {
       // Switch tenant session on the server, then do a full page navigation.
       // A client-side navigate() leaves stale store data in memory; a hard
       // redirect reloads the app fresh with the new tenant context — same as F5.
-      await useTenantStore.getState().setCurrentTenant(alert.tenantId);
+      const switched = await useTenantStore.getState().setCurrentTenant(alert.tenantId);
       setOpen(false);
+      if (!switched) {
+        toast.error(t('tenant.switchFailed') || 'Could not switch to this workspace.');
+        return;
+      }
       window.location.href = alert.navigateTo ?? '/';
       return;
     }
@@ -211,6 +216,13 @@ export function NotificationCenter() {
       navigate(alert.navigateTo);
     }
   };
+
+  // Deleting an alert is a management right of its tenant (settings): a
+  // refusal brings the alerts back and says why.
+  const refused = () => toast.error(t('notificationCenter.deleteRefused')
+    || 'You are not allowed to delete these notifications: they are shared by the tenant.');
+  const handleRemove = async (id: number) => { if (!(await removeAlert(id))) refused(); };
+  const handleClearAll = async () => { if (!(await clearAll())) refused(); };
 
   const isAnyEnabled = localEnabled || multiTenantEnabled;
   const title = t('notifications.title') || 'Notifications';
@@ -229,7 +241,7 @@ export function NotificationCenter() {
       )}
       {tabAlerts.length > 0 && (
         <button
-          onClick={clearAll}
+          onClick={() => { void handleClearAll(); }}
           title={t('notificationCenter.clearLocal') || 'Clear local notifications'}
           aria-label={t('notificationCenter.clearLocal') || 'Clear local notifications'}
           className="text-text-muted hover:text-text-primary transition-colors coarse:min-h-10 coarse:min-w-10 coarse:inline-flex coarse:items-center coarse:justify-center"
@@ -308,7 +320,7 @@ export function NotificationCenter() {
           // Show tenant badge in the Global tab for cross-tenant alerts
           showTenantBadge={tab === 'global' && alert.tenantId !== currentTenantId}
           onRead={handleAlertClick}
-          onRemove={(id) => removeAlert(id)}
+          onRemove={(id) => { void handleRemove(id); }}
         />
       ))
     )

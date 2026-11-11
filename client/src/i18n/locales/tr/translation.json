@@ -1,4 +1,16 @@
 {
+  "android": {
+    "commands": {
+      "passwordBlank": "Parola yalnızca boşluklardan oluşamaz. Parolayı kaldırmak için alanı boş bırakın."
+    },
+    "reconcileHold": {
+      "help": "Son uzlaştırma, yönetilen {{managed}} cihazdan {{count}} tanesini Google'da bulamadı: hiçbiri yönetimden çıkarılmadı. Önce Google'daki kuruluşu kontrol edin; yalnızca bu cihazlar gerçekten yok olmuşsa onaylayın.",
+      "confirm": "{{count}} cihazın kaybolduğunu onayla…",
+      "confirmTitle": "Kaybolan cihazları onayla",
+      "confirmMessage": "{{count}} cihaz yönetimden çıkarılsın mı? Bunu yalnızca Google'da gerçekten kaldırılmışlarsa yapın: ikinci bir faktör istenir.",
+      "confirmed": "Onay kaydedildi: uzlaştırma bir dakika içinde çalışır."
+    }
+  },
   "common": {
     "save": "Kaydet",
     "cancel": "İptal",
@@ -258,6 +270,14 @@
     "socketDisconnected": "Disconnected from server — Click to reload"
   },
   "tenant": {
+    "switchFailed": "Bu çalışma alanına geçilemedi.",
+    "roleAdministrator": "Yönetici",
+    "roleMember": "Üye",
+    "confirmRoleChange": "{{user}} kullanıcısına bu çalışma alanında \"{{role}}\" rolü verilsin mi?",
+    "roleOf": "{{user}} rolü",
+    "deleteTitle": "\"{{name}}\" çalışma alanını sil",
+    "confirmDeleteTyped": "Yönetilen cihazlar dahil tüm verileri kalıcı olarak silinecek. Onaylamak için \"{{slug}}\" yazın.",
+    "deleted": "\"{{name}}\" çalışma alanı silindi",
     "pageTitle": "Çalışma Alanları",
     "pageDesc": "Çok kiracılı dağıtımlar için çalışma alanlarını ve üyelerini yönetin.",
     "create": "Yeni Çalışma Alanı",
@@ -279,6 +299,9 @@
     "switchWorkspace": "Çalışma alanı değiştir"
   },
   "devices": {
+    "list": {
+      "otherGroups": "Diğer gruplar"
+    },
     "tabApiKeys": "API Anahtarları",
     "viewDevice": "Cihazı görüntüle",
     "noDevices": "No devices found",
@@ -431,6 +454,10 @@
       "failedAddPermission": "Failed to add permission",
       "failedUpdatePermission": "Failed to update permission",
       "failedRemovePermission": "Failed to remove permission"
+    },
+    "restrictions": {
+      "commandsSensitiveOn": "Kullanımda: \"Android ajanı komutlarında ikinci faktör\" koruma ayarı açık.",
+      "commandsSensitiveOff": "Kullanımda değil: \"Android ajanı komutlarında ikinci faktör\" koruma ayarı kapalı (Güvenlik, Korumalar sekmesi)."
     }
   },
   "agents": {
@@ -463,6 +490,15 @@
     "error": "Hata"
   },
   "policies": {
+    "editor": {
+      "confirmReload": "Sunucuda kayıtlı sürüm yeniden yüklensin mi? Kaydedilmemiş değişiklikleriniz kaybolur.",
+      "noLongerDraft": "Bu sürüm artık taslak değil (başka bir yerde gönderildi veya yayımlandı): yeniden yükleyin.",
+      "confirmOverwrite": "Bu taslak, siz açtıktan sonra başka biri tarafından değiştirildi. Yine de sürümünüz kaydedilsin mi? Onun değişiklikleri kaybolur.",
+      "reviewBeforePublish": "Bu sürüm başka bir yerde değiştirildi: güncel içeriği şimdi gösteriliyor, yayımlamadan önce gözden geçirin.",
+      "changedElsewhere": "Bu sürüm siz açtıktan sonra başka bir yerde değiştirildi. Kaydetmek bu değişikliklerin yerini alır.",
+      "reloadVersion": "Yeniden yükle",
+      "savedElsewhere": "Bu taslak bu arada başka bir yerde kaydedildi: hiçbir şey kaydedilmedi. Diğer değişiklikleri görmek için yeniden yükleyin (sizinkiler kaybolur)."
+    },
     "title": "Policies"
   },
   "supervision": {
@@ -470,6 +506,8 @@
     "tabReports": "Reports"
   },
   "groups": {
+    "movedOrderFailed": "Grup taşındı ancak yeni kardeş grupları arasındaki konumu kaydedilemedi",
+    "crossTenantMove": "Bir grup kendi çalışma alanında kalır: onu aynı çalışma alanının grupları arasına bırakın.",
     "new": "New Group",
     "edit": "Edit Group",
     "backToGroup": "Back to {{name}}",
@@ -665,7 +703,15 @@
       "site_archived": "Site archived",
       "site_restored": "Site restored",
       "site_imported": "Sites imported",
-      "device_site_changed": "Site of a device changed"
+      "device_site_changed": "Site of a device changed",
+      "live_alert_deleted": "Bildirim silindi",
+      "live_alert_cleared": "Bildirimler temizlendi",
+      "sso_sync_delete_blocked": "Hesabın Obligate tarafından silinmesi engellendi (hâlâ başvuruluyor): devre dışı bırakıldı, elle silin",
+      "android_mass_missing_confirmed": "Android: toplu kaybolma onaylandı",
+      "legacy_agent_package_confirmed": "Bir cihazın geri gönderdiği APK onaylandı"
+    },
+    "families": {
+      "legacy_agent": "Android ajanı"
     }
   },
   "errors": {
@@ -684,7 +730,21 @@
     "batchGone": "This batch no longer exists or was applied already.",
     "siteOutsidePerimeter": "Some phones of this site ({{devices}}) are outside your rights: an administrator changes its values.",
     "sitePolicyRightMissing": "Changing the values of sites needs the right to manage the policies.",
-    "importTooLargeBytes": "This file is too large once encoded: split it into several imports."
+    "importTooLargeBytes": "This file is too large once encoded: split it into several imports.",
+    "appPlatformsHaveAssignments": "Platformlarını değiştirmeden önce bu uygulamanın atamalarını kaldırın.",
+    "exportBusy": "Devam eden çok fazla PDF dışa aktarımı var: birazdan tekrar deneyin.",
+    "exportTooLarge": "PDF dışa aktarımı için çok fazla satır (en fazla 2.000): filtreleri daraltın veya CSV ya da XLSX olarak dışa aktarın.",
+    "exportTimeout": "PDF dışa aktarımı çok uzun sürdü: CSV ya da XLSX olarak dışa aktarın veya filtreleri daraltın.",
+    "tenantHasBridgeDevices": "Bu çalışma alanında Android köprü aracısıyla kayıtlı {{devices}} cihaz hâlâ var: önce bunları iptal edin, ardından çalışma alanını silin.",
+    "deadLetterAlreadyApplied": "Bu teslim edilemeyen ileti zaten yeniden uygulandı: iki kez uygulanmaz.",
+    "userHasDependencies": "Bu hesaba hâlâ başka kayıtlar başvuruyor: bunun yerine devre dışı bırakın veya önce ona başvuranları kaldırın.",
+    "invalidConfirmMissing": "Onay, bekletilen cihazların tam sayısını vermelidir (pozitif bir tamsayı).",
+    "adminRequired": "Yıkıcı bir komutu yalnızca kiracının bir yöneticisi serbest bırakabilir.",
+    "releaseRateLimited": "Son bir saatte çok fazla yıkıcı komut serbest bırakıldı: daha sonra tekrar deneyin.",
+    "policyVersionChanged": "Sürüm önizlemesinden bu yana değişti: yeniden inceleyin.",
+    "twoFactorSetupRequired": "İkinci bir faktör gerekli: önce profilinizde bir kimlik doğrulama uygulaması kurun.",
+    "packageNotConfirmed": "Bu APK bir cihaz tarafından geri gönderildi: yüklemeden önce Android ajanının Paketler sekmesinde onaylayın.",
+    "capabilityMissing": "Ekibiniz bu işlemin gerektirdiği yetkiye sahip değil."
   },
   "sites": {
     "title": "Sites",
@@ -894,12 +954,34 @@
     }
   },
   "legacyAgent": {
+    "importNames": {
+      "forbiddenHint": "İzin verilmiyor: bu cihazlarda yazma yetkiniz yok.",
+      "status": {
+        "governed": "Denetimli değişiklik: cihaz kaydından yeniden adlandırın"
+      },
+      "governedHint": "Denetimli değişiklik: yeni ad, cihazı bir atamanın hedeflediği dinamik bir gruba sokar veya çıkarır. Etkinin önizlendiği cihaz kaydından yeniden adlandırın."
+    },
     "tokens": {
       "site": "Site",
       "siteHint": "The phones enrolled with this token are attached to the site (and filed in its group when the token names none).",
       "qr": "Enrollment QR code",
       "qrHint": "Scanned by the agent: SCAN THE ENROLLMENT QR CODE."
-    }
+    },
+    "packages": {
+      "state": "Durum",
+      "toConfirm": "Onaylanacak",
+      "toConfirmHint": "Bir cihaz tarafından geri gönderildi: bir kişi onaylayana kadar yüklenemez.",
+      "confirmedState": "Onaylandı",
+      "confirm": "Onayla",
+      "confirmTitle": "Bu APK’yı onayla",
+      "confirmMessage": "Bu APK ({{packageName}}, {{version}}) bir kişi tarafından yüklenmedi, bir cihaz tarafından geri gönderildi. Onaylandıktan sonra kiracının cihazlarına yüklenebilir.",
+      "confirmCheck": "Onaylamadan önce paket adının, sürümün ve imzalayanın beklediğiniz gibi olduğunu kontrol edin.",
+      "signerShort": "İmzalayan",
+      "confirmed": "APK onaylandı: artık yüklenebilir.",
+      "fromDevice": "Cihazdan",
+      "unconfirmedHint": "Bir cihaz tarafından geri gönderilen {{count}} paket, yüklenebilmeden önce Paketler sekmesinde onaylanmalıdır."
+    },
+    "awaitingApproval": "İstek onaya gönderildi"
   },
   "legacyAgentPolicy": {
     "tabs": {
@@ -944,6 +1026,184 @@
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
       "variable_not_allowed": "Variables only in a template (file or app configuration)"
+    }
+  },
+  "notificationCenter": {
+    "deleteRefused": "Bu bildirimleri silme yetkiniz yok: kiracının tamamı tarafından paylaşılıyorlar."
+  },
+  "apple": {
+    "alerts": {
+      "vpp": {
+        "platforms_kept": {
+          "title": "Uygulama platformları güncellenmedi",
+          "message": "{{label}} içerik belirteci, atanmış {{count}} uygulama için başka platformlar belirtiyor: atamaları olduğu sürece platformları korunur."
+        }
+      }
+    }
+  },
+  "alerts": {
+    "android": {
+      "mass_missing_held": {
+        "title": "Android: Google'da toplu kaybolma bekletildi",
+        "message": "Bir uzlaştırma, yönetilen {{managed}} cihazdan {{count}} tanesini Google'da bulamadı: hiçbiri yönetimden çıkarılmadı. Kuruluşu kontrol edin, gerçekten yok olmuşlarsa Android Enterprise kartında onaylayın."
+      },
+      "google_unreachable": {
+        "title": "Android: Google’a ulaşılamıyor",
+        "message": "Obligarth, Google’ın Android Management API’sine ulaşamıyor: Android kayıtları, politikaları ve komutları bekliyor."
+      },
+      "google_auth_failed": {
+        "title": "Android: kimlik Google tarafından reddedildi",
+        "message": "Google hizmet hesabını reddetti (iptal edilmiş anahtar veya eksik izin): Android bağlantısı durduruldu."
+      },
+      "google_key_expiring": {
+        "title": "Android: hizmet hesabı anahtarının süresi doluyor",
+        "message": "Google hizmet hesabının anahtarının süresi {{days}} gün içinde doluyor: değiştirin."
+      },
+      "quota_warning": {
+        "title": "Android: cihaz kotası %80’de",
+        "message": "Google projesinde {{count}} Android cihaz: kotasının %80’i kullanılıyor."
+      },
+      "quota_exhausted": {
+        "title": "Android: cihaz kotasına ulaşıldı",
+        "message": "{{count}} Android cihaz: Google projesinin kotasına ulaşıldı, yeni kayıtlar reddediliyor."
+      },
+      "inbox_dead_letter": {
+        "title": "Android: bildirim teslim edilemeyen iletilerde",
+        "message": "{{tenantId}} kiracısının bir Google bildirimi işlenemedi ({{code}}) ve teslim edilemeyen iletilere taşındı."
+      },
+      "retention_risk": {
+        "title": "Android: bildirimlerin süresi dolma riski",
+        "message": "{{days}} gündür hiçbir Google bildirimi alınmadı: en eskileri okunmadan süresi dolabilir."
+      },
+      "pubsub_foreign_message": {
+        "title": "Android: bilinmeyen kuruluşlardan iletiler",
+        "message": "Son bir saatteki {{lastHour}} Pub/Sub iletisi Obligarth’ın tanımadığı kuruluşlardan geldi."
+      },
+      "pubsub_test_missing": {
+        "title": "Android: Pub/Sub test iletisi eksik",
+        "message": "{{tenantId}} kiracısının kuruluşunun Pub/Sub test iletisi ulaşmadı: konunun izinlerini kontrol edin."
+      },
+      "ownership_violation": {
+        "title": "Android: çağrı sahiplik denetimi tarafından reddedildi",
+        "message": "Google’a yapılan bir çağrı sahiplik denetimi tarafından reddedildi ({{reason}})."
+      },
+      "enterprise_orphan": {
+        "title": "Android: projenin kuruluşu kayıtta yok",
+        "message": "Google projesinin bir kuruluşu ({{ref}}) Obligarth kaydında yok."
+      },
+      "signup_callback_rejected": {
+        "title": "Android: kayıt geri çağrıları reddedildi",
+        "message": "Son bir saatte {{lastHour}} kuruluş kaydı geri çağrısı reddedildi."
+      },
+      "domain_claimed": {
+        "title": "Android: başka bir kiracının talep ettiği alan adı için kayıt",
+        "message": "{{tenantId}} kiracısı, başka bir kiracının talep ettiği bir alan adı için kuruluş kaydetmeye çalıştı."
+      },
+      "gateway_cap_reached": {
+        "title": "Android: yıkıcı işlemlerin son çare sınırına ulaşıldı",
+        "message": "Yıkıcı Android işlemlerinin son çare sınırına ulaşıldı ({{kind}}, {{count}}): sonrakiler reddediliyor."
+      },
+      "enterprise_unlinked_externally": {
+        "title": "Android: kuruluşun bağlantısı Obligarth dışında kaldırıldı",
+        "message": "Bu kiracının Android kuruluşunun bağlantısı Obligarth dışında kaldırıldı: cihazları artık yönetilmiyor."
+      },
+      "signup_failed": {
+        "title": "Android: kuruluş kaydı başarısız",
+        "message": "Android kuruluşunun kaydı başarısız oldu ({{code}})."
+      },
+      "signup_interrupted": {
+        "title": "Android: kuruluş kaydı kesildi",
+        "message": "Bir Android kuruluş kaydı bitmeden kesildi: yeniden başlatın."
+      },
+      "device_api_too_low": {
+        "title": "Android: cihaz profilinin en düşük API düzeyinin altında",
+        "message": "Kayıt profilinin en düşük API düzeyinin altındaki bir Android cihazı karantinaya alındı."
+      },
+      "enrollment_spike": {
+        "title": "Android: uzun bir belirteçte kayıt artışı",
+        "message": "Uzun belirteç {{tokenId}} üzerinde son bir saatte {{perHour}} kayıt: sonrakiler onay gerektirebilir."
+      },
+      "policy_push_failed": {
+        "title": "Android: politika Google tarafından reddedildi",
+        "message": "Google, {{deviceId}} cihazının politikasını reddetti."
+      },
+      "integrity_compromised": {
+        "title": "Android: cihaz bütünlüğü risk altında",
+        "message": "{{deviceId}} cihazı bütünlük denetimini geçemedi: güvenliği ihlal edilmiş olabilir."
+      },
+      "device_pending_approval": {
+        "title": "Android: onay bekleyen cihazlar",
+        "message": "Android cihazları onaylarını bekliyor."
+      },
+      "quarantine_cap_reached": {
+        "title": "Android: karantinadaki kayıt sınırına ulaşıldı",
+        "message": "Karantinadaki Android kayıtlarının sınırına ulaşıldı: sonrakiler reddediliyor."
+      },
+      "device_offline_long": {
+        "title": "Android: 240 gündür iletişim kurmayan cihazlar",
+        "message": "{{count}} Android cihaz 240 gündür iletişim kurmadı."
+      },
+      "device_presumed_gone": {
+        "title": "Android: kaybolduğu varsayılan cihazlar",
+        "message": "{{count}} Android cihazın kaybolduğu varsayılıyor (Google’da yok): onaylayın veya geri yükleyin."
+      },
+      "token_expiring": {
+        "title": "Android: yenilenecek uzun kayıt belirteçleri",
+        "message": "{{count}} uzun kayıt belirtecinin süresi yakında doluyor: yenileyin."
+      },
+      "byod_code_flood": {
+        "title": "Android: çok fazla hatalı BYOD davet kodu",
+        "message": "Bir saatte {{perHour}} adetten fazla hatalı BYOD davet kodu: kiracının tüm kodları saat bitene kadar reddediliyor."
+      }
+    },
+    "enrollment": {
+      "unknown_session": {
+        "title": "Bu kiracının belirteci olmayan kayıtlar",
+        "message": "Bu kiracının kayıt belirteci olmayan Android cihazları bulundu: karantinayı kontrol edin."
+      },
+      "ownership_mismatch": {
+        "title": "Sahiplik veya mod kayıt profilinden farklı",
+        "message": "Bir Android cihazı, kayıt profilinin izin vermediği bir sahiplik veya modla kaydoldu: karantinada."
+      },
+      "duplicate_serial": {
+        "title": "Seri numarası yönetilen bir cihazda zaten kullanılıyor",
+        "message": "Bir Android cihazı, zaten yönetilen {{deviceId}} cihazının seri numarasıyla kaydoldu."
+      }
+    }
+  },
+  "twoFactorPrompt": {
+    "actions": {
+      "androidReconcileConfirmMissing": "Google'da kaybolan Android cihazlarını onayla",
+      "androidReleaseHeld": "Bekletilen bir Android komutunu serbest bırak"
+    }
+  },
+  "mcpAuthorizations": {
+    "errors": {
+      "approvalMissing": "Onay talebi artık mevcut değil.",
+      "batchGone": "Değişiklik grubu süresi doldu veya zaten kullanıldı: aracıdan yeniden isteyin.",
+      "capabilityMissing": "Ekibiniz bu eylemin gerektirdiği yetkiye sahip değil.",
+      "detachOneByOne": "Bir aracı birden çok cihazı aynı anda sitelerinden ayıramaz: konsolda tek tek ayırın.",
+      "executionFailed": "Onaylanan eylem çalıştırılırken başarısız oldu.",
+      "keyInactive": "Erişim anahtarı artık etkin değil.",
+      "perimeterLost": "Eylem artık sizin veya anahtarın kapsamı dışında.",
+      "planChanged": "Plan onaydan bu yana değişti: hiçbir şey uygulanmadı.",
+      "policyChanged": "İlke talepten bu yana değişti: hiçbir şey uygulanmadı.",
+      "unknownTool": "Bilinmeyen araç.",
+      "refusedStatus": "Konsol tarafından reddedildi (HTTP {{status}})",
+      "interrupted": "İşlem bitmeden kesildi: yeniden istemeden önce sonucunu kontrol edin.",
+      "cancelFailed": "İptal henüz tamamlanmadı: her dakika yeniden deneniyor.",
+      "stepUpRequired": "İşlem yeni bir ikinci faktör gerektiriyor: konsoldan yeniden onaylayın.",
+      "impactChanged": "Etki, siz gördüğünüzden beri değişti: hiçbir şey yapılmadı."
+    }
+  },
+  "guard": {
+    "settings": {
+      "legacyAgentCommandsSensitive": "Android ajanı komutlarında ikinci faktör",
+      "legacyAgentCommandsSensitiveHelp": "Bir uygulamayı yüklemek veya kaldırmak, ajanı güncellemek, bir cihazı yeniden başlatmak ve kioskunu askıya almak, bunları gönderen kişinin ikinci faktörünü ister (konsol ve MCP). Varsayılan olarak kapalı. Diğer ayarlar gibi değişikliği ikinci bir kişi onaylar.",
+      "pending": "Değişiklik onay bekliyor (istek no. {{id}})",
+      "pendingOpen": "Onayları aç",
+      "on": "açık",
+      "off": "kapalı"
     }
   }
 }

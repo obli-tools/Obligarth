@@ -9,6 +9,8 @@ import { config } from '../config';
 import { logger } from '../utils/logger';
 
 const TOKEN_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+/** A new request within this delay of the last link sends nothing (that link stays valid). */
+const RESEND_AFTER_MS = 2 * 60 * 1000;
 
 /**
  * An SSO account (Obligate, og_) never gets a local password by e-mail: its
@@ -38,6 +40,16 @@ export const passwordResetService = {
       // Silently succeed to prevent email enumeration
       return;
     }
+
+    // A link sent moments ago stays the valid one: a burst of requests (or a
+    // double click) never invalidates the link the owner is about to open.
+    const recent = await db('password_reset_tokens')
+      .where({ user_id: user.id })
+      .whereNull('used_at')
+      .where('expires_at', '>', new Date())
+      .where('created_at', '>', new Date(Date.now() - RESEND_AFTER_MS))
+      .first('id');
+    if (recent) return;
 
     // Invalidate any existing unused tokens for this user
     await db('password_reset_tokens')
@@ -137,6 +149,10 @@ export const passwordResetService = {
       const { deviceKeyService } = await import('./deviceKey/deviceKey.service');
       await deviceKeyService.revokeAllForUser(row.user_id, 'password_reset');
     } catch { /* trigger */ }
+    // Every open session of the account ends too (the reset is often meant to
+    // cut off whoever holds one); this request has no session of its own.
+    const { killOtherSessionsForUser } = await import('./userSessions.service');
+    await killOtherSessionsForUser(row.user_id, null, 'password_reset');
 
     return true;
   },

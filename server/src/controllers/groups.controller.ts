@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { DeviceGroup } from '@obligarth/shared';
-import { groupService } from '../services/group.service';
+import { announceGroupChange, groupService } from '../services/group.service';
 import { permissionService } from '../services/permission.service';
 import { teamService } from '../services/team.service';
 import { groupNotificationService } from '../services/groupNotification.service';
@@ -164,6 +164,8 @@ export const groupsController = {
         });
       } catch {}
 
+      // Committed: the other consoles of the tenant follow the tree (the global view's echo to the master's admins).
+      announceGroupChange('created', tenantId, group);
       res.status(201).json({ success: true, data: group });
     } catch (err) {
       next(err);
@@ -192,6 +194,7 @@ export const groupsController = {
         });
       } catch {}
 
+      announceGroupChange('updated', current.tenantId, group);
       res.json({ success: true, data: group });
     } catch (err) {
       next(err);
@@ -287,6 +290,8 @@ export const groupsController = {
       }
       const done = await asTargetTenant(req, targetTenantId, () => groupService.reorder(items, req.tenantId, view));
       if (!done) throw new AppError(404, 'Group not found');
+      // One event for the batch (one per group would make every console read its tree again as many times).
+      announceGroupChange('reordered', targetTenantId, items[0], { groupIds: items.map((i) => i.id) });
 
       res.json({ success: true, message: 'Groups reordered' });
     } catch (err) {

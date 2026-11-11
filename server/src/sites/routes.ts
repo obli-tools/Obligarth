@@ -9,7 +9,7 @@ import { permissionService } from '../services/permission.service';
 import { parseRequestDeviceId } from '../services/deviceScope.service';
 import { consumeBatch, insertBatch } from './batches';
 import {
-  CONSOLE_IMPORT_TOOL, SiteChangeBody, guardSiteWrite, prevDigestOf, requireGroupWrite, requirePolicyManage, whoOf,
+  CONSOLE_IMPORT_TOOL, SiteChangeBody, guardDeviceSite, guardSiteWrite, prevDigestOf, requireGroupWrite, requirePolicyManage, whoOf,
 } from './guard';
 import { checkSite } from './model';
 import {
@@ -24,13 +24,14 @@ import { agentApkUrl, enrollmentQrPng, issueEnrollmentToken, tokenLimiter } from
 // Console API of the sites (lot P1-SITE §2.3), mounted at /api/sites in the tenant of the session; the site of one
 // device at /api/mdm/devices/:id/site (createDeviceSiteRouter, before the registry's router):
 //   GET    /sites?q=&archived=          the sites, with the counts of their devices by state (any member: the devices the
-//                                       caller sees)
+//                                       caller sees; their values only with devices.manage or mdm.policies.manage)
 //   GET    /sites/value-keys            the keys of the values of the sites (variable picker of the templates)
 //   GET    /sites/:id                   one site, its devices, their state and what to do
 //   POST   /sites                       devices.manage: a site (write access on the group it names)
 //   PATCH  /sites/:id                   devices.manage: its fields (values replaced as a whole)
 //   POST   /sites/:id/archive|restore   devices.manage: an archived site keeps its row, refused while it has devices
-//   POST   /sites/:id/devices           devices.manage: { deviceIds[] } attached (500 at most, write access on each)
+//   POST   /sites/:id/devices           devices.manage: { deviceIds[] } attached (500 at most, write access on each);
+//                                       several whose agent policy changes: guarded as below (reviews F029/F116)
 //   POST   /sites/import?dryRun=&digest= devices.manage: a CSV file (text/csv, 2 MiB): the plan (dry run, the default,
 //                                       with its digest and policy impact), or applied with dryRun=false (the digest of
 //                                       the dry run shown: 409 planChanged when the plan made again differs)
@@ -39,7 +40,8 @@ import { agentApkUrl, enrollmentQrPng, issueEnrollmentToken, tokenLimiter } from
 //   POST   /sites/:id/enrollment-sheet  mdm.enrollment.manage: { label?, days?, maxUses? } the printable sheet of the site
 //                                       (lot P1-QR §3.2): a token of the site in its group (30 days, 5 phones by
 //                                       default), its QR code, the sheets of the site still active revoked; shown once
-//   PUT    /mdm/devices/:id/site        devices.manage: { siteId | null }
+//   PUT    /mdm/devices/:id/site        devices.manage: { siteId | null }; one device (here or above): free, unless the
+//                                       tenant restricts sites.device_site (opt-in) and its agent policy changes
 // A write that changes what the templates of a site's devices read (code, name, city or values of a site, an import
 // that updates sites, the sites from the custom fields) is guarded as the import of per-device values (sites/guard.ts):
 // mdm.policies.manage, the caller's rights on every device of the sites changed, the restrictable action sites.apply
@@ -98,6 +100,19 @@ function digestOfQuery(v: unknown): string | undefined {
   return p.data;
 }
 
+/**
+ * Review F034: the values of the sites (store codes, identifiers the files of the phones read) are data of the client:
+ * read by those who manage the devices or the policies (devices.manage or mdm.policies.manage); any other member sees
+ * the sites, their code, name, city and devices, not their values.
+ */
+async function readsValues(req: Request, tenantId: number): Promise<boolean> {
+  if (req.session.role === 'admin') return true;
+  const userId = req.session.userId!;
+  return (await permissionService.userHasTenantCapability(userId, tenantId, 'devices.manage'))
+    || (await permissionService.userHasTenantCapability(userId, tenantId, 'mdm.policies.manage'));
+}
+const withoutValues = <T extends { values: Record<string, string> }>(s: T): T => ({ ...s, values: {} });
+
 export function createSitesRouter(): Router {
   const router = Router();
   const manage = requireTenantCapability('devices.manage');
@@ -105,7 +120,9 @@ export function createSitesRouter(): Router {
   router.get('/', wrap(async (req, res) => {
     const q = typeof req.query.q === 'string' ? req.query.q.slice(0, 200) : undefined;
     const archived = req.query.archived === 'true' || req.query.archived === '1';
-    res.json({ success: true, data: await listSites(req.tenantId!, { q, archived, visible: await visibleOf(req) }) });
+    const sites = await listSites(req.tenantId!, { q, archived, visible: await visibleOf(req) });
+    const reads = await readsValues(req, req.tenantId!);
+    res.json({ success: true, data: reads ? sites : sites.map(withoutValues) });
   }));
 
   router.get('/value-keys', wrap(async (req, res) => {
@@ -186,7 +203,8 @@ export function createSitesRouter(): Router {
   }));
 
   router.get('/:id', wrap(async (req, res) => {
-    res.json({ success: true, data: await siteDetail(req.tenantId!, String(req.params.id), await visibleOf(req)) });
+    const site = await siteDetail(req.tenantId!, String(req.params.id), await visibleOf(req));
+    res.json({ success: true, data: (await readsValues(req, req.tenantId!)) ? site : withoutValues(site) });
   }));
 
   router.post('/', manage, wrap(async (req, res) => {
@@ -241,6 +259,8 @@ export function createSitesRouter(): Router {
     // The site of the route first: an unknown one (or another tenant's) answers 404 whatever the body.
     const site = await siteRow(db, tenantId, String(req.params.id));
     const b = body(SheetBody, req);
+    // Review F035: the phones of the sheet enter the group of the site, as a move into it: write access on that group.
+    await requireGroupWrite(whoOf(req), site.groupId);
     let current = site;
     // No group on the sheet: the enrollment reads the site's (a change of its group reaches the sheets already printed).
     const { token, revokedPrevious } = await issueEnrollmentToken(req, tenantId, {
@@ -261,8 +281,29 @@ export function createSitesRouter(): Router {
     // The site of the route first: an unknown one (or another tenant's) answers 404 whatever the body.
     const site = await siteRow(db, tenantId, String(req.params.id));
     const b = body(DevicesBody, req);
-    await requireDevicesWrite(req, tenantId, b.deviceIds);
-    res.json({ success: true, data: await setDevicesSite(tenantId, b.deviceIds, site.id, await audit.fromRequest(req, tenantId)) });
+    const ids = [...new Set(b.deviceIds)];
+    await requireDevicesWrite(req, tenantId, ids);
+    if (site.archived) throw new AppError(409, 'This site is archived', 'siteArchived');
+    // Reviews F029/F116: attaching several devices changes what their templates read ({{site.*}}) as a change of the
+    // values does: when it changes their agent policy, the same guard (mdm.policies.manage, sites.apply, the
+    // thresholds). One device stays a write on that device (the record's change of site, PUT /mdm/devices/:id/site),
+    // unless the tenant restricts sites.device_site (guardDeviceSite: opt-in, no level by default).
+    if (ids.length === 1) {
+      if (!(await guardDeviceSite(req, res, { tenantId, deviceId: ids[0], siteId: site.id }))) return;
+    } else {
+      const impact = await sitePolicyImpact(db, tenantId, { attach: ids.map((deviceId) => ({ deviceId, site })) });
+      if (impact > 0) {
+        await requirePolicyManage(req, tenantId);
+        const ok = await guardSiteWrite(req, res, {
+          tenantId, deviceIds: ids, impact,
+          description: `Attach ${ids.length} device(s) to the site ${site.code} (${impact} device(s) whose agent policy changes)`,
+          payload: { op: 'attach', siteId: site.id, code: site.code, devices: ids.length },
+          sealed: { op: 'attach', siteId: site.id, deviceIds: ids },
+        });
+        if (!ok) return;
+      }
+    }
+    res.json({ success: true, data: await setDevicesSite(tenantId, ids, site.id, await audit.fromRequest(req, tenantId)) });
   }));
 
   return router;
@@ -278,6 +319,8 @@ export function createDeviceSiteRouter(): Router {
     // The device of the route first: an unknown one (or another tenant's) answers 404 whatever the body.
     await requireDevicesWrite(req, tenantId, [id]);
     const b = body(DeviceSiteBody, req);
+    // Reviews F029/F116: free unless the tenant restricts sites.device_site (opt-in) and the change rewrites its policy.
+    if (!(await guardDeviceSite(req, res, { tenantId, deviceId: id, siteId: b.siteId ?? null }))) return;
     res.json({ success: true, data: await setDevicesSite(tenantId, [id], b.siteId, await audit.fromRequest(req, tenantId)) });
   }));
   return router;

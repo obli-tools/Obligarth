@@ -148,6 +148,8 @@ export function useSiteChange(onDone?: () => void): {
       if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
       return;
     }
+    // Several phones whose files change: the attachment may be held for a second person (202), nothing applied yet.
+    if (pendingSaid(t, out)) { onDone?.(); return; }
     toast.success(t('sites.attached', { count: out.changed.length }) || `${out.changed.length} phone(s) changed site`);
     onDone?.();
     if (out.siteGroupId !== null && out.outsideGroup.length > 0) {

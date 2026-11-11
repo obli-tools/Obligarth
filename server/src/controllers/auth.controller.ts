@@ -251,9 +251,10 @@ export const authController = {
       const isAdmin = user.role === 'admin';
       const permissions = await permissionsIn(user.id, isAdmin, req.session.currentTenantId);
 
-      // Check if force 2FA applies to this user
+      // Check if force 2FA applies to this user (the rule middleware/force2fa.ts
+      // enforces: never an Obligate SSO account, whose second factor is Obligate's).
       let requires2faSetup = false;
-      if (!config.disable2faForce) {
+      if (!config.disable2faForce && fRow?.foreign_source !== 'obligate') {
         const cfg = await appConfigService.getAll();
         // app_config values are strings: 'false' is truthy — compare explicitly.
         if (cfg.force_2fa === 'true' && !user.totpEnabled && !user.emailOtpEnabled) {

@@ -22,16 +22,24 @@ import { activeRequester, refuse, type ApprovalExecution } from '../services/app
 import { parseRequestDeviceId, resolveRequestDevice } from '../services/deviceScope.service';
 import { sendStepUpFailure } from '../services/deviceKey/stepUpProof';
 import { permissionService } from '../services/permission.service';
-import { applyRestriction } from '../services/restriction.service';
+import { applyRestriction, restrictionService } from '../services/restriction.service';
 import { vault } from '../vault';
 import { forgetKnoxKey, KNOX_PURPOSE, knoxSecretIdOf } from './agentConfig';
 import {
   cancelOpenOfDevice, commandSpecOrNull, ERASE_ACTION, legacyAgentCommands, LOCK_ACTION, POLICY_COMMAND_TYPES, REMOTE_OPEN, type CommandSpec, type EnqueueOutcome,
 } from './commands';
 import { looksLikeApk, receiveApk } from './packages';
+import { ApkFormatError, apkSignersOfFile } from './apkSigner';
+import { declaredSignerHolds } from './pulledApk';
 import { legacyAgentRemote } from './remoteBridge';
+import { commandGuardDeps, commandRestrictionKey } from './commandGuard';
 import { requestDeviceResolution } from '../mdm/policies/triggers';
 import { customFieldsOf } from '../mdm/policies/loader';
+import { withConfigurationLock } from '../mdm/policies/configLock';
+import { deviceFactsEffect } from '../mdm/groups/governance';
+import { DEVICE_VALUES_ACTION, deviceValuesLevel } from '../mdm/registry/agentValues';
+import { requestGroupEvaluation } from '../mdm/groups/triggers';
+import { deviceService } from '../services/device.service';
 import { policyRouter } from './policyRoutes';
 import { issueEnrollmentToken, tokenLimiter, TOKEN_COLUMNS, tokenView } from './tokens';
 
@@ -48,19 +56,22 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 //   GET  /devices/:id/actions           its menu (lock, erase, message, reboot, inventory; remote view and
 //                                       control, P0-15) and what greys an entry
 //   GET  /devices/:id/commands          its queue
-//   POST /devices/:id/commands          capability of the type, restriction → 202
+//   POST /devices/:id/commands          capability of the type, restriction (commandGuard.ts, review F115) → 202
 //   POST /commands/bulk                 the same on 500 devices at most
 //   POST /commands/:commandId/cancel    a pending command, not guarded
 //   POST /actions                       lock / erase: the guard engine (its floors, delays, confirmation)
 //   POST /devices/names                 import of display names by IMEI or serial (MobiControl, Omnissa, CSV), preview or apply;
-//                                       write scope on each renamed device
+//                                       write scope on each renamed device; a rename that moves it in a targeted
+//                                       dynamic group set aside (the governed PATCH of the record); resolution after
 //   POST /devices/export                the view of the console as CSV or XLSX (capability reports)
 //   POST /devices/:id/revoke            restriction legacy_agent.revoke (floor sensitive); 423 tenantFrozen
 //                                       during a freeze, here and at the execution of an approval (PONT-R-RV2)
 //   GET  /tokens, POST /tokens, POST /tokens/:id/revoke     mdm.enrollment.manage
-//   GET  /packages, POST /packages      mdm.apps.manage (POST: the raw APK)
+//   GET  /packages, POST /packages      mdm.apps.manage (POST: the raw APK, confirmed at once)
+//   POST /packages/:id/confirm          mdm.apps.manage: a package sent back by a device may be installed (F028)
 //   GET  /releases                      the versions of the agent offered to agent.update
-//   GET  /settings, PUT /settings/knox  the tenant's Knox licence key (sealed; never returned)
+//   GET  /settings, PUT /settings/knox  the tenant's Knox licence key (sealed; never returned); PUT: restriction
+//                                       legacy_agent.knox_key (floor sensitive, strict step-up, a secret)
 // The guarded types (device.wipe, device.lock) are refused on the command
 // routes (409 guardedActionRequired): /actions goes through the engine.
 // =============================================================================
@@ -249,6 +260,8 @@ router.get('/devices/:id/actions', wrap(async (req, res) => {
   const canWrite = isAdmin || await permissionService.canWriteDevice(userId, id, false);
   const managesPolicies = isAdmin || await permissionService.userHasTenantCapability(userId, tenantId, 'mdm.policies.manage');
   const actions: LegacyAgentDeviceAction[] = [];
+  // Review T1-R3-6: the tenant's guard setting read once for the whole menu, not once per type it covers.
+  const sensitiveOn = await commandGuardDeps.settingOn(tenantId);
   for (const type of MENU_TYPES) {
     const spec = commandSpecOrNull(type)!;
     const policyType = POLICY_COMMAND_TYPES.includes(type);
@@ -261,7 +274,7 @@ router.get('/devices/:id/actions', wrap(async (req, res) => {
             // The owner of the device reboots it without Knox (lot BANC §3.8: knoxLicensed || deviceOwner).
             : type === 'device.reboot' && r.knox_state !== 'licensed' && r.device_owner !== true ? 'knoxRequired'
               : frozen ? 'frozen' : null;
-    actions.push({ type, actionKey: spec.guardedBy ?? spec.restrictionKey ?? type, guarded: spec.guardedBy !== null, available: unavailable === null, unavailable });
+    actions.push({ type, actionKey: spec.guardedBy ?? (await commandRestrictionKey(tenantId, spec, [id], sensitiveOn)) ?? type, guarded: spec.guardedBy !== null, available: unavailable === null, unavailable });
   }
   // P0-15 §4.2: the remote assistance, opened through /api/remote-sessions (its restriction remote.view or
   // remote.control, the strict step-up), with the reason the server would refuse it now (remote/guard.ts checkOpenable).
@@ -299,6 +312,10 @@ export async function consoleCommand(tenantId: number, type: string, raw: Record
     if (!UUID_RE.test(packageId)) throw new AppError(422, 'app.install: packageId is required', 'invalidParams');
     const p = await db('legacy_agent_packages').where({ tenant_id: tenantId, id: packageId }).first() as Record<string, any> | undefined;
     if (!p) throw new AppError(404, 'Package not found');
+    // Review F028: a package sent back by a device is installed only once a human confirmed it.
+    if (!p.confirmed_at) {
+      throw new AppError(422, 'This package was sent back by a device: confirm it before installing it', 'packageNotConfirmed', { packageId: String(p.id) });
+    }
     params = {
       packageId: String(p.id), packageName: p.package_name, versionCode: Number(p.version_code), sha256: p.sha256, size: Number(p.size_bytes),
       ...(p.signer_sha256 ? { signerSha256: p.signer_sha256 } : {}),
@@ -341,9 +358,11 @@ router.post('/devices/:id/commands', enqueueLimiter, wrap(async (req, res) => {
   if ((await lacking(req, [id], spec.capability)).length > 0) throw new AppError(403, `Capability '${spec.capability}' not permitted for your team`, 'capabilityMissing');
   await requirePolicyManage(req, spec);
   const key = idempotencyKey(req);
-  if (spec.restrictionKey) {
+  // Review F115: the type's key, or legacy_agent.commands_sensitive when the tenant's guard setting is on.
+  const restrictionKey = await commandRestrictionKey(tenantId, spec, [id]);
+  if (restrictionKey) {
     const ok = await applyRestriction(res, {
-      req, actionKey: spec.restrictionKey, deviceIds: [id], approvalRequestType: 'legacy_agent_action',
+      req, actionKey: restrictionKey, deviceIds: [id], approvalRequestType: 'legacy_agent_action',
       approvalDescription: `${spec.type} on 1 Android agent device`,
       approvalPayload: { action: 'legacy_agent.command', type: spec.type, deviceIds: [id], params, reason: b.reason ?? null, ticket: b.ticket ?? null },
     });
@@ -373,9 +392,10 @@ router.post('/commands/bulk', bulkLimiter, wrap(async (req, res) => {
   if (without.length > 0) throw new AppError(403, 'Capability not permitted on some devices', 'capabilityMissing', { count: without.length });
   await requirePolicyManage(req, spec);
   const key = idempotencyKey(req);
-  if (spec.restrictionKey) {
+  const restrictionKey = await commandRestrictionKey(tenantId, spec, ids);
+  if (restrictionKey) {
     const ok = await applyRestriction(res, {
-      req, actionKey: spec.restrictionKey, deviceIds: ids, approvalRequestType: 'legacy_agent_action',
+      req, actionKey: restrictionKey, deviceIds: ids, approvalRequestType: 'legacy_agent_action',
       approvalDescription: `${spec.type} on ${ids.length} Android agent device(s)`,
       approvalPayload: { action: 'legacy_agent.command', type: spec.type, deviceIds: ids, params, reason: b.reason ?? null, ticket: b.ticket ?? null },
     });
@@ -522,6 +542,47 @@ const serialKey = (v: unknown): string | null => {
   return s.length >= 4 && s.length <= 64 ? s : null;
 };
 
+/** Has the tenant a level on sites.device_values anywhere (an entry of its matrix, whatever its scope, or a floor)? A
+ *  cheap read before the per-device check of the name import (review F116): false keeps the import as it was. */
+async function deviceValuesOptedIn(tenantId: number): Promise<boolean> {
+  return (await nameImportDeps.level(tenantId)) !== 'none';
+}
+
+/** The reads of the name import's guard, an object so that the local tests replace them (mock.method). */
+export const nameImportDeps = {
+  level: (tenantId: number) => restrictionService.getLevelFor({ tenantId, actionKey: DEVICE_VALUES_ACTION }),
+  effect: (q: Knex | Knex.Transaction, tenantId: number, deviceId: number, name: string) => deviceFactsEffect(q, tenantId, deviceId, { displayName: name }),
+  valuesLevel: (q: Knex | Knex.Transaction, req: Request, tenantId: number, deviceId: number, name: string) =>
+    deviceValuesLevel(q, req, tenantId, deviceId, { displayName: name }),
+};
+
+/**
+ * Sets aside as 'governed' the rows still 'rename' whose rename goes through the governed change of the record: one
+ * that makes the device enter or leave a targeted dynamic group (F030, only when the tenant has such groups), or one
+ * the restriction sites.device_values governs (F116: a level, and the new name rewrites the agent policy).
+ */
+export async function setAsideGovernedRenames(q: Knex | Knex.Transaction, req: Request, tenantId: number,
+  rows: LegacyAgentNameImportRow[], targeted: number): Promise<void> {
+  const valuesOptIn = await deviceValuesOptedIn(tenantId);
+  for (const r of rows.filter((x) => x.status === 'rename')) {
+    if (targeted > 0) {
+      const effect = await nameImportDeps.effect(q, tenantId, r.deviceId!, r.name);
+      if (effect.entered.length > 0 || effect.left.length > 0) { r.status = 'governed'; continue; }
+    }
+    if (valuesOptIn && (await nameImportDeps.valuesLevel(q, req, tenantId, r.deviceId!, r.name)) !== 'none') r.status = 'governed';
+  }
+}
+
+/** The dynamic groups of the tenant an assignment targets (0: no rename can move a device in one). */
+async function targetedSmartGroups(tenantId: number): Promise<number> {
+  const r = await db('smart_groups as g').where('g.tenant_id', tenantId)
+    .whereExists(function targeted() {
+      this.select(db.raw('1')).from('assignments as a').whereRaw('a.tenant_id = g.tenant_id').where('a.target_scope', 'smart_group').whereRaw('a.target_id = g.id');
+    })
+    .count<{ n: string }[]>('g.id as n').first();
+  return Number(r?.n ?? 0);
+}
+
 router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
   const b = body(NameImportBody, req);
   const tenantId = req.tenantId!;
@@ -584,27 +645,47 @@ router.post('/devices/names', bulkLimiter, wrap(async (req, res) => {
       if (!(await permissionService.canWriteDevice(req.session.userId!, r.deviceId!, false))) r.status = 'forbidden';
     }
   }
+  // Review F030: a rename that makes a device enter or leave a dynamic group an assignment targets goes through the
+  // governed change of the record (PATCH /api/mdm/devices/:id: devices.manage, its preview, its second factor or
+  // approver), never through the import: such a row is set aside ('governed', distinct from 'forbidden': the caller
+  // may write the device, but not by this way). Checked again under the lock of the configuration at the apply when
+  // the tenant has such groups (an assignment written meanwhile).
+  // Review F116 (round 3): a rename the tenant's restriction sites.device_values governs (a level, and the new name
+  // rewrites the device's agent policy: {{device.name}}) goes through the record's governed change too, whatever the
+  // groups; no level (the default) keeps the import as it was. Checked at the preview and again at the apply.
+  const targeted = await targetedSmartGroups(tenantId);
+  const setAsideGoverned = (q: Knex | Knex.Transaction): Promise<void> => setAsideGovernedRenames(q, req, tenantId, rows, targeted);
+  if (!b.apply) await setAsideGoverned(db);
 
   let applied = 0;
-  if (b.apply) {
-    const go = rows.filter((r) => r.status === 'rename');
-    if (go.length > 0) {
-      const auditCtx = await audit.fromRequest(req, tenantId);
-      await db.transaction(async (trx) => {
-        const now = new Date();
-        for (const r of go) {
-          const n = await trx('devices').where({ tenant_id: tenantId, id: r.deviceId!, management_channel: 'legacy_agent' })
-            .update({ display_name: r.name, updated_at: now });
-          if (n === 0) continue;
-          await audit.appendInTx(trx, {
-            tenantId, action: 'legacy_agent.device_renamed', target: { type: 'device', id: String(r.deviceId), device: r.deviceId! },
-            details: { from: r.currentName, to: r.name, source: 'import', format: b.format ?? null, matchedBy: r.matchedBy },
-          }, auditCtx);
-          r.status = 'renamed';
-          applied++;
-        }
-      });
-    }
+  const renamed: number[] = [];
+  if (b.apply && rows.some((r) => r.status === 'rename')) {
+    const auditCtx = await audit.fromRequest(req, tenantId);
+    const write = async (trx: Knex.Transaction): Promise<void> => {
+      await setAsideGoverned(trx);
+      const now = new Date();
+      for (const r of rows.filter((x) => x.status === 'rename')) {
+        const n = await trx('devices').where({ tenant_id: tenantId, id: r.deviceId!, management_channel: 'legacy_agent' })
+          .update({ display_name: r.name, updated_at: now });
+        if (n === 0) continue;
+        await audit.appendInTx(trx, {
+          tenantId, action: 'legacy_agent.device_renamed', target: { type: 'device', id: String(r.deviceId), device: r.deviceId! },
+          details: { from: r.currentName, to: r.name, source: 'import', format: b.format ?? null, matchedBy: r.matchedBy },
+        }, auditCtx);
+        r.status = 'renamed';
+        renamed.push(r.deviceId!);
+        applied++;
+      }
+      // What follows a change of the record, as the PATCH: the templates that read {{device.name}} rendered again (the
+      // kiosk's header, the files), the dynamic groups on the name evaluated again.
+      if (renamed.length > 0) {
+        await requestDeviceResolution(trx, tenantId, renamed);
+        await requestGroupEvaluation(trx, tenantId, renamed);
+      }
+    };
+    if (targeted > 0 || (await deviceValuesOptedIn(tenantId))) await withConfigurationLock(tenantId, write);
+    else await db.transaction(write);
+    if (renamed.length > 0) deviceService.emitChanged(tenantId, renamed);
   }
   const out: LegacyAgentNameImportResult = { rows, applied };
   res.json({ success: true, data: out });
@@ -744,10 +825,19 @@ router.post('/tokens', requireTenantCapability('mdm.enrollment.manage'), tokenLi
   const b = body(TokenBody, req);
   const tenantId = req.tenantId!;
   if (b.groupId && !(await db('device_groups').where({ tenant_id: tenantId, id: b.groupId }).first('id'))) throw new AppError(404, 'Group not found');
+  // Review F035: a device the token enrolls enters its group, as a move into it: write access on that group.
+  if (b.groupId && req.session.role !== 'admin' && !(await permissionService.canWriteGroup(req.session.userId!, b.groupId, false))) {
+    throw new AppError(403, 'No write permission on target group');
+  }
   const siteId = b.siteId ? b.siteId.toLowerCase() : null;
   const { token } = await issueEnrollmentToken(req, tenantId, { label: b.label, groupId: b.groupId ?? null, siteId, siteSheet: false, days: b.days, maxUses: b.maxUses },
     // Loaded on use: the sites' module reaches the router of the console, which mounts this one.
-    siteId ? async (trx) => { await (await import('../sites/service')).usableSiteInTx(trx, tenantId, siteId); } : undefined);
+    siteId ? async (trx) => {
+      const site = await (await import('../sites/service')).usableSiteInTx(trx, tenantId, siteId);
+      // Without a group of its own, the token enrolls into the site's group (enrollmentPlacement): the same write access.
+      if (!b.groupId && site.groupId !== null && req.session.role !== 'admin'
+        && !(await permissionService.canWriteGroup(req.session.userId!, site.groupId, false))) throw new AppError(403, 'No write permission on target group');
+    } : undefined);
   res.setHeader('Cache-Control', 'no-store');
   res.status(201).json({ success: true, data: token });
 }));
@@ -782,6 +872,8 @@ export function packageView(r: Record<string, any>): LegacyAgentPackageView {
   return {
     id: String(r.id), packageName: r.package_name, versionCode: String(r.version_code), versionName: r.version_name ?? null, sha256: r.sha256,
     sizeBytes: Number(r.size_bytes), signerSha256: r.signer_sha256 ?? null, label: r.label ?? null, createdAt: iso(r.created_at) as string,
+    confirmedAt: iso(r.confirmed_at) ?? null, confirmedBy: r.confirmed_by === null || r.confirmed_by === undefined ? null : Number(r.confirmed_by),
+    sourceDeviceId: r.source_device_id === null || r.source_device_id === undefined ? null : Number(r.source_device_id),
   };
 }
 
@@ -799,15 +891,31 @@ router.post('/packages', requireTenantCapability('mdm.apps.manage'), uploadLimit
     throw new AppError(422, 'The agent is updated through its versions, not as a package', 'forbiddenPackage');
   }
   const tenantId = req.tenantId!;
-  const file = await receiveApk(req);
+  // A signer declared is checked against the file's v2/v3 block before the file joins the store: a wrong one would make
+  // every app.install of it fail on the devices, and would refuse every later pull of that package (pulledApk.ts).
+  const declared = m.signerSha256;
+  const file = await receiveApk(req, declared ? async (tmp) => {
+    let signers;
+    try { signers = await apkSignersOfFile(tmp); } catch (err) {
+      if (err instanceof ApkFormatError) return; // not readable here: the agent checks it at install, as before
+      throw err;
+    }
+    if (!declaredSignerHolds(signers, declared)) {
+      throw new AppError(422, 'The signer declared is not the certificate that signs this APK', 'signerMismatch');
+    }
+  } : undefined);
   if (!(await looksLikeApk(file.sha256))) throw new AppError(422, 'This file is not an APK (ZIP archive)', 'notAnApk');
   const auditCtx = await audit.fromRequest(req, tenantId);
   const row = await db.transaction(async (trx) => {
     const existing = await trx('legacy_agent_packages').where({ tenant_id: tenantId, sha256: file.sha256 }).first();
+    // Review F028: a human who uploads the very file a device sent back vouches for it: the package is confirmed.
+    if (existing && !existing.confirmed_at) return confirmPackageInTx(trx, tenantId, existing, req.session.userId!, auditCtx, 'upload');
     if (existing) return existing;
     const [r] = await trx('legacy_agent_packages').insert({
       tenant_id: tenantId, package_name: m.packageName, version_code: m.versionCode, version_name: m.versionName || null, sha256: file.sha256,
       size_bytes: file.size, signer_sha256: m.signerSha256 ?? null, label: m.label || null, created_by: req.session.userId!,
+      // An upload by a human is confirmed at its creation (review F028).
+      confirmed_at: new Date(), confirmed_by: req.session.userId!,
     }).returning('*') as Array<Record<string, any>>;
     await audit.appendInTx(trx, {
       tenantId, action: 'legacy_agent.package_uploaded', target: { type: 'legacy_agent_package', id: String(r.id) },
@@ -816,6 +924,38 @@ router.post('/packages', requireTenantCapability('mdm.apps.manage'), uploadLimit
     return r;
   });
   res.status(201).json({ success: true, data: packageView(row) });
+}));
+
+/** Confirms a package in the caller's transaction, audited legacy_agent.package_confirmed (review F028). */
+async function confirmPackageInTx(trx: Knex.Transaction, tenantId: number, row: Record<string, any>, userId: number,
+  auditCtx: Awaited<ReturnType<typeof audit.fromRequest>>, via: 'console' | 'upload'): Promise<Record<string, any>> {
+  const [r] = await trx('legacy_agent_packages').where({ tenant_id: tenantId, id: row.id }).whereNull('confirmed_at')
+    .update({ confirmed_at: new Date(), confirmed_by: userId }).returning('*') as Array<Record<string, any>>;
+  if (!r) return (await trx('legacy_agent_packages').where({ tenant_id: tenantId, id: row.id }).first()) as Record<string, any>;
+  await audit.appendInTx(trx, {
+    tenantId, action: 'legacy_agent.package_confirmed', target: { type: 'legacy_agent_package', id: String(r.id) },
+    details: {
+      packageName: r.package_name, versionCode: String(r.version_code), sha256: r.sha256, signerSha256: r.signer_sha256 ?? null,
+      sourceDeviceId: r.source_device_id ?? null, via,
+    },
+  }, auditCtx);
+  return r;
+}
+
+// POST /api/legacy-agent/packages/:id/confirm (review F028): a package sent back by a device (app.pull, the harvest) may
+// be installed once a holder of mdm.apps.manage (the right of the upload) confirms it. Idempotent: an already confirmed
+// package answers as it is.
+router.post('/packages/:id/confirm', requireTenantCapability('mdm.apps.manage'), wrap(async (req, res) => {
+  const id = String(req.params.id ?? '');
+  if (!UUID_RE.test(id)) throw new AppError(404, 'Package not found');
+  const tenantId = req.tenantId!;
+  const auditCtx = await audit.fromRequest(req, tenantId);
+  const row = await db.transaction(async (trx) => {
+    const p = await trx('legacy_agent_packages').where({ tenant_id: tenantId, id: id.toLowerCase() }).forUpdate().first() as Record<string, any> | undefined;
+    if (!p) throw new AppError(404, 'Package not found');
+    return p.confirmed_at ? p : confirmPackageInTx(trx, tenantId, p, req.session.userId!, auditCtx, 'console');
+  });
+  res.json({ success: true, data: packageView(row) });
 }));
 
 // GET /api/legacy-agent/releases: the versions of the agent an agent.update may name (not withdrawn).
@@ -844,17 +984,35 @@ const KnoxBody = z.object({ licenseKey: z.string().trim().min(8).max(200).regex(
 router.put('/settings/knox', requireTenantCapability('mdm.enrollment.manage'), wrap(async (req, res) => {
   const b = body(KnoxBody, req);
   const tenantId = req.tenantId!;
+  // Review F122: the key the Knox features of the whole fleet depend on: a fresh second factor (floor 'sensitive', strict:
+  // never the trusted IP), and at 'restricted' a fresh code again rather than an approval that would keep the secret.
+  // The removal carries no secret: at 'restricted' it goes to a second person (executeLegacyAgentAction, action
+  // legacy_agent.knox_key_remove); a new key always asks a fresh code instead, never an approval that would keep it.
+  const ok = await applyRestriction(res, {
+    req, actionKey: 'legacy_agent.knox_key', carriesSecret: b.licenseKey !== null, approvalRequestType: 'legacy_agent_action',
+    approvalDescription: b.licenseKey === null ? 'Remove the Knox licence key' : 'Change the Knox licence key',
+    ...(b.licenseKey === null ? { approvalPayload: { action: KNOX_REMOVE_ACTION } } : {}),
+  });
+  if (!ok) return;
   const auditCtx = await audit.fromRequest(req, tenantId);
+  await writeKnoxKey(tenantId, b.licenseKey, req.session.userId!, auditCtx);
+  res.json({ success: true, data: { knoxLicenseSet: b.licenseKey !== null } });
+}));
+
+const KNOX_REMOVE_ACTION = 'legacy_agent.knox_key_remove';
+
+/** Writes (or removes, null) the tenant's Knox licence key, audited legacy_agent.knox_key_set. */
+async function writeKnoxKey(tenantId: number, licenseKey: string | null, userId: number,
+  auditCtx: Awaited<ReturnType<typeof audit.fromRequest>>): Promise<void> {
   await db.transaction(async (trx) => {
-    const ref = b.licenseKey === null ? null
-      : { $secret: await vault.createTenantSecret(tenantId, KNOX_PURPOSE, b.licenseKey, { userId: req.session.userId! }, { trx }) };
-    await trx('legacy_agent_settings').insert({ tenant_id: tenantId, knox_license: ref ? JSON.stringify(ref) : null, updated_by: req.session.userId!, updated_at: new Date() })
+    const ref = licenseKey === null ? null
+      : { $secret: await vault.createTenantSecret(tenantId, KNOX_PURPOSE, licenseKey, { userId }, { trx }) };
+    await trx('legacy_agent_settings').insert({ tenant_id: tenantId, knox_license: ref ? JSON.stringify(ref) : null, updated_by: userId, updated_at: new Date() })
       .onConflict('tenant_id').merge(['knox_license', 'updated_by', 'updated_at']);
     await audit.appendInTx(trx, { tenantId, action: 'legacy_agent.knox_key_set', target: { type: 'tenant', id: String(tenantId) }, details: { set: ref !== null } }, auditCtx);
   });
   forgetKnoxKey(tenantId);
-  res.json({ success: true, data: { knoxLicenseSet: b.licenseKey !== null } });
-}));
+}
 
 /** The console API of the bridge agent, mounted at /api/legacy-agent (routes/index.ts), after requireTenant. */
 let policyRoutesMounted = false;
@@ -873,6 +1031,16 @@ export function createLegacyAgentRouter(): Router {
  */
 export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<string | void> {
   const p = (x.payload ?? {}) as { action?: unknown; type?: unknown; deviceIds?: unknown; params?: unknown; reason?: unknown; ticket?: unknown };
+  // Review F122: the removal of the Knox key approved (a new key never goes this way: it asks a fresh code).
+  if (p.action === KNOX_REMOVE_ACTION) {
+    const requester = await activeRequester(x.requesterId);
+    if (!requester.isPlatformAdmin && !(await permissionService.userHasTenantCapability(x.requesterId, x.tenantId, 'mdm.enrollment.manage'))) {
+      refuse('The requester no longer holds the right to manage the enrollment');
+    }
+    if ((await knoxSecretIdOf(db, x.tenantId)) === null) return 'No Knox licence key was set any more';
+    await writeKnoxKey(x.tenantId, null, x.requesterId, await audit.fromDbActor(userActor(x.requesterId), x.tenantId));
+    return undefined;
+  }
   if (!Array.isArray(p.deviceIds)) refuse('Malformed request');
   const ids = [...new Set((p.deviceIds as unknown[]).map(parseRequestDeviceId).filter((n): n is number => n !== null))];
   if (ids.length === 0 || ids.length > 500) refuse('Malformed request');
@@ -911,6 +1079,7 @@ export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<st
       params = (await consoleCommand(x.tenantId, s.type, params)).params;
     } catch (err) {
       const e = err as { statusCode?: number; message?: string };
+      if ((e as { code?: string }).code === 'packageNotConfirmed') refuse('packageNotConfirmed: the package is no longer confirmed');
       if (e.statusCode && e.statusCode < 500) refuse(`The ${s.type === 'app.install' ? 'package' : 'version of the agent'} is no longer available`);
       throw err;
     }
@@ -921,6 +1090,10 @@ export async function executeLegacyAgentAction(x: ApprovalExecution): Promise<st
     const without = new Set(await permissionService.devicesLackingCapability(x.requesterId, ids, s.capability));
     for (const id of ids) if (!without.has(id) && !(await permissionService.canWriteDevice(x.requesterId, id, false))) without.add(id);
     if (without.size > 0) refuse('The requester no longer holds the capability of this command on every device');
+    // The commands of the agent policy also need mdm.policies.manage (requirePolicyManage), read again here.
+    if (POLICY_COMMAND_TYPES.includes(s.type) && !(await permissionService.userHasTenantCapability(x.requesterId, x.tenantId, 'mdm.policies.manage'))) {
+      refuse('The requester no longer holds the right to manage the policies');
+    }
   }
   let o: EnqueueOutcome;
   try {

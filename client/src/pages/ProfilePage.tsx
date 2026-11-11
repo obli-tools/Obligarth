@@ -81,6 +81,13 @@ export function ProfilePage() {
  const [emailCode, setEmailCode] = useState('');
  const [emailSaving, setEmailSaving] = useState(false);
 
+ // "Force 2FA": once a factor is on, the session state is read again — the
+ // server lets the account out of its profile, and so does ProtectedRoute.
+ const hasFactor = !!tfaStatus?.totpEnabled || !!tfaStatus?.emailOtpEnabled;
+ useEffect(() => {
+ if (requires2faSetup && hasFactor) void useAuthStore.getState().checkSession();
+ }, [requires2faSetup, hasFactor]);
+
  useEffect(() => {
  profileApi.get().then((profile) => {
  setDisplayName(profile.displayName || '');

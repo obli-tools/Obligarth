@@ -56,7 +56,7 @@ export async function recordRefusal(req: Request | null, r: RefusalInput, ctx?: 
       message: `${r.def.key} refused: the account's administrator rights are less than 72 hours old.`,
       stableKey: `guard:cooldown:${r.tenantId}:${r.requester?.userId ?? 'unknown'}`,
       navigateTo: '/admin/security?tab=guard',
-    });
+    }, { platform: r.tenantId !== MASTER_TENANT_ID });
   }
   await checkAnomalies(r.tenantId);
 }

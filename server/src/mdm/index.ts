@@ -7,6 +7,7 @@ import {
   refuse, registerApprovalExecutor, registerApprovalRequestType, requireTenantCapability, type ApprovalExecution,
   type BatchCommandPayload,
 } from '../services/approval.service';
+import { permissionService } from '../services/permission.service';
 import { registerRestrictableActions } from '../services/restriction.service';
 import { findSecretRefs, registerSecretReferenceHolder } from '../vault';
 import { registerCommandResultIngestor, onTargetFinal } from '../apple/commands/results';
@@ -77,7 +78,7 @@ let registered = false;
  *  executed as the requester, rights and device checked again. */
 async function executeChangeOwnership(x: ApprovalExecution): Promise<void> {
   const payload = x.payload as BatchCommandPayload;
-  await requireTenantCapability(x.requesterId, x.tenantId, 'devices.manage');
+  const r = await requireTenantCapability(x.requesterId, x.tenantId, 'devices.manage');
   const deviceId = Number(payload.deviceIds?.[0]);
   const to = payload.params?.to;
   if (!Number.isSafeInteger(deviceId) || deviceId <= 0 || (to !== 'corporate' && to !== 'corporate_personal')) {
@@ -85,6 +86,10 @@ async function executeChangeOwnership(x: ApprovalExecution): Promise<void> {
   }
   if (!(await db('devices').where({ tenant_id: x.tenantId, id: deviceId }).first('id'))) {
     refuse('The device of this request is no longer in the tenant');
+  }
+  // Write access on the device (its team scope), as the route asked it (resolveDevice(true)).
+  if (!r.isPlatformAdmin && !(await permissionService.canWriteDevice(x.requesterId, deviceId, false))) {
+    refuse('The requester no longer has write access to the device');
   }
   const ctx = await audit.fromDbActor(userActor(x.requesterId), x.tenantId);
   const reason = typeof payload.params?.reason === 'string' ? payload.params.reason : '';

@@ -70,7 +70,9 @@ async function signupFacts(signupId: string): Promise<SignupFacts | null> {
 export function signupRefusal(f: SignupFacts | null, tenantId: number): string | null {
   if (!f) return 'androidSignupNotFound';
   if (f.state !== 'failed') return 'androidSignupNotInterrupted';
-  if (f.failure_code === 'interrupted') return null;
+  // bind_refused: the enterprise was created at Google, only its binding failed (rows written before review F022,
+  // which now records such a failure as interrupted).
+  if (f.failure_code === 'interrupted' || f.failure_code === 'bind_refused') return null;
   if (f.failure_code === 'mgpa_refused' && (f.mgpa_exception || tenantId === MASTER_TENANT_ID)) return null;
   return 'androidSignupNotInterrupted';
 }
@@ -83,7 +85,7 @@ export function signupRefusal(f: SignupFacts | null, tenantId: number): string |
 export async function listAdoptable(tenantId: number, o: { gateway?: AndroidGateway } = {}): Promise<Array<{ enterpriseName: string; signupId: string }>> {
   const gw = o.gateway ?? androidGateway();
   const signups = await asTenant(tenantId, ADOPT_ACTOR, () => db('android_signups').where({ tenant_id: tenantId, state: 'failed' })
-    .whereIn('failure_code', ['interrupted', 'mgpa_refused']).pluck('id')) as string[];
+    .whereIn('failure_code', ['interrupted', 'bind_refused', 'mgpa_refused']).pluck('id')) as string[];
   if (!signups.length) return [];
   const orphans = await projectOrphans(gw);
   const out: Array<{ enterpriseName: string; signupId: string }> = [];

@@ -8,6 +8,8 @@ import { FloatingDock } from './FloatingDock';
 import { Drawer } from '@/components/common/Drawer';
 import { useUiStore, useEffectiveSidebar } from '@/store/uiStore';
 import { useTenantStore } from '@/store/tenantStore';
+import { useAuthStore } from '@/store/authStore';
+import { useGroupStore } from '@/store/groupStore';
 import { useSocket } from '@/hooks/useSocket';
 import { cn } from '@/utils/cn';
 
@@ -15,6 +17,14 @@ export function AppLayout() {
   const { t } = useTranslation();
   // Global socket subscriptions — always active regardless of which page is open
   useSocket();
+
+  // The group tree of the store, loaded once per signed-in account (then kept current by tenant switches and
+  // the group pages): the permission checks walk it for the grants of ancestor groups, and the group pages
+  // read their siblings and subgroups from it.
+  const userId = useAuthStore((s) => s.user?.id);
+  useEffect(() => {
+    if (userId != null) void useGroupStore.getState().fetchTree();
+  }, [userId]);
 
   // ── Tenant-switch safety net ──────────────────────────────────────────────
   // Tenant-scoped pages (device record, group detail, etc.)
@@ -36,7 +46,7 @@ export function AppLayout() {
     if (previous === currentTenantId) return;       // unchanged — no-op
     // The device record (DeviceSummaryPage) switches to the tenant of a device
     // opened from another one and wants the URL to survive the switch — it
-    // sets this flag right before calling setCurrentTenant. Honour it once and
+    // sets this flag (switchTenant's keepUrl) right before currentTenantId changes. Honour it once and
     // clear it.
     if (sessionStorage.getItem('skipTenantSwitchRedirect') === '1') {
       sessionStorage.removeItem('skipTenantSwitchRedirect');

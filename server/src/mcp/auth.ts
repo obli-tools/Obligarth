@@ -3,6 +3,7 @@ import type { NextFunction, Request, Response } from 'express';
 import { db } from '../db';
 import { asIdentity } from '../db/context';
 import { BucketLimiter, ConcurrencyLimiter, WindowLimiter } from '../legacyAgent/limits';
+import { force2faBlocks } from '../middleware/force2fa';
 import { neverBlockReason } from '../security/neverBlock';
 import { clientAddress, type ResolvedClient } from '../utils/clientIp';
 import { logger } from '../utils/logger';
@@ -89,8 +90,22 @@ async function guessingFailure(req: Request, client: ResolvedClient, kind: strin
 // ── IP gate (before the authentication; memory only) ────────────────────────
 
 /**
+ * Whether a request is an attempt of an MCP client: POST on /mcp itself, no Origin (a browser always sends one on a
+ * POST, a command-line client none) and an access key presented as such (Authorization: Bearer obg_…). A browser
+ * cannot forge that cross-site (a custom Authorization needs a CORS preflight, which carries an Origin): an image, a
+ * link or a form of a third-party page never is one (review F050).
+ */
+export function isMcpAttempt(req: Request): boolean {
+  if (req.method !== 'POST' || (req.path !== '/' && req.path !== '')) return false;
+  if (req.get('Origin') !== undefined) return false;
+  return parseToken(bearerOf(req.headers.authorization)) !== null;
+}
+
+/**
  * 1. an active local block of the address or its /64: 403; 2. strict mode and an address outside the global and the
- * known lists: blocked at once and for good (unless the never-block guard refuses), reported to Obliguard, 403.
+ * known lists: 403; blocked at once and for good (unless the never-block guard refuses) and reported to Obliguard only
+ * for an attempt of an MCP client (isMcpAttempt): a request a third-party web page can make a visitor send never
+ * blocks nor reports that visitor's address.
  */
 export async function ipGate(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
@@ -99,6 +114,7 @@ export async function ipGate(req: Request, res: Response, next: NextFunction): P
     const policy = currentPolicy();
     if (!policy) { void refreshPolicy().catch(() => undefined); next(); return; }
     if (policy.mode === 'strict' && client.ip && !policy.inGlobal(client.ip) && !policy.inKnown(client.ip)) {
+      if (!isMcpAttempt(req)) { sendForbidden(res); return; }
       const s = await mcpSettings();
       const guard = neverBlockReason(client, s.neverBlock);
       auditAuthFailure({ kind: 'ip_outside_strict_list', ip: client.ip, requestId: req.requestId });
@@ -192,6 +208,13 @@ export async function mcpAuth(req: Request, res: Response, next: NextFunction): 
     if (!user) { await revokeKey(key.rowId, 'owner_removed', null); possession('owner_removed'); return; }
     if (user.is_active !== true) { await revokeAllOfUser(Number(user.id), 'user_disabled'); possession('user_inactive'); return; }
     if (Number(user.credential_version) !== key.credentialVersion) { await revokeKey(key.rowId, 'credentials_changed', null); possession('credentials_changed'); return; }
+    // force_2fa (F040): an account the console holds on its profile until it sets up a second factor is refused here
+    // too, whatever its key's age (a key created before the setting was turned on). The rule below (a factor that can
+    // approve) already implies it today; this keeps the platform rule itself, with its own code. Not a failure: no ban.
+    if (await asIdentity(MCP_ACTOR, () => force2faBlocks(Number(user.id)))) {
+      sendForbidden(res, 'twoFactorSetupRequired', 'Two-factor authentication is required: set it up on your profile first');
+      return;
+    }
     // A factor that can approve the key's authorizations (checkSecondFactor's rule; an SSO account's factor is
     // Obligate's). Not a failure: no ban.
     if (!hasStepUpFactor(user)) { sendForbidden(res, 'stepUpFactorMissing', 'Second factor required on the account'); return; }

@@ -65,13 +65,15 @@ export class GoogleHttp {
     this.backoffMs = 0;
   }
 
-  private checkBreaker(): void {
+  /** True when this call is the trial call of a half-open breaker. */
+  private checkBreaker(): boolean {
     if (this.backoffUntil > Date.now()) {
       throw new AndroidRateLimitedError(Math.ceil((this.backoffUntil - Date.now()) / 1000));
     }
-    if (this.openedAt === null) return;
-    if (Date.now() - this.openedAt < BREAKER_OPEN_MS || this.trial) throw new AndroidUnavailableError('circuit open');
+    if (this.openedAt === null) return false;
+    if (Date.now() - this.openedAt < BREAKER_OPEN_MS || this.trial) throw new AndroidUnavailableError('circuit open', { notSent: true });
     this.trial = true;
+    return true;
   }
 
   private transportOk(): void {
@@ -104,11 +106,13 @@ export class GoogleHttp {
     }
     let authRetried = false;
     for (let attempt = 1; ; attempt++) {
-      this.checkBreaker();
+      const isTrial = this.checkBreaker();
       const started = Date.now();
       let status = 0;
+      let tokenStage = true;
       try {
         const token = await this.tokens.accessToken();
+        tokenStage = false;
         const res = await request(o.url, {
           dispatcher: this.agent,
           method: o.method,
@@ -128,10 +132,16 @@ export class GoogleHttp {
         androidMetrics.googleRequest(o.op, status, Date.now() - started);
         if (status >= 200 && status < 300) {
           this.backoffMs = 0;
+          // A 2xx whose body cannot be read is not an answer: taken as {}, an unreadable page of a list would look
+          // like a complete empty list (and a reconciliation would release the whole fleet). An empty body is only
+          // an answer for a write (a DELETE or an acknowledgement); a read always carries a JSON object.
+          if (json === UNREADABLE || (json === null && o.method === 'GET')) {
+            throw new AndroidUnavailableError(`unreadable answer on ${o.op}`);
+          }
           return (json ?? {}) as T;
         }
         const header = res.headers['retry-after'];
-        const err = googleErrorFor(status, json, { scope: o.scope, read: o.read, retryAfter: Array.isArray(header) ? header[0] : header });
+        const err = googleErrorFor(status, json === UNREADABLE ? null : json, { scope: o.scope, read: o.read, retryAfter: Array.isArray(header) ? header[0] : header });
         if (err === null) return null;
         if (err instanceof AndroidRateLimitedError) this.rateLimited(err.retryAfterSeconds);
         if (err instanceof AndroidAuthError && status === 401 && !authRetried) {
@@ -145,8 +155,10 @@ export class GoogleHttp {
         }
         throw err;
       } catch (err) {
+        // Review F022: a failure while the access token is obtained proves the request never left.
+        if (tokenStage && err instanceof AndroidError && err.kind === 'unavailable') err.details.notSent = true;
         if (err instanceof AndroidError) throw err;
-        if ((err as { name?: string }).name === 'AbortError' || o.signal?.aborted) throw new AndroidUnavailableError('aborted');
+        if ((err as { name?: string }).name === 'AbortError' || o.signal?.aborted) throw new AndroidUnavailableError('aborted', tokenStage ? { notSent: true } : {});
         // Transport failure: connection, timeout, oversized body.
         if (status === 0) this.transportFailed();
         androidMetrics.googleRequest(o.op, 0, Date.now() - started);
@@ -154,12 +166,25 @@ export class GoogleHttp {
           await androidWait(250 + Math.floor(Math.random() * 250));
           continue;
         }
-        throw new AndroidUnavailableError(`transport failure on ${o.op}`);
+        throw new AndroidUnavailableError(`transport failure on ${o.op}`, tokenStage ? { notSent: true } : {});
+      } finally {
+        // Every exit of the trial call settles the breaker, otherwise a trial that failed before transportOk() or
+        // transportFailed() (token endpoint unreachable, oversized answer, abort, body timeout) would leave `trial` set
+        // and every later call would answer "circuit open" until the process restarts. An unreachable token endpoint
+        // during the trial is a transport failure: the breaker opens again for a new window.
+        if (isTrial && this.trial) {
+          if (tokenStage && !(o.signal?.aborted)) this.transportFailed();
+          else this.trial = false;
+        }
       }
     }
   }
 }
 
+/** A non-empty body that is not JSON. */
+const UNREADABLE: unique symbol = Symbol('unreadable');
+
+/** The parsed body, null when empty, UNREADABLE when not JSON. */
 async function readBounded(res: Dispatcher.ResponseData, max: number): Promise<unknown> {
   let size = 0;
   const chunks: Buffer[] = [];
@@ -175,7 +200,7 @@ async function readBounded(res: Dispatcher.ResponseData, max: number): Promise<u
   try {
     return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
-    return null;
+    return UNREADABLE;
   }
 }
 

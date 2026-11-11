@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Clock, RefreshCw, Snowflake, UserCheck, X, Play, Gauge } from 'lucide-react';
@@ -7,14 +7,17 @@ import { clsx } from 'clsx';
 import toast from 'react-hot-toast';
 import type { GuardApproverDto, GuardQuota, GuardSettingsDto, PendingActionDto, User } from '@obligarth/shared';
 import { guardApi } from '@/api/guard.api';
+import { approvalApi, type PendingApproval } from '@/api/approval.api';
 import { usersApi } from '@/api/users.api';
 import { isStepUpHandled } from '@/api/client';
 import { getSocket } from '@/socket/socketClient';
 import { useAuthStore } from '@/store/authStore';
 import { usePrompt, useConfirm } from '@/components/common/ConfirmDialog';
 import { IconButton } from '@/components/common/IconButton';
+import { ToggleSwitch } from '@/components/common/ToggleSwitch';
 import { FreezeBanner } from './FreezeBanner';
 import { guardErrorMessage } from './GuardedActionDialog';
+import { pendingSettingsChanges, pendingSettingsSummary } from './guardSettingsPending';
 
 // The Guards tab of the Security page (audit-durci §10.11): the guarded
 // actions awaiting approval, scheduled (with their countdown), paused,
@@ -326,18 +329,38 @@ function SettingsForm({ settings, onSaved }: { settings: GuardSettingsDto; onSav
   const [min, setMin] = useState(settings.hourlyCapMin);
   const [side, setSide] = useState(settings.massApproverSide);
   const [floor, setFloor] = useState(settings.publishFleetShareFloor ?? 5);
-  useEffect(() => {
+  // Review F115: off by default; a server older than the setting sends nothing (the switch is then hidden).
+  const [legacySensitive, setLegacySensitive] = useState(settings.legacyAgentCommandsSensitive === true);
+  // The changes of these settings waiting for their second person (approval guard_settings_change).
+  const [pending, setPending] = useState<PendingApproval[]>([]);
+  // Follow the stored values only when they really change: the panel re-reads the settings (a new object, the
+  // same values) on every guard or approval event, which must not wipe what is being typed.
+  const resetFromSettings = useCallback(() => {
     setPercent(settings.hourlyCapPercent); setMin(settings.hourlyCapMin); setSide(settings.massApproverSide);
     setFloor(settings.publishFleetShareFloor ?? 5);
-  }, [settings]);
+    setLegacySensitive(settings.legacyAgentCommandsSensitive === true);
+  }, [settings.hourlyCapPercent, settings.hourlyCapMin, settings.massApproverSide, settings.publishFleetShareFloor, settings.legacyAgentCommandsSensitive]);
+  useEffect(() => { resetFromSettings(); }, [resetFromSettings]);
+  const loadPending = useCallback(() => {
+    approvalApi.list()
+      .then((list) => setPending(pendingSettingsChanges(list, settings.tenantId)))
+      .catch(() => setPending([]));
+  }, [settings.tenantId]);
+  // The settings object changes on every guard or approval event: re-read the requests with it.
+  useEffect(() => { loadPending(); }, [loadPending, settings]);
   const save = async () => {
     try {
       const r = await guardApi.updateSettings({
         hourlyCapPercent: percent, hourlyCapMin: min, massApproverSide: side,
         ...(settings.publishFleetShareFloor !== undefined ? { publishFleetShareFloor: floor } : {}),
+        ...(settings.legacyAgentCommandsSensitive !== undefined ? { legacyAgentCommandsSensitive: legacySensitive } : {}),
       });
       toast.success('approvalId' in r ? (t('guard.settings.requested') || 'Change requested: waiting for an approver') : (t('guard.settings.unchanged') || 'Nothing changed'));
+      // Review T6-R1: a requested change is not in force yet. Show the stored values again (the request is listed
+      // below), so a later save does not resend the unapproved values bundled with another change.
+      if ('approvalId' in r) resetFromSettings();
       onSaved();
+      loadPending();
     } catch (err) { errorToast(t, err); }
   };
   return (
@@ -364,7 +387,31 @@ function SettingsForm({ settings, onSaved }: { settings: GuardSettingsDto; onSav
         )}
         <button type="button" onClick={save} className="text-xs px-2.5 py-1 rounded bg-accent text-white coarse:min-h-10">{t('guard.settings.save') || 'Request the change'}</button>
       </div>
+      {settings.legacyAgentCommandsSensitive !== undefined && (
+        <div className="max-w-2xl text-xs">
+          <ToggleSwitch
+            size="sm"
+            checked={legacySensitive}
+            onChange={setLegacySensitive}
+            label={t('guard.settings.legacyAgentCommandsSensitive') || 'Second factor on the Android agent commands'}
+            description={t('guard.settings.legacyAgentCommandsSensitiveHelp')
+              || 'Installing or uninstalling an app, updating the agent, restarting a device and suspending its kiosk ask the second factor of the person who sends them (console and MCP). Off by default. Like the other settings, the change is approved by a second person.'}
+          />
+        </div>
+      )}
       <p className="text-[11px] text-text-muted">{t('guard.settings.help') || 'A change is approved by a second person (a client approver by default).'}</p>
+      {pending.length > 0 && (
+        <ul className="space-y-1">
+          {pending.map((a) => (
+            <li key={a.id} className="flex flex-wrap items-center gap-2 rounded bg-yellow-400/10 px-2 py-1 text-[11px] text-yellow-400">
+              <Clock className="h-3 w-3 shrink-0" />
+              <span>{t('guard.settings.pending', { id: a.id }) || `Change waiting for its approval (request #${a.id})`}</span>
+              <span className="text-text-muted">{pendingSettingsSummary(t, a, settings)}</span>
+              <Link to="/admin/approvals" className="text-accent hover:underline">{t('guard.settings.pendingOpen') || 'Open the approvals'}</Link>
+            </li>
+          ))}
+        </ul>
+      )}
     </section>
   );
 }

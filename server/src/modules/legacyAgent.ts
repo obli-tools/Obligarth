@@ -1,3 +1,4 @@
+import { LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION } from '@obligarth/shared';
 import { guardReviewerPolicy } from '../guard/approvals';
 import { registerFreezeMirror } from '../guard/frozen';
 import { registerDevicePurger } from './privacy';
@@ -19,6 +20,7 @@ import { ensureServerKey, registerServerKeySecretName } from '../legacyAgent/ser
 import { registerArtifactChannel } from '../mdm/policies/artifacts';
 import { collectPolicyFiles, ensureFilesDir } from '../legacyAgent/files';
 import { registerLegacyAgentMinuteStep } from '../legacyAgent/jobs';
+import { collectApkLeftovers } from '../legacyAgent/packages';
 import { agentArtifactProvider } from '../legacyAgent/policyChannel';
 import { executeDeviceValuesImport } from '../legacyAgent/policyRoutes';
 
@@ -31,7 +33,12 @@ import { executeDeviceValuesImport } from '../legacyAgent/policyRoutes';
 // by app.ts, the console routes by routes/index.ts.
 // =============================================================================
 
-/** The restrictable actions of the agent (§5.4): no floor but the revocation's ('sensitive'). */
+/** The restrictable actions of the agent (§5.4): floors on the revocation, the import of per-device values and the Knox
+ *  licence key ('sensitive'); the commands keep no floor nor default on their own keys (a floor on legacy_agent.apps or
+ *  legacy_agent.update would also stop the harvest and the automatic updates). Review F115 (decision of the owners):
+ *  the per-tenant guard setting legacyAgentCommandsSensitive (off by default) sends the human requests of install,
+ *  uninstall, agent update, restart and kiosk suspension through legacy_agent.commands_sensitive (floor 'sensitive'),
+ *  on every path (legacyAgent/commandGuard.ts); the automatic flows never read that key nor the setting. */
 export const LEGACY_AGENT_RESTRICTABLE_ACTIONS = [
   { key: 'legacy_agent.message', label: 'Show a message on Android agent devices', category: 'Android agent' },
   { key: 'legacy_agent.restart', label: 'Restart Android agent devices', category: 'Android agent' },
@@ -40,6 +47,13 @@ export const LEGACY_AGENT_RESTRICTABLE_ACTIONS = [
   { key: 'legacy_agent.revoke', label: 'Revoke an Android agent', category: 'Android agent' },
   // Lot PONT-POL (B4, D18): the import of per-device values changes the files the policies deposit, without a publication.
   { key: 'legacy_agent.device_values_import', label: 'Import per-device values of Android agent policies', category: 'Android agent' },
+  // Review F115: the kiosk left for some minutes and the policy applied again (kiosk.suspend, policy.reapply) can be
+  // restricted by a tenant (none by default: the operators' current use is unchanged).
+  { key: 'legacy_agent.policy_commands', label: 'Suspend the kiosk or apply the policy again on Android agent devices', category: 'Android agent' },
+  // Review F122: the Knox licence key of the tenant (a secret: a fresh code, never an approval that would keep it).
+  { key: 'legacy_agent.knox_key', label: 'Change or remove the Knox licence key of the Android agents', category: 'Android agent' },
+  // Review F115: used only while the tenant's guard setting legacyAgentCommandsSensitive is on (commandGuard.ts).
+  { key: LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION, label: 'Android agent commands (install, uninstall, agent update, restart, kiosk suspension) while the guard setting asks a second factor', category: 'Android agent' },
 ] as const;
 
 let registered = false;
@@ -62,11 +76,15 @@ export function registerLegacyAgentModule(): void {
   registerLegacyAgentGuardedActions();
   registerRestrictableActions(LEGACY_AGENT_RESTRICTABLE_ACTIONS, {}, {
     'legacy_agent.revoke': { level: 'sensitive' }, 'legacy_agent.device_values_import': { level: 'sensitive' },
+    'legacy_agent.knox_key': { level: 'sensitive', strictStepUp: true },
+    [LEGACY_AGENT_COMMANDS_SENSITIVE_ACTION]: { level: 'sensitive' },
   });
   // The policies of the bridge agent (lot PONT-POL): the provider of the channel agent (agent:policy per device), the
   // hourly collection of the file store, its root created at start.
   registerArtifactChannel(agentArtifactProvider);
   registerLegacyAgentMinuteStep('policy-files-gc', collectPolicyFiles);
+  // The temporary files of the APK store left by a refused or interrupted transfer (review F033), hourly as well.
+  registerLegacyAgentMinuteStep('apk-store-gc', collectApkLeftovers);
   registerBootTask('legacy-agent.policy-files', async () => {
     try { await ensureFilesDir(); } catch (err) { logger.error({ code: (err as { code?: unknown })?.code }, 'legacy agent: the policy file store cannot be created'); }
   });

@@ -27,6 +27,7 @@ import { tenantFrozen } from '../../guard/frozen';
 import { findSecretRefs, vault } from '../../vault';
 import { logger } from '../../utils/logger';
 import { readEnterprise } from '../enterprises/registry';
+import { markEnterpriseAccessLost } from '../operations/offboarding';
 import { androidGateway } from '../gateway';
 import { commandAdmitted } from '../gateway/commandStates';
 import { AndroidError } from '../gateway/errors';
@@ -44,6 +45,10 @@ export const SUBMIT_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android
 export const POLL_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.operations-poll' }) as DbActor;
 /** Pages of listOperations read by one recovery at most (100 operations a page). */
 const RECOVERY_MAX_PAGES = 20;
+/** A read of an operation refused by Google (not a 404): polled again after this delay at least (review F021)… */
+const REFUSED_POLL_MIN_MS = 15 * 60_000;
+/** …and expired only this long past the command's end. */
+const REFUSED_POLL_GRACE_MS = 24 * 3_600_000;
 
 export type SubmitResult = 'sent' | 'adopted' | 'held' | 'rejected' | 'expired' | 'cancelled' | 'skipped';
 
@@ -71,12 +76,16 @@ async function sealMoving(trx: Knex.Transaction, tenantId: number, id: string): 
 }
 
 /** Records the operation Google returned (T2): 'sent', the secret wiped. False when the command changed meanwhile. */
-async function recordOperation(tenantId: number, id: string, operation: string): Promise<boolean> {
+async function recordOperation(tenantId: number, id: string, operation: string, expiresAt: Date | string): Promise<boolean> {
   const now = new Date();
+  // Never past the end (review F021): only a refused read puts next_poll_at past expires_at, which the due query of
+  // pollAndroidOperations relies on to wait for it.
+  const first = nextPollAt(now, 0);
+  const end = new Date(expiresAt);
   return db.transaction(async (trx) => {
     const n = await patchCommand(trx, tenantId, id, {
       state: 'sent', submit_state: 'submitted', hold_reason: null, amapi_operation: operation, delivered_at: now, secret_enc: null,
-      next_poll_at: nextPollAt(now, 0), poll_count: 0, state_event_at: now, last_submit_error: null, submitted_at: now,
+      next_poll_at: Number.isFinite(end.getTime()) && first.getTime() > end.getTime() ? end : first, poll_count: 0, state_event_at: now, last_submit_error: null, submitted_at: now,
     }, { states: ['pending'], operationNull: true });
     return n === 1;
   });
@@ -174,7 +183,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
       const ops = candidates.filter((c) => !owned.has(c.name))
         .sort((a, b) => Date.parse(String(a.metadata?.createTime)) - Date.parse(String(b.metadata?.createTime)));
       if (ops.length) {
-        const adopted = await recordOperation(tenantId, id, ops[0].name);
+        const adopted = await recordOperation(tenantId, id, ops[0].name, row.expires_at);
         logger.info({ android: { command: id, tenantId, recovery: 'adopted', candidates: ops.length } }, 'android: interrupted command adopted');
         if (adopted && row.cancel_requested_at) {
           const fresh = await db.transaction((trx) => readRow(trx, tenantId, id, false));
@@ -215,7 +224,7 @@ export async function submitAndroidCommand(tenantId: number, commandId: string, 
       } finally {
         if (secret) delete body.newPassword;
       }
-      const recorded = await recordOperation(tenantId, id, operation);
+      const recorded = await recordOperation(tenantId, id, operation, row.expires_at);
       if (!recorded) return 'skipped';
       const fresh = await db.transaction((trx) => readRow(trx, tenantId, id, false));
       if (fresh?.cancel_requested_at) await cancelSent(tenantId, fresh, fresh.actor, gw);
@@ -263,24 +272,55 @@ export async function pollAndroidOperations(tenantId: number, o: { gateway?: And
       }
       return n;
     });
+    // Past its end: read at once, unless a refused read put its next poll past the end (review F021; only that branch
+    // puts next_poll_at past expires_at: the submission and the normal follow-up cap it at the end).
     const due = await commands(db).where({ 'c.tenant_id': tenantId, 't.state': 'sent' })
-      .where((q) => q.where('t.amapi_next_poll_at', '<=', now).orWhere('c.expires_at', '<=', now))
+      .where((q) => q.where('t.amapi_next_poll_at', '<=', now)
+        .orWhere((x) => x.where('c.expires_at', '<=', now).where((y) => y.whereNull('t.amapi_next_poll_at').orWhereRaw('t.amapi_next_poll_at <= c.expires_at'))))
       .orderBy('t.amapi_next_poll_at').limit(o.limit ?? 100).select(COMMAND_COLUMNS) as CommandRow[];
     if (!due.length) return out;
     const e = await readEnterprise();
-    if (!e) return out;
+    // Review F021: an enterprise in error (access lost) is not polled: its commands stay sent until it is linked
+    // again or unlinked, never expired because Google refused to read their operations; at the latest, a day past
+    // their end (the bound of the refused reads), when nothing can still be pending at Google, they expire.
+    if (!e || (e.state !== 'linked' && e.state !== 'unlinking')) {
+      const late = due.filter((r) => new Date(r.expires_at).getTime() + REFUSED_POLL_GRACE_MS <= now.getTime());
+      for (const r of late) {
+        await db.transaction(async (trx) => { if (await finalizeCommand(trx, r, { state: 'expired' })) out.expired += 1; });
+      }
+      return out;
+    }
     for (const r of due) {
       let op = null;
+      let refused = false;
       try {
         op = await gw.getOperation(e, String(r.amapi_operation));
       } catch (err) {
         if (!(err instanceof AndroidError) || err.retryable) throw err;
+        if (err.kind === 'access_lost') {
+          // A 403 of the enterprise: the enterprise in error, the commands left as they are.
+          await markEnterpriseAccessLost(tenantId);
+          return out;
+        }
+        refused = true;
       }
       out.polled += 1;
       const final = finalStateOf(op, { cancelRequested: !!r.cancel_requested_at });
       const expired = new Date(r.expires_at).getTime() <= now.getTime();
       await db.transaction(async (trx) => {
-        if (final) {
+        if (refused) {
+          // Google refused the read (400, ownership…): the operation may still run on the device (a wipe, the lost
+          // mode). Polled again later; expired only a day past its end, when nothing can still be pending at Google.
+          if (new Date(r.expires_at).getTime() + REFUSED_POLL_GRACE_MS <= now.getTime()) {
+            if (await finalizeCommand(trx, r, { state: 'expired' })) out.expired += 1;
+            return;
+          }
+          const count = Number(r.poll_count) + 1;
+          const next = nextPollAt(new Date(r.delivered_at ?? now), count);
+          // At least a quarter of an hour, and past the end if need be (the due query then waits for next_poll_at).
+          const floor = now.getTime() + REFUSED_POLL_MIN_MS;
+          await patchCommand(trx, tenantId, r.id, { poll_count: count, next_poll_at: next.getTime() > floor ? next : new Date(floor) }, { states: ['sent'] });
+        } else if (final) {
           if (await finalizeCommand(trx, r, { state: final.state, errorCode: final.errorCode })) out.finished += 1;
         } else if (expired || op === null) {
           // past its end without execution (or vanished at Google): expired [NV: form of an expired operation, AN-J]

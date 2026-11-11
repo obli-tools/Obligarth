@@ -3,6 +3,7 @@ import { getSocket } from '../socket/socketClient';
 import { bindSocketListeners } from '../socket/socketListeners';
 import { useAuthStore } from '../store/authStore';
 import { useLiveAlertsStore } from '../store/liveAlertsStore';
+import { useSocketStore } from '../store/socketStore';
 import { SocketEvents } from '@obligarth/shared';
 import type { LiveAlert, LiveAlertsResolvedEvent } from '@obligarth/shared';
 
@@ -14,6 +15,9 @@ import type { LiveAlert, LiveAlertsResolvedEvent } from '@obligarth/shared';
  */
 export function useSocket() {
   const { user } = useAuthStore();
+  // A tenant switch replaces the socket instance: the listeners follow the
+  // current one (the old one is disconnected and receives nothing).
+  const generation = useSocketStore((s) => s.generation);
 
   useEffect(() => {
     if (!user) return;
@@ -60,5 +64,5 @@ export function useSocket() {
       socket.off('connect', onConnect);
       unbindRegistered();
     };
-  }, [user]);
+  }, [user, generation]);
 }

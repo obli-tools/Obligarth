@@ -62,6 +62,22 @@ export async function takeTokens(settings: LimiterSettings, key: string | null, 
   androidMetrics.rateWait(Date.now() - started);
 }
 
+/**
+ * Deletes the key buckets not touched for an hour (review F027): a key bucket refills in KEY_CAPACITY / KEY_RATE_PER_S
+ * seconds, so an idle one is full, the same as an absent row (tryTake creates it full again). Without this, every
+ * token, device, policy and package left a row for ever. The project bucket is kept. Returns the rows deleted.
+ */
+export async function purgeIdleBuckets(): Promise<number> {
+  return db('android_rate_buckets').whereNot('bucket', 'project')
+    .where('refreshed_at', '<', db.raw("clock_timestamp() - interval '1 hour'")).delete();
+}
+
+/** Gives back one token taken from `bucket` (the work it paid for did not happen), up to its capacity. */
+export async function giveBack(bucket: string, capacity: number): Promise<void> {
+  await db('android_rate_buckets').where({ bucket })
+    .update({ tokens: db.raw('LEAST(?::double precision, tokens + 1)', [capacity]) });
+}
+
 /** The project bucket's level, for the health view: tokens left and capacity. */
 export async function projectBudget(settings: LimiterSettings): Promise<{ tokens: number; capacity: number }> {
   const capacity = settings.projectPer100s;

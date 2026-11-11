@@ -1,5 +1,6 @@
 import type { NotificationPlugin, NotificationPayload } from '../types';
 import { statusIcon } from '../statusIcons';
+import { guardedPost } from '../../utils/ssrfGuard';
 
 export const ntfyPlugin: NotificationPlugin = {
   type: 'ntfy',
@@ -26,12 +27,8 @@ export const ntfyPlugin: NotificationPlugin = {
 
     const body = `${payload.oldStatus} → ${payload.newStatus}${payload.message ? `\n${payload.message}` : ''}`;
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers,
-      body,
-      signal: AbortSignal.timeout(10000),
-    });
+    // Self-hosted servers may be on the local network ('lan'): loopback and link-local refused, no redirect.
+    const res = await guardedPost(url, { headers, body }, 'lan');
     if (!res.ok) throw new Error(`ntfy returned ${res.status}`);
   },
 

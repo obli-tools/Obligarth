@@ -51,6 +51,13 @@ export function contentSha(content: unknown): string {
   return createHash('sha256').update(canonicalJson(content)).digest('hex');
 }
 
+/** Optimistic concurrency of the drafts (review F070): did the stored content change since the editor read the
+ *  digest `expected`? No digest given: never (the clients that do not send one keep the last-writer rule). Pure. */
+export function draftChangedSince(stored: unknown, expected: string | undefined | null): boolean {
+  if (expected === undefined || expected === null) return false;
+  return String(stored ?? '').trim().toLowerCase() !== expected.trim().toLowerCase();
+}
+
 const iso = (d: unknown): string | null => (d ? new Date(d as string).toISOString() : null);
 const parse = <T>(v: unknown): T => (typeof v === 'string' ? JSON.parse(v) as T : v as T);
 
@@ -400,9 +407,12 @@ export const policyService = {
    * they are), references checked in the tenant, secrets typed in ({"$secretValue"}) moved to the vault
    * (vault.createTenantSecret, purposes policy.*) and replaced by their reference before any storage, in one
    * transaction. A version other than a draft answers 409.
+   * `opts.expectedContentSha256` (review F070, optimistic concurrency): the contentSha256 of the version the editor
+   * read; compared under the lock of the version's row, a draft saved meanwhile by someone else answers 409
+   * policyVersionChanged and nothing is written. Absent: no comparison (the clients that do not send it).
    */
   async saveDraft(tenantId: number, policyId: number, version: number, rawContent: unknown, changeNote: unknown,
-    actor: PolicyActor): Promise<PolicyVersion> {
+    actor: PolicyActor, opts: { expectedContentSha256?: string } = {}): Promise<PolicyVersion> {
     await policyRow(db, tenantId, policyId);
     await settleOrphanedPending(db, tenantId, policyId);
     const note = typeof changeNote === 'string' && changeNote.trim() ? changeNote.trim().slice(0, 2000) : null;
@@ -412,6 +422,9 @@ export const policyService = {
       if (policy.state === 'archived') throw new AppError(409, 'An archived policy does not change', 'policyArchived');
       const row = await versionRow(trx, tenantId, policyId, version, true);
       if (row.state !== 'draft') throw new AppError(409, 'Only a draft is edited', 'policyVersionNotDraft', { state: row.state });
+      if (draftChangedSince(row.content_sha256, opts.expectedContentSha256)) {
+        throw new AppError(409, 'The draft was saved elsewhere since it was read: read it again', 'policyVersionChanged');
+      }
       // Validated against the draft as it is stored (locked): the raw profiles it holds are kept as they are (the
       // editor sends back what it was shown of them).
       const stored = parse<PolicyContentV1>(row.content);

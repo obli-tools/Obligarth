@@ -15,11 +15,11 @@ import {
 import { deviceViewNotFound, deviceViewService, mergeViewFilters, parseViewRef } from '../views/deviceViewService';
 import { hasGlobalView, parseRequestDeviceId, resolveRequestDevice } from '../../services/deviceScope.service';
 import { permissionService } from '../../services/permission.service';
-import { launchChromium } from '../../utils/chromium';
+import { checkPdfRows, inPdfSlot, renderHtmlPdf } from './pdfExportLimits';
 import { listEpisodes } from '../registry/episodes';
 import { assignEndUser } from '../registry/endUsers';
 import { changeOwnership } from '../registry/ownership';
-import { changeDevicesGroup } from '../policies/deviceMove';
+import { changeDevicesGroup, moveScopeOf } from '../policies/deviceMove';
 import { deviceAppIcon, deviceApps, deviceCertificates, deviceProfiles } from '../inventory/views';
 import { retentionDays } from '../../privacy/retention';
 import { lostModeLocationAllowed } from '../../privacy/profiles';
@@ -190,32 +190,38 @@ router.get('/devices/export', requireTenantCapability('reports'), globalViewScop
   try {
     const { filters, format } = await listFiltersOf(req);
     const fmt = format ?? 'csv';
-    const devices = await deviceService.exportDevices(req.tenantId!, filters, { globalView: hasGlobalView(req) });
-    await sendExport(res, fmt, devices);
+    const run = async (): Promise<void> => {
+      const devices = await deviceService.exportDevices(req.tenantId!, filters, { globalView: hasGlobalView(req) });
+      if (fmt === 'pdf') checkPdfRows(devices.length);
+      await sendExport(res, fmt, devices);
+    };
+    await (fmt === 'pdf' ? inPdfSlot(run) : run());
   } catch (err) { next(err); }
 });
 
 // GET /api/mdm/fleet/summary, /fleet/timeseries?days=14, /fleet/hourly?hours=24 (dashboard)
 router.get('/fleet/summary', globalViewScope('console.devices'), async (req, res, next) => {
   try {
-    res.json({ data: await deviceService.getFleetSummary(req.tenantId!, { globalView: hasGlobalView(req) }) });
+    // A member sees the counters of the devices of their teams only (F007/F014), no delta against the tenant's snapshot.
+    res.json({ data: await deviceService.getFleetSummary(req.tenantId!, { globalView: hasGlobalView(req), visibleIds: await visibleIdsOf(req) }) });
   } catch (err) { next(err); }
 });
 router.get('/fleet/timeseries', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const days = Math.min(90, Math.max(1, parseInt(String(req.query.days ?? '14'), 10) || 14));
-    res.json({ data: await deviceService.getFleetTimeseries(req.tenantId!, days, { globalView: hasGlobalView(req) }) });
+    res.json({ data: await deviceService.getFleetTimeseries(req.tenantId!, days, { globalView: hasGlobalView(req) }, await visibleIdsOf(req)) });
   } catch (err) { next(err); }
 });
 router.get('/fleet/hourly', globalViewScope('console.devices'), async (req, res, next) => {
   try {
     const hours = Math.min(168, Math.max(2, parseInt(String(req.query.hours ?? '24'), 10) || 24));
-    res.json({ data: await deviceService.getFleetHourlySeries(req.tenantId!, hours, { globalView: hasGlobalView(req) }) });
+    res.json({ data: await deviceService.getFleetHourlySeries(req.tenantId!, hours, { globalView: hasGlobalView(req) }, await visibleIdsOf(req)) });
   } catch (err) { next(err); }
 });
 
 // POST /api/mdm/devices/batch/group[?dryRun=true] — { deviceIds, groupId }: devices of the session's tenant only (an
-// id of another tenant, or unknown: 404, nothing moved); write on the target group. What the devices inherit follows
+// id of another tenant, or unknown: 404, nothing moved); write on every device (a device out of the caller's teams:
+// 404, read only: 403) and on the target group. What the devices inherit follows
 // their group (S12; decision of the owners of 15/10/2026): previewed, and guarded like a change of assignments (a
 // step-up when a configuration changes, a second approver beyond the thresholds of DM23: 202), with the restriction
 // device.bulk_group_change beyond one device (mdm/policies/deviceMove.ts).
@@ -227,6 +233,13 @@ router.post('/devices/batch/group', requireTenantCapability('devices.manage'), a
     if (parsed.some((n) => n === null) || ids.length === 0) throw new AppError(404, 'No matching devices in this tenant');
     const inTenant = (await db('devices').whereIn('id', ids).andWhere({ tenant_id: req.tenantId! }).pluck('id') as number[]).map(Number);
     if (inTenant.length !== ids.length) throw new AppError(404, 'No matching devices in this tenant');
+    if (req.session.role !== 'admin') {
+      // Write access on every device moved, as POST /devices/:id/group (resolveDevice(true)) and the MCP tool: a
+      // device out of the caller's teams answers like an unknown one (404), a read-only one 403; nothing moves.
+      const scope = await moveScopeOf(req.session.userId!, ids);
+      if (scope.missing.length || scope.unseen.length) throw new AppError(404, 'No matching devices in this tenant');
+      if (scope.readOnly.length) throw new AppError(403, 'Insufficient permissions');
+    }
     if (b.groupId !== null && !(await db('device_groups').where({ id: b.groupId, tenant_id: req.tenantId! }).first('id'))) {
       throw new AppError(404, 'Group not found');
     }
@@ -606,17 +619,11 @@ th { background: #1f2937; color: white; font-weight: 600; } tr:nth-child(even) t
 <table><thead><tr>${pdfColumns.map((c) => `<th>${esc(c.header)}</th>`).join('')}</tr></thead><tbody>
 ${rows.map((r) => `<tr>${pdfColumns.map((c) => `<td>${esc(String((r as Record<string, unknown>)[c.key] ?? ''))}</td>`).join('')}</tr>`).join('')}
 </tbody></table></body></html>`;
-  const browser = await launchChromium();
-  try {
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'domcontentloaded' });
-    const pdf = await page.pdf({ format: 'A4', landscape: true, margin: { top: '15mm', bottom: '15mm', left: '10mm', right: '10mm' }, printBackground: true });
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
-    res.send(pdf);
-  } finally {
-    await browser.close();
-  }
+  // In the slot the route took (inPdfSlot), bounded in time, the browser always closed (pdfExportLimits.ts).
+  const pdf = await renderHtmlPdf(html);
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${baseName}.pdf"`);
+  res.send(pdf);
 }
 
 export default router;

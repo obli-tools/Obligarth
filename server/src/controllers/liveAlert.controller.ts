@@ -1,7 +1,33 @@
 import type { Request, Response, NextFunction } from 'express';
 import { isPlatformOnlyAlertKind, liveAlertService } from '../services/liveAlert.service';
+import { permissionService } from '../services/permission.service';
+import { auditService } from '../services/audit.service';
+import { registerAuditActions } from '../audit';
+import { clientIp } from '../utils/clientIp';
 import { db } from '../db';
 import { asMember, asTenant, userActor } from '../db/context';
+
+// The alerts of a tenant are rows shared by all its members: deleting one
+// takes it out of every member's bell and of the phones. A deletion is
+// therefore a management act (capability `settings` of the alert's tenant, or
+// a platform administrator) and is journaled; reading the list and marking
+// alerts read stay open to every member.
+export const LIVE_ALERT_DELETE_CAPABILITY = 'settings' as const;
+
+registerAuditActions([
+  { name: 'live_alert.deleted', criticality: 'standard', label: 'Live alert deleted' },
+  { name: 'live_alert.cleared', criticality: 'standard', label: 'Live alerts of the tenant cleared' },
+]);
+
+/** May this user delete the alerts of this tenant (in the tenant's context)? */
+async function mayDeleteAlerts(req: Request, tenantId: number): Promise<boolean> {
+  if (req.session.role === 'admin') return true;
+  return permissionService.userHasTenantCapability(Number(req.session.userId), tenantId, LIVE_ALERT_DELETE_CAPABILITY);
+}
+
+function forbidden(res: Response): void {
+  res.status(403).json({ success: false, error: 'Insufficient permissions' });
+}
 
 /** An alert of one of the user's tenants (read in the context 'member'),
  *  or undefined; an alert of the platform for its administrators only. */
@@ -41,9 +67,11 @@ export async function getAllTenantAlerts(req: Request, res: Response, next: Next
       .select('tenants.id', 'tenants.name') as { id: number; name: string }[];
 
     const tenantIds = tenants.map((t) => t.id);
+    // The platform's alerts for its administrators, as in the current tenant's list (getAlerts).
+    const opts = { platformAdmin: req.session.role === 'admin' };
     const [alerts, activeIds] = await Promise.all([
-      liveAlertService.getForTenants(tenantIds, 200),
-      liveAlertService.getActiveIds(tenantIds),
+      liveAlertService.getForTenants(tenantIds, 200, opts),
+      liveAlertService.getActiveIds(tenantIds, opts),
     ]);
     res.json({ alerts, tenants, activeIds });
   } catch (err) { next(err); }
@@ -79,7 +107,17 @@ export async function deleteAlert(req: Request, res: Response, next: NextFunctio
     const alert = Number.isSafeInteger(id) && id > 0 ? await alertOfUser(userId, id, req.session.role === 'admin') : undefined;
     if (!alert) { res.status(404).json({ error: 'Alert not found' }); return; }
 
-    await asTenant(Number(alert.tenant_id), userActor(userId), () => liveAlertService.deleteAlert(id, Number(alert.tenant_id)));
+    const tenantId = Number(alert.tenant_id);
+    const done = await asTenant(tenantId, userActor(userId), async () => {
+      if (!(await mayDeleteAlerts(req, tenantId))) return false;
+      await liveAlertService.deleteAlert(id, tenantId);
+      return true;
+    });
+    if (!done) { forbidden(res); return; }
+    await auditService.log({
+      tenantId, userId, action: 'live_alert.deleted', resourceType: 'live_alert', resourcePath: String(id),
+      ipAddress: clientIp(req) || undefined,
+    });
     res.json({ ok: true });
   } catch (err) { next(err); }
 }
@@ -87,7 +125,13 @@ export async function deleteAlert(req: Request, res: Response, next: NextFunctio
 /** DELETE /api/live-alerts — clear all for current tenant */
 export async function clearAll(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    await liveAlertService.clearAll(req.tenantId, { platformAdmin: req.session.role === 'admin' });
+    const tenantId = Number(req.tenantId);
+    if (!(await mayDeleteAlerts(req, tenantId))) { forbidden(res); return; }
+    const count = await liveAlertService.clearAll(tenantId, { platformAdmin: req.session.role === 'admin' });
+    await auditService.log({
+      tenantId, userId: Number(req.session.userId), action: 'live_alert.cleared', resourceType: 'tenant', resourcePath: String(tenantId),
+      details: { count }, ipAddress: clientIp(req) || undefined,
+    });
     res.json({ ok: true });
   } catch (err) { next(err); }
 }

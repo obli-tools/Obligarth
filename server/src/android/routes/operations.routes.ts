@@ -6,7 +6,9 @@
 //   POST /enterprise/unlink/confirm-external  the enterprise in error confirmed unlinked from outside (step-up)
 //   POST /enterprise/recheck                  an enterprise in error read again at Google (linked again if reachable)
 //   GET  /enterprise/offboarding              the offboarding (steps, devices left, the client's guide once done)
-//   POST /reconcile                           an extra reconciliation of the tenant (picked up within the minute)
+//   GET  /reconcile                           the mass disappearance held by the last pass, if any (review F023)
+//   POST /reconcile                           an extra reconciliation of the tenant (picked up within the minute);
+//                                             { confirmMissing: n } (step-up) releases a held disappearance of n devices
 //   GET  /devices/presumed-gone               the devices presumed gone (their forget: guarded action android.device_forget,
 //                                             POST /api/guard/actions, never a route of this module)
 //   GET  /deadlines                           the deadlines of the tenant (long tokens, backup administrators)
@@ -27,7 +29,7 @@ import {
   confirmExternalUnlink, INTEGRATIONS_CAPABILITY, OffboardingError, readOffboarding, recheckEnterpriseAccess, requestForceUnlink, requestUnlink,
 } from '../operations/offboarding';
 import { readQuotaView } from '../operations/quota';
-import { requestReconcile } from '../operations/reconcile';
+import { readReconcileHold, requestReconcile } from '../operations/reconcile';
 import { masterPlatformAdmin } from './admin.routes';
 import { toRouteError } from './enterprise.routes';
 
@@ -88,9 +90,27 @@ export function createAndroidOperationsRouter(): Router {
     res.json({ success: true, data: await readOffboarding(tenantId, userId) });
   }));
 
-  router.post('/reconcile', capability, wrap(async (req, res) => {
+  // Review F023: { confirmMissing: n } releases a held mass disappearance of exactly n devices (GET /reconcile shows
+  // it); it takes the devices out of management, hence a fresh second factor. Without it, a held one stays held.
+  router.get('/reconcile', capability, wrap(async (req, res) => {
     const { tenantId, userId } = ids(req);
-    const ok = await requestReconcile(tenantId, 'operator', { type: 'user', userId });
+    res.json({ success: true, data: { held: await readReconcileHold(tenantId, { type: 'user', userId }) } });
+  }));
+
+  router.post('/reconcile', capability, wrap(async (req, res) => {
+    const raw = (req.body ?? {}).confirmMissing;
+    if (raw !== undefined && raw !== null && !(Number.isInteger(raw) && raw > 0)) {
+      throw new AppError(400, 'confirmMissing must be a positive integer', 'invalidConfirmMissing');
+    }
+    const confirmMissing = typeof raw === 'number' ? raw : undefined;
+    if (confirmMissing !== undefined && !(await stepUp(req, res, 'android.reconcile_confirm_missing'))) return;
+    const { tenantId, userId } = ids(req);
+    if (confirmMissing !== undefined) {
+      // Journaled before the request: the confirmation takes devices out of management.
+      await audit.append({ tenantId, action: 'android.mass_missing_confirmed', target: { type: 'tenant', id: String(tenantId) }, details: { count: confirmMissing } },
+        await audit.fromRequest(req, tenantId));
+    }
+    const ok = await requestReconcile(tenantId, 'operator', { type: 'user', userId }, { confirmMissing });
     if (!ok) throw new AppError(409, 'No linked Android enterprise', 'androidNotLinked');
     res.status(202).json({ success: true, data: { requested: true } });
   }));

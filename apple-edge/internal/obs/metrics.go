@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Registry holds metrics and renders them in the Prometheus text format.
@@ -81,16 +82,57 @@ type series struct {
 
 func (v *vec) name() string { return v.metricName }
 
+// Bounds of the label values (defence in depth: a label fed from a request
+// must never let a caller grow the registry without limit).
+const (
+	// MaxSeriesPerMetric is the number of series a metric keeps; any new
+	// combination of label values beyond it is counted in one series whose
+	// labels are all OverflowLabel.
+	MaxSeriesPerMetric = 10000
+
+	// MaxLabelValueLen bounds a label value (bytes, cut on a rune boundary).
+	MaxLabelValueLen = 128
+
+	// OverflowLabel is the label value of the overflow series.
+	OverflowLabel = "overflow"
+)
+
+// truncateLabel cuts s to MaxLabelValueLen bytes without splitting a rune.
+func truncateLabel(s string) string {
+	if len(s) <= MaxLabelValueLen {
+		return s
+	}
+	n := MaxLabelValueLen
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
 func (v *vec) get(lv []string) *series {
 	if len(lv) != len(v.labels) {
 		panic(fmt.Sprintf("metric %s: %d label values for %d labels", v.metricName, len(lv), len(v.labels)))
 	}
-	k := strings.Join(lv, "\xff")
-	s := v.series[k]
-	if s == nil {
-		s = &series{values: append([]string(nil), lv...)}
-		v.series[k] = s
+	values := make([]string, len(lv))
+	for i, x := range lv {
+		values[i] = truncateLabel(x)
 	}
+	k := strings.Join(values, "\xff")
+	s := v.series[k]
+	if s != nil {
+		return s
+	}
+	if len(v.series) >= MaxSeriesPerMetric {
+		for i := range values {
+			values[i] = OverflowLabel
+		}
+		k = strings.Join(values, "\xff")
+		if s = v.series[k]; s != nil {
+			return s
+		}
+	}
+	s = &series{values: values}
+	v.series[k] = s
 	return s
 }
 

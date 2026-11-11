@@ -5,6 +5,7 @@ import { db } from '../db';
 import { AppError } from '../middleware/errorHandler';
 import { permissionService } from '../services/permission.service';
 import type { GateOutcome, RestrictionGate } from '../mcp/gate';
+import { commandRestrictionKey } from './commandGuard';
 import { commandSpecOrNull, legacyAgentCommands, POLICY_COMMAND_TYPES, type EnqueueOutcome } from './commands';
 import { agentsQuery, commandView, consoleCommand, DEVICE_COLUMNS, deviceView, packageView, releaseView } from './routes';
 
@@ -149,9 +150,11 @@ export async function requestCommand(caller: ConsoleCaller, r: CommandRequest, g
     && !(await permissionService.userHasTenantCapability(caller.userId, tenantId, 'mdm.policies.manage'))) {
     throw new AppError(403, "Capability 'mdm.policies.manage' not permitted for your team", 'capabilityMissing');
   }
-  if (spec.restrictionKey) {
+  // Review F115: the type's key, or legacy_agent.commands_sensitive when the tenant's guard setting is on (as routes.ts).
+  const restrictionKey = await commandRestrictionKey(tenantId, spec, ids);
+  if (restrictionKey) {
     const g = await gate.check({
-      tenantId, actionKey: spec.restrictionKey, deviceIds: ids, approvalRequestType: 'legacy_agent_action',
+      tenantId, actionKey: restrictionKey, deviceIds: ids, approvalRequestType: 'legacy_agent_action',
       approvalDescription: ids.length === 1 ? `${spec.type} on 1 Android agent device` : `${spec.type} on ${ids.length} Android agent device(s)`,
       approvalPayload: { action: 'legacy_agent.command', type: spec.type, deviceIds: ids, params, reason: r.reason ?? null, ticket: r.ticket ?? null },
     });
