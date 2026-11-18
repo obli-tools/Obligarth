@@ -8,6 +8,7 @@
 // =============================================================================
 
 import type { JsonValue } from './policyContent';
+import type { LegacyAgentCommandState } from './legacyAgent';
 
 /** The first agent that reads a policy (1.3.0): an older one never gets the key `policy` of its configuration. */
 export const LEGACY_AGENT_POLICY_MIN_VERSION_CODE = 10300;
@@ -53,11 +54,13 @@ export const LEGACY_AGENT_POLICY_LIMITS = {
   /** All the rendered managed configurations of one device (the UTF-8 bytes of the JSON of their values): with the inline
    *  files (192 KiB, 256 KiB once in base64) the body stays below compiledBodyBytes. */
   appConfigTotalBytes: 64 * 1024,
+  /** The required apps of a section (server-side only, installed by the job legacy-agent.required-apps). */
+  requiredApps: 32,
 } as const;
 
 // ── Setting keys (one per inheritable unit) ──────────────────────────────────
 
-export type AgentKeyFamily = 'file' | 'wifi' | 'wifi.remove' | 'kiosk' | 'dpm' | 'knox' | 'cert' | 'appconfig';
+export type AgentKeyFamily = 'file' | 'wifi' | 'wifi.remove' | 'kiosk' | 'dpm' | 'knox' | 'cert' | 'appconfig' | 'requiredApp';
 
 export const agentFileKey = (id: string): string => `agent:file[${id}]`;
 export const agentWifiKey = (ssid: string): string => `agent:wifi[${ssid}]`;
@@ -70,6 +73,9 @@ export const AGENT_WIPE_KEY = 'agent:dpm.maxFailedPasswordsForWipe';
 /** The prefix of the managed configuration of one app (§6 ter, contract with the agent: agent:appconfig:<id>). */
 export const AGENT_APPCONFIG_KEY_PREFIX = 'agent:appconfig:';
 export const agentAppConfigKey = (id: string): string => `${AGENT_APPCONFIG_KEY_PREFIX}${id}`;
+/** The prefix of a required app (agent:requiredApp[<package>]): resolved like the others, never sent to the agent. */
+export const AGENT_REQUIRED_APP_KEY_PREFIX = 'agent:requiredApp[';
+export const agentRequiredAppKey = (pkg: string): string => `agent:requiredApp[${pkg}]`;
 
 /** The family and the instance (or field) of an agent setting key; null when it is not one. */
 export function parseAgentKey(key: string): { family: AgentKeyFamily; instance?: string; field?: string } | null {
@@ -78,12 +84,22 @@ export function parseAgentKey(key: string): { family: AgentKeyFamily; instance?:
   if (rest === 'kiosk') return { family: 'kiosk' };
   const app = /^appconfig:(.+)$/s.exec(rest);
   if (app) return { family: 'appconfig', instance: app[1] };
-  const inst = /^(file|wifi\.remove|wifi|cert)\[(.+)\]$/s.exec(rest);
+  const inst = /^(file|wifi\.remove|wifi|cert|requiredApp)\[(.+)\]$/s.exec(rest);
   if (inst) return { family: inst[1] as AgentKeyFamily, instance: inst[2] };
   const fld = /^(dpm|knox)\.([A-Za-z][A-Za-z0-9]{0,63})$/.exec(rest);
   if (fld) return { family: fld[1] as AgentKeyFamily, field: fld[2] };
   return null;
 }
+
+/**
+ * The families resolved like the others (inheritance, priorities, exclusions, impact preview) but never compiled into
+ * agent:policy: the server acts on them itself (the required apps, installed by the job legacy-agent.required-apps).
+ */
+export const AGENT_SERVER_ONLY_FAMILIES: readonly AgentKeyFamily[] = ['requiredApp'];
+export const isServerOnlyAgentKey = (key: string): boolean => {
+  const p = parseAgentKey(key);
+  return !!p && AGENT_SERVER_ONLY_FAMILIES.includes(p.family);
+};
 
 // ── Packages ─────────────────────────────────────────────────────────────────
 
@@ -366,6 +382,18 @@ export interface AgentAppConfigEntry { key: string; template: string }
  *  DevicePolicyManager.setApplicationRestrictions, each template rendered per device by the server. */
 export interface AgentAppConfigItem { id: string; package: string; entries: AgentAppConfigEntry[] }
 
+/** How a required app is enforced: installed when absent, or also when its versionCode is below the package's. */
+export const AGENT_REQUIRED_APP_MODES = ['install', 'minVersion'] as const;
+export type AgentRequiredAppMode = typeof AGENT_REQUIRED_APP_MODES[number];
+
+/** A required app: a package of the tenant's APK store (legacy_agent_packages, confirmed, F028) and its mode. */
+export interface AgentRequiredApp {
+  packageName: string;
+  /** The uuid of the legacy_agent_packages row (lower case). */
+  packageId: string;
+  mode: AgentRequiredAppMode;
+}
+
 export interface LegacyAgentPolicySection {
   files?: AgentFileItem[];
   wifi?: AgentWifiItem[];
@@ -380,6 +408,9 @@ export interface LegacyAgentPolicySection {
   /** Lot BANC (D16): the explicit confirmation a restriction that cuts ADB needs (Knox usbDebugging=false): the device
    *  can no longer go back to a bench station without a bench window or a reset. */
   confirmBenchLockout?: true;
+  /** The required apps: server-side only (agent:requiredApp[<package>]), never sent to the agent; the job
+   *  legacy-agent.required-apps queues app.install where they are missing. */
+  requiredApps?: AgentRequiredApp[];
 }
 
 /** The purposes of the vault secrets of the section. */
@@ -482,4 +513,59 @@ export function agentKeyLabelParts(key: string): { family: AgentKeyFamily | 'pol
   const k = parseAgentKey(key);
   if (!k) return { family: null, name: key };
   return { family: k.family, name: k.instance ?? k.field ?? '' };
+}
+
+// ── Required apps: the console views (server-side state, computed on read) ──
+
+export const LEGACY_AGENT_REQUIRED_APP_STATES = ['installed', 'queued', 'awaiting_inventory', 'due', 'backoff', 'failed', 'skipped'] as const;
+export type LegacyAgentRequiredAppState = typeof LEGACY_AGENT_REQUIRED_APP_STATES[number];
+export const LEGACY_AGENT_REQUIRED_APP_REASONS = ['package_unavailable', 'package_not_confirmed', 'no_inventory', 'inventory_limited', 'frozen',
+  'restricted', 'admin_inactive', 'no_contact', 'low_storage', 'not_applicable', 'stale_inventory', 'storage_unknown', 'package_failing'] as const;
+export type LegacyAgentRequiredAppReason = typeof LEGACY_AGENT_REQUIRED_APP_REASONS[number];
+
+/** What of the tenant sets every required app aside (shown at the head of the editor's tab): the privacy profile that
+ *  limits the inventory to the managed apps, the restrictions matrix on legacy_agent.apps. */
+export interface LegacyAgentRequiredAppsTenantView {
+  appsLimited: boolean;
+  restriction: { level: 'none' | 'sensitive' | 'restricted'; scope: 'all' | 'partial' | null };
+}
+
+/** A package of the tenant's store a policy author can choose. */
+export interface LegacyAgentRequiredAppPackageView {
+  id: string;
+  packageName: string;
+  versionCode: string;
+  versionName: string | null;
+  label: string | null;
+  sizeBytes: number;
+  createdAt: string;
+  confirmed: boolean;
+}
+
+/** The state of one required app on one device. */
+export interface LegacyAgentRequiredAppView {
+  packageName: string;
+  mode: AgentRequiredAppMode;
+  packageId: string;
+  package: { versionCode: string; versionName: string | null; label: string | null; sizeBytes: number; confirmed: boolean } | null;
+  policy: { id: number; name: string; version: number } | null;
+  installed: { versionCode: string | null; versionName: string | null } | null;
+  state: LegacyAgentRequiredAppState;
+  reason: LegacyAgentRequiredAppReason | null;
+  /** The unavailable reason of the resolution (state skipped, reason not_applicable). */
+  detail: string | null;
+  /** The failed installs of the job for this package. */
+  attempts: number;
+  maxAttempts: number;
+  lastAttempt: { commandId: string; state: LegacyAgentCommandState; resultCode: string | null; at: string } | null;
+  openCommandId: string | null;
+  nextAttemptAt: string | null;
+}
+
+export interface LegacyAgentRequiredAppsView {
+  deviceId: number;
+  evaluatedAt: string;
+  /** The installs the job queues at most per tenant and per window. */
+  perRunLimit: number;
+  items: LegacyAgentRequiredAppView[];
 }

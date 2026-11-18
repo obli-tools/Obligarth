@@ -19,7 +19,7 @@ import { withConfigurationLock } from './configLock';
 import { requestTenantResolution } from './triggers';
 import { androidContributions } from '../android/contributions';
 import { legacyAgentContributions } from '../legacyAgent/contributions';
-import { legacyAgentNodeAt, type LegacyAgentStoreRef } from '../legacyAgent/validate';
+import { legacyAgentNodeAt, type LegacyAgentPackageRef, type LegacyAgentStoreRef } from '../legacyAgent/validate';
 import { FAILED_PASSWORDS_FOR_WIPE } from '../android/overlay';
 import type { AndroidValidationOptions } from '../android/validate';
 import {
@@ -266,6 +266,27 @@ export async function missingFiles(q: Knex | Knex.Transaction, tenantId: number,
   return out;
 }
 
+/**
+ * The packages of the required apps of the section of the bridge agent, against the tenant's APK store
+ * (legacy_agent_packages): no row or another package name (package_not_found), a package still to confirm
+ * (package_not_confirmed, F028: no app.install of it before). In the caller's transaction; the job revalidates both
+ * before each install (requiredApps.ts).
+ */
+export async function missingPackages(q: Knex | Knex.Transaction, tenantId: number, refs: LegacyAgentPackageRef[]): Promise<PolicyValidationIssue[]> {
+  if (!refs.length) return [];
+  const ids = [...new Set(refs.map((r) => r.packageId))];
+  const rows = await q('legacy_agent_packages').where({ tenant_id: tenantId }).whereIn('id', ids).select('id', 'package_name', 'confirmed_at') as
+    Array<{ id: string; package_name: string; confirmed_at: Date | string | null }>;
+  const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r]));
+  const out: PolicyValidationIssue[] = [];
+  for (const r of refs) {
+    const row = byId.get(r.packageId);
+    if (!row || row.package_name !== r.packageName) out.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: r.path, code: 'package_not_found' });
+    else if (row.confirmed_at === null || row.confirmed_at === undefined) out.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: r.path, code: 'package_not_confirmed' });
+  }
+  return out;
+}
+
 /** The guards of the Android validation of a tenant (android-amapi §22.4; lot AN-A2): the domain of its live
  *  enterprise (FRP administrators) and the floor of maximumFailedPasswordsForWipe (the default floor until the tenant
  *  setting androidMinFailedPasswordsForWipe exists). In the tenant's context of the caller. */
@@ -281,7 +302,8 @@ export async function validateForSubmission(q: Knex | Knex.Transaction, tenantId
     legacyAgentTenantBound: boolean }> {
   const v = validatePolicyContent(content, { catalog: appleCatalog(), policyUuid, allowSecretValues: false, allowRawProfiles: true,
     android: await androidValidationOptions(q, tenantId) });
-  const issues = [...v.issues, ...(await missingSecrets(q, tenantId, v.secretRefs)), ...(await missingFiles(q, tenantId, v.legacyAgentStoreRefs))];
+  const issues = [...v.issues, ...(await missingSecrets(q, tenantId, v.secretRefs)), ...(await missingFiles(q, tenantId, v.legacyAgentStoreRefs)),
+    ...(await missingPackages(q, tenantId, v.legacyAgentPackageRefs))];
   if (!sectionsOf(v.content).length && !issues.length) issues.push({ itemId: null, path: 'sections.apple.items', code: 'invalid_content' });
   return { issues, content: v.content, androidWipeRules: v.androidWipeRules, legacyAgentWipeRules: v.legacyAgentWipeRules,
     legacyAgentTenantBound: v.legacyAgentTenantBound };
@@ -432,7 +454,8 @@ export const policyService = {
         catalog: appleCatalog(), policyUuid: policy.uuid, allowSecretValues: true, keptRawProfiles: rawProfilesOf(stored),
         android: await androidValidationOptions(trx, tenantId),
       });
-      const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs)), ...(await missingFiles(trx, tenantId, v.legacyAgentStoreRefs))];
+      const issues = [...v.issues, ...(await missingSecrets(trx, tenantId, v.secretRefs)), ...(await missingFiles(trx, tenantId, v.legacyAgentStoreRefs)),
+        ...(await missingPackages(trx, tenantId, v.legacyAgentPackageRefs))];
       if (issues.length || !v.content) validationFailed(issues);
       const sites: Array<(typeof v.secretValues)[number] & { id: string }> = [];
       for (const s of v.secretValues) {

@@ -4,6 +4,7 @@ import type {
   LegacyAgentInstanceSettings, LegacyAgentNameImportFormat, LegacyAgentNameImportResult,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
   LegacyAgentDeviceValuesImportResult, LegacyAgentDeviceValuesImportRow, LegacyAgentFileView, LegacyAgentPolicyStatusView,
+  LegacyAgentRequiredAppPackageView, LegacyAgentRequiredAppsTenantView, LegacyAgentRequiredAppsView,
 } from '@obligarth/shared';
 
 /** The matching of an import of per-device values (lot PONT-POL §12.1). */
@@ -70,6 +71,21 @@ export const legacyAgentApi = {
   async actions(id: number): Promise<LegacyAgentDeviceAction[]> {
     const res = await apiClient.get<ApiResponse<LegacyAgentDeviceAction[]>>(`/legacy-agent/devices/${id}/actions`);
     return res.data.data ?? [];
+  },
+  /** The packages of the tenant's store a policy author can make required (mdm.policies.manage). */
+  async requiredAppPackages(): Promise<LegacyAgentRequiredAppPackageView[]> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentRequiredAppPackageView[]>>('/legacy-agent/policy/required-app-packages');
+    return res.data.data ?? [];
+  },
+  /** What of the tenant sets every required app aside (privacy profile, restrictions matrix). */
+  async requiredAppsTenant(): Promise<LegacyAgentRequiredAppsTenantView> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentRequiredAppsTenantView>>('/legacy-agent/policy/required-apps-tenant');
+    return res.data.data!;
+  },
+  /** The state of each required app of a device's effective policy (computed by the server on read). */
+  async deviceRequiredApps(deviceId: number): Promise<LegacyAgentRequiredAppsView> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentRequiredAppsView>>(`/legacy-agent/devices/${deviceId}/required-apps`);
+    return res.data.data!;
   },
   async deviceCommands(id: number): Promise<LegacyAgentCommandView[]> {
     const res = await apiClient.get<ApiResponse<LegacyAgentCommandView[]>>(`/legacy-agent/devices/${id}/commands`);

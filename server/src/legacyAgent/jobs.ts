@@ -7,6 +7,7 @@ import { raiseInTx, resolveInTx } from '../apple/alerts/service';
 import { AUTO_UPDATE_JOB, autoUpdate } from './autoUpdate';
 import { expireDue } from './commands';
 import { HARVEST_JOB, harvestApks } from './harvest';
+import { REQUIRED_APPS_JOB, REQUIRED_APPS_TENANT_JOB, requiredAppsSweep, requiredAppsTenantRun, setRequiredAppsTenantJob } from './requiredApps';
 
 // =============================================================================
 // Jobs of the bridge agent (docs: agent-pont-android §6):
@@ -29,6 +30,13 @@ import { HARVEST_JOB, harvestApks } from './harvest';
 //   legacy-agent.apk-harvest      every 15 minutes: the APKs of the fleet the
 //                                 tenant has no package of are asked of one
 //                                 device each (app.pull, harvest.ts)
+//   legacy-agent.required-apps    every 10 minutes (offset from the two
+//                                 above): the required apps of the agent
+//                                 policies installed where missing, at most
+//                                 50 per tenant per 10 minutes and 50 open at
+//                                 once (requiredApps.ts)
+//   legacy-agent.required-apps-tenant  the same for one tenant or one device:
+//                                 after an inventory, after a resolution
 // The packages-gc and retention jobs are v1 (§15.4).
 // =============================================================================
 
@@ -148,4 +156,30 @@ export function registerLegacyAgentJobs(): void {
     deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 86_400, keepPendingSeconds: 3_600,
     handler: harvestApks,
   });
+  registerJob({
+    name: REQUIRED_APPS_JOB,
+    scope: 'platform',
+    description: 'Every 10 minutes: the required apps of the Android agent policies are installed where missing (at most 50 per tenant per 10 minutes)',
+    payload: z.object({}).strict(),
+    policy: 'exclusive',
+    schedule: { cron: '5,15,25,35,45,55 * * * *' },
+    retry: { limit: 0, delaySeconds: 0, backoff: false },
+    timeoutSeconds: 300,
+    pollSeconds: 300,
+    deadLetter: false, trackStatus: 'queue', manualRun: true, keepFinishedSeconds: 86_400, keepPendingSeconds: 3_600,
+    handler: requiredAppsSweep,
+  });
+  setRequiredAppsTenantJob(registerJob({
+    name: REQUIRED_APPS_TENANT_JOB,
+    scope: 'tenant',
+    description: 'The required apps of the Android agent policies of one tenant or one device (after an inventory, after a resolution)',
+    payload: z.object({ tenantId: z.number().int().positive(), deviceId: z.number().int().positive().optional() }).strict(),
+    policy: 'stately',
+    retry: { limit: 1, delaySeconds: 60, backoff: false },
+    timeoutSeconds: 300,
+    notify: true,
+    pollSeconds: 300,
+    concurrency: { perTenant: 1 },
+    handler: requiredAppsTenantRun,
+  }));
 }

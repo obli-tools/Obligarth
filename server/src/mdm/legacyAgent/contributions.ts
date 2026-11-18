@@ -1,5 +1,6 @@
 import {
-  AGENT_KIOSK_KEY, agentAppConfigKey, agentCertKey, agentDpmKey, agentFileKey, agentKnoxKey, agentWifiKey, agentWifiRemoveKey, isAgentTemplateVariable,
+  AGENT_KIOSK_KEY, agentAppConfigKey, agentCertKey, agentDpmKey, agentFileKey, agentKnoxKey, agentRequiredAppKey, agentWifiKey, agentWifiRemoveKey,
+  isAgentTemplateVariable,
   variablesInString,
   type AgentTemplateVariable, type JsonValue, type LegacyAgentPolicySection,
 } from '@obligarth/shared';
@@ -12,7 +13,10 @@ import { valueHashOf } from '../policies/contributions';
 // remove (agent:wifi.remove[<ssid>]), the kiosk as a whole (agent:kiosk), a
 // device-administrator or Knox field (agent:dpm.<f>, agent:knox.<f>), a CA
 // (agent:cert[<id>]), the managed configuration of an app (agent:appconfig:<id>,
-// lot P1-QR §6 ter, its value {package, entries}). The value is kept as the version stores it: secrets as
+// lot P1-QR §6 ter, its value {package, entries}), a required app
+// (agent:requiredApp[<package>], its value {packageId, mode}: server-side only,
+// resolved like the others but never compiled for the agent, see
+// legacyAgent/policyChannel.ts and requiredApps.ts). The value is kept as the version stores it: secrets as
 // references, templates as templates; its hash never derives from a secret.
 // The variables come only from the text of a file template (A5) and from the
 // templates of the entries of a managed configuration. Only a
@@ -62,6 +66,9 @@ export function legacyAgentContributions(section: LegacyAgentPolicySection | und
       for (const v of variablesInString(e.template, isAgentTemplateVariable).known) if (!vars.includes(v)) vars.push(v);
     }
     push(agentAppConfigKey(a.id), value as unknown as JsonValue, vars);
+  }
+  for (const r of section.requiredApps ?? []) {
+    if (r && typeof r.packageName === 'string') push(agentRequiredAppKey(r.packageName), { packageId: r.packageId, mode: r.mode } as JsonValue);
   }
   return out.sort((x, y) => (x.settingKey < y.settingKey ? -1 : x.settingKey > y.settingKey ? 1 : 0));
 }

@@ -10,11 +10,14 @@ import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { useLegacyActionRunner } from '@/components/mdm/actions/useLegacyActionRunner';
 import { ITEM_STATE_TONE, agentKeyLabel, codeLabel, itemStateLabel } from '@/components/legacyAgentPolicy/ui';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { LegacyRequiredAppsBlock } from './LegacyRequiredAppsBlock';
 
 // The "Agent policy" tab of a device of the bridge agent (lot PONT-POL §11.3): the version of its agent (a policy needs
 // 1.3.0), the desired and delivered hashes, the state of its artifact agent:policy and why, the agent's last report
 // item by item (filterable by state), what the compilation dropped and what the freeze held back even before the agent
 // reports, and the two actions of the policy (re-apply, suspend the kiosk) greyed by the menu of the device.
+// Below the facts, the required apps of its effective policy and their server-side state (LegacyRequiredAppsBlock),
+// reloaded with the rest by the refresh button and after a queued action.
 
 const ARTIFACT_TONE: Record<string, 'green' | 'gray' | 'blue' | 'amber' | 'red' | 'violet'> = {
   applied: 'green', delivering: 'blue', pending: 'blue', error: 'red', removing: 'amber', removed: 'gray',
@@ -30,7 +33,9 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
   const [actions, setActions] = useState<LegacyAgentDeviceAction[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Shown | 'all'>('all');
+  const [refreshKey, setRefreshKey] = useState(0);
   const load = useCallback(() => {
+    setRefreshKey((k) => k + 1);
     legacyAgentApi.devicePolicy(deviceId).then((v) => { setView(v); setError(null); }).catch((err) => setError(apiErrorMessage(err)));
     legacyAgentApi.actions(deviceId).then(setActions).catch(() => setActions([]));
   }, [deviceId]);
@@ -95,6 +100,8 @@ export function LegacyPolicyTab({ deviceId, canAct }: { deviceId: number; canAct
         <Fact label={t('legacyAgentPolicy.device.reported') || 'Last report'}>{r ? formatDateTime(r.reportedAt) : '—'}</Fact>
         <Fact label="Knox">{r?.knoxState ? trCode(`legacyAgent.knox.${r.knoxState}`, r.knoxState) : '—'}</Fact>
       </dl>
+
+      <LegacyRequiredAppsBlock deviceId={deviceId} refreshKey={refreshKey} />
 
       {(view.dropped.length > 0 || view.withheld.length > 0) && (
         <div className="space-y-1 rounded-xl bg-amber-400/5 p-3 text-sm">

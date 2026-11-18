@@ -14,6 +14,9 @@ export const LEGACY_AGENT_ALERTS = {
   'legacy_agent.license_error': { scope: 'tenant', severity: 'warning', title: 'Knox licence refused', message: 'The Knox licence could not be activated on an Android agent device: silent installation and restart are unavailable.' },
   // Lot BANC §3.4: the agent was the owner of the device and is no longer, without a release asked by the server.
   'legacy_agent.device_owner_lost': { scope: 'tenant', severity: 'warning', title: 'Android agent no longer owner of the device', message: 'The Android agent of a device lost its device owner role without being asked to give the device back: the protections of the owner are gone.' },
+  // Required apps of the bridge agent policies (requiredApps.ts): a full pass of the tenant raises it while one install
+  // failed 3 times, and resolves it once none did.
+  'legacy_agent.required_app_failed': { scope: 'tenant', severity: 'warning', title: 'Required apps not installed', message: '{count} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox).' },
 } as const;
 
 export type LegacyAgentAlertKind = keyof typeof LEGACY_AGENT_ALERTS;
@@ -24,6 +27,7 @@ export const LEGACY_AGENT_ALERTS_FR: Record<LegacyAgentAlertKind, { title: strin
   'legacy_agent.silent': { title: 'Agents Android silencieux', message: "{count} agent(s) Android n'ont pas contacté le serveur depuis 24 heures." },
   'legacy_agent.license_error': { title: 'Licence Knox refusée', message: "La licence Knox n'a pas pu être activée sur un appareil de l'agent Android : installation silencieuse et redémarrage indisponibles." },
   'legacy_agent.device_owner_lost': { title: "L'agent Android n'est plus propriétaire de l'appareil", message: "L'agent Android d'un appareil a perdu son rôle de propriétaire de l'appareil sans qu'on lui ait demandé de le rendre : les protections du propriétaire ont disparu." },
+  'legacy_agent.required_app_failed': { title: 'Apps obligatoires non installées', message: "{count} app(s) obligatoire(s) des politiques de l'agent Android ont échoué 3 fois à l'installation : vérifiez les appareils (signature, stockage, Knox)." },
 };
 
 /** The definitions of the bridge agent's alerts for registerAlertDefinitions. */

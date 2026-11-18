@@ -35,6 +35,7 @@ export function AppConfigPanel({ items, editable, issues, onChange }: {
           </Button>
         )}
       </div>
+      <IssueList issues={issues.filter((i) => i.path === 'appConfigs')} />
       {items.length === 0 ? <p className="text-sm text-text-muted">{t('legacyAgentPolicy.appConfig.none') || 'No app configured.'}</p> : (
         <ul className="divide-y divide-border/50 rounded-xl bg-bg-secondary">
           {items.map((a, i) => (

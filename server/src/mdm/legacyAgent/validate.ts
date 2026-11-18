@@ -1,6 +1,6 @@
 import { X509Certificate } from 'node:crypto';
 import {
-  AGENT_DPM_FIELDS, AGENT_KIOSK_BLOCK_KEYS, AGENT_KNOX_FIELDS, AGENT_SECRET_PURPOSES, AGENT_WIPE_KEY, LEGACY_AGENT_POLICY_LIMITS as L,
+  AGENT_DPM_FIELDS, AGENT_KIOSK_BLOCK_KEYS, AGENT_REQUIRED_APP_MODES, AGENT_KNOX_FIELDS, AGENT_SECRET_PURPOSES, AGENT_WIPE_KEY, LEGACY_AGENT_POLICY_LIMITS as L,
   LEGACY_AGENT_SECTION_ITEM, agentPathKey, isAgentFilePath, isAgentPackageName, isAgentTemplateVariable, isAgentTileUrl,
   isIntentUriWellFormed, isOwnAgentPackage, isReservedKnoxListPackage, isSecretRef, isSecretValue, isUnsafeIntentUri, isValidSsid,
   normalizeIntentUri, variablesInString,
@@ -11,7 +11,9 @@ import {
 // Validation of the section legacyAgent of a policy version (lot PONT-POL §4),
 // the bridge agent's: files deposited, Wi-Fi networks, the soft kiosk, the
 // device-administrator and Knox restrictions, the CAs of the system store, the
-// managed configuration of apps (agent 1.4.2, lot P1-QR §6 ter).
+// managed configuration of apps (agent 1.4.2, lot P1-QR §6 ter), the required apps
+// (server-side only: packages of the tenant's store, returned in packageRefs for
+// the caller to check: missingPackages).
 // Pure (it mirrors android/validate.ts): unknown keys and wrong types refused,
 // variables only in the text of a file template and in the templates of a
 // managed configuration ({{device.custom.<name>}} admitted there), secret slots as vault references or typed values (moved to
@@ -39,10 +41,14 @@ export interface LegacyAgentSecretSite {
 
 export interface LegacyAgentStoreRef { path: string; sha256: string; size: number; kind: 'file' | 'image' | 'certificate' }
 
+/** A required app's package (legacy_agent_packages), checked by the caller against the tenant (missingPackages). */
+export interface LegacyAgentPackageRef { path: string; packageId: string; packageName: string }
+
 export interface LegacyAgentValidation {
   issues: Array<{ path: string; code: PolicyValidationCode }>;
   secrets: LegacyAgentSecretSite[];
   storeRefs: LegacyAgentStoreRef[];
+  packageRefs: LegacyAgentPackageRef[];
   /** ['agent:dpm.maxFailedPasswordsForWipe'] when it is set above 0. */
   wipeRules: string[];
   /** The section holds what belongs to its tenant only (a secret, a store file, a CA file, a kiosk): never shared nor
@@ -116,6 +122,7 @@ class Ctx {
   readonly issues: LegacyAgentValidation['issues'] = [];
   readonly secrets: LegacyAgentSecretSite[] = [];
   readonly storeRefs: LegacyAgentStoreRef[] = [];
+  readonly packageRefs: LegacyAgentPackageRef[] = [];
   tenantBound = false;
   add(tokens: Array<string | number>, code: PolicyValidationCode): void {
     if (this.issues.length < MAX_ISSUES) this.issues.push({ path: pathText(tokens), code });
@@ -451,11 +458,11 @@ function validateAppConfigs(x: Ctx, raw: unknown): void {
 export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidationOptions): LegacyAgentValidation {
   const x = new Ctx();
   const done = (wipeRules: string[]): LegacyAgentValidation => ({
-    issues: x.issues, secrets: x.secrets, storeRefs: x.storeRefs, wipeRules, tenantBound: x.tenantBound,
+    issues: x.issues, secrets: x.secrets, storeRefs: x.storeRefs, packageRefs: x.packageRefs, wipeRules, tenantBound: x.tenantBound,
     section: x.issues.length ? null : normalise(raw as LegacyAgentPolicySection),
   });
   if (!isObj(raw)) { x.add([], 'invalid_content'); return done([]); }
-  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs', 'appConfigs', 'confirmBenchLockout'], []);
+  x.keys(raw, ['files', 'wifi', 'wifiRemove', 'kiosk', 'dpm', 'knox', 'certs', 'appConfigs', 'confirmBenchLockout', 'requiredApps'], []);
   noVariables(x, raw, []);
   // Lot BANC (D16, §7.3): Knox usbDebugging=false cuts ADB, hence the bench station: never without an explicit
   // confirmation stored with the section. A policy published before keeps being delivered (the publication and the
@@ -470,15 +477,47 @@ export function validateLegacyAgentSection(raw: unknown, o: LegacyAgentValidatio
   if (raw.knox !== undefined) validateKnox(x, raw.knox, raw.kiosk);
   if (raw.certs !== undefined) validateCerts(x, raw.certs);
   if (raw.appConfigs !== undefined) validateAppConfigs(x, raw.appConfigs);
+  if (raw.requiredApps !== undefined) validateRequiredApps(x, raw.requiredApps);
   return done(wipe);
 }
 
-/** The section with its intent URIs normalised (prefix in lower case). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * The required apps (server-side only, never sent to the agent): 32 at most, one per package (case-insensitive), a
+ * package other than the agent's, a package of the tenant's store by its uuid (checked by the caller: missingPackages,
+ * present, same package name, confirmed, F028) and a mode. A non-empty list binds the section to its tenant (its store).
+ */
+function validateRequiredApps(x: Ctx, raw: unknown): void {
+  if (!Array.isArray(raw)) { x.add(['requiredApps'], 'type_mismatch'); return; }
+  if (raw.length > L.requiredApps) { x.add(['requiredApps'], 'too_many_required_apps'); return; }
+  if (raw.length > 0) x.tenantBound = true;
+  const seen = new Set<string>();
+  raw.forEach((a, i) => {
+    const at: Array<string | number> = ['requiredApps', i];
+    if (!isObj(a)) { x.add(at, 'type_mismatch'); return; }
+    const before = x.issues.length;
+    x.keys(a, ['packageName', 'packageId', 'mode'], at);
+    const { packageName, packageId, mode } = a;
+    if (!isAgentPackageName(packageName)) x.add([...at, 'packageName'], 'package_invalid');
+    else if (isOwnAgentPackage(packageName)) x.add([...at, 'packageName'], 'package_reserved');
+    else if (seen.has(packageName.toLowerCase())) x.add([...at, 'packageName'], 'duplicate_value');
+    else seen.add(packageName.toLowerCase());
+    if (typeof packageId !== 'string' || !UUID_RE.test(packageId)) x.add([...at, 'packageId'], 'invalid_content');
+    if (typeof mode !== 'string' || !(AGENT_REQUIRED_APP_MODES as readonly string[]).includes(mode)) x.add([...at, 'mode'], 'out_of_range');
+    if (x.issues.length === before && typeof packageName === 'string' && typeof packageId === 'string') {
+      x.packageRefs.push({ path: pathText([...at, 'packageId']), packageId: packageId.toLowerCase(), packageName });
+    }
+  });
+}
+
+/** The section with its intent URIs normalised (prefix in lower case) and the uuids of its required apps in lower case. */
 function normalise(s: LegacyAgentPolicySection): LegacyAgentPolicySection {
   const copy = JSON.parse(JSON.stringify(s)) as LegacyAgentPolicySection;
   for (const t of copy.kiosk?.tiles ?? []) {
     if (t.action?.type === 'intent') t.action.uri = normalizeIntentUri(t.action.uri) ?? t.action.uri;
   }
+  for (const r of copy.requiredApps ?? []) if (typeof r.packageId === 'string') r.packageId = r.packageId.toLowerCase();
   return copy;
 }
 

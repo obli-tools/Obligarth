@@ -9,12 +9,14 @@
 // the agent reports each as error/<code>. Only a body above the size limit is a problem (compile:body_too_large). The
 // hash of the body never derives from a secret. The managed configuration of apps (agent:appconfig:<id>, agent 1.4.2,
 // lot P1-QR §6 ter) goes in appConfigs, each template rendered as text; the key is absent when there is none, so the
-// bodies of the devices without one keep their hash. No I/O in compile. A device whose desired state changes has its long
+// bodies of the devices without one keep their hash. The required apps (agent:requiredApp[…]) are resolved but never
+// compiled: the server installs them (requiredApps.ts); a device with only them gets no artifact, the body, hash and
+// sources of the others are unchanged. No I/O in compile. A device whose desired state changes has its long
 // wait woken after the commit; any other takes the change at its next poll.
 import { createHash } from 'node:crypto';
 import {
   AGENT_KIOSK_KEY, AGENT_WIPE_KEY, LEGACY_AGENT_POLICY_ARTIFACT_KEY, LEGACY_AGENT_POLICY_FORMAT, LEGACY_AGENT_POLICY_LIMITS as L,
-  LEGACY_AGENT_SETTING_PREFIX, agentPathKey, isAgentTemplateVariable, parseAgentKey,
+  LEGACY_AGENT_SETTING_PREFIX, agentPathKey, isAgentTemplateVariable, isServerOnlyAgentKey, parseAgentKey,
   type AgentPolicyDropCode, type JsonValue,
 } from '@obligarth/shared';
 import { canonicalJson } from '../audit/canonical';
@@ -83,7 +85,7 @@ const byRank = (a: Candidate, b: Candidate): number => a.s.source.rank - b.s.sou
 export function compileAgentPolicy(device: ResolutionDevice, settings: ResolvedSetting[], tenant: { name: string; slug: string },
   tenantId: number | null): ChannelArtifact | null {
   const live = settings.filter((s) => s.kind === 'agent' && s.settingKey.startsWith(LEGACY_AGENT_SETTING_PREFIX) && !s.removed
-    && s.availability.status === 'available' && s.value !== undefined);
+    && s.availability.status === 'available' && s.value !== undefined && !isServerOnlyAgentKey(s.settingKey));
   if (!live.length) return null;
   const dropped: Array<{ key: string; code: AgentPolicyDropCode }> = [];
   const drop = (key: string, code: AgentPolicyDropCode): void => { dropped.push({ key, code }); };

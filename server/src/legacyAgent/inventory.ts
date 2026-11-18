@@ -7,6 +7,7 @@ import { requestGroupEvaluation } from '../mdm/groups/triggers';
 import { legacyAgentPrivacyRulesFor } from '../privacy/profiles';
 import { LEGACY_AGENT_ACTOR } from './actor';
 import { managedPackages } from './commands';
+import { requestRequiredAppsAfterCommit } from './requiredApps';
 import { ICONS_MIN_VERSION_CODE, leaseIcons } from './icons';
 import { InventoryBody } from './schemas';
 import { withAgentTransaction } from './session';
@@ -28,7 +29,8 @@ import { errorReply, type AgentIdentity, type Exchange, type Reply } from './sur
 // profile (P0-13, CNF-02, D14) decides the IMEIs (kept only when it collects
 // the hardware identifiers) and the apps (the managed ones only when it
 // limits them: those a successful app.install put there); the serial number
-// stays, the identity of the device (PB13).
+// stays, the identity of the device (PB13). Once committed, a pass over the
+// required apps of the device's policies is requested (requiredApps.ts).
 // =============================================================================
 
 const clean = (v: string | null | undefined, max: number): string | null => {
@@ -143,6 +145,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
     });
     // The dynamic groups: what the base marked of this inventory (facts, API level, patch, applications), P0-5 T5.
     await requestGroupEvaluation(trx, who.tenantId, [who.deviceId]);
+    // The required apps of its policies, once this transaction committed (nothing read in it; never throws).
+    requestRequiredAppsAfterCommit(trx, who.tenantId, who.deviceId);
     // iconsWanted is always present (empty included): the agent 1.0.2 learns from it that this server knows the icons.
     return { status: 200, body: { accepted: true, iconsWanted } };
   });

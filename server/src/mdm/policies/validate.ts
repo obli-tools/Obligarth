@@ -11,7 +11,7 @@ import { androidContributions } from '../android/contributions';
 import { validateAndroidSection, type AndroidValidationOptions } from '../android/validate';
 import { legacyAgentContributions } from '../legacyAgent/contributions';
 import {
-  LEGACY_AGENT_SECTION_ITEM, legacyAgentNodeAt, validateLegacyAgentSection, type LegacyAgentStoreRef, type LegacyAgentValidationOptions,
+  LEGACY_AGENT_SECTION_ITEM, legacyAgentNodeAt, validateLegacyAgentSection, type LegacyAgentPackageRef, type LegacyAgentStoreRef, type LegacyAgentValidationOptions,
 } from '../legacyAgent/validate';
 
 // =============================================================================
@@ -95,6 +95,8 @@ export interface ValidationOutcome {
   legacyAgentWipeRules: string[];
   /** The store files the section of the bridge agent references (checked against the tenant's store by the caller). */
   legacyAgentStoreRefs: LegacyAgentStoreRef[];
+  /** The packages of the required apps of the section (checked against the tenant's packages by the caller: missingPackages). */
+  legacyAgentPackageRefs: LegacyAgentPackageRef[];
   /** The section of the bridge agent holds what belongs to its tenant only (B2: never shared nor assigned elsewhere). */
   legacyAgentTenantBound: boolean;
 }
@@ -349,10 +351,11 @@ export function validatePolicyContent(raw: unknown, o: ValidateOptions): Validat
     summary.secretRefs = c.secretRefs.length + c.secretValues.length;
     summary.variables = c.variables;
     return { issues: c.issues, content, secretValues: c.secretValues, secretRefs: c.secretRefs, summary, androidWipeRules,
-      legacyAgentWipeRules: agent.wipeRules, legacyAgentStoreRefs: agent.storeRefs, legacyAgentTenantBound: agent.tenantBound };
+      legacyAgentWipeRules: agent.wipeRules, legacyAgentStoreRefs: agent.storeRefs, legacyAgentPackageRefs: agent.packageRefs, legacyAgentTenantBound: agent.tenantBound };
   };
   let androidWipeRules: string[] = [];
-  let agent: { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; tenantBound: boolean } = { wipeRules: [], storeRefs: [], tenantBound: false };
+  let agent: { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; packageRefs: LegacyAgentPackageRef[]; tenantBound: boolean } =
+    { wipeRules: [], storeRefs: [], packageRefs: [], tenantBound: false };
   if (!isPlainObject(raw)) { c.add(null, '', 'invalid_content'); return done(null); }
   // Before anything serialises or hashes the content: sections, items, values and their own nesting.
   if (nestedDeeperThan(raw, MAX_DEPTH + 8)) { c.add(null, '', 'invalid_content'); return done(null); }
@@ -534,11 +537,11 @@ function validateAndroid(c: Collector, raw: unknown, o: ValidateOptions, content
 /** Validates the section legacyAgent into the collector, as validateAndroid does: issues on the pseudo item
  *  'legacyAgent', secrets with their purpose (sites by tokens from the section), one summary item per setting key. */
 function validateLegacyAgent(c: Collector, raw: unknown, o: ValidateOptions, content: PolicyContentV1, summary: PolicyVersionSummary):
-  { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; tenantBound: boolean } {
+  { wipeRules: string[]; storeRefs: LegacyAgentStoreRef[]; packageRefs: LegacyAgentPackageRef[]; tenantBound: boolean } {
   const r = validateLegacyAgentSection(raw, o.legacyAgent ?? { minFailedPasswordsForWipe: o.android?.minFailedPasswordsForWipe ?? 10 });
   const codes: ReadonlySet<string> = ANDROID_CODES;
   for (const x of r.issues) c.add(LEGACY_AGENT_SECTION_ITEM, x.path, (codes.has(x.code) ? x.code : 'invalid_content') as PolicyValidationCode);
-  const out = { wipeRules: r.wipeRules, storeRefs: r.storeRefs, tenantBound: r.tenantBound };
+  const out = { wipeRules: r.wipeRules, storeRefs: r.storeRefs, packageRefs: r.packageRefs, tenantBound: r.tenantBound };
   if (r.issues.length || !r.section) return out;
   for (const s of r.secrets) {
     if (s.kind === 'ref') c.secretRefs.push({ itemId: LEGACY_AGENT_SECTION_ITEM, path: s.path, id: s.id!, purpose: s.purpose });

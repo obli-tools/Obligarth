@@ -23,6 +23,8 @@ import { registerLegacyAgentMinuteStep } from '../legacyAgent/jobs';
 import { collectApkLeftovers } from '../legacyAgent/packages';
 import { agentArtifactProvider } from '../legacyAgent/policyChannel';
 import { executeDeviceValuesImport } from '../legacyAgent/policyRoutes';
+import { requestRequiredAppsTenant } from '../legacyAgent/requiredApps';
+import { registerTenantResolvedHook } from '../mdm/policies/jobs';
 
 // =============================================================================
 // ANDROID BRIDGE AGENT (channel legacy_agent; docs: agent-pont-android §6):
@@ -85,6 +87,9 @@ export function registerLegacyAgentModule(): void {
   registerLegacyAgentMinuteStep('policy-files-gc', collectPolicyFiles);
   // The temporary files of the APK store left by a refused or interrupted transfer (review F033), hourly as well.
   registerLegacyAgentMinuteStep('apk-store-gc', collectApkLeftovers);
+  // The required apps of the policies: a pass over the tenant after each of its resolutions (a publication, an
+  // assignment, a group moved in the tree), when it has one; the 10-minute job catches the rest.
+  registerTenantResolvedHook('legacy-agent.required-apps', (ctx, tenantId) => ctx.withTenant((trx) => requestRequiredAppsTenant(trx, tenantId)));
   registerBootTask('legacy-agent.policy-files', async () => {
     try { await ensureFilesDir(); } catch (err) { logger.error({ code: (err as { code?: unknown })?.code }, 'legacy agent: the policy file store cannot be created'); }
   });

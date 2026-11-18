@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, KeyRound, LayoutGrid, Package, ShieldBan, Trash2, Wifi } from 'lucide-react';
+import { Download, FileText, KeyRound, LayoutGrid, Package, ShieldBan, Trash2, Wifi } from 'lucide-react';
 import type { LegacyAgentPolicySection as Section, PolicyValidationIssue } from '@obligarth/shared';
 import { Button } from '@/components/common/Button';
 import { SegmentedTabs, type SegmentedTab } from '@/components/common/SegmentedTabs';
@@ -9,6 +9,7 @@ import { CertsPanel } from './CertsPanel';
 import { FilesPanel } from './FilesPanel';
 import { KioskPanel } from './KioskPanel';
 import type { MobiControlImportResult } from './MobiControlImportDialog';
+import { RequiredAppsPanel } from './RequiredAppsPanel';
 import { RestrictionsPanel } from './RestrictionsPanel';
 import { WifiPanel } from './WifiPanel';
 import { IssueList, useStoreFiles } from './ui';
@@ -18,8 +19,10 @@ import { IssueList, useStoreFiles } from './ui';
 // of apps (agent 1.4.2 as device owner, lot P1-QR §6 ter). It applies to the devices
 // of the channel legacy_agent with an agent 1.3.0 or later; an older agent ignores it. Secrets are typed write-only and
 // moved to the vault at the save; the server validates everything (issues of the pseudo item 'legacyAgent').
+// The required apps (requiredApps, agent:requiredApp[<package>]) are server-side only: never sent to the agent, the job
+// legacy-agent.required-apps queues app.install from the tenant's confirmed packages where an app is missing.
 
-type Tab = 'files' | 'wifi' | 'kiosk' | 'restrictions' | 'certs' | 'appConfigs';
+type Tab = 'files' | 'wifi' | 'kiosk' | 'restrictions' | 'certs' | 'appConfigs' | 'requiredApps';
 
 /** A section without any content is dropped from the version. */
 function compact(s: Section): Section | undefined {
@@ -32,6 +35,7 @@ function compact(s: Section): Section | undefined {
   if (s.knox && Object.keys(s.knox).length) out.knox = s.knox;
   if (s.certs?.length) out.certs = s.certs;
   if (s.appConfigs?.length) out.appConfigs = s.appConfigs;
+  if (s.requiredApps?.length) out.requiredApps = s.requiredApps;
   // Lot BANC (D16): the confirmation of a restriction that cuts ADB, kept only while that restriction is set.
   if (out.knox?.usbDebugging === false && s.confirmBenchLockout === true) out.confirmBenchLockout = true;
   return Object.keys(out).length ? out : undefined;
@@ -47,7 +51,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
   const s = section ?? {};
   const set = (patch: Partial<Section>) => onChange(compact({ ...s, ...patch }));
   const under = (prefix: string) => issues.filter((i) => i.path === prefix || i.path.startsWith(`${prefix}.`) || i.path.startsWith(`${prefix}[`));
-  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs|appConfigs|confirmBenchLockout)([.[]|$)/.test(i.path));
+  const loose = issues.filter((i) => !/^(files|wifi|wifiRemove|kiosk|dpm|knox|certs|appConfigs|requiredApps|confirmBenchLockout)([.[]|$)/.test(i.path));
 
   if (!section && !present) {
     if (!editable) return null;
@@ -67,6 +71,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
       badge: count(Object.keys(s.dpm ?? {}).length + Object.keys(s.knox ?? {}).length) },
     { id: 'certs', label: t('legacyAgentPolicy.tabs.certs') || 'Certificates', icon: <KeyRound size={14} />, badge: count(s.certs?.length ?? 0) },
     { id: 'appConfigs', label: t('legacyAgentPolicy.tabs.appConfigs') || 'App configuration', icon: <Package size={14} />, badge: count(s.appConfigs?.length ?? 0) },
+    { id: 'requiredApps', label: t('legacyAgentPolicy.tabs.requiredApps') || 'Required apps', icon: <Download size={14} />, badge: count(s.requiredApps?.length ?? 0) },
   ];
   const mergeImport = (r: MobiControlImportResult) => {
     const wifi = [...(s.wifi ?? [])];
@@ -103,6 +108,7 @@ export function LegacyAgentPolicySection({ section, editable, issues, onChange }
       )}
       {tab === 'certs' && <CertsPanel certs={s.certs ?? []} editable={editable} issues={under('certs')} onChange={(certs) => set({ certs })} />}
       {tab === 'appConfigs' && <AppConfigPanel items={s.appConfigs ?? []} editable={editable} issues={under('appConfigs')} onChange={(appConfigs) => set({ appConfigs })} />}
+      {tab === 'requiredApps' && <RequiredAppsPanel items={s.requiredApps ?? []} editable={editable} issues={under('requiredApps')} onChange={(requiredApps) => set({ requiredApps })} />}
     </section>
   );
 }

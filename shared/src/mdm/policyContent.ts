@@ -175,6 +175,8 @@ export const POLICY_VALIDATION_CODES = [
   'wipe_without_password', 'variable_not_allowed', 'shared_policy_resource',
   // The managed configuration of apps (lot P1-QR §6 ter): the bounds of its instances and of their entries.
   'too_many_app_configs', 'too_many_entries',
+  // Required apps of the bridge agent: their bound, a package missing from the tenant's store, one not confirmed (F028).
+  'too_many_required_apps', 'package_not_found', 'package_not_confirmed',
 ] as const;
 export type PolicyValidationCode = typeof POLICY_VALIDATION_CODES[number];
 

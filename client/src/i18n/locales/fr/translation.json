@@ -3072,6 +3072,10 @@
         "device_owner_lost": {
           "title": "L'agent Android n'est plus propriétaire de l'appareil",
           "message": "L'agent Android d'un appareil a perdu son rôle de propriétaire de l'appareil sans qu'on lui ait demandé de le rendre : les protections du propriétaire ont disparu."
+        },
+        "required_app_failed": {
+          "title": "Apps obligatoires non installées",
+          "message": "{{count}} app(s) obligatoire(s) des politiques de l'agent Android ont échoué 3 fois à l'installation : vérifiez les appareils (signature, stockage, Knox)."
         }
       },
       "smart_group": {
@@ -4016,7 +4020,10 @@
       "variable_not_allowed": "Variables uniquement dans un modèle (fichier ou configuration d’appli)",
       "shared_policy_resource": "Cette politique contient des ressources de son locataire : jamais partagée ni affectée à un autre locataire",
       "too_many_app_configs": "Trop de configurations d’appli (64 au plus)",
-      "too_many_entries": "Trop d’entrées (50 au plus)"
+      "too_many_entries": "Trop d’entrées (50 au plus)",
+      "too_many_required_apps": "Trop d'apps obligatoires (32 au plus)",
+      "package_not_found": "Paquet introuvable dans ce tenant",
+      "package_not_confirmed": "Paquet non confirmé : confirmez-le avant de le rendre obligatoire"
     },
     "rawProfile": {
       "binary_plist": "Un profil binaire n'est pas accepté : exportez-le en XML.",
@@ -6789,7 +6796,8 @@
       "kiosk": "Kiosque",
       "restrictions": "Restrictions",
       "certs": "Certificats",
-      "appConfigs": "Configuration des applis"
+      "appConfigs": "Configuration des applis",
+      "requiredApps": "Apps obligatoires"
     },
     "actions": {
       "minutes": "Minutes (1 à 240)",
@@ -7008,7 +7016,8 @@
       "dpm": "Administrateur",
       "knox": "Knox",
       "cert": "Certificat",
-      "appconfig": "Configuration d’appli"
+      "appconfig": "Configuration d’appli",
+      "requiredApp": "App obligatoire"
     },
     "itemStates": {
       "compliant": "Conforme",
@@ -7231,6 +7240,64 @@
       "addEntry": "Ajouter une valeur",
       "insertInto": "Insérer dans {{key}} :",
       "missing": "Sans valeur sur cet appareil (la configuration ne lui est pas envoyée) :"
+    },
+    "requiredApps": {
+      "intro": "Le serveur installe ces apps sur les appareils de la politique où elles manquent (app.install), d'après un inventaire récent, au plus 50 par tenant toutes les 10 minutes et 50 en cours à la fois ; un paquet dont les installations échouent est arrêté. Rien n'est jamais désinstallé. Silencieux avec Knox, sinon Android demande à l'utilisateur.",
+      "add": "Ajouter une app obligatoire",
+      "none": "Aucune app obligatoire.",
+      "pickTitle": "Choisir un paquet",
+      "search": "Rechercher par nom ou paquet",
+      "noPackage": "Aucun paquet dans ce tenant : téléversez-en ou récoltez-en un depuis la page de l'agent Android.",
+      "toConfirm": "À confirmer",
+      "toConfirmHint": "Confirmez-le d'abord dans la page Paquets de l'agent Android",
+      "alreadyRequired": "Déjà obligatoire",
+      "packageMissing": "Paquet introuvable",
+      "changeVersion": "Changer de version",
+      "mode": "Mode",
+      "modes": {
+        "install": "Installer si absente",
+        "minVersion": "Installer ou mettre à niveau vers cette version"
+      },
+      "states": {
+        "installed": "Installée",
+        "queued": "Installation en file",
+        "awaiting_inventory": "Installée, en attente de l'inventaire",
+        "due": "En attente de son tour",
+        "backoff": "Nouvel essai plus tard",
+        "failed": "En échec",
+        "skipped": "Mise de côté"
+      },
+      "reasons": {
+        "package_unavailable": "Paquet indisponible",
+        "package_not_confirmed": "Paquet non confirmé",
+        "no_inventory": "Pas encore d'inventaire",
+        "inventory_limited": "Inventaire des apps limité par le profil de confidentialité",
+        "frozen": "Tenant gelé",
+        "restricted": "Restreint par la matrice (legacy_agent.apps)",
+        "admin_inactive": "Administrateur de l'appareil inactif",
+        "no_contact": "Aucun contact depuis 24 heures",
+        "low_storage": "Stockage libre insuffisant",
+        "not_applicable": "Non applicable",
+        "stale_inventory": "Inventaire trop ancien : un nouveau est demandé",
+        "storage_unknown": "Stockage libre inconnu",
+        "package_failing": "Paquet arrêté : ses dernières installations échouent"
+      },
+      "device": {
+        "title": "Apps obligatoires",
+        "target": "Cible",
+        "installed": "Installée",
+        "policy": "Politique",
+        "lastAttempt": "Dernière tentative",
+        "nextAttempt": "Prochaine tentative",
+        "attempts": "Échec {{count}}/{{max}}",
+        "limitHint": "Au plus {{limit}} installations par tenant toutes les 10 minutes et {{limit}} en cours à la fois ; les apps « En attente de son tour » sont prises à un passage suivant.",
+        "rearm": "Pour réessayer tout de suite : installez-la à la main depuis la fiche de l'appareil, ou choisissez un autre paquet dans la politique."
+      },
+      "tenant": {
+        "appsLimited": "Le profil de confidentialité de ce tenant limite l'inventaire des apps aux apps gérées : une app absente ne prouve rien, donc rien n'est installé tant qu'il reste sur « apps gérées seulement ».",
+        "restrictedAll": "La matrice de restrictions de ce tenant demande une personne sur legacy_agent.apps : aucune app obligatoire n'est installée automatiquement.",
+        "restrictedPartial": "La matrice de restrictions de ce tenant demande une personne sur legacy_agent.apps pour certains appareils ou groupes : les apps obligatoires ne leur sont pas installées automatiquement."
+      }
     }
   },
   "bench": {

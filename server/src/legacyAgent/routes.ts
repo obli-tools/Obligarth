@@ -41,6 +41,7 @@ import { DEVICE_VALUES_ACTION, deviceValuesLevel } from '../mdm/registry/agentVa
 import { requestGroupEvaluation } from '../mdm/groups/triggers';
 import { deviceService } from '../services/device.service';
 import { policyRouter } from './policyRoutes';
+import { requiredAppsRouter } from './requiredAppsRoutes';
 import { issueEnrollmentToken, tokenLimiter, TOKEN_COLUMNS, tokenView } from './tokens';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
@@ -70,6 +71,8 @@ const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean>
 //   GET  /packages, POST /packages      mdm.apps.manage (POST: the raw APK, confirmed at once)
 //   POST /packages/:id/confirm          mdm.apps.manage: a package sent back by a device may be installed (F028)
 //   GET  /releases                      the versions of the agent offered to agent.update
+//   GET  /policy/required-app-packages  mdm.policies.manage: the packages a policy may require (requiredAppsRoutes.ts)
+//   GET  /devices/:id/required-apps     the required apps of a device and their state (requiredAppsRoutes.ts)
 //   GET  /settings, PUT /settings/knox  the tenant's Knox licence key (sealed; never returned); PUT: restriction
 //                                       legacy_agent.knox_key (floor sensitive, strict step-up, a secret)
 // The guarded types (device.wipe, device.lock) are refused on the command
@@ -1016,10 +1019,13 @@ async function writeKnoxKey(tenantId: number, licenseKey: string | null, userId:
 
 /** The console API of the bridge agent, mounted at /api/legacy-agent (routes/index.ts), after requireTenant. */
 let policyRoutesMounted = false;
+let requiredAppsRoutesMounted = false;
 
 export function createLegacyAgentRouter(): Router {
   // The agent policies (lot PONT-POL §9.2): the file store, the templates, the state of a device, the per-device values.
   if (!policyRoutesMounted) { policyRoutesMounted = true; router.use(policyRouter()); }
+  // The required apps of the policies: the packages to choose from, the state of a device (requiredAppsRoutes.ts).
+  if (!requiredAppsRoutesMounted) { requiredAppsRoutesMounted = true; router.use(requiredAppsRouter()); }
   return router;
 }
 

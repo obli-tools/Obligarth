@@ -985,10 +985,17 @@
   },
   "legacyAgentPolicy": {
     "tabs": {
-      "appConfigs": "App configuration"
+      "appConfigs": "App configuration",
+      "requiredApps": "Required apps",
+      "files": "Files",
+      "wifi": "Wi-Fi",
+      "kiosk": "Kiosk",
+      "restrictions": "Restrictions",
+      "certs": "Certificates"
     },
     "keys": {
-      "appconfig": "App configuration"
+      "appconfig": "App configuration",
+      "requiredApp": "Required app"
     },
     "codes": {
       "appconfig_applied": "Configuration of the app set",
@@ -1015,6 +1022,92 @@
       "addEntry": "Add a value",
       "insertInto": "Insert into {{key}}:",
       "missing": "Without a value on this device (the configuration is not sent to it):"
+    },
+    "requiredApps": {
+      "intro": "The server installs these apps on the devices of the policy where they are missing (app.install), from a recent inventory, at most 50 per tenant every 10 minutes and 50 in progress at once; a package whose installs fail is stopped. Nothing is ever uninstalled. Silent with Knox, otherwise Android asks the user.",
+      "add": "Add a required app",
+      "none": "No required app.",
+      "pickTitle": "Choose a package",
+      "search": "Search by name or package",
+      "noPackage": "No package in this tenant: upload or harvest one on the Android agent page.",
+      "toConfirm": "To confirm",
+      "toConfirmHint": "Confirm it on the Packages page of the Android agent first",
+      "alreadyRequired": "Already required",
+      "packageMissing": "Package not found",
+      "changeVersion": "Change the version",
+      "mode": "Mode",
+      "modes": {
+        "install": "Install if missing",
+        "minVersion": "Install or update to this version"
+      },
+      "states": {
+        "installed": "Installed",
+        "queued": "Installation queued",
+        "awaiting_inventory": "Installed, waiting for the inventory",
+        "due": "Waiting for its turn",
+        "backoff": "Retry later",
+        "failed": "Failed",
+        "skipped": "Set aside"
+      },
+      "reasons": {
+        "package_unavailable": "Package unavailable",
+        "package_not_confirmed": "Package not confirmed",
+        "no_inventory": "No inventory yet",
+        "inventory_limited": "Apps inventory limited by the privacy profile",
+        "frozen": "Tenant frozen",
+        "restricted": "Restricted by the matrix (legacy_agent.apps)",
+        "admin_inactive": "Device administrator inactive",
+        "no_contact": "No contact for 24 hours",
+        "low_storage": "Not enough free storage",
+        "not_applicable": "Not applicable",
+        "stale_inventory": "Inventory too old: a new one is asked",
+        "storage_unknown": "Free storage unknown",
+        "package_failing": "Package stopped: its recent installs fail"
+      },
+      "device": {
+        "title": "Required apps",
+        "target": "Target",
+        "installed": "Installed",
+        "policy": "Policy",
+        "lastAttempt": "Last attempt",
+        "nextAttempt": "Next attempt",
+        "attempts": "Failed {{count}}/{{max}}",
+        "limitHint": "At most {{limit}} installations per tenant every 10 minutes and {{limit}} in progress at once; « Waiting for its turn » items are taken by a later pass.",
+        "rearm": "To try again now: install it by hand from the device page, or choose another package in the policy."
+      },
+      "tenant": {
+        "appsLimited": "The privacy profile of this tenant limits the apps inventory to the managed apps: an absent app proves nothing, so nothing is installed while it is set to « managed apps only ».",
+        "restrictedAll": "The restrictions matrix of this tenant asks for a person on legacy_agent.apps: no required app is installed automatically.",
+        "restrictedPartial": "The restrictions matrix of this tenant asks for a person on legacy_agent.apps for some devices or groups: the required apps are not installed automatically on them."
+      }
+    },
+    "files": {
+      "id": "Identifier",
+      "idHint": "Lower-case letters, digits, - and _ (the key of the setting).",
+      "preview": "Preview on a device",
+      "searchDevice": "Search a device…"
+    },
+    "addSection": "Add a section: Android agent (device administrator)",
+    "title": "Android agent (device administrator)",
+    "minVersion": "agent 1.3.0 and later",
+    "removeSection": "Remove the section",
+    "device": {
+      "tooOld": "Agent older than 1.3.0: policies are ignored until it is updated",
+      "agent": "Agent",
+      "desired": "Desired policy",
+      "delivered": "Delivered",
+      "state": "State",
+      "noPolicy": "No policy",
+      "reported": "Last report",
+      "noItem": "No item.",
+      "noReport": "The agent has not reported this policy yet."
+    },
+    "actions": {
+      "reapply": "Re-apply the policy",
+      "suspendKiosk": "Suspend the kiosk"
+    },
+    "itemStates": {
+      "warning": "Warning"
     }
   },
   "mdm": {
@@ -1025,7 +1118,10 @@
       "too_many_app_configs": "Too many app configurations (64 at most)",
       "too_many_entries": "Too many entries (50 at most)",
       "template_too_large": "Template too large (32 KiB for a file, 4,096 characters for an app configuration value)",
-      "variable_not_allowed": "Variables only in a template (file or app configuration)"
+      "variable_not_allowed": "Variables only in a template (file or app configuration)",
+      "too_many_required_apps": "Too many required apps (32 at most)",
+      "package_not_found": "Package not found in this tenant",
+      "package_not_confirmed": "Package not confirmed: confirm it before requiring it"
     }
   },
   "notificationCenter": {
@@ -1037,6 +1133,12 @@
         "platforms_kept": {
           "title": "应用平台未更新",
           "message": "内容令牌 {{label}} 为 {{count}} 个已分配的应用列出了其他平台：只要它们仍有分配，其平台就会保留。"
+        }
+      },
+      "legacy_agent": {
+        "required_app_failed": {
+          "title": "Required apps not installed",
+          "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
       }
     }

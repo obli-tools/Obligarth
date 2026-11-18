@@ -10,8 +10,9 @@ import type { CommandSpec } from './commands';
 // off by default), the commands of LEGACY_AGENT_SENSITIVE_COMMAND_TYPES go through legacy_agent.commands_sensitive
 // (floor 'sensitive': a second factor) unless their own key asks more. One function for every path: the record of a
 // device and the batch (routes.ts), the MCP server and the approval of its authorizations (console.ts). The automatic
-// flows (harvest.ts, autoUpdate.ts) never call it: they read their own key of the matrix as before, so the setting
-// never stops them.
+// flows (harvest.ts, autoUpdate.ts, requiredApps.ts) never call it: they read their own key of the matrix as before, so
+// the setting never stops them. The required apps come from a published (hence approved) policy: their installs pass,
+// only the matrix key legacy_agent.apps applies to them, per device.
 // =============================================================================
 
 const RANK: Record<RestrictionLevel, number> = { none: 0, sensitive: 1, restricted: 2 };
