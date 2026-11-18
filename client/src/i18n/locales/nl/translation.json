@@ -708,10 +708,14 @@
       "live_alert_cleared": "Meldingen gewist",
       "sso_sync_delete_blocked": "Verwijdering van het account door Obligate geblokkeerd (nog in gebruik): uitgeschakeld, handmatig verwijderen",
       "android_mass_missing_confirmed": "Android: massale verdwijning bevestigd",
-      "legacy_agent_package_confirmed": "Door een apparaat teruggestuurde APK bevestigd"
+      "legacy_agent_package_confirmed": "Door een apparaat teruggestuurde APK bevestigd",
+      "obliwatch_consent_changed": "Obliwatch-toestemming van de tenant gewijzigd",
+      "obliwatch_read": "Gegevens gelezen door Obliwatch",
+      "obliwatch_auth_rejected": "Verzoek van Obliwatch geweigerd"
     },
     "families": {
-      "legacy_agent": "Android-agent"
+      "legacy_agent": "Android-agent",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Goedkeuringen openen",
       "on": "aan",
       "off": "uit"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Wat de beveiligingstool van de suite met deze tenant mag doen. Elke wijziging vraagt een tweede factor en wordt gelogd.",
+      "stateOn": "Toestemming gegeven",
+      "stateOff": "Geen toestemming",
+      "allowed": "Toegestaan",
+      "read": "Obliwatch mag deze tenant lezen",
+      "readHint": "Apparaten, hun beveiligingsstatus en dekking, en de toegangssleutels van AI-agents. Nooit een serienummer, IMEI, telefoonnummer, MAC-adres of locatie.",
+      "push": "Mobiele beveiligingssignalen versturen",
+      "pushHint": "Wijzigingen in naleving, integriteit, beheer en verloren-modus, direct naar Obliwatch verstuurd.",
+      "actions": "Actieverzoeken van Obliwatch accepteren",
+      "actionsHint": "Vergrendelen, verloren-modus, locatie of geluid op één apparaat: elk verzoek wacht op een tweede factor of een goedkeurder in Obligarth.",
+      "nominativeAiApps": "Nominatieve weergave van de AI-apps",
+      "nominativeAiAppsHint": "Welk apparaat welke AI-app gebruikt, in plaats van alleen aantallen.",
+      "slugIncompatible": "De identificatie van deze tenant ({{slug}}) voldoet niet aan het formaat dat Obliwatch vereist: kleine letters, cijfers en koppeltekens, maximaal 64.",
+      "saved": "Obliwatch-toestemming opgeslagen",
+      "lastChange": "Laatste wijziging: {{date}} door {{user}}",
+      "neverChanged": "Nooit gewijzigd: alles staat uit."
     }
   }
 }

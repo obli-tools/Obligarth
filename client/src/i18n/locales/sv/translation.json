@@ -708,10 +708,14 @@
       "live_alert_cleared": "Aviseringar rensade",
       "sso_sync_delete_blocked": "Borttagning av kontot från Obligate blockerad (refereras fortfarande): inaktiverat, ta bort manuellt",
       "android_mass_missing_confirmed": "Android: massförsvinnande bekräftat",
-      "legacy_agent_package_confirmed": "APK tillbakaskickad av en enhet bekräftad"
+      "legacy_agent_package_confirmed": "APK tillbakaskickad av en enhet bekräftad",
+      "obliwatch_consent_changed": "Tenantens Obliwatch-samtycke ändrat",
+      "obliwatch_read": "Data läst av Obliwatch",
+      "obliwatch_auth_rejected": "Begäran från Obliwatch nekad"
     },
     "families": {
-      "legacy_agent": "Android-agent"
+      "legacy_agent": "Android-agent",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Öppna godkännandena",
       "on": "på",
       "off": "av"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Vad svitens säkerhetsverktyg får göra med denna tenant. Varje ändring kräver en andra faktor och loggas.",
+      "stateOn": "Samtycke givet",
+      "stateOff": "Inget samtycke",
+      "allowed": "Tillåtet",
+      "read": "Obliwatch får läsa denna tenant",
+      "readHint": "Enheter, deras säkerhetsläge och täckning samt AI-agenters åtkomstnycklar. Aldrig serienummer, IMEI, telefonnummer, MAC-adress eller plats.",
+      "push": "Skicka mobila säkerhetssignaler",
+      "pushHint": "Ändringar av efterlevnad, integritet, hantering och förlorat läge, skickade till Obliwatch direkt.",
+      "actions": "Ta emot åtgärdsbegäranden från Obliwatch",
+      "actionsHint": "Lås, förlorat läge, plats eller ljud på en enhet: varje begäran väntar på en andra faktor eller en godkännare i Obligarth.",
+      "nominativeAiApps": "Namngiven vy över AI-appar",
+      "nominativeAiAppsHint": "Vilken enhet som använder vilken AI-app, i stället för bara antal.",
+      "slugIncompatible": "Identifieraren för denna tenant ({{slug}}) följer inte formatet som Obliwatch kräver: gemener, siffror och bindestreck, högst 64.",
+      "saved": "Obliwatch-samtycke sparat",
+      "lastChange": "Senaste ändring: {{date}} av {{user}}",
+      "neverChanged": "Aldrig ändrat: allt är avstängt."
     }
   }
 }

@@ -708,10 +708,14 @@
       "live_alert_cleared": "تم مسح الإشعارات",
       "sso_sync_delete_blocked": "حُظر حذف الحساب من Obligate (لا يزال مُشارًا إليه): عُطّل، احذفه يدويًا",
       "android_mass_missing_confirmed": "Android: تأكّد الاختفاء الجماعي",
-      "legacy_agent_package_confirmed": "تأكيد ملف APK أعاده جهاز"
+      "legacy_agent_package_confirmed": "تأكيد ملف APK أعاده جهاز",
+      "obliwatch_consent_changed": "تم تغيير موافقة Obliwatch للمستأجر",
+      "obliwatch_read": "بيانات قرأها Obliwatch",
+      "obliwatch_auth_rejected": "تم رفض طلب Obliwatch"
     },
     "families": {
-      "legacy_agent": "وكيل Android"
+      "legacy_agent": "وكيل Android",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "فتح الموافقات",
       "on": "مفعّل",
       "off": "معطّل"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "ما يمكن لأداة الأمان في الحزمة فعله مع هذا المستأجر. كل تغيير يتطلب عاملًا ثانيًا ويُسجَّل.",
+      "stateOn": "تم منح الموافقة",
+      "stateOff": "لا موافقة",
+      "allowed": "مسموح",
+      "read": "يمكن لـ Obliwatch قراءة هذا المستأجر",
+      "readHint": "الأجهزة ووضعها الأمني وتغطيتها ومفاتيح وصول وكلاء الذكاء الاصطناعي. لا رقم تسلسلي ولا IMEI ولا رقم هاتف ولا عنوان MAC ولا موقع أبدًا.",
+      "push": "إرسال إشارات أمان الأجهزة المحمولة",
+      "pushHint": "تغييرات الامتثال والسلامة والإدارة ووضع الفقدان، تُرسل إلى Obliwatch فور حدوثها.",
+      "actions": "قبول طلبات الإجراءات من Obliwatch",
+      "actionsHint": "القفل أو وضع الفقدان أو الموقع أو الصوت على جهاز واحد: ينتظر كل طلب عاملًا ثانيًا أو موافقًا في Obligarth.",
+      "nominativeAiApps": "عرض اسمي لتطبيقات الذكاء الاصطناعي",
+      "nominativeAiAppsHint": "أي جهاز يستخدم أي تطبيق ذكاء اصطناعي، بدلًا من الأعداد فقط.",
+      "slugIncompatible": "معرّف هذا المستأجر ({{slug}}) لا يطابق الصيغة التي يتطلبها Obliwatch: أحرف صغيرة وأرقام وشرطات، 64 كحد أقصى.",
+      "saved": "تم حفظ موافقة Obliwatch",
+      "lastChange": "آخر تغيير: {{date}} بواسطة {{user}}",
+      "neverChanged": "لم يتغير أبدًا: كل شيء معطّل."
     }
   }
 }

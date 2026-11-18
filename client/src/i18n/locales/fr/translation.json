@@ -1916,7 +1916,10 @@
       "live_alert_cleared": "Notifications effacées",
       "sso_sync_delete_blocked": "Suppression du compte par Obligate bloquée (encore référencé) : désactivé, à supprimer à la main",
       "android_mass_missing_confirmed": "Android : disparition massive confirmée",
-      "legacy_agent_package_confirmed": "APK renvoyé par un appareil confirmé"
+      "legacy_agent_package_confirmed": "APK renvoyé par un appareil confirmé",
+      "obliwatch_consent_changed": "Consentement Obliwatch du tenant modifié",
+      "obliwatch_read": "Données lues par Obliwatch",
+      "obliwatch_auth_rejected": "Requête d’Obliwatch refusée"
     },
     "families": {
       "auth": "Authentification",
@@ -1947,7 +1950,8 @@
       "enrollment": "Enrôlement",
       "privacy": "Confidentialité",
       "ops": "Exploitation",
-      "legacy_agent": "Agent Android"
+      "legacy_agent": "Agent Android",
+      "obliwatch": "Obliwatch"
     },
     "errors": {
       "unavailable": "L'action n'a pas été réalisée : le journal d'audit est indisponible."
@@ -7819,6 +7823,27 @@
         "title": "Numéro de série déjà porté par un appareil géré",
         "message": "Un appareil Android s'est inscrit avec le numéro de série de l'appareil {{deviceId}}, déjà géré."
       }
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Ce que l’outil de sécurité de la suite peut faire avec ce tenant. Chaque changement demande un second facteur et est journalisé.",
+      "stateOn": "Consentement donné",
+      "stateOff": "Aucun consentement",
+      "allowed": "Autorisé",
+      "read": "Obliwatch peut lire ce tenant",
+      "readHint": "Les appareils, leur posture et leur couverture, et les clés d’accès des agents IA. Jamais de numéro de série, d’IMEI, de numéro de téléphone, d’adresse MAC ni de position.",
+      "push": "Envoyer les signaux de sécurité mobile",
+      "pushHint": "Changements de conformité, d’intégrité, de gestion et de mode perdu, envoyés à Obliwatch dès qu’ils surviennent.",
+      "actions": "Accepter les demandes d’action d’Obliwatch",
+      "actionsHint": "Verrouillage, mode perdu, localisation ou sonnerie sur un appareil : chaque demande attend un second facteur ou un approbateur dans Obligarth.",
+      "nominativeAiApps": "Vue nominative des apps IA",
+      "nominativeAiAppsHint": "Quel appareil utilise quelle app IA, au lieu de simples décomptes.",
+      "slugIncompatible": "L’identifiant de ce tenant ({{slug}}) ne respecte pas le format exigé par Obliwatch : lettres minuscules, chiffres et tirets, 64 au plus.",
+      "saved": "Consentement Obliwatch enregistré",
+      "lastChange": "Dernier changement : {{date}} par {{user}}",
+      "neverChanged": "Jamais modifié : tout est désactivé."
     }
   }
 }

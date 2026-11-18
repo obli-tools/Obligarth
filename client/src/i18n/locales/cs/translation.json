@@ -708,10 +708,14 @@
       "live_alert_cleared": "Oznámení vymazána",
       "sso_sync_delete_blocked": "Smazání účtu službou Obligate zablokováno (stále odkazován): deaktivován, smažte ručně",
       "android_mass_missing_confirmed": "Android: hromadné zmizení potvrzeno",
-      "legacy_agent_package_confirmed": "Potvrzen APK odeslaný zpět zařízením"
+      "legacy_agent_package_confirmed": "Potvrzen APK odeslaný zpět zařízením",
+      "obliwatch_consent_changed": "Souhlas Obliwatch tenanta změněn",
+      "obliwatch_read": "Data přečtená Obliwatch",
+      "obliwatch_auth_rejected": "Požadavek Obliwatch odmítnut"
     },
     "families": {
-      "legacy_agent": "Agent Android"
+      "legacy_agent": "Agent Android",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Otevřít schválení",
       "on": "zapnuto",
       "off": "vypnuto"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Co smí bezpečnostní nástroj sady s tímto tenantem dělat. Každá změna vyžaduje druhý faktor a je zaznamenána.",
+      "stateOn": "Souhlas udělen",
+      "stateOff": "Bez souhlasu",
+      "allowed": "Povoleno",
+      "read": "Obliwatch smí číst tohoto tenanta",
+      "readHint": "Zařízení, jejich stav zabezpečení a pokrytí a přístupové klíče agentů AI. Nikdy sériové číslo, IMEI, telefonní číslo, MAC adresu ani polohu.",
+      "push": "Odesílat mobilní bezpečnostní signály",
+      "pushHint": "Změny shody, integrity, správy a režimu ztráty, odesílané do Obliwatch hned, jak nastanou.",
+      "actions": "Přijímat žádosti o akce od Obliwatch",
+      "actionsHint": "Zamčení, režim ztráty, poloha nebo zvuk na jednom zařízení: každá žádost čeká na druhý faktor nebo schvalovatele v Obligarth.",
+      "nominativeAiApps": "Jmenný přehled aplikací AI",
+      "nominativeAiAppsHint": "Které zařízení používá kterou aplikaci AI, místo pouhých počtů.",
+      "slugIncompatible": "Identifikátor tohoto tenanta ({{slug}}) neodpovídá formátu, který Obliwatch vyžaduje: malá písmena, číslice a pomlčky, nejvýše 64.",
+      "saved": "Souhlas Obliwatch uložen",
+      "lastChange": "Poslední změna: {{date}}, {{user}}",
+      "neverChanged": "Nikdy nezměněno: vše je vypnuto."
     }
   }
 }

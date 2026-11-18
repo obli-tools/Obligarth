@@ -30,6 +30,9 @@ import { createAndroidByodSurface } from './android/byod/surface';
 import { createAndroidSigninSurface } from './android/signin/surface';
 import { createLegacyAgentSurface } from './legacyAgent/surface';
 import { createMcpRouter } from './mcp/router';
+import { createObliwatchRouter } from './integrations/obliwatch/router';
+import { obliwatchIntegrationEnabled } from './integrations/obliwatch/config';
+import { OBLIWATCH_API_BASE } from '@obligarth/shared';
 import { createNoticePublicSurface } from './privacy/notice/surface';
 import { jobs } from './jobs';
 import { httpMetricsMiddleware } from './ops/http';
@@ -117,6 +120,12 @@ export function createApp() {
   // parsers, the cookies, the session and the console's database context: no session exists here, nothing can write
   // one nor set a cookie; its own no-store, IP gate, Origin guard, JSON parser and key authentication.
   app.use('/mcp', createMcpRouter());
+  // The read API of Obliwatch (/api/integrations/obliwatch/v1; brief GTH-03, GTH-07), only with OBLIWATCH_INTEGRATION=on:
+  // mounted like /mcp, before cors, the parsers, the cookies, the session and the console's database context. Obliwatch
+  // calls it server to server with an app token of Obligate (sub app:obliwatch); no session exists here, nothing can
+  // write one nor set a cookie; its own no-store, JSON parser, token authentication, single-use jti, rate limit and
+  // per-tenant consent (integrations/obliwatch/router.ts). Off: the path falls through to the API's JSON 404.
+  if (obliwatchIntegrationEnabled()) app.use(OBLIWATCH_API_BASE, createObliwatchRouter());
   app.use(
     cors({
       origin: config.clientOrigin,

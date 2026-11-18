@@ -7,6 +7,7 @@ import { deviceApps, deviceCertificates, deviceProfiles } from '../../mdm/invent
 import { deviceConfiguration } from '../../mdm/policies/configuration';
 import { listEpisodes } from '../../mdm/registry/episodes';
 import { deviceDetail, listDevices } from '../../legacyAgent/console';
+import { maskLegacyDevice, maskRegistryDevice } from '../../privacy/mask';
 import { holdsTenantCapability, requireScope, withTenant, type McpCaller } from '../caller';
 import { deviceFilter, deviceNotFound, groupFilter, resolveCallerDevice } from '../perimeter';
 import { READ, js, page, registerTool } from './index';
@@ -60,38 +61,7 @@ export async function identifiersAllowed(caller: McpCaller, tenantId: number): P
   return caller.key.scopes.includes('devices.identifiers') && (await holdsTenantCapability(caller, tenantId, 'devices.manage'));
 }
 
-/** Status items of the bridge agent that carry a hardware or network identifier. */
-const IDENTIFIER_ITEM = /imei|meid|serial|android_?id|iccid|imsi|phone|msisdn|mac|knox/i;
-
-/** A registry summary or record without its identifiers (serial, IMEI, UDID, phone number, ICCID, EID, MAC addresses). */
-function maskRegistryDevice<T extends object>(d: T): T {
-  const out = { ...(d as Record<string, any>) };
-  if ('serialNumber' in out) out.serialNumber = null;
-  if (out.apple && typeof out.apple === 'object') {
-    const apple = { ...out.apple };
-    if ('imei' in apple) apple.imei = null;
-    if ('udid' in apple) apple.udid = null;
-    if (apple.info && typeof apple.info === 'object') {
-      const info = { ...apple.info };
-      for (const k of ['phoneNumber', 'iccid', 'eid', 'wifiMac', 'bluetoothMac']) if (k in info) info[k] = null;
-      apple.info = info;
-    }
-    out.apple = apple;
-  }
-  out.identifiersMasked = true;
-  return out as T;
-}
-
-/** A bridge agent's list row or record without its identifiers (serials, IMEIs, Android id, Knox, identifying status). */
-function maskLegacyDevice<T extends object>(d: T): T {
-  const out = { ...(d as Record<string, any>) };
-  if ('serialNumber' in out) out.serialNumber = null;
-  for (const k of ['androidId', 'claimedSerial', 'samsungSerial', 'hints', 'knoxInfo']) if (k in out) out[k] = null;
-  if ('imeis' in out) out.imeis = [];
-  if (Array.isArray(out.status)) out.status = out.status.filter((s: { item?: unknown }) => !IDENTIFIER_ITEM.test(String(s.item ?? '')));
-  out.identifiersMasked = true;
-  return out as T;
-}
+// maskRegistryDevice / maskLegacyDevice: privacy/mask.ts (shared with the Obliwatch read API, which always masks).
 
 /**
  * The free search of a key without identifiers (review F053): the ids, among `within`, of the devices whose

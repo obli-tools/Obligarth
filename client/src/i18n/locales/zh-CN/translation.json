@@ -708,10 +708,14 @@
       "live_alert_cleared": "通知已清除",
       "sso_sync_delete_blocked": "Obligate 删除账户被阻止（仍被引用）：已停用，请手动删除",
       "android_mass_missing_confirmed": "Android：已确认大规模消失",
-      "legacy_agent_package_confirmed": "已确认由设备回传的 APK"
+      "legacy_agent_package_confirmed": "已确认由设备回传的 APK",
+      "obliwatch_consent_changed": "租户的 Obliwatch 同意已更改",
+      "obliwatch_read": "Obliwatch 读取的数据",
+      "obliwatch_auth_rejected": "Obliwatch 请求被拒绝"
     },
     "families": {
-      "legacy_agent": "Android 代理"
+      "legacy_agent": "Android 代理",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "打开审批",
       "on": "开",
       "off": "关"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "套件的安全工具可以对此租户执行的操作。每次更改都需要第二因素并会记录。",
+      "stateOn": "已同意",
+      "stateOff": "未同意",
+      "allowed": "允许",
+      "read": "Obliwatch 可以读取此租户",
+      "readHint": "设备、其安全状态和覆盖范围，以及 AI 代理的访问密钥。绝不包括序列号、IMEI、电话号码、MAC 地址或位置。",
+      "push": "发送移动安全信号",
+      "pushHint": "合规、完整性、管理和丢失模式的变化，发生时即发送给 Obliwatch。",
+      "actions": "接受来自 Obliwatch 的操作请求",
+      "actionsHint": "对单台设备锁定、丢失模式、定位或播放声音：每个请求都需在 Obligarth 中经第二因素或审批人确认。",
+      "nominativeAiApps": "AI 应用实名视图",
+      "nominativeAiAppsHint": "显示哪台设备使用哪个 AI 应用，而不只是数量。",
+      "slugIncompatible": "此租户的标识符（{{slug}}）不符合 Obliwatch 要求的格式：小写字母、数字和连字符，最多 64 个。",
+      "saved": "Obliwatch 同意已保存",
+      "lastChange": "最近更改：{{date}}，{{user}}",
+      "neverChanged": "从未更改：全部关闭。"
     }
   }
 }

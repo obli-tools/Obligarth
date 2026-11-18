@@ -13,6 +13,7 @@ import { InventoryBody } from './schemas';
 import { withAgentTransaction } from './session';
 import { writeStatusItems } from './status';
 import { errorReply, type AgentIdentity, type Exchange, type Reply } from './surface';
+import { signalMark } from '../integrations/obliwatch/marker';
 
 // =============================================================================
 // POST /agent/v1/inventory (docs: agent-pont-android §4.6, PB13, RC-7): the
@@ -86,7 +87,8 @@ export async function handleInventory(who: AgentIdentity, ex: Exchange, raw: Buf
       os_version: clean(d.osVersion, 32), os_build: clean(d.build, 32), device_name: clean(d.deviceName, 255),
       storage_capacity_bytes: b.storage?.totalBytes ?? null, storage_available_bytes: b.storage?.freeBytes ?? null,
       ...(serial.set ? { serial_number: serial.set } : {}),
-      last_checkin_at: now, updated_at: now,
+      // The Obliwatch read API exposes the satellite's patch level and the coverage of the apps: marked in this write.
+      last_checkin_at: now, updated_at: now, signal_updated_at: signalMark(trx),
     });
     const privacy = await legacyAgentPrivacyRulesFor(trx, who.tenantId);
     const imeis = privacy.imei ? [...new Set(d.imeis ?? [])] : [];

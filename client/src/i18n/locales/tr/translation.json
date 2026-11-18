@@ -708,10 +708,14 @@
       "live_alert_cleared": "Bildirimler temizlendi",
       "sso_sync_delete_blocked": "Hesabın Obligate tarafından silinmesi engellendi (hâlâ başvuruluyor): devre dışı bırakıldı, elle silin",
       "android_mass_missing_confirmed": "Android: toplu kaybolma onaylandı",
-      "legacy_agent_package_confirmed": "Bir cihazın geri gönderdiği APK onaylandı"
+      "legacy_agent_package_confirmed": "Bir cihazın geri gönderdiği APK onaylandı",
+      "obliwatch_consent_changed": "Kiracının Obliwatch onayı değiştirildi",
+      "obliwatch_read": "Obliwatch tarafından okunan veriler",
+      "obliwatch_auth_rejected": "Obliwatch isteği reddedildi"
     },
     "families": {
-      "legacy_agent": "Android ajanı"
+      "legacy_agent": "Android ajanı",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Onayları aç",
       "on": "açık",
       "off": "kapalı"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Paketin güvenlik aracının bu kiracıyla neler yapabileceği. Her değişiklik ikinci bir doğrulama ister ve kaydedilir.",
+      "stateOn": "Onay verildi",
+      "stateOff": "Onay yok",
+      "allowed": "İzin verilen",
+      "read": "Obliwatch bu kiracıyı okuyabilir",
+      "readHint": "Cihazlar, güvenlik durumları ve kapsamları ile yapay zekâ ajanlarının erişim anahtarları. Asla seri numarası, IMEI, telefon numarası, MAC adresi veya konum yok.",
+      "push": "Mobil güvenlik sinyallerini gönder",
+      "pushHint": "Uyumluluk, bütünlük, yönetim ve kayıp modu değişiklikleri, olur olmaz Obliwatch’a gönderilir.",
+      "actions": "Obliwatch’tan gelen eylem isteklerini kabul et",
+      "actionsHint": "Tek bir cihazda kilitleme, kayıp modu, konum veya ses: her istek Obligarth’ta ikinci bir doğrulama veya onaylayıcı bekler.",
+      "nominativeAiApps": "Yapay zekâ uygulamalarının isimli görünümü",
+      "nominativeAiAppsHint": "Yalnızca sayılar yerine hangi cihazın hangi yapay zekâ uygulamasını kullandığı.",
+      "slugIncompatible": "Bu kiracının tanımlayıcısı ({{slug}}) Obliwatch’un istediği biçime uymuyor: küçük harfler, rakamlar ve tireler, en fazla 64.",
+      "saved": "Obliwatch onayı kaydedildi",
+      "lastChange": "Son değişiklik: {{date}}, {{user}}",
+      "neverChanged": "Hiç değiştirilmedi: her şey kapalı."
     }
   }
 }

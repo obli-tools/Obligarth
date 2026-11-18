@@ -708,10 +708,14 @@
       "live_alert_cleared": "Notificaciones borradas",
       "sso_sync_delete_blocked": "Eliminación de la cuenta por Obligate bloqueada (aún referenciada): desactivada, elimínela a mano",
       "android_mass_missing_confirmed": "Android: desaparición masiva confirmada",
-      "legacy_agent_package_confirmed": "APK devuelto por un dispositivo confirmado"
+      "legacy_agent_package_confirmed": "APK devuelto por un dispositivo confirmado",
+      "obliwatch_consent_changed": "Consentimiento de Obliwatch del inquilino modificado",
+      "obliwatch_read": "Datos leídos por Obliwatch",
+      "obliwatch_auth_rejected": "Solicitud de Obliwatch rechazada"
     },
     "families": {
-      "legacy_agent": "Agente Android"
+      "legacy_agent": "Agente Android",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Abrir las aprobaciones",
       "on": "activado",
       "off": "desactivado"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Lo que la herramienta de seguridad de la suite puede hacer con este inquilino. Cada cambio pide un segundo factor y queda registrado.",
+      "stateOn": "Consentimiento dado",
+      "stateOff": "Sin consentimiento",
+      "allowed": "Permitido",
+      "read": "Obliwatch puede leer este inquilino",
+      "readHint": "Los dispositivos, su postura y cobertura, y las claves de acceso de los agentes de IA. Nunca un número de serie, IMEI, número de teléfono, dirección MAC ni ubicación.",
+      "push": "Enviar las señales de seguridad móvil",
+      "pushHint": "Cambios de cumplimiento, integridad, gestión y modo perdido, enviados a Obliwatch en cuanto ocurren.",
+      "actions": "Aceptar solicitudes de acción de Obliwatch",
+      "actionsHint": "Bloqueo, modo perdido, ubicación o sonido en un dispositivo: cada solicitud espera un segundo factor o un aprobador en Obligarth.",
+      "nominativeAiApps": "Vista nominativa de las apps de IA",
+      "nominativeAiAppsHint": "Qué dispositivo usa qué app de IA, en lugar de solo recuentos.",
+      "slugIncompatible": "El identificador de este inquilino ({{slug}}) no cumple el formato que exige Obliwatch: minúsculas, cifras y guiones, 64 como máximo.",
+      "saved": "Consentimiento de Obliwatch guardado",
+      "lastChange": "Último cambio: {{date}} por {{user}}",
+      "neverChanged": "Nunca modificado: todo está desactivado."
     }
   }
 }

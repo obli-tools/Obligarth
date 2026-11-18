@@ -522,6 +522,65 @@ export async function keysCoveringTenant(tenantId: number): Promise<Array<{ row:
   });
 }
 
+/** A key of the full oversight (Obliwatch, GTH-07), with the position of its page. */
+export interface OversightFullKey {
+  row: KeyRow;
+  targets: McpTarget[];
+  owner: { id: number; username: string; isPlatformAdmin: boolean };
+  /** created_at as Postgres text (exact, microseconds) and id: the position of a page. */
+  position: { createdAt: string; id: string };
+}
+
+/** Days a revoked or expired key stays in the full oversight. */
+export const OVERSIGHT_DEAD_KEY_DAYS = 90;
+
+/**
+ * The keys whose perimeter reaches tenant T, for the security oversight of the MSP (Obliwatch, GTH-07; identity
+ * context): keysCoveringTenant's reach (listed tenant, or 'all' with the owner a platform administrator or a member of
+ * T; T not excluded) WITHOUT its liveness filter: revoked and expired keys too, for OVERSIGHT_DEAD_KEY_DAYS after
+ * they died. The owner's mcp.access_keys in T is required of an ACTIVE key of a non-administrator only (a dead key is
+ * history, its owner's current rights do not change what it could do). Newest first, `limit` at most, after `after`.
+ * The caller projects the rows (ip_allow, last_used_ip, revoked_* are selected; never secret_sha256, which is not).
+ */
+export async function keysForTenantOversightFull(
+  tenantId: number, opts: { after?: { createdAt: string; id: string } | null; limit: number },
+): Promise<{ items: OversightFullKey[]; more: boolean }> {
+  const limit = Math.max(1, Math.min(500, Math.floor(opts.limit)));
+  const COLUMNS = KEY_COLUMNS.filter((c) => c !== 'secret_sha256');
+  return asIdentity(MCP_ACTOR, async () => {
+    const out: OversightFullKey[] = [];
+    let after = opts.after ?? null;
+    for (let round = 0; round < 50 && out.length <= limit; round++) {
+      const q = db('access_keys as k').join('users as u', 'u.id', 'k.user_id')
+        .whereRaw('LEAST(k.revoked_at, k.expires_at) > now() - make_interval(days => ?)', [OVERSIGHT_DEAD_KEY_DAYS])
+        .where((w) => w.where((x) => x.where('k.tenant_mode', 'list').whereExists(db('access_key_targets as t').whereRaw('t.key_id = k.id')
+          .where({ 't.kind': 'tenant', 't.tenant_id': tenantId })))
+          .orWhere((x) => x.where('k.tenant_mode', 'all').where((y) => y.where('u.role', 'admin')
+            .orWhereExists(db('user_tenants as ut').whereRaw('ut.user_id = k.user_id').where('ut.tenant_id', tenantId)))))
+        .whereNotExists(db('access_key_targets as e').whereRaw('e.key_id = k.id').where({ 'e.kind': 'tenant_excluded', 'e.tenant_id': tenantId }))
+        .select([
+          ...COLUMNS.map((c) => `k.${c}`), db.raw('k.ip_allow::text[] AS ip_allow'), db.raw('k.created_at::text AS created_at_pos'),
+          'u.username', db.raw('u.role AS user_role'), db.raw('u.is_active AS user_active'), db.raw('u.credential_version AS user_cv'),
+        ])
+        .orderBy([{ column: 'k.created_at', order: 'desc' }, { column: 'k.id', order: 'desc' }]).limit(200);
+      if (after) q.whereRaw('(k.created_at, k.id) < (?::timestamptz, ?::uuid)', [after.createdAt, after.id]);
+      const rows = await q as KeyRow[];
+      if (rows.length === 0) break;
+      for (const r of rows) {
+        after = { createdAt: String(r.created_at_pos), id: String(r.id) };
+        const isAdmin = r.user_role === 'admin';
+        const active = !r.revoked_at && new Date(r.expires_at).getTime() > Date.now();
+        if (active && !isAdmin && !(await permissionService.userHasTenantCapability(Number(r.user_id), tenantId, 'mcp.access_keys'))) continue;
+        const t = await db('access_key_targets').where({ key_id: r.id }).select('kind', 'tenant_id', 'ref_id') as Array<{ kind: string; tenant_id: number; ref_id: number | null }>;
+        out.push({ row: r, targets: targetsOf(t), owner: { id: Number(r.user_id), username: String(r.username), isPlatformAdmin: isAdmin }, position: after });
+        if (out.length > limit) break;
+      }
+      if (rows.length < 200) break;
+    }
+    return { items: out.slice(0, limit), more: out.length > limit };
+  });
+}
+
 export function oversightView(k: { row: KeyRow; owner: { id: number; username: string } }): TenantOversightKeyView {
   const info = keyInfoOf(k.row);
   return {

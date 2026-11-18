@@ -708,10 +708,14 @@
       "live_alert_cleared": "Notifikationer ryddet",
       "sso_sync_delete_blocked": "Sletning af kontoen fra Obligate blokeret (stadig refereret): deaktiveret, slet den manuelt",
       "android_mass_missing_confirmed": "Android: massiv forsvinding bekræftet",
-      "legacy_agent_package_confirmed": "APK sendt tilbage af en enhed bekræftet"
+      "legacy_agent_package_confirmed": "APK sendt tilbage af en enhed bekræftet",
+      "obliwatch_consent_changed": "Tenantens Obliwatch-samtykke ændret",
+      "obliwatch_read": "Data læst af Obliwatch",
+      "obliwatch_auth_rejected": "Anmodning fra Obliwatch afvist"
     },
     "families": {
-      "legacy_agent": "Android-agent"
+      "legacy_agent": "Android-agent",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Åbn godkendelserne",
       "on": "til",
       "off": "fra"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Hvad suitens sikkerhedsværktøj må gøre med denne tenant. Hver ændring kræver en anden faktor og logges.",
+      "stateOn": "Samtykke givet",
+      "stateOff": "Intet samtykke",
+      "allowed": "Tilladt",
+      "read": "Obliwatch må læse denne tenant",
+      "readHint": "Enheder, deres sikkerhedstilstand og dækning samt AI-agenters adgangsnøgler. Aldrig serienummer, IMEI, telefonnummer, MAC-adresse eller placering.",
+      "push": "Send mobile sikkerhedssignaler",
+      "pushHint": "Ændringer i overholdelse, integritet, administration og mistet-tilstand, sendt til Obliwatch med det samme.",
+      "actions": "Accepter handlingsanmodninger fra Obliwatch",
+      "actionsHint": "Lås, mistet-tilstand, placering eller lyd på én enhed: hver anmodning venter på en anden faktor eller en godkender i Obligarth.",
+      "nominativeAiApps": "Navngiven visning af AI-apps",
+      "nominativeAiAppsHint": "Hvilken enhed bruger hvilken AI-app, i stedet for kun antal.",
+      "slugIncompatible": "Identifikatoren for denne tenant ({{slug}}) passer ikke til det format, Obliwatch kræver: små bogstaver, cifre og bindestreger, højst 64.",
+      "saved": "Obliwatch-samtykke gemt",
+      "lastChange": "Seneste ændring: {{date}} af {{user}}",
+      "neverChanged": "Aldrig ændret: alt er slået fra."
     }
   }
 }

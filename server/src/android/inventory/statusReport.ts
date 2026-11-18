@@ -25,6 +25,7 @@ import { rollupConfigState } from '../../mdm/policies/artifacts';
 import { requestDeviceResolution } from '../../mdm/policies/triggers';
 import { requestGroupEvaluation } from '../../mdm/groups/triggers';
 import { androidSenders } from '../enrollment/senders';
+import { signalMark, touchSignalInTx } from '../../integrations/obliwatch/marker';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -63,6 +64,23 @@ export function reducePosture(p: unknown): { devicePosture: string; risks: strin
   return { devicePosture: posture, risks };
 }
 
+/** The comparable form of a posture for the Obliwatch marker (jsonb reorders the keys): posture and sorted risks. */
+const postureKey = (p: unknown): string => {
+  if (!p || typeof p !== 'object') return '';
+  const o = p as { devicePosture?: unknown; risks?: unknown };
+  return `${String(o.devicePosture ?? '')}|${Array.isArray(o.risks) ? o.risks.map(String).sort().join(',') : ''}`;
+};
+
+/** The comparable form of a stored security patch level (a date column, read at local midnight): YYYY-MM-DD or null. */
+const patchKey = (v: unknown): string | null => {
+  if (!v) return null;
+  if (typeof v === 'string') return v.slice(0, 10);
+  const d = v instanceof Date ? v : new Date(String(v));
+  if (!Number.isFinite(d.getTime())) return null;
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+};
+
 const time = (v: unknown): Date | null => (typeof v === 'string' && Number.isFinite(Date.parse(v)) ? new Date(v) : null);
 
 export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'ignored'> {
@@ -71,7 +89,9 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   const row = await trx('android_devices as a').join('devices as dv', function j() { this.on('dv.id', '=', 'a.device_id').andOn('dv.tenant_id', '=', 'a.tenant_id'); })
     .where('a.amapi_name', d.name).whereNull('a.released_at')
     .first('a.device_id', 'a.last_status_report_at', 'a.pushed_policy_version', 'a.policy_state', 'a.policy_name', 'a.api_level', 'a.approval_state',
-      'dv.ownership', 'dv.serial_number', 'dv.last_checkin_at', 'dv.os_version') as
+      'dv.ownership', 'dv.serial_number', 'dv.last_checkin_at', 'dv.os_version', 'a.security_posture', 'a.security_patch_level',
+      // The Obliwatch marker (integrations/obliwatch/marker.ts): whether the device had an inventory of apps before.
+      trx.raw('EXISTS (SELECT 1 FROM obligarth.device_apps x WHERE x.tenant_id = a.tenant_id AND x.device_id = a.device_id) AS had_apps')) as
     Record<string, any> | undefined;
   if (!row) {
     const q = await trx('android_quarantine').where({ amapi_name: d.name }).first('id');
@@ -136,6 +156,10 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
     if (inv.storageAvailable !== null) cols.storage_available_bytes = inv.storageAvailable;
   }
   cols.config_state = policyState === 'applied' ? 'applied' : policyState === 'error' ? 'error' : 'pending';
+  // The Obliwatch read API exposes the posture and the patch level of the satellite: marked in this same write (no
+  // extra one) when they change, and on the first report (the coverage of the integrity changes).
+  if (!row.last_status_report_at || postureKey(row.security_posture) !== postureKey(posture)
+    || patchKey(row.security_patch_level) !== (inv.securityPatchLevel ?? null)) cols.signal_updated_at = signalMark(trx);
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
   // Lot AN-P: the state of the policy on the artifact amapi:policy when the version pushed is the one desired; the
   // aggregate state then follows the artifacts of the device (a desired version not pushed yet keeps it pending).
@@ -174,6 +198,8 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
         .merge(appsMerge(trx, ['name', 'version', 'short_version', 'managed', 'management_status', 'is_system', 'installer', 'source', 'last_seen_at']));
     }
   }
+  // The coverage of the apps of the Obliwatch read API moves between 'none' and collected (never fails the report).
+  if (!!row.had_apps !== (apps.length > 0)) await touchSignalInTx(trx, tenantId, [deviceId]);
   // §8.3: the facts the availability depends on changed (an upgrade): resolution of the device and push of its policy.
   const apiChanged = inv.apiLevel !== null && inv.apiLevel !== undefined && row.api_level !== null && Number(row.api_level) !== Number(inv.apiLevel);
   const osChanged = !!inv.osVersion && !!row.os_version && String(row.os_version) !== String(inv.osVersion);

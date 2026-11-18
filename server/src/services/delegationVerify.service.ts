@@ -361,11 +361,25 @@ function fail(
   reason: DelegationFailureReason,
   kid: string | null,
   extra: { claims?: DelegationClaims; detail?: string } = {},
-): DelegationResult {
+): Extract<DelegationResult, { ok: false }> {
   return { ok: false, reason, kid, ...extra };
 }
 
-async function verifyToken(token: string): Promise<DelegationResult> {
+/**
+ * The subject a token must name:
+ *   user  the Obligate user id as a string (^[0-9]{1,15}$, > 0), resolved to a local user afterwards;
+ *   app   'app:<app type>' (an app-scoped token of Obligate, DELEGATION_APP_SUBJECT_PAIRS), never resolved to a user.
+ */
+type SubjectKind = 'user' | 'app';
+
+const APP_SUBJECT_RE = /^app:[a-z][a-z0-9-]{1,31}$/;
+
+type CoreResult =
+  | { ok: true; kid: string; claims: DelegationClaims }
+  | Extract<DelegationResult, { ok: false }>;
+
+/** Steps 1 to 5 and the time checks, shared by the user and the app paths: everything but the subject's resolution. */
+async function verifyCore(token: string, subjectKind: SubjectKind): Promise<CoreResult> {
   if (typeof token !== 'string' || token.length === 0 || Buffer.byteLength(token, 'utf8') > MAX_TOKEN_BYTES) {
     return fail('token_malformed', null);
   }
@@ -436,8 +450,18 @@ async function verifyToken(token: string): Promise<DelegationResult> {
   // sub is the Obligate user id AS A STRING (contract). A numeric type is
   // refused rather than coerced — the two sides agreed on one wire shape and
   // quietly accepting a second one is how they drift apart.
-  if (typeof p.sub !== 'string' || !/^[0-9]{1,15}$/.test(p.sub) || Number(p.sub) <= 0) {
-    return fail('subject_invalid', kid);
+  // An app token (sub 'app:<type>') never passes the user path, and a user token never passes the app path: the two
+  // subjects mean opposite things (an app's own authority, a person's).
+  // The detail says which other kind of subject it was (the payload is signed by now), so that a router can answer
+  // user_token_refused / app_token_refused rather than a bare subject_invalid.
+  if (typeof p.sub !== 'string') return fail('subject_invalid', kid);
+  const userShaped = /^[0-9]{1,15}$/.test(p.sub) && Number(p.sub) > 0;
+  const appShaped = APP_SUBJECT_RE.test(p.sub);
+  if (subjectKind === 'user' && !userShaped) {
+    return fail('subject_invalid', kid, appShaped ? { detail: 'app_subject' } : {});
+  }
+  if (subjectKind === 'app' && !appShaped) {
+    return fail('subject_invalid', kid, userShaped ? { detail: 'user_subject' } : {});
   }
   // ost is a SLUG (HARD RULE 3 / 13). An all-digits value is refused exactly as
   // the mint side refuses it: that is a numeric tenant id smuggled into a slug
@@ -469,11 +493,20 @@ async function verifyToken(token: string): Promise<DelegationResult> {
   if (claims.exp <= now - CLOCK_SKEW_SEC) return fail('token_expired', kid, { claims });
   if (claims.exp - claims.iat > MAX_LIFETIME_SEC) return fail('token_lifetime_excessive', kid, { claims });
 
+  return { ok: true, kid, claims };
+}
+
+async function verifyToken(token: string): Promise<DelegationResult> {
+  const core = await verifyCore(token, 'user');
+  if (!core.ok) return core;
+  const { kid, claims } = core;
+
   // NOTE ON REPLAY: jti is recorded on the audit row for correlation, but a
   // token is NOT burned on first use here. A context rail reads several
   // sections with the one token it was handed, so one-shot semantics would
   // break the caller for no gain: the 120s window plus TLS is the mitigation,
   // and Obligate keeps the authoritative one-row-per-jti grant record.
+  // (The Obliwatch router burns its tokens itself: integrations/obliwatch/jti.ts.)
 
   // 6. Resolve the Obligate subject to a LOCAL user.
   const subject = await resolveLocalSubject(claims.sub);
@@ -523,6 +556,33 @@ async function resolveLocalSubject(sub: string): Promise<DelegationSubject | 'no
   return { localUserId: user.id, username: user.username, role: user.role };
 }
 
+// ── App-scoped tokens (sub 'app:<type>') ────────────────────────────────────
+
+/** The refusals of the app path, on top of the shared ones. */
+export type AppTokenFailureReason = DelegationFailureReason | 'azp_subject_mismatch' | 'scope_invalid';
+
+export type AppTokenResult =
+  | { ok: true; kid: string; claims: DelegationClaims; /** The calling app's type (sub without 'app:', = azp). */ app: string }
+  | { ok: false; reason: AppTokenFailureReason; kid: string | null; claims?: DelegationClaims; detail?: string };
+
+/**
+ * An app-scoped token: the same header, kid, signature, iss, aud, ost, jti and time checks as a user token, then
+ *   - sub = 'app:<type>' and azp = <type> (the rule of Obliwatch's own verifier: an app token speaks for the app that
+ *     asked for it, never for another one);
+ *   - scp = 'read' exactly (the only scope Obligate mints);
+ *   - no user: nothing is resolved, nothing is provisioned.
+ * Which app may call which route, the tenant, the consent and the one-time use of the jti are the caller's policy.
+ */
+async function verifyAppToken(token: string): Promise<AppTokenResult> {
+  const core = await verifyCore(token, 'app');
+  if (!core.ok) return core;
+  const { kid, claims } = core;
+  const app = claims.sub.slice('app:'.length);
+  if (claims.azp !== app) return { ok: false, reason: 'azp_subject_mismatch', kid, claims };
+  if (claims.scp !== 'read') return { ok: false, reason: 'scope_invalid', kid, claims };
+  return { ok: true, kid, claims, app };
+}
+
 export const delegationVerifyService = {
   /** This app's audience value, exported so the middleware states the same
    *  constant it enforces. */
@@ -544,6 +604,19 @@ export const delegationVerifyService = {
       // real cause is an outage, and tells the caller its token is bad when a
       // retry would have succeeded.
       return fail('internal_error', null, { detail: 'internal' });
+    }
+  },
+
+  /**
+   * Verify an app-scoped token (sub 'app:<type>'). Fails closed on every step; never throws. Never accepted by the
+   * delegated user path (delegatedAuth.ts), which calls verify().
+   */
+  async verifyApp(token: string): Promise<AppTokenResult> {
+    try {
+      return await verifyAppToken(token);
+    } catch (err) {
+      logger.error({ err }, '[delegation] app token verification threw — refusing');
+      return { ok: false, reason: 'internal_error', kid: null, detail: 'internal' };
     }
   },
 

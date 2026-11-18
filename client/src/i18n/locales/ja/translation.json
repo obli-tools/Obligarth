@@ -708,10 +708,14 @@
       "live_alert_cleared": "通知をクリアしました",
       "sso_sync_delete_blocked": "Obligate によるアカウント削除をブロック(まだ参照あり): 無効化済み、手動で削除してください",
       "android_mass_missing_confirmed": "Android: 大量消失を確認",
-      "legacy_agent_package_confirmed": "デバイスから返送された APK を確認"
+      "legacy_agent_package_confirmed": "デバイスから返送された APK を確認",
+      "obliwatch_consent_changed": "テナントの Obliwatch 同意が変更されました",
+      "obliwatch_read": "Obliwatch が読み取ったデータ",
+      "obliwatch_auth_rejected": "Obliwatch のリクエストを拒否"
     },
     "families": {
-      "legacy_agent": "Android エージェント"
+      "legacy_agent": "Android エージェント",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "承認を開く",
       "on": "オン",
       "off": "オフ"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "スイートのセキュリティツールがこのテナントで行えること。変更のたびに第二要素が必要で、記録されます。",
+      "stateOn": "同意済み",
+      "stateOff": "同意なし",
+      "allowed": "許可",
+      "read": "Obliwatch はこのテナントを読み取れます",
+      "readHint": "デバイス、その状態とカバレッジ、AI エージェントのアクセスキー。シリアル番号、IMEI、電話番号、MAC アドレス、位置情報は決して含みません。",
+      "push": "モバイルのセキュリティシグナルを送信",
+      "pushHint": "コンプライアンス、整合性、管理、紛失モードの変化を、発生時に Obliwatch へ送信します。",
+      "actions": "Obliwatch からの操作リクエストを受け付ける",
+      "actionsHint": "1 台のデバイスのロック、紛失モード、位置情報、サウンド：各リクエストは Obligarth での第二要素または承認者を待ちます。",
+      "nominativeAiApps": "AI アプリの記名表示",
+      "nominativeAiAppsHint": "件数だけでなく、どのデバイスがどの AI アプリを使っているか。",
+      "slugIncompatible": "このテナントの識別子（{{slug}}）は Obliwatch が要求する形式に合いません：小文字、数字、ハイフンのみ、64 文字以内。",
+      "saved": "Obliwatch の同意を保存しました",
+      "lastChange": "最終変更：{{date}}（{{user}}）",
+      "neverChanged": "変更なし：すべてオフです。"
     }
   }
 }

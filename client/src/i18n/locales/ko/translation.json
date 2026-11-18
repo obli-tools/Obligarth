@@ -708,10 +708,14 @@
       "live_alert_cleared": "알림 지워짐",
       "sso_sync_delete_blocked": "Obligate의 계정 삭제가 차단됨(아직 참조됨): 비활성화됨, 직접 삭제하세요",
       "android_mass_missing_confirmed": "Android: 대량 사라짐 확인됨",
-      "legacy_agent_package_confirmed": "기기가 돌려보낸 APK 확인됨"
+      "legacy_agent_package_confirmed": "기기가 돌려보낸 APK 확인됨",
+      "obliwatch_consent_changed": "테넌트의 Obliwatch 동의 변경됨",
+      "obliwatch_read": "Obliwatch가 읽은 데이터",
+      "obliwatch_auth_rejected": "Obliwatch 요청 거부됨"
     },
     "families": {
-      "legacy_agent": "Android 에이전트"
+      "legacy_agent": "Android 에이전트",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "승인 열기",
       "on": "켜짐",
       "off": "꺼짐"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "제품군의 보안 도구가 이 테넌트에서 할 수 있는 일입니다. 모든 변경은 2단계 인증이 필요하며 기록됩니다.",
+      "stateOn": "동의함",
+      "stateOff": "동의 없음",
+      "allowed": "허용",
+      "read": "Obliwatch가 이 테넌트를 읽을 수 있음",
+      "readHint": "기기, 보안 상태와 적용 범위, AI 에이전트의 액세스 키. 일련번호, IMEI, 전화번호, MAC 주소, 위치는 절대 포함하지 않습니다.",
+      "push": "모바일 보안 신호 보내기",
+      "pushHint": "규정 준수, 무결성, 관리, 분실 모드의 변경을 발생 즉시 Obliwatch로 보냅니다.",
+      "actions": "Obliwatch의 작업 요청 수락",
+      "actionsHint": "기기 한 대의 잠금, 분실 모드, 위치, 소리: 각 요청은 Obligarth에서 2단계 인증 또는 승인자를 기다립니다.",
+      "nominativeAiApps": "AI 앱 실명 보기",
+      "nominativeAiAppsHint": "개수만이 아니라 어떤 기기가 어떤 AI 앱을 쓰는지.",
+      "slugIncompatible": "이 테넌트의 식별자({{slug}})가 Obliwatch가 요구하는 형식에 맞지 않습니다: 소문자, 숫자, 하이픈, 최대 64자.",
+      "saved": "Obliwatch 동의를 저장했습니다",
+      "lastChange": "마지막 변경: {{date}}, {{user}}",
+      "neverChanged": "변경된 적 없음: 모두 꺼져 있습니다."
     }
   }
 }

@@ -708,10 +708,14 @@
       "live_alert_cleared": "Notificações apagadas",
       "sso_sync_delete_blocked": "Exclusão da conta pelo Obligate bloqueada (ainda referenciada): desativada, exclua manualmente",
       "android_mass_missing_confirmed": "Android: desaparecimento em massa confirmado",
-      "legacy_agent_package_confirmed": "APK devolvido por um dispositivo confirmado"
+      "legacy_agent_package_confirmed": "APK devolvido por um dispositivo confirmado",
+      "obliwatch_consent_changed": "Consentimento do Obliwatch do tenant alterado",
+      "obliwatch_read": "Dados lidos pelo Obliwatch",
+      "obliwatch_auth_rejected": "Solicitação do Obliwatch recusada"
     },
     "families": {
-      "legacy_agent": "Agente Android"
+      "legacy_agent": "Agente Android",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Abrir as aprovações",
       "on": "ativado",
       "off": "desativado"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "O que a ferramenta de segurança da suíte pode fazer com este tenant. Cada alteração pede um segundo fator e é registrada.",
+      "stateOn": "Consentimento dado",
+      "stateOff": "Sem consentimento",
+      "allowed": "Permitido",
+      "read": "O Obliwatch pode ler este tenant",
+      "readHint": "Os dispositivos, sua postura e cobertura, e as chaves de acesso de agentes de IA. Nunca número de série, IMEI, número de telefone, endereço MAC ou localização.",
+      "push": "Enviar os sinais de segurança móvel",
+      "pushHint": "Mudanças de conformidade, integridade, gerenciamento e modo perdido, enviadas ao Obliwatch assim que ocorrem.",
+      "actions": "Aceitar solicitações de ação do Obliwatch",
+      "actionsHint": "Bloqueio, modo perdido, localização ou som em um dispositivo: cada solicitação aguarda um segundo fator ou um aprovador no Obligarth.",
+      "nominativeAiApps": "Visão nominativa dos apps de IA",
+      "nominativeAiAppsHint": "Qual dispositivo usa qual app de IA, em vez de apenas contagens.",
+      "slugIncompatible": "O identificador deste tenant ({{slug}}) não segue o formato exigido pelo Obliwatch: letras minúsculas, dígitos e hifens, no máximo 64.",
+      "saved": "Consentimento do Obliwatch salvo",
+      "lastChange": "Última alteração: {{date}} por {{user}}",
+      "neverChanged": "Nunca alterado: tudo está desativado."
     }
   }
 }

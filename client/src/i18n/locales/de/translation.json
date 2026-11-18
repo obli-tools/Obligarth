@@ -708,10 +708,14 @@
       "live_alert_cleared": "Benachrichtigungen geleert",
       "sso_sync_delete_blocked": "Kontolöschung durch Obligate blockiert (noch referenziert): deaktiviert, manuell löschen",
       "android_mass_missing_confirmed": "Android: massenhaftes Verschwinden bestätigt",
-      "legacy_agent_package_confirmed": "Von einem Gerät zurückgesendete APK bestätigt"
+      "legacy_agent_package_confirmed": "Von einem Gerät zurückgesendete APK bestätigt",
+      "obliwatch_consent_changed": "Obliwatch-Einwilligung des Mandanten geändert",
+      "obliwatch_read": "Von Obliwatch gelesene Daten",
+      "obliwatch_auth_rejected": "Anfrage von Obliwatch abgelehnt"
     },
     "families": {
-      "legacy_agent": "Android-Agent"
+      "legacy_agent": "Android-Agent",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Genehmigungen öffnen",
       "on": "an",
       "off": "aus"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Was das Sicherheitswerkzeug der Suite mit diesem Mandanten tun darf. Jede Änderung erfordert einen zweiten Faktor und wird protokolliert.",
+      "stateOn": "Einwilligung erteilt",
+      "stateOff": "Keine Einwilligung",
+      "allowed": "Erlaubt",
+      "read": "Obliwatch darf diesen Mandanten lesen",
+      "readHint": "Geräte, ihr Sicherheitszustand und ihre Abdeckung sowie die Zugriffsschlüssel von KI-Agenten. Niemals Seriennummer, IMEI, Telefonnummer, MAC-Adresse oder Standort.",
+      "push": "Mobile Sicherheitssignale senden",
+      "pushHint": "Änderungen von Konformität, Integrität, Verwaltung und Verloren-Modus, sofort an Obliwatch gesendet.",
+      "actions": "Aktionsanfragen von Obliwatch annehmen",
+      "actionsHint": "Sperren, Verloren-Modus, Ortung oder Ton auf einem Gerät: jede Anfrage wartet auf einen zweiten Faktor oder einen Genehmiger in Obligarth.",
+      "nominativeAiApps": "Namentliche Ansicht der KI-Apps",
+      "nominativeAiAppsHint": "Welches Gerät welche KI-App nutzt, statt nur Zählungen.",
+      "slugIncompatible": "Die Kennung dieses Mandanten ({{slug}}) entspricht nicht dem von Obliwatch verlangten Format: Kleinbuchstaben, Ziffern und Bindestriche, höchstens 64.",
+      "saved": "Obliwatch-Einwilligung gespeichert",
+      "lastChange": "Letzte Änderung: {{date}} durch {{user}}",
+      "neverChanged": "Nie geändert: alles ist aus."
     }
   }
 }

@@ -11,6 +11,7 @@ import { requestDeviceResolution } from '../policies/triggers';
 import { requestGroupEvaluation } from '../groups/triggers';
 import { normalizeSerial, platformFromProductName, serialHolderOf } from '../registry/authenticateRules';
 import { appsMerge } from './appMerge';
+import { touchSignalInTx } from '../../integrations/obliwatch/marker';
 
 // =============================================================================
 // The inventory contract (docs: modele-donnees-mdm §5.2 to §5.4, §10.4): the
@@ -322,6 +323,8 @@ export async function ingestInstalledApplicationList(trx: Knex.Transaction, tena
   if (keep.length) del.whereNotIn('identifier', keep);
   await del.del();
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_apps_at: occurredAt, updated_at: new Date() });
+  // The first installed list moves the coverage of the apps of the Obliwatch read API (never fails the ingestion).
+  if (!f.last.apps) await touchSignalInTx(trx, tenantId, [deviceId]);
   // The dynamic groups that read the applications (marked by the base, P0-5 T5).
   await requestGroupEvaluation(trx, tenantId, [deviceId]);
   return 'applied';
@@ -361,6 +364,8 @@ export async function ingestManagedApplicationList(trx: Knex.Transaction, tenant
   else await gone.update({ managed: false, management_status: null });
   // last_apps_at stays the installed list's: the weekly refresh asks for one on it (apple/commands/inventory.ts).
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update({ last_managed_apps_at: occurredAt, updated_at: new Date() });
+  // The first list of apps moves the coverage of the apps of the Obliwatch read API (never fails the ingestion).
+  if (!f.last.apps && !f.last.managed_apps) await touchSignalInTx(trx, tenantId, [deviceId]);
   for (const fn of managedAppsHooks) await fn(trx, tenantId, deviceId);
   // The dynamic groups that read the applications (marked by the base, P0-5 T5).
   await requestGroupEvaluation(trx, tenantId, [deviceId]);

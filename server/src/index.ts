@@ -32,6 +32,7 @@ import { registerLegacyAgentModule } from './modules/legacyAgent';
 import { registerRemoteModule } from './modules/remote';
 import { registerBenchModule } from './modules/bench';
 import { registerMcpModule } from './modules/mcp';
+import { registerObliwatchModule } from './modules/obliwatch';
 import { registerSitesModule } from './modules/sites';
 import { registerMdmModule } from './mdm';
 import { registerPrivacyModule } from './modules/privacy';
@@ -100,6 +101,9 @@ async function main() {
   // MCP server (AI agents through personal access keys): after the bridge agent, whose minute job and console core
   // it uses.
   registerMcpModule();
+  // Obliwatch integration (brief GTH-01..09): after MCP, before Android. Its audit actions always; its restriction
+  // and minute step only with OBLIWATCH_INTEGRATION=on.
+  registerObliwatchModule();
   // Sites (lot P1-SITE): audit actions and the filter of the device list.
   registerSitesModule();
   registerPrivacyModule();

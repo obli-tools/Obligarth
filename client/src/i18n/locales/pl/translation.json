@@ -708,10 +708,14 @@
       "live_alert_cleared": "Powiadomienia wyczyszczone",
       "sso_sync_delete_blocked": "Usunięcie konta przez Obligate zablokowane (nadal przywoływane): wyłączone, usuń ręcznie",
       "android_mass_missing_confirmed": "Android: masowe zniknięcie potwierdzone",
-      "legacy_agent_package_confirmed": "Potwierdzono APK odesłany przez urządzenie"
+      "legacy_agent_package_confirmed": "Potwierdzono APK odesłany przez urządzenie",
+      "obliwatch_consent_changed": "Zmieniono zgodę Obliwatch tenanta",
+      "obliwatch_read": "Dane odczytane przez Obliwatch",
+      "obliwatch_auth_rejected": "Żądanie Obliwatch odrzucone"
     },
     "families": {
-      "legacy_agent": "Agent Android"
+      "legacy_agent": "Agent Android",
+      "obliwatch": "Obliwatch"
     }
   },
   "errors": {
@@ -1306,6 +1310,27 @@
       "pendingOpen": "Otwórz zatwierdzenia",
       "on": "włączone",
       "off": "wyłączone"
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "Co narzędzie bezpieczeństwa pakietu może robić z tym tenantem. Każda zmiana wymaga drugiego składnika i jest rejestrowana.",
+      "stateOn": "Zgoda udzielona",
+      "stateOff": "Brak zgody",
+      "allowed": "Dozwolone",
+      "read": "Obliwatch może odczytywać tego tenanta",
+      "readHint": "Urządzenia, ich stan bezpieczeństwa i pokrycie oraz klucze dostępu agentów AI. Nigdy numer seryjny, IMEI, numer telefonu, adres MAC ani lokalizacja.",
+      "push": "Wysyłaj mobilne sygnały bezpieczeństwa",
+      "pushHint": "Zmiany zgodności, integralności, zarządzania i trybu utraty, wysyłane do Obliwatch na bieżąco.",
+      "actions": "Akceptuj żądania działań od Obliwatch",
+      "actionsHint": "Blokada, tryb utraty, lokalizacja lub dźwięk na jednym urządzeniu: każde żądanie czeka na drugi składnik lub zatwierdzającego w Obligarth.",
+      "nominativeAiApps": "Imienny widok aplikacji AI",
+      "nominativeAiAppsHint": "Które urządzenie używa której aplikacji AI, zamiast samych liczb.",
+      "slugIncompatible": "Identyfikator tego tenanta ({{slug}}) nie spełnia formatu wymaganego przez Obliwatch: małe litery, cyfry i myślniki, najwyżej 64.",
+      "saved": "Zgoda Obliwatch zapisana",
+      "lastChange": "Ostatnia zmiana: {{date}} przez {{user}}",
+      "neverChanged": "Nigdy nie zmieniono: wszystko jest wyłączone."
     }
   }
 }

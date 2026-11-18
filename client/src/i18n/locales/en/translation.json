@@ -1916,7 +1916,10 @@
       "live_alert_cleared": "Notifications cleared",
       "sso_sync_delete_blocked": "Account deletion by Obligate blocked (still referenced): deactivated, delete it by hand",
       "android_mass_missing_confirmed": "Android: mass disappearance confirmed",
-      "legacy_agent_package_confirmed": "APK sent back by a device confirmed"
+      "legacy_agent_package_confirmed": "APK sent back by a device confirmed",
+      "obliwatch_consent_changed": "Obliwatch consent of the tenant changed",
+      "obliwatch_read": "Data read by Obliwatch",
+      "obliwatch_auth_rejected": "Obliwatch request refused"
     },
     "families": {
       "auth": "Authentication",
@@ -1947,7 +1950,8 @@
       "enrollment": "Enrollment",
       "privacy": "Privacy",
       "ops": "Operations",
-      "legacy_agent": "Android agent"
+      "legacy_agent": "Android agent",
+      "obliwatch": "Obliwatch"
     },
     "errors": {
       "unavailable": "The action was not carried out: the audit log is unavailable."
@@ -7819,6 +7823,27 @@
         "title": "Serial number held by a device under management",
         "message": "An Android device enrolled with the serial number of device {{deviceId}}, already under management."
       }
+    }
+  },
+  "obliwatch": {
+    "consent": {
+      "title": "Obliwatch",
+      "subtitle": "What the security tool of the suite may do with this tenant. Each change asks a second factor and is journaled.",
+      "stateOn": "Consent given",
+      "stateOff": "No consent",
+      "allowed": "Allowed",
+      "read": "Obliwatch may read this tenant",
+      "readHint": "Devices, their posture and coverage, and the access keys of AI agents. Never a serial number, IMEI, phone number, MAC address or location.",
+      "push": "Send the mobile security signals",
+      "pushHint": "Compliance, integrity, management and lost mode changes, sent to Obliwatch as they happen.",
+      "actions": "Accept action requests from Obliwatch",
+      "actionsHint": "Lock, lost mode, location or sound on one device: each request waits for a second factor or an approver in Obligarth.",
+      "nominativeAiApps": "Nominative view of the AI apps",
+      "nominativeAiAppsHint": "Which device runs which AI app, instead of counts only.",
+      "slugIncompatible": "The identifier of this tenant ({{slug}}) does not fit the format Obliwatch requires: lowercase letters, digits and hyphens, 64 at most.",
+      "saved": "Obliwatch consent saved",
+      "lastChange": "Last change: {{date}} by {{user}}",
+      "neverChanged": "Never changed: everything is off."
     }
   }
 }

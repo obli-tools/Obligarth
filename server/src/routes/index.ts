@@ -67,6 +67,8 @@ import { createLegacyAgentAdminRouter } from '../legacyAgent/admin.routes';
 import { createAccessKeysRouter } from '../mcp/keys/routes';
 import { createMcpAuthorizationsRouter } from '../mcp/authorizations/routes';
 import { createMcpAdminRouter } from '../mcp/admin.routes';
+import { createObliwatchConsoleRouter } from '../integrations/obliwatch/consent';
+import { obliwatchIntegrationEnabled } from '../integrations/obliwatch/config';
 import { createBenchStationRouter } from '../bench/api.routes';
 import { createBenchAdminRouter } from '../bench/admin.routes';
 import { createBenchSessionsRouter } from '../bench/sessions.routes';
@@ -209,6 +211,10 @@ tenantRouter.use('/bench-provisionings', createBenchHistoryRouter());
 tenantRouter.use('/access-keys', createAccessKeysRouter());
 tenantRouter.use('/mcp-authorizations', createMcpAuthorizationsRouter());
 tenantRouter.use('/admin/mcp', createMcpAdminRouter());
+// The consent of the tenant to the Obliwatch integration (GET/PUT /integrations/obliwatch/consent; capability
+// 'settings', restriction obliwatch.settings_change), only with OBLIWATCH_INTEGRATION=on. The read API itself
+// (/api/integrations/obliwatch/v1) is mounted by app.ts, before the session.
+if (obliwatchIntegrationEnabled()) tenantRouter.use('/integrations/obliwatch', createObliwatchConsoleRouter());
 // The hardened audit journal: retention, legal holds, SIEM destinations,
 // seal keys (master tenant, platform administrators; audit/admin.routes.ts).
 tenantRouter.use('/admin/audit', createAuditAdminRouter());

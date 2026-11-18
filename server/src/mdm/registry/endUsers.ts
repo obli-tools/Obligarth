@@ -4,6 +4,7 @@ import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
 import { requestDeviceResolution, requestEndUserResolution } from '../policies/triggers';
 import { requestGroupEvaluation } from '../groups/triggers';
+import { touchEndUserDevicesInTx } from '../../integrations/obliwatch/marker';
 
 // =============================================================================
 // End users: the employees of the client (docs: modele-donnees-mdm §4.8,
@@ -127,6 +128,8 @@ export const endUserService = {
           external_id: n.value.externalId, updated_at: new Date(),
         }).returning('*');
         if (!row) return null;
+        // The e-mail is the primaryUpn of the Obliwatch read API: its devices are marked (never fails the change).
+        if (row.email !== current.email) await touchEndUserDevicesInTx(trx, tenantId, [id]);
         await requestEndUserResolution(trx, tenantId, [id]);
         await requestGroupEvaluation(trx, tenantId);
         return rowToEndUser(row);
@@ -184,7 +187,9 @@ export const endUserService = {
         report.lines.push({ line: i + 1, outcome: outcome.outcome, id: outcome.id });
         if (outcome.outcome === 'updated') updatedIds.push(outcome.id);
       }
-      // The devices of the end users whose profile changed read it through the variables: resolved again.
+      // The devices of the end users whose profile changed read it through the variables: resolved again; and marked
+      // for the Obliwatch read API (the e-mail is its primaryUpn; never fails the import).
+      await touchEndUserDevicesInTx(trx, tenantId, updatedIds);
       await requestEndUserResolution(trx, tenantId, updatedIds);
       if (updatedIds.length) await requestGroupEvaluation(trx, tenantId);
     });
