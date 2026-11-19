@@ -10,7 +10,11 @@ import { OBLIWATCH_APP } from './config';
 //     scope:'read'} (pair obligarth:obliwatch at Obligate). Never cached, never logged, never put in an error;
 //   - GET /api/ingest/v1/producer-config (cached 5 minutes per tenant): the modules and disabled rule prefixes;
 //   - POST /api/ingest/v1/alerts {alerts:[1..500]}: one result per item. 503 and 429 carry Retry-After (honoured).
-// 10 s timeout per request. The methods never throw: they answer a result.
+//   GET /api/external/v1/catalogues/ai-domains (lot L4, GTH-06): the AI catalog, read by the daily job catalog-sync
+//   (catalog.ts parses it), with the same token pattern, conditional (If-None-Match / 304 with the stored ETag).
+// The producer-config also carries (lot L4) the attestation of the tenant for the nominative view of the AI apps:
+// data.attestations.nominativeAiApps (boolean; data.nominativeAiApps accepted too); absent: null (not attested).
+// 10 s timeout per request, answers of 4 MiB at most. The methods never throw: they answer a result.
 // =============================================================================
 
 export interface ObliwatchClientConfig {
@@ -25,6 +29,8 @@ export interface ProducerConfig {
   ruleIdPrefixesDisabled: string[];
   maxBatch: number;
   minIntervalSec: number;
+  /** Lot L4: Obliwatch attests the tenant may see the AI apps by device (null: the field is absent). */
+  nominativeAiAppsAttested: boolean | null;
 }
 
 export interface IngestResult { eventId: string; status: string; code?: string }
@@ -38,6 +44,7 @@ export type ConfigResult = { ok: true; config: ProducerConfig } | CallFailure;
 const TARGET_TTL_MS = 60_000;
 const CONFIG_TTL_MS = 5 * 60_000;
 const TIMEOUT_MS = 10_000;
+const MAX_ANSWER_BYTES = 4 * 1024 * 1024;
 
 function retryAfterOf(v: string | null): number | null {
   if (!v) return null;
@@ -47,8 +54,47 @@ function retryAfterOf(v: string | null): number | null {
   return Number.isFinite(t) ? Math.min(Math.max(0, Math.ceil((t - Date.now()) / 1000)), 86_400) : null;
 }
 
+/**
+ * The body of an answer, `max` BYTES at most, never buffered beyond: a Content-Length above the bound is refused before
+ * any read, and the stream is counted as it comes and cancelled once the bound is passed (null: too large). A body that
+ * cannot be read is ''. Decoded as UTF-8 afterwards.
+ */
+async function readBounded(res: Response, max: number): Promise<string | null> {
+  const declared = Number(res.headers?.get?.('content-length') ?? NaN);
+  if (Number.isFinite(declared) && declared > max) {
+    await res.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (!res.body) return res.text().then((t) => (Buffer.byteLength(t, 'utf8') > max ? null : t)).catch(() => '');
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > max) {
+        await reader.cancel().catch(() => undefined);
+        return null;
+      }
+      chunks.push(value);
+    }
+  } catch {
+    return '';
+  }
+  return new TextDecoder('utf-8').decode(Buffer.concat(chunks.map((c) => Buffer.from(c.buffer, c.byteOffset, c.byteLength))));
+}
+
 const fail = (error: string, status: number | null = null, retryAfterSeconds: number | null = null): CallFailure =>
   ({ ok: false, error: errorText(error).slice(0, 300), status, retryAfterSeconds });
+
+/** The attestation of the nominative view of the AI apps in a producer-config (lot L4); null when absent. */
+function attestedOf(d: Record<string, unknown>): boolean | null {
+  const a = d.attestations && typeof d.attestations === 'object' ? (d.attestations as Record<string, unknown>).nominativeAiApps : undefined;
+  if (typeof a === 'boolean') return a;
+  return typeof d.nominativeAiApps === 'boolean' ? d.nominativeAiApps : null;
+}
 
 export class ObliwatchClient {
   private target: { url: string; at: number } | null = null;
@@ -113,8 +159,8 @@ export class ObliwatchClient {
     }
   }
 
-  private async call(tenantSlug: string, method: 'GET' | 'POST', path: string, body?: unknown):
-    Promise<{ ok: true; json: unknown } | CallFailure> {
+  private async call(tenantSlug: string, method: 'GET' | 'POST', path: string, body?: unknown, ifNoneMatch?: string | null):
+    Promise<{ ok: true; json: unknown; etag: string | null; notModified: boolean } | CallFailure> {
     try {
       const target = await this.resolveTarget();
       if (!target) return fail('Obliwatch not discovered through Obligate (connected app obliwatch)');
@@ -122,19 +168,32 @@ export class ObliwatchClient {
       if (!token) return fail('Obligate delegation token unavailable');
       const res = await this.fetchFn(`${target}${path}`, {
         method,
-        headers: { Accept: 'application/json', ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), Authorization: `Bearer ${token}` },
+        headers: {
+          Accept: 'application/json',
+          ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+          ...(ifNoneMatch ? { 'If-None-Match': ifNoneMatch } : {}),
+          Authorization: `Bearer ${token}`,
+        },
         body: body === undefined ? undefined : JSON.stringify(body),
         signal: AbortSignal.timeout(TIMEOUT_MS),
         redirect: 'error',
       });
-      const text = await res.text().catch(() => '');
+      const etagRaw = res.headers?.get?.('etag') ?? null;
+      // An ETag is an opaque, printable token (RFC 9110 entity-tag, weak or strong); anything else is ignored.
+      const etag = etagRaw && /^(W\/)?"[\x21\x23-\x7e]{0,250}"$/.test(etagRaw.trim()) ? etagRaw.trim() : null;
+      if (res.status === 304 && ifNoneMatch) {
+        await res.body?.cancel().catch(() => undefined);
+        return { ok: true, json: null, etag: etag ?? ifNoneMatch, notModified: true };
+      }
+      const text = await readBounded(res, MAX_ANSWER_BYTES);
+      if (text === null) return fail('answer too large', res.status);
       if (!res.ok) {
         let code = '';
         try { code = String((JSON.parse(text) as { code?: unknown; error?: unknown })?.code ?? ''); } catch { /* not JSON */ }
         return fail(`HTTP ${res.status}${code ? ` ${code.slice(0, 60)}` : ''}`, res.status, retryAfterOf(res.headers.get('retry-after')));
       }
       try {
-        return { ok: true, json: text ? JSON.parse(text) : null };
+        return { ok: true, json: text ? JSON.parse(text) : null, etag, notModified: false };
       } catch {
         return fail('invalid JSON answer', res.status);
       }
@@ -161,10 +220,20 @@ export class ObliwatchClient {
       ruleIdPrefixesDisabled: Array.isArray(d.ruleIdPrefixesDisabled) ? d.ruleIdPrefixesDisabled.filter((x): x is string => typeof x === 'string').slice(0, 200) : [],
       maxBatch: Number.isInteger(d.maxBatch) && (d.maxBatch as number) > 0 ? Math.min(d.maxBatch as number, 500) : 500,
       minIntervalSec: Number.isInteger(d.minIntervalSec) && (d.minIntervalSec as number) >= 0 ? Math.min(d.minIntervalSec as number, 300) : 10,
+      nominativeAiAppsAttested: attestedOf(d),
     };
     if (this.configs.size > 10_000) this.configs.clear();
     this.configs.set(tenantSlug, { config, at: now });
     return { ok: true, config };
+  }
+
+  /**
+   * The AI catalog of Obliwatch (raw JSON, parsed by catalog.ts), with a token of `tenantSlug` (a consenting tenant).
+   * `etag`: the ETag of the stored catalog, sent as If-None-Match; a 304 answers notModified (json null).
+   */
+  async aiCatalog(tenantSlug: string, etag?: string | null):
+    Promise<{ ok: true; json: unknown; etag: string | null; notModified: boolean } | CallFailure> {
+    return this.call(tenantSlug, 'GET', '/api/external/v1/catalogues/ai-domains', undefined, etag);
   }
 
   /** One batch of alerts (1 to 500) of the tenant. */

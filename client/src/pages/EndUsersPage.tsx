@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { FileUp, Pencil, Plus, RefreshCw, Search, UserMinus } from 'lucide-react';
+import { FileDown, FileUp, Pencil, Plus, RefreshCw, Search, UserMinus } from 'lucide-react';
 import type { EndUser, EndUserImportReport } from '@obligarth/shared';
 import { mdmApi, type EndUserFields } from '@/api/mdm.api';
 import { isStepUpHandled } from '@/api/client';
@@ -15,10 +15,13 @@ import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { formatDate } from '@/components/mdm/PlatformIcon';
 import { anonymize } from '@/utils/anonymize';
 import { apiErrorBody, apiErrorMessage, trCode } from '@/utils/apiError';
+import { saveBlob } from '@/utils/download';
 
 // The end users of the tenant (modele-donnees-mdm §4.8, PLT-28): the employees of the client a device is
 // assigned to. They have no account here: a name, an e-mail, a Managed Apple Account, an identifier of the
-// client's directory. Created by hand, by a CSV import, or at an enrollment.
+// client's directory and, for Obliwatch (GTH-02), the UPN and the Entra object id of the directory (entered or
+// imported, never synchronised). Created by hand, by a CSV import, or at an enrollment; exported as a CSV that
+// imports back within the import's bounds (5 000 lines, 1 MiB: a larger export is split first, importError.too_many_lines).
 
 const PAGE_SIZE = 100;
 /** The message of a refused end user or CSV file: the server answers 400 invalidRequest with the reason in
@@ -47,6 +50,7 @@ export function EndUsersPage() {
   const [editing, setEditing] = useState<EndUser | 'new' | null>(null);
   const [report, setReport] = useState<EndUserImportReport | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(() => {
@@ -90,6 +94,18 @@ export function EndUsersPage() {
     }
   };
 
+  const exportFile = async () => {
+    setExporting(true);
+    try {
+      const { blob, filename } = await mdmApi.exportEndUsers({ status: status || undefined });
+      if (!(await saveBlob(blob, filename, 'text/csv'))) toast.error(t('common.error') || 'Error');
+    } catch (err) {
+      if (!isStepUpHandled(err)) toast.error(apiErrorMessage(err), { duration: 7000 });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   const pages = data ? Math.max(1, Math.ceil(data.total / PAGE_SIZE)) : 1;
   return (
     <PageContainer className="space-y-5">
@@ -119,6 +135,9 @@ export function EndUsersPage() {
           <span className="ml-auto flex gap-2">
             <input ref={fileRef} type="file" accept=".csv,text/csv,text/plain" className="hidden"
               onChange={(e) => { const f = e.target.files?.[0]; if (f) void importFile(f); }} />
+            <Button size="sm" variant="secondary" loading={exporting} onClick={() => { void exportFile(); }}>
+              <FileDown className="w-4 h-4 mr-1" />{t('endUsers.export') || 'Export a CSV'}
+            </Button>
             <Button size="sm" variant="secondary" loading={importing} onClick={() => fileRef.current?.click()}>
               <FileUp className="w-4 h-4 mr-1" />{t('endUsers.import') || 'Import a CSV'}
             </Button>
@@ -128,7 +147,7 @@ export function EndUsersPage() {
       </div>
       {canManage && (
         <p className="text-[11px] text-text-muted">
-          {t('endUsers.importHint') || 'CSV columns: email, display_name, managed_apple_account, external_id (a header line; an existing line is updated by its external_id, then by its e-mail).'}
+          {t('endUsers.importHintUpn') || 'CSV columns: email, display_name, managed_apple_account, external_id, and optionally upn, entra_object_id (a header line; an existing line is updated by its external_id, then by its e-mail). The export has the same columns.'}
         </p>
       )}
       {error && <p className="text-sm text-red-400">{error}</p>}
@@ -143,6 +162,7 @@ export function EndUsersPage() {
                 <tr className="text-left">
                   <th className="font-medium px-4 py-2">{t('endUsers.name') || 'Name'}</th>
                   <th className="font-medium px-3 py-2">{t('endUsers.email') || 'E-mail'}</th>
+                  <th className="font-medium px-3 py-2">{t('endUsers.fields.upn') || 'UPN'}</th>
                   <th className="font-medium px-3 py-2">{t('endUsers.managedAppleAccount') || 'Managed Apple Account'}</th>
                   <th className="font-medium px-3 py-2">{t('endUsers.externalId') || 'Directory identifier'}</th>
                   <th className="font-medium px-3 py-2 text-right">{t('endUsers.devices') || 'Devices'}</th>
@@ -158,6 +178,14 @@ export function EndUsersPage() {
                       <span className="block text-[10px] uppercase text-text-muted">{trCode(`endUsers.source.${u.source}`, u.source)}</span>
                     </td>
                     <td className="px-3 py-2.5 text-text-secondary break-all">{anonymize(u.email) || '—'}</td>
+                    <td className="px-3 py-2.5 text-text-secondary break-all">
+                      {anonymize(u.upn) || <span className="text-text-muted">—</span>}
+                      {u.entraObjectId && (
+                        <span className="block font-mono text-[10px] text-text-muted" title={t('endUsers.fields.entraObjectId') || 'Entra object id'}>
+                          {anonymize(u.entraObjectId)}
+                        </span>
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 text-text-secondary break-all">{anonymize(u.managedAppleAccount) || '—'}</td>
                     <td className="px-3 py-2.5 text-text-secondary font-mono text-xs break-all">{anonymize(u.externalId) || '—'}</td>
                     <td className="px-3 py-2.5 text-right tabular-nums">
@@ -211,20 +239,27 @@ export function EndUsersPage() {
 
 function EndUserDialog({ target, onClose, onSaved }: { target: EndUser | 'new' | null; onClose: () => void; onSaved: () => void }) {
   const { t } = useTranslation();
-  const [f, setF] = useState<Record<keyof EndUserFields, string>>({ email: '', displayName: '', managedAppleAccount: '', externalId: '' });
+  const [f, setF] = useState<Record<keyof EndUserFields, string>>({ email: '', displayName: '', managedAppleAccount: '', externalId: '', upn: '', entraObjectId: '' });
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     if (target === null) return;
     const u = target === 'new' ? null : target;
-    setF({ email: u?.email ?? '', displayName: u?.displayName ?? '', managedAppleAccount: u?.managedAppleAccount ?? '', externalId: u?.externalId ?? '' });
+    setF({
+      email: u?.email ?? '', displayName: u?.displayName ?? '', managedAppleAccount: u?.managedAppleAccount ?? '', externalId: u?.externalId ?? '',
+      upn: u?.upn ?? '', entraObjectId: u?.entraObjectId ?? '',
+    });
   }, [target]);
+  // The shapes the server checks (invalid_upn, invalid_entra_object_id), told before the request.
+  const upnBad = f.upn.trim() !== '' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(f.upn.trim());
+  const entraBad = f.entraObjectId.trim() !== '' && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(f.entraObjectId.trim());
   // One identity at least (e-mail, Managed Apple Account or directory identifier): a name alone is refused by
   // the server (identity_required), such a line could never be matched again by an import or an enrollment.
-  const ok = [f.email, f.managedAppleAccount, f.externalId].some((v) => v.trim().length > 0);
+  const ok = [f.email, f.managedAppleAccount, f.externalId].some((v) => v.trim().length > 0) && !upnBad && !entraBad;
   const save = async () => {
     const body: EndUserFields = {
       email: f.email.trim() || null, displayName: f.displayName.trim() || null,
       managedAppleAccount: f.managedAppleAccount.trim() || null, externalId: f.externalId.trim() || null,
+      upn: f.upn.trim() || null, entraObjectId: f.entraObjectId.trim().toLowerCase() || null,
     };
     setBusy(true);
     try {
@@ -240,11 +275,14 @@ function EndUserDialog({ target, onClose, onSaved }: { target: EndUser | 'new' |
     }
   };
   const field = 'mt-1 w-full rounded border border-border bg-bg-secondary px-2 py-1.5 text-sm text-text-primary';
-  const input = (key: keyof EndUserFields, label: string, max: number, type = 'text') => (
+  const input = (key: keyof EndUserFields, label: string, max: number, type = 'text', error?: string | null, hint?: string) => (
     <label className="block">
       <span className="text-xs text-text-muted">{label}</span>
       <input type={type} value={f[key]} onChange={(e) => setF((prev) => ({ ...prev, [key]: e.target.value }))} maxLength={max}
-        autoCapitalize="off" spellCheck={false} className={field} />
+        autoCapitalize="off" spellCheck={false} aria-invalid={error ? true : undefined}
+        className={`${field}${error ? ' border-red-400' : ''}`} />
+      {error ? <span className="mt-0.5 block text-[11px] text-red-400">{error}</span>
+        : hint ? <span className="mt-0.5 block text-[11px] text-text-muted">{hint}</span> : null}
     </label>
   );
   return (
@@ -265,6 +303,12 @@ function EndUserDialog({ target, onClose, onSaved }: { target: EndUser | 'new' |
         {input('email', t('endUsers.email') || 'E-mail', 320, 'email')}
         {input('managedAppleAccount', t('endUsers.managedAppleAccount') || 'Managed Apple Account', 320, 'email')}
         {input('externalId', t('endUsers.externalId') || 'Directory identifier', 255)}
+        {input('upn', t('endUsers.fields.upn') || 'UPN', 320, 'text',
+          upnBad ? (t('endUsers.report.code.invalid_upn') || 'invalid UPN') : null,
+          t('endUsers.fields.upnHint') || 'The sign-in name of the person in the directory (Entra ID), e.g. first.last@example.com. Sent to Obliwatch instead of the e-mail.')}
+        {input('entraObjectId', t('endUsers.fields.entraObjectId') || 'Entra object id', 36, 'text',
+          entraBad ? (t('endUsers.report.code.invalid_entra_object_id') || 'invalid Entra object id') : null,
+          t('endUsers.fields.entraObjectIdHint') || 'The object id of the person in Entra ID (a GUID).')}
         <p className="text-[11px] text-text-muted">{t('endUsers.variablesHint', { variables: '{{user.email}}, {{user.display_name}}' })}</p>
       </div>
     </Modal>

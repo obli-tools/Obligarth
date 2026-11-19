@@ -115,6 +115,11 @@ export interface EnrollmentEpisode {
 export interface EndUser {
   id: number; uuid: string; tenantId: number;
   externalId: string | null; email: string | null; displayName: string | null; managedAppleAccount: string | null;
+  /** The user principal name of the client's directory (Entra ID), unique per tenant (case insensitive); entered by
+   *  hand or imported, never synchronised from a directory (Obliwatch: GTH-02). */
+  upn: string | null;
+  /** The object id of the person in Entra ID (a uuid, lower case), unique per tenant. */
+  entraObjectId: string | null;
   source: EndUserSource; status: EndUserStatus; departedAt: string | null;
   createdAt: string; updatedAt: string;
   /** Devices currently assigned (lists). */

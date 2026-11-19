@@ -719,7 +719,8 @@
       "obliwatch_read": "Data läst av Obliwatch",
       "obliwatch_auth_rejected": "Begäran från Obliwatch nekad",
       "obliwatch_push_dead": "Obliwatch-signaler övergivna (döda brev)",
-      "obliwatch_push_requeued": "Döda Obliwatch-brev skickade igen"
+      "obliwatch_push_requeued": "Döda Obliwatch-brev skickade igen",
+      "end_user_exported": "Slutanvändare exporterade"
     },
     "families": {
       "legacy_agent": "Android-agent",
@@ -1355,6 +1356,22 @@
       "retry": "Skicka igen",
       "lastError": "Senaste fel: {{error}}",
       "requeued": "{{count}} signal(er) köade igen"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "ogiltigt UPN",
+        "invalid_entra_object_id": "ogiltigt Entra-objekt-id"
+      }
+    },
+    "export": "Exportera en CSV",
+    "importHintUpn": "CSV-kolumner: email, display_name, managed_apple_account, external_id och valfritt upn, entra_object_id (en rubrikrad; en befintlig rad uppdateras via sitt external_id, sedan via sin e-post). Exporten har samma kolumner.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Personens inloggningsnamn i katalogen (Entra ID), t.ex. fornamn.efternamn@example.com. Skickas till Obliwatch i stället för e-postadressen.",
+      "entraObjectId": "Entra-objekt-id",
+      "entraObjectIdHint": "Personens objekt-id i Entra ID (ett GUID)."
     }
   }
 }

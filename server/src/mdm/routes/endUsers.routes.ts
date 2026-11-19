@@ -21,7 +21,11 @@ const Fields = z.object({
   displayName: z.string().max(200).nullable().optional(),
   managedAppleAccount: z.string().max(320).nullable().optional(),
   externalId: z.string().max(255).nullable().optional(),
+  // Lot L4 (Obliwatch GTH-02): the UPN and the Entra object id of the directory, entered by hand (validated by the service).
+  upn: z.string().max(320).nullable().optional(),
+  entraObjectId: z.string().max(64).nullable().optional(),
 }).strict();
+const ExportQuery = z.object({ status: z.enum(['active', 'departed']).optional() }).passthrough();
 const ListQuery = z.object({
   status: z.enum(['active', 'departed']).optional(),
   q: z.string().max(200).optional(),
@@ -48,6 +52,24 @@ router.get('/', reader, async (req, res, next) => {
   try {
     const q = parse(ListQuery, req.query);
     res.json({ data: await endUserService.list(req.tenantId!, { status: q.status, search: q.q, page: q.page, pageSize: q.pageSize }) });
+  } catch (err) { next(err); }
+});
+
+// GET /api/mdm/end-users/export?status= — CSV with the columns of the import (personal data: users.manage, journaled
+// with the count only).
+router.get('/export', requireTenantCapability('users.manage'), async (req, res, next) => {
+  try {
+    const q = parse(ExportQuery, req.query);
+    const out = await endUserService.exportCsv(req.tenantId!, { status: q.status });
+    await audit.append({
+      tenantId: req.tenantId!, action: 'end_user.exported', target: { type: 'end_user', id: 'export' },
+      details: { count: out.count, status: q.status ?? null },
+    }, await audit.fromRequest(req, req.tenantId!));
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="obligarth-end-users.csv"');
+    res.setHeader('Cache-Control', 'no-store');
+    // A byte order mark: a spreadsheet reads the file as UTF-8 (the import strips it).
+    res.send(`﻿${out.csv}`);
   } catch (err) { next(err); }
 });
 

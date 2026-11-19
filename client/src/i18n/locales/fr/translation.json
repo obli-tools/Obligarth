@@ -1925,7 +1925,8 @@
       "obliwatch_read": "Données lues par Obliwatch",
       "obliwatch_auth_rejected": "Requête d’Obliwatch refusée",
       "obliwatch_push_dead": "Signaux Obliwatch abandonnés (lettres mortes)",
-      "obliwatch_push_requeued": "Lettres mortes Obliwatch renvoyées"
+      "obliwatch_push_requeued": "Lettres mortes Obliwatch renvoyées",
+      "end_user_exported": "Utilisateurs finaux exportés"
     },
     "families": {
       "auth": "Authentification",
@@ -3569,13 +3570,23 @@
         "invalid_external_id": "identifiant d'annuaire invalide",
         "invalid_display_name": "nom invalide",
         "identity_required": "une adresse électronique, un compte Apple géré ou un identifiant d'annuaire est exigé",
-        "identity_conflict": "ses identifiants désignent deux utilisateurs finaux différents"
+        "identity_conflict": "ses identifiants désignent deux utilisateurs finaux différents",
+        "invalid_upn": "UPN invalide",
+        "invalid_entra_object_id": "identifiant d’objet Entra invalide"
       }
     },
     "importError": {
       "empty": "Le fichier est vide.",
       "header": "La ligne d'en-tête ne nomme aucune colonne d'identité (email, managed_apple_account ou external_id).",
       "too_many_lines": "Le fichier dépasse 5 000 lignes : découpez-le."
+    },
+    "export": "Exporter un CSV",
+    "importHintUpn": "Colonnes du CSV : email, display_name, managed_apple_account, external_id, et facultatives upn, entra_object_id (une ligne d'en-tête ; une ligne existante est mise à jour par son external_id, puis par son adresse). L'export a les mêmes colonnes.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Le nom de connexion de la personne dans l’annuaire (Entra ID), par exemple prenom.nom@example.com. Transmis à Obliwatch à la place de l’adresse.",
+      "entraObjectId": "Identifiant d’objet Entra",
+      "entraObjectIdHint": "L’identifiant d’objet de la personne dans Entra ID (un GUID)."
     }
   },
   "mdm": {

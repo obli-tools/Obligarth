@@ -719,7 +719,8 @@
       "obliwatch_read": "Дані прочитано Obliwatch",
       "obliwatch_auth_rejected": "Запит Obliwatch відхилено",
       "obliwatch_push_dead": "Сигнали Obliwatch покинуто (недоставлені)",
-      "obliwatch_push_requeued": "Недоставлені сигнали Obliwatch надіслано знову"
+      "obliwatch_push_requeued": "Недоставлені сигнали Obliwatch надіслано знову",
+      "end_user_exported": "Кінцевих користувачів експортовано"
     },
     "families": {
       "legacy_agent": "Агент Android",
@@ -1355,6 +1356,22 @@
       "retry": "Надіслати знову",
       "lastError": "Остання помилка: {{error}}",
       "requeued": "Знову в черзі: {{count}}"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "недійсний UPN",
+        "invalid_entra_object_id": "недійсний ідентифікатор об’єкта Entra"
+      }
+    },
+    "export": "Експорт у CSV",
+    "importHintUpn": "Стовпці CSV: email, display_name, managed_apple_account, external_id і необов’язкові upn, entra_object_id (рядок заголовка; наявний рядок оновлюється за external_id, потім за адресою ел. пошти). Експорт має ті самі стовпці.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Ім’я для входу особи в каталозі (Entra ID), наприклад imya.prizvyshche@example.com. Передається до Obliwatch замість адреси ел. пошти.",
+      "entraObjectId": "Ідентифікатор об’єкта Entra",
+      "entraObjectIdHint": "Ідентифікатор об’єкта особи в Entra ID (GUID)."
     }
   }
 }

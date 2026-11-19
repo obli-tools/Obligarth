@@ -719,7 +719,8 @@
       "obliwatch_read": "Данные прочитаны Obliwatch",
       "obliwatch_auth_rejected": "Запрос Obliwatch отклонён",
       "obliwatch_push_dead": "Сигналы Obliwatch оставлены (недоставленные)",
-      "obliwatch_push_requeued": "Недоставленные сигналы Obliwatch отправлены снова"
+      "obliwatch_push_requeued": "Недоставленные сигналы Obliwatch отправлены снова",
+      "end_user_exported": "Конечные пользователи экспортированы"
     },
     "families": {
       "legacy_agent": "Агент Android",
@@ -1355,6 +1356,22 @@
       "retry": "Отправить снова",
       "lastError": "Последняя ошибка: {{error}}",
       "requeued": "Снова в очереди: {{count}}"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "недопустимый UPN",
+        "invalid_entra_object_id": "недопустимый идентификатор объекта Entra"
+      }
+    },
+    "export": "Экспорт в CSV",
+    "importHintUpn": "Столбцы CSV: email, display_name, managed_apple_account, external_id и необязательные upn, entra_object_id (строка заголовка; существующая строка обновляется по external_id, затем по адресу эл. почты). Экспорт содержит те же столбцы.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Имя для входа человека в каталоге (Entra ID), например imya.familiya@example.com. Передаётся в Obliwatch вместо адреса эл. почты.",
+      "entraObjectId": "Идентификатор объекта Entra",
+      "entraObjectIdHint": "Идентификатор объекта человека в Entra ID (GUID)."
     }
   }
 }

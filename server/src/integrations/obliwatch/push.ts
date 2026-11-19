@@ -34,7 +34,7 @@ import { pushSingletonKey, reconcileSignalState, type PushPayload } from './sign
 // tenant with due transitions (a send absorbed by a running job, a retry that came due) and purges the rows ended for
 // 30 days (dead: 90 days).
 // What is sent is built here, field by field, from the transition (its whitelisted details) and the read API's view of
-// the device (deviceViewsOf: hostname, os, end user's address): never a serial number, IMEI, UDID, phone number, MAC
+// the device (deviceViewsOf: hostname, os, end user's UPN else address): never a serial number, IMEI, UDID, phone number, MAC
 // nor a coordinate; dropIdentifierKeys is applied to each item as the last line; never srcIp (source 'mobile').
 // =============================================================================
 
@@ -104,7 +104,7 @@ export function alertOf(r: Row, view: { hostname: string | null; platform: strin
     severity: r.severity,
     ...(def?.mitre && r.state === 'active' ? { mitre: def.mitre } : {}),
     asset,
-    // The end user's address until end_users.upn exists (lot L4).
+    // The end user's UPN, else their address (lot L4: the primaryUpn of the read API, devices.ts upnOf).
     ...(view?.primaryUpn ? { user: { upn: view.primaryUpn.slice(0, 320) } } : {}),
     details,
   };

@@ -719,7 +719,8 @@
       "obliwatch_read": "Obliwatch tarafından okunan veriler",
       "obliwatch_auth_rejected": "Obliwatch isteği reddedildi",
       "obliwatch_push_dead": "Obliwatch sinyallerinden vazgeçildi (teslim edilemeyenler)",
-      "obliwatch_push_requeued": "Teslim edilemeyen Obliwatch sinyalleri yeniden gönderildi"
+      "obliwatch_push_requeued": "Teslim edilemeyen Obliwatch sinyalleri yeniden gönderildi",
+      "end_user_exported": "Son kullanıcılar dışa aktarıldı"
     },
     "families": {
       "legacy_agent": "Android ajanı",
@@ -1355,6 +1356,22 @@
       "retry": "Yeniden gönder",
       "lastError": "Son hata: {{error}}",
       "requeued": "{{count}} sinyal yeniden kuyruğa alındı"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "geçersiz UPN",
+        "invalid_entra_object_id": "geçersiz Entra nesne kimliği"
+      }
+    },
+    "export": "CSV dışa aktar",
+    "importHintUpn": "CSV sütunları: email, display_name, managed_apple_account, external_id ve isteğe bağlı upn, entra_object_id (bir başlık satırı; mevcut bir satır external_id'si, ardından e-postası ile güncellenir). Dışa aktarma aynı sütunlara sahiptir.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Kişinin dizindeki (Entra ID) oturum açma adı, ör. ad.soyad@example.com. E-posta yerine Obliwatch’a gönderilir.",
+      "entraObjectId": "Entra nesne kimliği",
+      "entraObjectIdHint": "Kişinin Entra ID’deki nesne kimliği (bir GUID)."
     }
   }
 }

@@ -3,6 +3,7 @@ import express, { Router, type NextFunction, type Request, type RequestHandler, 
 import { OBLIWATCH_API_VERSION, type ObliwatchPingResponse } from '@obligarth/shared';
 import { logger } from '../../utils/logger';
 import { listAccessKeys } from './accessKeys';
+import { aiSummary } from './aiApps';
 import { getDevice, getDeviceApps, listDevices } from './devices';
 import { auditRead } from './audit';
 import { obliwatchAuth, sendError } from './auth';
@@ -21,6 +22,8 @@ import { readConsent, requireConsent } from './consent';
 //   GET /devices         app token + consent 'read' (GTH-03): ?updatedSince=&limit=1..500&cursor= (devices.ts)
 //   GET /devices/:uuid   app token + consent 'read' (GTH-03, GTH-09 coverage)
 //   GET /devices/:uuid/apps  app token + consent 'read' (GTH-03): managed apps only unless the profile collects all
+//   GET /apps/ai-summary     app token + consent 'read' (GTH-06, lot L4): AI apps of Obliwatch's catalog, aggregates;
+//                            ?nominative=1 with the consent nominativeAiApps and Obliwatch's attestation (aiApps.ts)
 //
 // Extension points for the next lots: a read route of L2 is `router.get(path, ...APP_READ, handler)`; an action
 // route of L5 is `router.post(path, obliwatchAuth('user'), requireConsent('actions'), handler)`.
@@ -61,6 +64,7 @@ export function createObliwatchRouter(): Router {
   router.get('/devices', ...APP_READ, wrap(listDevices));
   router.get('/devices/:uuid', ...APP_READ, wrap(getDevice));
   router.get('/devices/:uuid/apps', ...APP_READ, wrap(getDeviceApps));
+  router.get('/apps/ai-summary', ...APP_READ, wrap(aiSummary));
 
   router.use((_req, res) => { sendError(res, 404, 'not_found', 'Not found'); });
 

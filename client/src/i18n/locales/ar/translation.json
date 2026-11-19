@@ -719,7 +719,8 @@
       "obliwatch_read": "بيانات قرأها Obliwatch",
       "obliwatch_auth_rejected": "تم رفض طلب Obliwatch",
       "obliwatch_push_dead": "إشارات Obliwatch المتخلّى عنها (رسائل ميتة)",
-      "obliwatch_push_requeued": "أُعيد إرسال رسائل Obliwatch الميتة"
+      "obliwatch_push_requeued": "أُعيد إرسال رسائل Obliwatch الميتة",
+      "end_user_exported": "تم تصدير المستخدمين النهائيين"
     },
     "families": {
       "legacy_agent": "وكيل Android",
@@ -1355,6 +1356,22 @@
       "retry": "إعادة الإرسال",
       "lastError": "آخر إخفاق: {{error}}",
       "requeued": "أُعيد {{count}} إشارة إلى قائمة الانتظار"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "UPN غير صالح",
+        "invalid_entra_object_id": "معرّف كائن Entra غير صالح"
+      }
+    },
+    "export": "تصدير ملف CSV",
+    "importHintUpn": "أعمدة CSV: email, display_name, managed_apple_account, external_id، واختياريًا upn وentra_object_id (سطر عناوين؛ يُحدَّث السطر الموجود عبر external_id ثم عبر البريد الإلكتروني). للتصدير الأعمدة نفسها.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "اسم تسجيل دخول الشخص في الدليل (Entra ID)، مثل first.last@example.com. يُرسل إلى Obliwatch بدلًا من البريد الإلكتروني.",
+      "entraObjectId": "معرّف كائن Entra",
+      "entraObjectIdHint": "معرّف كائن الشخص في Entra ID ‏(GUID)."
     }
   }
 }

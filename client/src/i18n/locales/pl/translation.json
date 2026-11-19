@@ -719,7 +719,8 @@
       "obliwatch_read": "Dane odczytane przez Obliwatch",
       "obliwatch_auth_rejected": "Żądanie Obliwatch odrzucone",
       "obliwatch_push_dead": "Porzucone sygnały Obliwatch (martwe listy)",
-      "obliwatch_push_requeued": "Martwe listy Obliwatch wysłane ponownie"
+      "obliwatch_push_requeued": "Martwe listy Obliwatch wysłane ponownie",
+      "end_user_exported": "Wyeksportowano użytkowników końcowych"
     },
     "families": {
       "legacy_agent": "Agent Android",
@@ -1355,6 +1356,22 @@
       "retry": "Wyślij ponownie",
       "lastError": "Ostatni błąd: {{error}}",
       "requeued": "Ponownie w kolejce: {{count}}"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "nieprawidłowy UPN",
+        "invalid_entra_object_id": "nieprawidłowy identyfikator obiektu Entra"
+      }
+    },
+    "export": "Eksportuj CSV",
+    "importHintUpn": "Kolumny CSV: email, display_name, managed_apple_account, external_id oraz opcjonalnie upn, entra_object_id (wiersz nagłówka; istniejący wiersz jest aktualizowany według external_id, a następnie adresu e-mail). Eksport ma te same kolumny.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Nazwa logowania osoby w katalogu (Entra ID), np. imie.nazwisko@example.com. Przekazywana do Obliwatch zamiast adresu e-mail.",
+      "entraObjectId": "Identyfikator obiektu Entra",
+      "entraObjectIdHint": "Identyfikator obiektu osoby w Entra ID (GUID)."
     }
   }
 }

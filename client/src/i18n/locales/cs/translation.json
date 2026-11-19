@@ -719,7 +719,8 @@
       "obliwatch_read": "Data přečtená Obliwatch",
       "obliwatch_auth_rejected": "Požadavek Obliwatch odmítnut",
       "obliwatch_push_dead": "Signály Obliwatch vzdány (nedoručitelné)",
-      "obliwatch_push_requeued": "Nedoručitelné signály Obliwatch odeslány znovu"
+      "obliwatch_push_requeued": "Nedoručitelné signály Obliwatch odeslány znovu",
+      "end_user_exported": "Koncoví uživatelé exportováni"
     },
     "families": {
       "legacy_agent": "Agent Android",
@@ -1355,6 +1356,22 @@
       "retry": "Odeslat znovu",
       "lastError": "Poslední chyba: {{error}}",
       "requeued": "Znovu ve frontě: {{count}}"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "neplatné UPN",
+        "invalid_entra_object_id": "neplatné ID objektu Entra"
+      }
+    },
+    "export": "Exportovat CSV",
+    "importHintUpn": "Sloupce CSV: email, display_name, managed_apple_account, external_id a volitelně upn, entra_object_id (řádek záhlaví; existující řádek se aktualizuje podle external_id, poté podle e-mailu). Export má stejné sloupce.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "Přihlašovací jméno osoby v adresáři (Entra ID), např. jmeno.prijmeni@example.com. Předává se do Obliwatch místo e-mailu.",
+      "entraObjectId": "ID objektu Entra",
+      "entraObjectIdHint": "ID objektu osoby v Entra ID (GUID)."
     }
   }
 }

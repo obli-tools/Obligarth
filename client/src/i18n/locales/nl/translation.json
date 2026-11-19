@@ -719,7 +719,8 @@
       "obliwatch_read": "Gegevens gelezen door Obliwatch",
       "obliwatch_auth_rejected": "Verzoek van Obliwatch geweigerd",
       "obliwatch_push_dead": "Obliwatch-signalen opgegeven (onbestelbaar)",
-      "obliwatch_push_requeued": "Onbestelbare Obliwatch-signalen opnieuw verzonden"
+      "obliwatch_push_requeued": "Onbestelbare Obliwatch-signalen opnieuw verzonden",
+      "end_user_exported": "Eindgebruikers geëxporteerd"
     },
     "families": {
       "legacy_agent": "Android-agent",
@@ -1355,6 +1356,22 @@
       "retry": "Opnieuw verzenden",
       "lastError": "Laatste fout: {{error}}",
       "requeued": "{{count}} signaal/signalen opnieuw in de wachtrij"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "ongeldige UPN",
+        "invalid_entra_object_id": "ongeldige Entra-object-id"
+      }
+    },
+    "export": "CSV exporteren",
+    "importHintUpn": "CSV-kolommen: email, display_name, managed_apple_account, external_id en optioneel upn, entra_object_id (een kopregel; een bestaande regel wordt bijgewerkt via zijn external_id, daarna via zijn e-mail). De export heeft dezelfde kolommen.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "De aanmeldnaam van de persoon in de directory (Entra ID), bijv. voornaam.achternaam@example.com. Aan Obliwatch doorgegeven in plaats van het e-mailadres.",
+      "entraObjectId": "Entra-object-id",
+      "entraObjectIdHint": "De object-id van de persoon in Entra ID (een GUID)."
     }
   }
 }

@@ -9,7 +9,9 @@ import { touchEndUserDevicesInTx } from '../../integrations/obliwatch/marker';
 // =============================================================================
 // End users: the employees of the client (docs: modele-donnees-mdm §4.8,
 // PLT-28). No account in Obligate nor in Obligarth. Unique per tenant, case
-// insensitive, by e-mail address, Managed Apple Account and external id. A
+// insensitive, by e-mail address, Managed Apple Account, external id, UPN and
+// Entra object id (the last two: Obliwatch GTH-02, entered or imported, never
+// synchronised from a directory; not an identity on their own). A
 // departure keeps the device ↔ employee link 90 days (conception §10.4), then
 // the retention purges the end user and the links become NULL (composite keys
 // ON DELETE SET NULL). Every function runs in the caller's database context
@@ -18,12 +20,17 @@ import { touchEndUserDevicesInTx } from '../../integrations/obliwatch/marker';
 
 const EMAIL_RE = /^[^\s@<>()",;:]{1,64}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
 const EXTERNAL_ID_RE = /^[\x21-\x7e][\x20-\x7e]{0,254}$/;
+/** A user principal name: <name>@<domain> (Entra ID: a routable domain or the tenant's onmicrosoft.com one). */
+const UPN_RE = /^[A-Za-z0-9.!#$%&'*+/=^_`{|}~-]{1,113}@[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface EndUserInput {
   email?: string | null;
   displayName?: string | null;
   managedAppleAccount?: string | null;
   externalId?: string | null;
+  upn?: string | null;
+  entraObjectId?: string | null;
 }
 
 /** Normalised fields, or the code of the first invalid one. */
@@ -33,12 +40,16 @@ export function normaliseEndUser(input: EndUserInput): { ok: true; value: Requir
   const maa = clean(input.managedAppleAccount);
   const externalId = clean(input.externalId);
   const displayName = clean(input.displayName);
+  const upn = clean(input.upn);
+  const entra = clean(input.entraObjectId);
   if (email !== null && (email.length > 320 || !EMAIL_RE.test(email))) return { ok: false, code: 'invalid_email', field: 'email' };
   if (maa !== null && (maa.length > 320 || !EMAIL_RE.test(maa))) return { ok: false, code: 'invalid_managed_apple_account', field: 'managedAppleAccount' };
   if (externalId !== null && !EXTERNAL_ID_RE.test(externalId)) return { ok: false, code: 'invalid_external_id', field: 'externalId' };
   if (displayName !== null && (displayName.length > 200 || /[\u0000-\u001f\u007f]/.test(displayName))) return { ok: false, code: 'invalid_display_name', field: 'displayName' };
+  if (upn !== null && (upn.length > 320 || !UPN_RE.test(upn))) return { ok: false, code: 'invalid_upn', field: 'upn' };
+  if (entra !== null && !UUID_RE.test(entra)) return { ok: false, code: 'invalid_entra_object_id', field: 'entraObjectId' };
   if (email === null && maa === null && externalId === null) return { ok: false, code: 'identity_required', field: 'email' };
-  return { ok: true, value: { email, displayName, managedAppleAccount: maa, externalId } };
+  return { ok: true, value: { email, displayName, managedAppleAccount: maa, externalId, upn, entraObjectId: entra === null ? null : entra.toLowerCase() } };
 }
 
 const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v ? new Date(String(v)).toISOString() : null);
@@ -47,20 +58,25 @@ export function rowToEndUser(r: Record<string, any>): EndUser {
   const u: EndUser = {
     id: Number(r.id), uuid: r.uuid, tenantId: Number(r.tenant_id),
     externalId: r.external_id ?? null, email: r.email ?? null, displayName: r.display_name ?? null,
-    managedAppleAccount: r.managed_apple_account ?? null, source: r.source, status: r.status,
+    managedAppleAccount: r.managed_apple_account ?? null,
+    upn: r.upn ?? null, entraObjectId: r.entra_object_id ? String(r.entra_object_id).toLowerCase() : null,
+    source: r.source, status: r.status,
     departedAt: iso(r.departed_at), createdAt: iso(r.created_at)!, updatedAt: iso(r.updated_at)!,
   };
   if (r.device_count !== undefined) u.deviceCount = Number(r.device_count);
   return u;
 }
 
-/** A 409 for a violation of one of the unique indexes (same e-mail, Managed Apple Account or external id). */
+/** A 409 for a violation of one of the unique indexes (same e-mail, Managed Apple Account, external id, UPN or Entra
+ *  object id). */
 function conflictOf(err: unknown): AppError | null {
   const e = err as { code?: string; constraint?: string };
   if (e?.code !== '23505') return null;
   const field = e.constraint === 'end_users_email_uq' ? 'email'
     : e.constraint === 'end_users_maa_uq' ? 'managedAppleAccount'
-      : e.constraint === 'end_users_external_uq' ? 'externalId' : null;
+      : e.constraint === 'end_users_external_uq' ? 'externalId'
+        : e.constraint === 'end_users_upn_uq' ? 'upn'
+          : e.constraint === 'end_users_entra_uq' ? 'entraObjectId' : null;
   return field ? new AppError(409, 'An end user of this tenant already has this identity', 'endUserExists', { field }) : null;
 }
 
@@ -75,7 +91,7 @@ export const endUserService = {
       const pat = `%${q.search.trim().replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
       base.where(function search() {
         this.whereILike('u.display_name', pat).orWhereILike('u.email', pat).orWhereILike('u.managed_apple_account', pat)
-          .orWhereILike('u.external_id', pat);
+          .orWhereILike('u.external_id', pat).orWhereILike('u.upn', pat);
       });
     }
     const total = Number((await base.clone().count<{ n: string }[]>('u.id as n').first())?.n ?? 0);
@@ -101,6 +117,7 @@ export const endUserService = {
       const [row] = await db('end_users').insert({
         tenant_id: tenantId, email: n.value.email, display_name: n.value.displayName,
         managed_apple_account: n.value.managedAppleAccount, external_id: n.value.externalId,
+        upn: n.value.upn, entra_object_id: n.value.entraObjectId,
         source: opts.source ?? 'manual', created_by: opts.createdBy,
       }).returning('*');
       return rowToEndUser(row);
@@ -117,6 +134,8 @@ export const endUserService = {
       displayName: input.displayName !== undefined ? input.displayName : current.display_name,
       managedAppleAccount: input.managedAppleAccount !== undefined ? input.managedAppleAccount : current.managed_apple_account,
       externalId: input.externalId !== undefined ? input.externalId : current.external_id,
+      upn: input.upn !== undefined ? input.upn : current.upn,
+      entraObjectId: input.entraObjectId !== undefined ? input.entraObjectId : current.entra_object_id,
     };
     const n = normaliseEndUser(merged);
     if (!n.ok) throw new AppError(400, 'Invalid end user', 'invalidRequest', { field: n.field, code: n.code });
@@ -125,11 +144,12 @@ export const endUserService = {
       return await db.transaction(async (trx) => {
         const [row] = await trx('end_users').where({ tenant_id: tenantId, id }).update({
           email: n.value.email, display_name: n.value.displayName, managed_apple_account: n.value.managedAppleAccount,
-          external_id: n.value.externalId, updated_at: new Date(),
+          external_id: n.value.externalId, upn: n.value.upn, entra_object_id: n.value.entraObjectId, updated_at: new Date(),
         }).returning('*');
         if (!row) return null;
-        // The e-mail is the primaryUpn of the Obliwatch read API: its devices are marked (never fails the change).
-        if (row.email !== current.email) await touchEndUserDevicesInTx(trx, tenantId, [id]);
+        // The UPN, else the e-mail, is the primaryUpn of the Obliwatch read API (and user.upn of its signals), the Entra
+        // object id its entraObjectId: the devices are marked (never fails the change).
+        if (identityChanged(current, row)) await touchEndUserDevicesInTx(trx, tenantId, [id]);
         await requestEndUserResolution(trx, tenantId, [id]);
         await requestGroupEvaluation(trx, tenantId);
         return rowToEndUser(row);
@@ -151,18 +171,23 @@ export const endUserService = {
 
   /**
    * CSV import (PLT-28): header row with the columns email, display_name, managed_apple_account, external_id
-   * (any order, at least one identity column); a line is matched by external id, then e-mail, then Managed
-   * Apple Account (case insensitive) and updated, else created (source 'csv'); a line whose external id
-   * differs from that of the end user its address designates, or whose identity belongs to another end user,
-   * is refused (identity_conflict); a report line by line. 5 000 lines at most. In one transaction of the
-   * tenant: a line refused by the base is reported, the others stay.
+   * and, optional (lot L4, GTH-02), upn and entra_object_id (any order, at least one identity column among the first
+   * three: a file without the new columns imports as before, an absent or empty cell keeps the stored value); a line
+   * is matched by external id, then e-mail, then Managed Apple Account, then Entra object id, then UPN (case
+   * insensitive) and updated, else created (source 'csv'); a line whose external id or Entra object id differs from
+   * that of the end user another of its identifiers designates, or whose identity belongs to another end user, is
+   * refused (identity_conflict); a report line by line. 5 000 lines at most. In one transaction of the tenant: a line
+   * refused by the base is reported, the others stay.
    */
   async importCsv(tenantId: number, csv: string, opts: { createdBy: number | null }): Promise<EndUserImportReport> {
     const lines = parseCsv(csv);
     if (lines.length === 0) throw new AppError(400, 'Empty file', 'invalidRequest', { code: 'empty' });
     const header = lines[0].map((h) => h.trim().toLowerCase());
     const col = (name: string) => header.indexOf(name);
-    const cols = { email: col('email'), displayName: col('display_name'), maa: col('managed_apple_account'), externalId: col('external_id') };
+    const cols = {
+      email: col('email'), displayName: col('display_name'), maa: col('managed_apple_account'), externalId: col('external_id'),
+      upn: col('upn'), entra: col('entra_object_id'),
+    };
     if (cols.email < 0 && cols.maa < 0 && cols.externalId < 0) {
       throw new AppError(400, 'The header names no identity column (email, managed_apple_account, external_id)', 'invalidRequest', { code: 'header' });
     }
@@ -173,8 +198,11 @@ export const endUserService = {
       for (let i = 1; i < lines.length; i++) {
         const cells = lines[i];
         if (cells.every((c) => !c.trim())) continue;
-        const cell = (k: number) => (k >= 0 ? (cells[k] ?? '') : undefined);
-        const n = normaliseEndUser({ email: cell(cols.email), displayName: cell(cols.displayName), managedAppleAccount: cell(cols.maa), externalId: cell(cols.externalId) });
+        const cell = (k: number) => (k >= 0 ? unneutralise(cells[k] ?? '') : undefined);
+        const n = normaliseEndUser({
+          email: cell(cols.email), displayName: cell(cols.displayName), managedAppleAccount: cell(cols.maa), externalId: cell(cols.externalId),
+          upn: cell(cols.upn), entraObjectId: cell(cols.entra),
+        });
         if (!n.ok) { report.rejected++; report.lines.push({ line: i + 1, outcome: 'rejected', code: n.code }); continue; }
         const v = n.value;
         const outcome = await importOne(trx, tenantId, v, opts.createdBy).catch((err) => {
@@ -188,14 +216,51 @@ export const endUserService = {
         if (outcome.outcome === 'updated') updatedIds.push(outcome.id);
       }
       // The devices of the end users whose profile changed read it through the variables: resolved again; and marked
-      // for the Obliwatch read API (the e-mail is its primaryUpn; never fails the import).
+      // for the Obliwatch read API (the UPN, else the e-mail, is its primaryUpn; never fails the import).
       await touchEndUserDevicesInTx(trx, tenantId, updatedIds);
       await requestEndUserResolution(trx, tenantId, updatedIds);
       if (updatedIds.length) await requestGroupEvaluation(trx, tenantId);
     });
     return report;
   },
+
+  /**
+   * CSV export (lot L4): the columns of the import, in its order (email, display_name, managed_apple_account,
+   * external_id, upn, entra_object_id), so that the file imports back as is up to the import's bounds (5 000 lines and
+   * 1 MiB: a larger export is split, or filtered by status, before it is imported; the import answers 413
+   * too_many_lines, which the console translates as "split it"); a text a spreadsheet would read as a formula is
+   * neutralised (a leading apostrophe, removed again by the import). 50 000 end users at most.
+   */
+  async exportCsv(tenantId: number, q: { status?: 'active' | 'departed' } = {}): Promise<{ csv: string; count: number }> {
+    const base = db('end_users').where('tenant_id', tenantId);
+    if (q.status) base.where('status', q.status);
+    const rows = await base.orderBy('id', 'asc').limit(EXPORT_MAX)
+      .select('email', 'display_name', 'managed_apple_account', 'external_id', 'upn', 'entra_object_id') as Array<Record<string, unknown>>;
+    const lines = [EXPORT_COLUMNS.join(',')];
+    for (const r of rows) lines.push(EXPORT_COLUMNS.map((c) => csvCell(r[c] == null ? '' : String(r[c]))).join(','));
+    return { csv: `${lines.join('\r\n')}\r\n`, count: rows.length };
+  },
 };
+
+const EXPORT_COLUMNS = ['email', 'display_name', 'managed_apple_account', 'external_id', 'upn', 'entra_object_id'] as const;
+const EXPORT_MAX = 50_000;
+
+/** A cell of the export: neutralised when a spreadsheet would read a formula (MDM-B2-R10), quoted when needed. */
+function csvCell(v: string): string {
+  const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+  return /[",;\r\n]/.test(safe) || safe !== safe.trim() ? `"${safe.replace(/"/g, '""')}"` : safe;
+}
+
+/** The neutralisation of the export undone: a leading apostrophe before a formula character. */
+function unneutralise(v: string): string {
+  return /^'[=+\-@\t\r]/.test(v) ? v.slice(1) : v;
+}
+
+/** The identifiers the Obliwatch read API shows of an end user changed (primaryUpn: UPN else e-mail; entraObjectId). */
+function identityChanged(before: Record<string, any>, after: Record<string, any>): boolean {
+  const low = (v: unknown) => (v == null ? null : String(v).toLowerCase());
+  return before.email !== after.email || before.upn !== after.upn || low(before.entra_object_id) !== low(after.entra_object_id);
+}
 
 /** One line of an import, under its own savepoint (a refused line leaves the transaction usable). */
 async function importOne(trx: Knex.Transaction, tenantId: number, v: Required<EndUserInput>, createdBy: number | null):
@@ -208,24 +273,38 @@ async function importOne(trx: Knex.Transaction, tenantId: number, v: Required<En
     if (!existing && v.managedAppleAccount) {
       existing = await sp('end_users').where('tenant_id', tenantId).whereRaw('lower(managed_apple_account) = lower(?)', [v.managedAppleAccount]).first();
     }
+    let byEntra = false;
+    if (!existing && v.entraObjectId) {
+      existing = await sp('end_users').where({ tenant_id: tenantId, entra_object_id: v.entraObjectId }).first();
+      byEntra = !!existing;
+    }
+    if (!existing && v.upn) existing = await sp('end_users').where('tenant_id', tenantId).whereRaw('lower(upn) = lower(?)', [v.upn]).first();
     // The line's external id and the one of the end user its address designates disagree: two identities,
-    // never merged silently (an operator decides).
+    // never merged silently (an operator decides). The same for the Entra object id (a directory identity too).
     if (existing && !byExternalId && v.externalId && existing.external_id && existing.external_id !== v.externalId) {
+      return { outcome: 'rejected' as const, code: 'identity_conflict' };
+    }
+    if (existing && !byEntra && v.entraObjectId && existing.entra_object_id
+      && String(existing.entra_object_id).toLowerCase() !== v.entraObjectId) {
       return { outcome: 'rejected' as const, code: 'identity_conflict' };
     }
     if (!existing) {
       const [row] = await sp('end_users').insert({
         tenant_id: tenantId, email: v.email, display_name: v.displayName, managed_apple_account: v.managedAppleAccount,
-        external_id: v.externalId, source: 'csv', created_by: createdBy,
+        external_id: v.externalId, upn: v.upn, entra_object_id: v.entraObjectId, source: 'csv', created_by: createdBy,
       }).returning('id');
       return { outcome: 'created' as const, id: Number(row.id ?? row) };
     }
     const next = {
       email: v.email ?? existing.email, display_name: v.displayName ?? existing.display_name,
       managed_apple_account: v.managedAppleAccount ?? existing.managed_apple_account, external_id: v.externalId ?? existing.external_id,
+      upn: v.upn ?? existing.upn ?? null,
+      entra_object_id: v.entraObjectId ?? (existing.entra_object_id ? String(existing.entra_object_id).toLowerCase() : null),
     };
     const same = next.email === existing.email && next.display_name === existing.display_name
-      && next.managed_apple_account === existing.managed_apple_account && next.external_id === existing.external_id;
+      && next.managed_apple_account === existing.managed_apple_account && next.external_id === existing.external_id
+      && next.upn === (existing.upn ?? null)
+      && next.entra_object_id === (existing.entra_object_id ? String(existing.entra_object_id).toLowerCase() : null);
     if (same) return { outcome: 'unchanged' as const, id: Number(existing.id) };
     await sp('end_users').where({ tenant_id: tenantId, id: existing.id }).update({ ...next, updated_at: new Date() });
     return { outcome: 'updated' as const, id: Number(existing.id) };

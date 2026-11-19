@@ -719,7 +719,8 @@
       "obliwatch_read": "Obliwatch가 읽은 데이터",
       "obliwatch_auth_rejected": "Obliwatch 요청 거부됨",
       "obliwatch_push_dead": "Obliwatch 신호 포기됨(전달 불가)",
-      "obliwatch_push_requeued": "전달 불가 Obliwatch 신호 다시 보냄"
+      "obliwatch_push_requeued": "전달 불가 Obliwatch 신호 다시 보냄",
+      "end_user_exported": "최종 사용자 내보냄"
     },
     "families": {
       "legacy_agent": "Android 에이전트",
@@ -1355,6 +1356,22 @@
       "retry": "다시 보내기",
       "lastError": "마지막 실패: {{error}}",
       "requeued": "신호 {{count}}개를 다시 대기열에 넣었습니다"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "잘못된 UPN",
+        "invalid_entra_object_id": "잘못된 Entra 개체 ID"
+      }
+    },
+    "export": "CSV 내보내기",
+    "importHintUpn": "CSV 열: email, display_name, managed_apple_account, external_id 및 선택 사항 upn, entra_object_id(머리글 행 필요, 기존 행은 external_id, 그다음 이메일로 업데이트됨). 내보내기도 같은 열을 사용합니다.",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "디렉터리(Entra ID)의 로그인 이름입니다(예: first.last@example.com). 이메일 대신 Obliwatch로 전송됩니다.",
+      "entraObjectId": "Entra 개체 ID",
+      "entraObjectIdHint": "Entra ID에서 이 사람의 개체 ID(GUID)입니다."
     }
   }
 }

@@ -719,7 +719,8 @@
       "obliwatch_read": "Obliwatch が読み取ったデータ",
       "obliwatch_auth_rejected": "Obliwatch のリクエストを拒否",
       "obliwatch_push_dead": "Obliwatch シグナルを断念（配信不能）",
-      "obliwatch_push_requeued": "配信不能の Obliwatch シグナルを再送信"
+      "obliwatch_push_requeued": "配信不能の Obliwatch シグナルを再送信",
+      "end_user_exported": "エンドユーザーをエクスポート"
     },
     "families": {
       "legacy_agent": "Android エージェント",
@@ -1355,6 +1356,22 @@
       "retry": "再送信",
       "lastError": "最後のエラー：{{error}}",
       "requeued": "{{count}} 件のシグナルを再度キューに入れました"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "UPN が無効です",
+        "invalid_entra_object_id": "Entra オブジェクト ID が無効です"
+      }
+    },
+    "export": "CSV をエクスポート",
+    "importHintUpn": "CSV の列：email, display_name, managed_apple_account, external_id、および任意で upn、entra_object_id（見出し行が必要。既存の行は external_id、次にメールアドレスで更新されます）。エクスポートも同じ列です。",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "ディレクトリ（Entra ID）でのサインイン名。例：first.last@example.com。メールアドレスの代わりに Obliwatch へ送信されます。",
+      "entraObjectId": "Entra オブジェクト ID",
+      "entraObjectIdHint": "Entra ID でのオブジェクト ID（GUID）。"
     }
   }
 }

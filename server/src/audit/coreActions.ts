@@ -91,6 +91,7 @@ export function registerCoreAuditActions(): void {
     { name: 'end_user.updated', criticality: 'standard', label: 'End user updated' },
     { name: 'end_user.departed', criticality: 'standard', label: 'End user departed' },
     { name: 'end_user.imported', criticality: 'standard', label: 'End users imported' },
+    { name: 'end_user.exported', criticality: 'standard', label: 'End users exported' },
 
     // ── Restrictions and approvals ─────────────────────────────────────────
     { name: 'restrictions.updated', criticality: 'critical', label: 'Restrictions matrix changed' },

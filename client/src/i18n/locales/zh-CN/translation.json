@@ -719,7 +719,8 @@
       "obliwatch_read": "Obliwatch 读取的数据",
       "obliwatch_auth_rejected": "Obliwatch 请求被拒绝",
       "obliwatch_push_dead": "Obliwatch 信号已放弃（死信）",
-      "obliwatch_push_requeued": "Obliwatch 死信已重新发送"
+      "obliwatch_push_requeued": "Obliwatch 死信已重新发送",
+      "end_user_exported": "已导出最终用户"
     },
     "families": {
       "legacy_agent": "Android 代理",
@@ -1355,6 +1356,22 @@
       "retry": "重新发送",
       "lastError": "最近失败：{{error}}",
       "requeued": "已将 {{count}} 个信号重新排队"
+    }
+  },
+  "endUsers": {
+    "report": {
+      "code": {
+        "invalid_upn": "UPN 无效",
+        "invalid_entra_object_id": "Entra 对象 ID 无效"
+      }
+    },
+    "export": "导出 CSV",
+    "importHintUpn": "CSV 列：email, display_name, managed_apple_account, external_id，以及可选的 upn、entra_object_id（需要标题行；已有行先按 external_id、再按电子邮件更新）。导出文件使用相同的列。",
+    "fields": {
+      "upn": "UPN",
+      "upnHint": "此人在目录（Entra ID）中的登录名，例如 first.last@example.com。代替电子邮件发送给 Obliwatch。",
+      "entraObjectId": "Entra 对象 ID",
+      "entraObjectIdHint": "此人在 Entra ID 中的对象 ID（GUID）。"
     }
   }
 }

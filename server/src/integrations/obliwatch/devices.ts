@@ -1,13 +1,16 @@
 import type { Request, Response } from 'express';
 import type {
-  CollectedField, ObliwatchDeviceAppItem, ObliwatchDeviceAppsResponse, ObliwatchDeviceView, ObliwatchDevicesResponse, Ownership,
+  CollectedField, ObliwatchAppsCoverage, ObliwatchDeviceAppItem, ObliwatchDeviceAppsResponse, ObliwatchDeviceView, ObliwatchDevicesResponse,
+  ObliwatchUpnSource, Ownership,
 } from '@obligarth/shared';
 import { db } from '../../db';
 import { asTenant } from '../../db/context';
 import { privacyRulesFor } from '../../apple/devices/privacy';
 import { nanoTypeOfMode, recordPrivacy } from '../../privacy/collected';
 import { dropIdentifierKeys } from '../../privacy/mask';
+import { nominativeAiAppsGate } from './aiApps';
 import { auditRead } from './audit';
+import { loadCatalog } from './catalog';
 import { sendError } from './auth';
 import { OBLIWATCH_ACTOR } from './config';
 import { appsCoverage, coverageOf, type CoverageFacts } from './coverage';
@@ -17,7 +20,9 @@ import { decodeCursor, encodeCursor } from './cursor';
 // The devices of the tenant of `ost` (brief GTH-03, GTH-09; plan L2), consent 'read' required (router):
 //   GET /devices?updatedSince=<ISO 8601>&limit=1..500&cursor=   {items: DeviceView[], nextCursor}
 //   GET /devices/:uuid                                         DeviceView (404 not_found outside the tenant)
-//   GET /devices/:uuid/apps                                    {items, coverage, collectedAt}
+//   GET /devices/:uuid/apps                                    {items, coverage, collectedAt, aiAppsWithheld, managedOnly}
+//     (lot L4: managed apps only on the personal side of a device; the AI catalog's bundles left out unless the
+//     nominative view of GTH-06 is open for the tenant)
 // The view is a STRICT WHITELIST built column by column: the query never selects a serial number, IMEI, UDID, phone
 // number, MAC, IP, location, the last logged-in user, the hardware or network information, the Android id nor the
 // internal id (the identifiers are only compared, in the database, with the device's names: nameOf); dropIdentifierKeys
@@ -25,7 +30,9 @@ import { decodeCursor, encodeCursor } from './cursor';
 // marker devices.signal_updated_at (migration 20261118100100), then the uuid; the cursor is that position, signed and
 // bound to the tenant and the endpoint (cursor.ts). Every query runs as the tenant of `ost` (asTenant, i:obliwatch).
 // Owner decisions: hostname for a corporate-owned device only (Q-L2c); integrity 'unknown' for an AMAPI device without
-// posture (Q-L2b). primaryUpn is the end user's e-mail until end_users.upn exists (lot L4).
+// posture (Q-L2b). Lot L4 (GTH-02, GTH-06): primaryUpn = end_users.upn, else the e-mail (upnOf: the same rule for the
+// user.upn of the push), entraObjectId, and the version of Microsoft Authenticator (authenticatorOf: never 'absent'
+// when Obligarth cannot see every app of the device).
 // =============================================================================
 
 const LIST_ENDPOINT = 'devices';
@@ -66,7 +73,9 @@ SELECT d.id, d.uuid::text AS uuid, d.platform, d.management_channel, d.ownership
        d.enrollment_state, d.os_version, d.compliance_state, d.compliance_reasons, d.lost_mode_state, d.last_checkin_at,
        ${nameOf('d.display_name')} AS admin_name,
        ${nameOf('d.device_name')} AS reported_name,
-       eu.email AS end_user_email,
+       eu.email AS end_user_email, eu.upn AS end_user_upn, eu.entra_object_id::text AS end_user_entra,
+       au.version AS auth_version, au.short_version AS auth_short_version, au.managed AS auth_managed,
+       (au.managed IS NOT NULL) AS auth_found,
        to_char(an.security_patch_level, 'YYYY-MM-DD') AS amapi_patch,
        CASE WHEN an.released_at IS NULL THEN an.security_posture END AS amapi_posture,
        an.last_status_report_at AS amapi_report_at,
@@ -81,6 +90,13 @@ SELECT d.id, d.uuid::text AS uuid, d.platform, d.management_channel, d.ownership
   LEFT JOIN obligarth.android_devices an ON an.tenant_id = d.tenant_id AND an.device_id = d.id
   LEFT JOIN obligarth.legacy_agent_devices la ON la.tenant_id = d.tenant_id AND la.device_id = d.id
   LEFT JOIN obligarth.apple_devices ap ON ap.tenant_id = d.tenant_id AND ap.device_id = d.id
+  LEFT JOIN LATERAL (
+    -- Microsoft Authenticator (GTH-06), by the unique key (tenant_id, device_id, identifier) of device_apps.
+    SELECT x.version, x.short_version, x.managed
+      FROM obligarth.device_apps x
+     WHERE x.tenant_id = d.tenant_id AND x.device_id = d.id
+       AND x.identifier = CASE WHEN d.platform = 'android' THEN 'com.azure.authenticator' ELSE 'com.microsoft.azureauthenticator' END
+  ) au ON true
   LEFT JOIN LATERAL (
     SELECT array_agg(DISTINCT f.v) AS ids
       FROM unnest(ARRAY[d.serial_number::text, la.claimed_serial::text, la.samsung_serial::text, la.hints->>'serial',
@@ -100,7 +116,7 @@ const BY_IDS_SQL = `${SELECT} AND d.id = ANY (?::int[])`;
 type Row = Record<string, any>;
 
 /** What the privacy profile collects of a device, cached per request by (channel, ownership, mode). */
-class CollectedCache {
+export class CollectedCache {
   private readonly cache = new Map<string, Promise<CollectedField[]>>();
   constructor(private readonly tenantId: number) {}
   get(channel: string, ownership: string, mode: string): Promise<CollectedField[]> {
@@ -116,7 +132,7 @@ class CollectedCache {
   }
 }
 
-const factsOf = (r: Row): CoverageFacts => ({
+export const factsOf = (r: Row): CoverageFacts => ({
   channel: String(r.management_channel), posture: r.amapi_posture ?? null, amapiReportAt: r.amapi_report_at,
   agentInventoryAt: r.agent_inventory_at, appleAppsAt: r.apple_apps_at, appleManagedAppsAt: r.apple_managed_apps_at,
   hasApps: r.has_apps === true,
@@ -144,7 +160,9 @@ export async function deviceView(r: Row, collected: CollectedCache): Promise<Obl
   const ownership = String(r.ownership) as ObliwatchDeviceView['ownership'];
   const fields = await collected.get(channel, ownership, String(r.management_mode));
   const p = channel === 'amapi' ? postureOf(r.amapi_posture) : { posture: null, risks: null };
-  const email = text(r.end_user_email, 320);
+  const upn = upnOf(r.end_user_upn, r.end_user_email);
+  const coverage = coverageOf(factsOf(r), fields);
+  const auth = authenticatorOf(r, ownership, String(r.management_mode), coverage.apps);
   const view: ObliwatchDeviceView = {
     uuid: String(r.uuid),
     platform: String(r.platform),
@@ -162,13 +180,63 @@ export async function deviceView(r: Row, collected: CollectedCache): Promise<Obl
     integrityRisks: p.risks,
     lostModeState: String(r.lost_mode_state),
     lastCheckinAt: iso(r.last_checkin_at),
-    primaryUpn: email,
-    primaryUpnSource: email ? 'email' : 'none',
-    coverage: coverageOf(factsOf(r), fields),
+    primaryUpn: upn.value,
+    primaryUpnSource: upn.source,
+    entraObjectId: uuidText(r.end_user_entra),
+    authenticatorVersion: auth.version,
+    authenticatorKnown: auth.known,
+    coverage,
     updatedAt: iso(r.signal_updated_at) as string,
   };
   // The always-on mask (brief §3): a key naming an identifier never leaves, whatever the view grows into.
   return dropIdentifierKeys(view);
+}
+
+/**
+ * primaryUpn of the read API and user.upn of the push (one rule, lot L4): the end user's UPN (end_users.upn), else
+ * their e-mail address, else nothing.
+ */
+export function upnOf(upn: unknown, email: unknown): { value: string | null; source: ObliwatchUpnSource } {
+  const u = text(upn, 320);
+  if (u) return { value: u, source: 'upn' };
+  const e = text(email, 320);
+  return e ? { value: e, source: 'email' } : { value: null, source: 'none' };
+}
+
+const uuidText = (v: unknown): string | null => (typeof v === 'string' && UUID_RE.test(v) ? v.toLowerCase() : null);
+
+/**
+ * A device holds only its work side for Obliwatch: a personal device, a work profile (personal or corporate-owned), a
+ * User Enrollment. Only the MANAGED apps of such a device are read (an app of the personal side is never counted nor
+ * declared absent), whatever the privacy profile collects.
+ */
+export function personalSide(ownership: string, mode: string): boolean {
+  return ownership === 'personal' || mode === 'work_profile_personal' || mode === 'work_profile_corporate' || mode === 'user_enrollment';
+}
+
+/**
+ * The version of Microsoft Authenticator (GTH-06) and whether Obligarth can tell (brief: an unknown datum is never
+ * presented as absent):
+ *   found, managed or seen with every app collected (apps 'full' on a work-only device): known, its version;
+ *   not found, apps 'full' on a work-only device: known, null (absent);
+ *   apps 'none' (nothing collected yet), even with a managed row: unknown, null;
+ *   anything else (apps 'managed_only', or the personal side of a device): unknown, null.
+ * The version: Android versionName (device_apps.version); Apple CFBundleShortVersionString (short_version), else the
+ * build (version).
+ */
+export function authenticatorOf(r: Row, ownership: string, mode: string, apps: ObliwatchAppsCoverage):
+  { version: string | null; known: boolean } {
+  // Apps 'none': nothing of the device's apps is presented, a managed row (written before the first inventory, say)
+  // included: the same rule as ai-summary, which never reads a device of coverage 'none'.
+  if (apps === 'none') return { version: null, known: false };
+  const everything = apps === 'full' && !personalSide(ownership, mode);
+  if (r.auth_found === true && (r.auth_managed === true || everything)) {
+    const v = String(r.platform) === 'android' ? text(r.auth_version, 64) ?? text(r.auth_short_version, 64)
+      : text(r.auth_short_version, 64) ?? text(r.auth_version, 64);
+    return { version: v, known: true };
+  }
+  if (everything) return { version: null, known: true };
+  return { version: null, known: false };
 }
 
 interface Position { t: string; u: string }
@@ -269,6 +337,10 @@ export async function getDevice(req: Request, res: Response): Promise<void> {
 export async function getDeviceApps(req: Request, res: Response): Promise<void> {
   const caller = req.obliwatch!;
   const uuid = String(req.params.uuid ?? '');
+  // The AI apps by device are the nominative view of GTH-06: left out unless it is open for the tenant (else the list
+  // would rebuild what ai-summary?nominative=1 refuses). Producer-config is asked only under the tenant's consent, and
+  // outside the database context (an HTTP call never holds a connection).
+  const aiAppsWithheld = UUID_RE.test(uuid) ? (await nominativeAiAppsGate(caller.tenantId, caller.ost)) !== 'ok' : true;
   const out = await asTenant(caller.tenantId, OBLIWATCH_ACTOR, async (): Promise<ObliwatchDeviceAppsResponse | null> => {
     const r = await rowOf(caller.tenantId, uuid);
     if (!r) return null;
@@ -278,18 +350,26 @@ export async function getDeviceApps(req: Request, res: Response): Promise<void> 
     const collectedAt = channel === 'amapi' ? iso(r.amapi_report_at)
       : channel === 'legacy_agent' ? iso(r.agent_inventory_at)
         : iso([r.apple_apps_at, r.apple_managed_apps_at].filter(Boolean).map((v) => new Date(v)).sort((a, b) => b.getTime() - a.getTime())[0] ?? null);
-    if (coverage === 'none') return { items: [], coverage, collectedAt };
+    // The work side only of a personal device, a work profile or a User Enrollment (brief §5.2: managed apps only on a
+    // personal device), whatever the privacy profile collects: the bridge agent's and AMAPI's allApps are tenant-wide
+    // (privacy/collected.ts), not per ownership. The same predicate as ai-summary and authenticatorOf.
+    const managedOnly = coverage !== 'full' || personalSide(String(r.ownership), String(r.management_mode));
+    if (coverage === 'none') return { items: [], coverage, collectedAt, aiAppsWithheld, managedOnly: true };
     const q = db('device_apps').where({ tenant_id: caller.tenantId, device_id: Number(r.id) })
       .orderBy('identifier', 'asc').limit(MAX_APPS)
       .select('identifier', 'version', 'short_version', 'managed');
     // The ingestion already keeps the managed apps only where the profile says so (mdm/inventory/views.ts): refiltered
     // here all the same, never a personal app.
-    if (coverage !== 'full') q.where('managed', true);
+    if (managedOnly) q.where('managed', true);
+    if (aiAppsWithheld) {
+      const ai = [...new Set((await loadCatalog()).bundles.map((b) => b.bundleId))];
+      if (ai.length) q.whereNotIn('identifier', ai);
+    }
     const rows = await q as Row[];
     const items: ObliwatchDeviceAppItem[] = rows.map((a) => ({
       identifier: String(a.identifier), version: text(a.version, 64), shortVersion: text(a.short_version, 64), managed: a.managed === true,
     }));
-    return dropIdentifierKeys({ items, coverage, collectedAt });
+    return dropIdentifierKeys({ items, coverage, collectedAt, aiAppsWithheld, managedOnly });
   });
   if (!out) { sendError(res, 404, 'not_found', 'Not found'); return; }
   auditRead(req, caller.tenantId, 'devices/:uuid/apps', { count: out.items.length, device: uuid.toLowerCase() });

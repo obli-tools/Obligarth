@@ -361,6 +361,13 @@ export const mdmApi = {
     const res = await apiClient.post<ApiResponse<EndUser>>(`/mdm/end-users/${id}/depart`);
     return res.data.data!;
   },
+  /** CSV with the columns of the import (email, display_name, managed_apple_account, external_id, upn, entra_object_id). */
+  async exportEndUsers(params?: { status?: 'active' | 'departed' }): Promise<{ blob: Blob; filename: string }> {
+    const res = await apiClient.get('/mdm/end-users/export', { params: query(params), responseType: 'blob' });
+    const cd = String(res.headers['content-disposition'] ?? '');
+    const match = /filename="([^"]+)"/.exec(cd);
+    return { blob: res.data as Blob, filename: match ? match[1] : 'obligarth-end-users.csv' };
+  },
   async importEndUsers(csv: string): Promise<EndUserImportReport> {
     const res = await apiClient.post<ApiResponse<EndUserImportReport>>('/mdm/end-users/import', { csv });
     return res.data.data!;
@@ -372,6 +379,8 @@ export interface EndUserFields {
   displayName?: string | null;
   managedAppleAccount?: string | null;
   externalId?: string | null;
+  upn?: string | null;
+  entraObjectId?: string | null;
 }
 
 /** The enrollment states of a device under management (every state but 'unenrolled'). */

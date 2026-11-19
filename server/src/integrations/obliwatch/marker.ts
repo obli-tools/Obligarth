@@ -34,7 +34,10 @@ export async function touchSignalInTx(trx: Knex.Transaction, tenantId: number, d
     .update({ signal_updated_at: signalMark(sp) }));
 }
 
-/** Marks the devices of end users of `tenantId` whose e-mail (primaryUpn of the read API) may have changed. Never throws. */
+/** Marks the devices of end users of `tenantId` whose UPN, e-mail (primaryUpn of the read API) or Entra object id may
+ *  have changed. Never throws. (Microsoft Authenticator in the inventory: the trigger device_apps_authenticator_marker,
+ *  migration 20261119110000, which follows the same rule in the database: its UPDATE runs in a subtransaction that
+ *  swallows any error, with NOWAIT on the device row, so it never fails nor blocks the writer of device_apps.) */
 export async function touchEndUserDevicesInTx(trx: Knex.Transaction, tenantId: number, endUserIds: number[]): Promise<void> {
   const ids = [...new Set(endUserIds.map(Number).filter((n) => Number.isInteger(n) && n > 0))];
   if (ids.length === 0) return;

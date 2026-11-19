@@ -7,6 +7,7 @@ import { logger } from '../utils/logger';
 import { obliwatchAlertDefinitions } from '../integrations/obliwatch/alerts';
 import { registerObliwatchAuditActions } from '../integrations/obliwatch/audit';
 import { obliwatchIntegrationEnabled } from '../integrations/obliwatch/config';
+import { CATALOG_QUEUE, CatalogJobPayload, runCatalogJob } from '../integrations/obliwatch/catalog';
 import { purgeSeenJti } from '../integrations/obliwatch/jti';
 import { PUSH_QUEUE, PushJobPayload, purgeTransitions, requestDuePushes, runPushJob } from '../integrations/obliwatch/push';
 import { bindPushJob } from '../integrations/obliwatch/signals';
@@ -18,7 +19,8 @@ import { bindPushJob } from '../integrations/obliwatch/signals';
 //     the integration is turned off);
 //   - with OBLIWATCH_INTEGRATION=on only: the restrictable action of the consent, the push job
 //     integrations.obliwatch.push (lot L3) and the minute step (purge of the burned jti; the tenants with due
-//     transitions asked again; once an hour, the purge of the transitions ended 30 days ago, 90 for a dead one). The
+//     transitions asked again; once an hour, the purge of the transitions ended 30 days ago, 90 for a dead one), the
+//     daily job integrations.obliwatch.catalog-sync (lot L4: the AI catalog of Obliwatch). The
 //     routes are mounted by app.ts (read API) and routes/index.ts (console), on the same switch. With the switch off,
 //     the hot paths' hooks (integrations/obliwatch/signals.ts) return at once, without a statement.
 // =============================================================================
@@ -59,6 +61,21 @@ export function registerObliwatchModule(): void {
     handler: runPushJob,
   });
   bindPushJob(push);
+
+  // Lot L4 (GTH-06): the AI catalog of Obliwatch, once a day and once at start (catalog.ts: nothing is fetched while no
+  // tenant consented to be read; Obliwatch's route not built yet is a recorded state, not a failure).
+  registerJob({
+    name: CATALOG_QUEUE,
+    scope: 'platform',
+    description: 'Every day at 03:35 UTC: fetch the AI catalog of Obliwatch (bundles of the AI apps) when a tenant consented to be read',
+    payload: CatalogJobPayload,
+    policy: 'exclusive',
+    schedule: { cron: '35 3 * * *' },
+    runAtStart: true,
+    retry: { limit: 2, delaySeconds: 600, backoff: true },
+    timeoutSeconds: 300,
+    handler: runCatalogJob,
+  });
 
   registerLegacyAgentMinuteStep('obliwatch', async (ctx) => {
     let purged = 0;

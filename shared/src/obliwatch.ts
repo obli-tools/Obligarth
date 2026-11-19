@@ -131,13 +131,24 @@ export interface ObliwatchDeviceView {
   integrityRisks: string[] | null;
   lostModeState: string;
   lastCheckinAt: string | null;
-  /** The end user's address until end_users.upn exists (lot L4). */
+  /** The end user's UPN (end_users.upn), else their e-mail address (lot L4: the same rule as user.upn of the push). */
   primaryUpn: string | null;
-  primaryUpnSource: 'email' | 'none';
+  /** Where primaryUpn comes from: 'upn' (end_users.upn), 'email' (the e-mail address, no UPN entered), 'none'. */
+  primaryUpnSource: ObliwatchUpnSource;
+  /** The end user's object id in Entra ID (end_users.entra_object_id), null when not entered (lot L4). */
+  entraObjectId: string | null;
+  /** The version of Microsoft Authenticator (com.azure.authenticator on Android, com.microsoft.azureauthenticator on
+   *  Apple) found in the inventory; null when absent or unknown (lot L4, GTH-06). */
+  authenticatorVersion: string | null;
+  /** True when Obligarth can tell: the app was found, or every app of the device is collected (apps coverage 'full'
+   *  on a corporate device) and it is not there. False: unknown, NEVER to be read as absent. */
+  authenticatorKnown: boolean;
   coverage: ObliwatchCoverage;
   /** The change marker (devices.signal_updated_at): the order of GET /devices and the bound of updatedSince. */
   updatedAt: string;
 }
+
+export type ObliwatchUpnSource = 'upn' | 'email' | 'none';
 
 /** GET /devices?updatedSince=&limit=1..500&cursor=. */
 export interface ObliwatchDevicesResponse {
@@ -157,6 +168,13 @@ export interface ObliwatchDeviceAppsResponse {
   items: ObliwatchDeviceAppItem[];
   coverage: ObliwatchAppsCoverage;
   collectedAt: string | null;
+  /** Lot L4 (GTH-06): true when the bundles of the AI catalog are left out of `items` (managed or not), because the
+   *  nominative view of the AI apps is not open for the tenant (consent nominativeAiApps AND Obliwatch's attestation);
+   *  set whether or not such an app is on the device. The aggregates stay in GET /apps/ai-summary. */
+  aiAppsWithheld: boolean;
+  /** Lot L4: true when only the managed apps are listed (apps coverage not 'full', or the work side only of a personal
+   *  device, a work profile or a User Enrollment: a personal app is never listed). */
+  managedOnly: boolean;
 }
 
 // ── Push of the D-MOB-* signals (GTH-01), lot L3 ──────────────────────────────────────────────────────────────────
@@ -183,4 +201,46 @@ export interface ObliwatchPushStatus {
 /** POST /api/integrations/obliwatch/push/retry-dead: the dead letters put back in the queue. */
 export interface ObliwatchPushRetryResponse {
   requeued: number;
+}
+
+// ── AI apps (GTH-06), lot L4 ──────────────────────────────────────────────────────────────────────────────────────
+
+/** The bundle identifiers of Microsoft Authenticator, per platform family (GTH-06, DeviceView.authenticatorVersion). */
+export const AUTHENTICATOR_BUNDLES = { android: 'com.azure.authenticator', ios: 'com.microsoft.azureauthenticator' } as const;
+
+/** The platforms of the AI catalog of Obliwatch ('ios': every Apple device, the bundle ids are shared). */
+export type ObliwatchCatalogPlatform = 'android' | 'ios';
+
+/** Bundles of the AI catalog kept at most (GET {obliwatch}/api/external/v1/catalogues/ai-domains, section bundles). */
+export const OBLIWATCH_AI_CATALOG_MAX = 5000;
+
+/** A bundle identifier (Android package, Apple bundle id): letters, digits, '_' and '-', in two dotted parts or more. */
+export const OBLIWATCH_BUNDLE_ID_RE = /^[A-Za-z0-9_-]{1,100}(\.[A-Za-z0-9_-]{1,100}){1,20}$/;
+
+/** 'ok': a catalog fetched in the last 3 days; 'stale': an older one (still used); 'unavailable': none ever fetched. */
+export type ObliwatchCatalogStatus = 'ok' | 'stale' | 'unavailable';
+
+export interface ObliwatchAiSummaryItem {
+  bundleId: string;
+  platform: ObliwatchCatalogPlatform;
+  /** Devices of the tenant where the app was seen (see the rules of GET /apps/ai-summary). */
+  devices: number;
+  /** ?nominative=1 only (tenant consent nominativeAiApps AND attestation signalled by producer-config): the uuids of
+   *  those devices, sorted; never a name. */
+  deviceUuids?: string[];
+}
+
+/**
+ * GET /apps/ai-summary[?nominative=1]: the AI apps of the catalog seen on the devices of the tenant (enrolled, not
+ * unenrolled). An app counts on a device when the device's apps coverage is 'full' on a corporate device, or when it
+ * is a MANAGED app; a personal app of a personal or work-profile device is never counted. `coverage`: the devices per
+ * apps coverage, so that a zero is read with what Obligarth can see.
+ */
+export interface ObliwatchAiSummaryResponse {
+  catalogVersion: string | null;
+  catalogStatus: ObliwatchCatalogStatus;
+  catalogFetchedAt: string | null;
+  nominative: boolean;
+  items: ObliwatchAiSummaryItem[];
+  coverage: { full: number; managed_only: number; none: number };
 }
