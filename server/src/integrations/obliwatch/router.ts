@@ -68,7 +68,7 @@ export function createObliwatchRouter(): Router {
   router.get('/devices/:uuid', ...APP_READ, wrap(getDevice));
   router.get('/devices/:uuid/apps', ...APP_READ, wrap(getDeviceApps));
   router.get('/apps/ai-summary', ...APP_READ, wrap(aiSummary));
-  router.post('/action-requests', obliwatchAuth('user'), requireConsent('actions'), wrap(createActionRequest));
+  router.post('/action-requests', obliwatchAuth('user', 'request'), requireConsent('actions'), wrap(createActionRequest));
   router.get('/action-requests/:id', obliwatchAuth('either'), requireConsent('actions'), wrap(getActionRequest));
   router.post('/action-requests/:id/cancel', obliwatchAuth('either'), requireConsent('actions'), wrap(cancelActionRequest));
 

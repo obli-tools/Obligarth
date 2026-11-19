@@ -26,6 +26,8 @@ import { consumeJti } from './jti';
 // =============================================================================
 
 export type ObliwatchTokenKind = 'app' | 'user';
+/** The delegation scope a route requires, exactly (Obligate mints 'request' only for user:obliwatch:obligarth). */
+export type ObliwatchScope = 'read' | 'request';
 
 export interface ObliwatchCaller {
   kind: ObliwatchTokenKind;
@@ -140,7 +142,7 @@ async function verifyUser(req: Request, res: Response, token: string): Promise<V
  * The authentication of a route of the router, for one kind of token. On success req.obliwatch is set and the jti
  * is burned; the route then checks the consent it needs (requireConsent).
  */
-export function obliwatchAuth(kind: ObliwatchTokenKind | 'either') {
+export function obliwatchAuth(kind: ObliwatchTokenKind | 'either', scope: ObliwatchScope = 'read') {
   return (req: Request, res: Response, next: NextFunction): void => {
     const t = tokenOf(req);
     if ('error' in t) { refuse(req, res, t.error); return; }
@@ -148,6 +150,9 @@ export function obliwatchAuth(kind: ObliwatchTokenKind | 'either') {
       const v = await asIdentity(OBLIWATCH_ACTOR, () => (kind === 'app' ? verifyApp(req, res, t.token) : kind === 'user' ? verifyUser(req, res, t.token) : verifyEither(req, res, t.token)));
       if (!v) return;
       const { claims, kid } = v;
+      // Each route declares its scope and the token's scp must be EXACTLY it (Obliwatch AR-13/AR-33): a 'read' token
+      // never creates an action request, a 'request' token never reads.
+      if (claims.scp !== scope) { refuse(req, res, 'scope_invalid', { claims }); return; }
 
       // The tenant from the SIGNED slug only, compared byte-exactly (the join key between apps).
       const tenant = await asIdentity(OBLIWATCH_ACTOR, () => tenantService.getBySlug(claims.ost));
