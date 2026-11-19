@@ -140,6 +140,10 @@ export interface AndroidCompileContext {
   /** Kiosk of a dedicated device (lot AN-G1): the app of its enrollment profile, whether it is a live app of the
    *  tenant's catalog, and whether a kiosk exit runs (the device's own policy only). */
   kiosk?: { app?: string | null; appInCatalog?: boolean; exit?: boolean };
+  /** Obliwatch lot L5 (GTH-08, SEC-13): the security logs collected (the push consent of the tenant, read by the push;
+   *  integrations/obliwatch/securityLogs.ts). Applied to the device's own policy of a company-owned fully managed device
+   *  only; absent or false: no usageLog (the body is the same as before). */
+  securityLogs?: boolean;
 }
 
 export class AndroidCompileError extends Error {
@@ -208,6 +212,11 @@ export function compileAndroid(effective: AndroidEffectiveSetting[], device: And
     playStoreMode: 'WHITELIST',
     enterpriseDisplayNameVisibility: 'ENTERPRISE_DISPLAY_NAME_VISIBLE',
   };
+  // Obliwatch lot L5 (SEC-13): the security logs of a company-owned fully managed device whose tenant consented to the push
+  // (usageLog is a reserved field: no policy sets it).
+  if (!enrollment && ctx.securityLogs === true && device.ownership === 'corporate' && device.mode === 'fully_managed') {
+    body.usageLog = { enabledLogTypes: ['SECURITY_LOGS'], uploadOnCellularAllowed: ['SECURITY_LOGS'] };
+  }
   const sources: string[] = [];
   const notApplicable: CompiledAndroidPolicy['notApplicable'] = [];
   const deferred: string[] = [];

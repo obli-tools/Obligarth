@@ -7,6 +7,7 @@ import {
   ingestSecurityInfo,
 } from '../../mdm/inventory/ingestors';
 import { logger } from '../../utils/logger';
+import { ingestAttestationInTx } from '../../integrations/obliwatch/appleAttestation';
 import { resolveInTx } from '../alerts/service';
 import { onTargetFinal as registerTargetFinalHook, type TargetFinalContext } from './targets';
 
@@ -248,6 +249,9 @@ export function registerMvpResultIngestors(): void {
     apply: async (c) => {
       const q = obj(c.result.QueryResponses);
       if (!q) return;
+      // Obliwatch lot L5 (GTH-08): the Apple managed device attestation the daily inventory asked, verified then dropped
+      // (the refiltering of the ingestor never keeps it); under a savepoint, never a failure of the inventory.
+      await ingestAttestationInTx(c.trx, c.tenantId, c.deviceId, q, c.occurredAt);
       await ingestDeviceInformation(c.trx, c.tenantId, c.deviceId, q, c.occurredAt);
       // What the inventory of the command queue does once the record knows more (§8.10: the bypass code of the
       // activation lock of a company device found supervised).

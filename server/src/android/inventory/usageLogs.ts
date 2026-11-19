@@ -1,5 +1,8 @@
 // Handler of the USAGE_LOGS notifications (amapi.usage_logs, sections 8.1, 11.2; lot AN-F2; criterion 6): the events of
-// the lost mode only (the usage logs of the policy are not collected otherwise in v1).
+// the lost mode, and (Obliwatch lot L5, SEC-13) the security logs of the company-owned fully managed devices of a tenant
+// with the push consent, aggregated by integrations/obliwatch/securityLogs.ts (counts only, never an event kept). The
+// batch reaches this handler already reduced (inbox/schemas.ts, reduceUsageLogs): the events of the lost mode whole, the
+// security events a detection reads as their type, time and one boolean, every other event as a count.
 //   - LOST_MODE_LOCATION: the position of a company device in lost mode (fully managed 11+, COPE 13+), kept the
 //     lost_mode_location_days of the tenant (P0-13 T4, CNF-04; 30 by default: lost_mode_locations, purge_at); never for a personal device (the device is ignored as a whole; the table refuses
 //     it too, lost_mode_locations_guard), never for a device whose lost mode is off (a late event), never when the
@@ -13,8 +16,9 @@ import { deviceEvents } from '../../apple/devices/events';
 import { lostModeLocationAllowed } from '../../privacy/profiles';
 import { lostModePurgeAt } from '../../privacy/retention';
 import { registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
-import { UsageLogsSchema } from '../inbox/schemas';
+import { USAGE_LOG_LOST_MODE_TYPES, UsageLogsSchema } from '../inbox/schemas';
 import { recordEventSignalInTx } from '../../integrations/obliwatch/signals';
+import { recordSecurityLogsInTx } from '../../integrations/obliwatch/securityLogs';
 
 type Logs = z.infer<typeof UsageLogsSchema>;
 type Ctx = AndroidEventContext<Logs>;
@@ -32,7 +36,9 @@ export interface LostModePosition { latitude: number; longitude: number; observe
 export function lostModeEvents(events: unknown, receivedAt: Date): { positions: LostModePosition[]; userExitAt: Date | null } {
   const positions: LostModePosition[] = [];
   let userExitAt: Date | null = null;
-  for (const raw of (Array.isArray(events) ? events : []).slice(0, MAX_EVENTS)) {
+  // The events of the lost mode first, then the cap: the security logs of the same batch (lot L5) never push them out.
+  const ofLostMode = (Array.isArray(events) ? events : []).filter((raw) => USAGE_LOG_LOST_MODE_TYPES.has(String(obj(raw).eventType ?? '')));
+  for (const raw of ofLostMode.slice(0, MAX_EVENTS)) {
     const e = obj(raw);
     const at = time(e.eventTime);
     // A time in the future (clock of the device) counts as the reception.
@@ -56,11 +62,16 @@ export async function onUsageLogs(ctx: Ctx): Promise<'applied' | 'ignored'> {
   const { trx, tenantId } = ctx;
   const p = ctx.event.payload;
   const row = await trx('android_devices as a').join('devices as dv', function j() { this.on('dv.id', '=', 'a.device_id').andOn('dv.tenant_id', '=', 'a.tenant_id'); })
-    .where('a.amapi_name', p.device).whereNull('a.released_at').first('a.device_id', 'dv.ownership', 'dv.lost_mode_state') as
-    { device_id: number; ownership: string; lost_mode_state: string | null } | undefined;
+    .where('a.amapi_name', p.device).whereNull('a.released_at').first('a.device_id', 'dv.ownership', 'dv.lost_mode_state', 'dv.management_mode') as
+    { device_id: number; ownership: string; lost_mode_state: string | null; management_mode: string } | undefined;
   // Unknown (quarantined, released, not enrolled yet) or personal: nothing is written, ever (criterion 6).
   if (!row || row.ownership === 'personal') return 'ignored';
   const deviceId = Number(row.device_id);
+  // Obliwatch lot L5 (GTH-08, SEC-13): the security logs of a company-owned fully managed device, counted then
+  // forgotten (aggregated detections D-MOB-SEC-*); nothing while the integration is off or without the push consent,
+  // never a failure of this handler.
+  await recordSecurityLogsInTx(trx, tenantId, { id: deviceId, ownership: row.ownership, mode: row.management_mode }, p.usageLogEvents, ctx.event.receivedAt,
+    p.otherEventCount ?? 0);
   const { positions, userExitAt } = lostModeEvents(p.usageLogEvents, ctx.event.receivedAt);
   let state = row.lost_mode_state ?? 'off';
   if (userExitAt) {

@@ -236,6 +236,16 @@ export class ObliwatchClient {
     return this.call(tenantSlug, 'GET', '/api/external/v1/catalogues/ai-domains', undefined, etag);
   }
 
+  /**
+   * Lot L5 (GTH-05): one batch of results of action requests (1 to 100) of the tenant, POST /api/ingest/v1/action-results
+   * {results: [...]}. Obliwatch had not built the route when this was written: any 2xx counts as delivered for the whole
+   * batch; a failure carries its HTTP status (404 included) for the caller's retries.
+   */
+  async postActionResults(tenantSlug: string, results: unknown[]): Promise<{ ok: true } | CallFailure> {
+    const r = await this.call(tenantSlug, 'POST', '/api/ingest/v1/action-results', { results });
+    return r.ok ? { ok: true } : r;
+  }
+
   /** One batch of alerts (1 to 500) of the tenant. */
   async postAlerts(tenantSlug: string, alerts: unknown[]): Promise<AlertsResult> {
     const r = await this.call(tenantSlug, 'POST', '/api/ingest/v1/alerts', { alerts });

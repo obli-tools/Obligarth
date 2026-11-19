@@ -141,6 +141,9 @@ const extraOf = (w: RuleState): string => {
   const o: Record<string, unknown> = { reasonCodes: w.reasonCodes.slice(0, 20) };
   if (w.posture !== undefined) o.posture = w.posture ?? null;
   if (w.risks !== undefined) o.risks = w.risks ?? null;
+  // An aggregated detection (SEC-13): counts only, never an event of the log.
+  if (Number.isSafeInteger(w.count) && (w.count as number) > 0) o.count = Math.min(w.count as number, 1_000_000);
+  if (Number.isSafeInteger(w.windowMinutes) && (w.windowMinutes as number) > 0) o.windowMinutes = Math.min(w.windowMinutes as number, 10_080);
   return JSON.stringify(o);
 };
 
@@ -316,6 +319,18 @@ async function currentStatesOf(q: Knex.Transaction, tenantId: number): Promise<R
       operatorDisabled: r.operator === true, personal: r.ownership === 'personal',
     }));
     if (r.channel === 'amapi') out.push(...postureRuleStates(deviceId, postureOf(r.posture)));
+  }
+  // Lot L5 (GTH-08): the last verdict of the Apple managed device attestation (appleAttestation.ts), a state rule.
+  const attested = await q('apple_device_attestations as x')
+    .join('devices as d', function j() { this.on('d.id', '=', 'x.device_id').andOn('d.tenant_id', '=', 'x.tenant_id'); })
+    .where({ 'x.tenant_id': tenantId, 'd.management_channel': 'apple_mdm' }).whereIn('d.enrollment_state', ['enrolled', 'awaiting_configuration'])
+    .whereNotNull('x.state').select('x.device_id', 'x.state', 'x.reason') as Array<{ device_id: number; state: string; reason: string | null }>;
+  for (const a of attested) {
+    const failed = a.state === 'failed';
+    out.push({
+      deviceId: Number(a.device_id), ruleId: 'D-MOB-ATTEST-FAILED', state: failed ? 'active' : 'cleared', severity: RULES['D-MOB-ATTEST-FAILED'].severity,
+      fingerprint: null, reasonCodes: failed ? ['attestation_failed', ...(a.reason ? [a.reason] : [])] : [],
+    });
   }
   return out;
 }

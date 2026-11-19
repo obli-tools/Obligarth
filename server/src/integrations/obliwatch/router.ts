@@ -4,6 +4,7 @@ import { OBLIWATCH_API_VERSION, type ObliwatchPingResponse } from '@obligarth/sh
 import { logger } from '../../utils/logger';
 import { listAccessKeys } from './accessKeys';
 import { aiSummary } from './aiApps';
+import { cancelActionRequest, createActionRequest, getActionRequest } from './actions';
 import { getDevice, getDeviceApps, listDevices } from './devices';
 import { auditRead } from './audit';
 import { obliwatchAuth, sendError } from './auth';
@@ -24,9 +25,11 @@ import { readConsent, requireConsent } from './consent';
 //   GET /devices/:uuid/apps  app token + consent 'read' (GTH-03): managed apps only unless the profile collects all
 //   GET /apps/ai-summary     app token + consent 'read' (GTH-06, lot L4): AI apps of Obliwatch's catalog, aggregates;
 //                            ?nominative=1 with the consent nominativeAiApps and Obliwatch's attestation (aiApps.ts)
+//   POST /action-requests             user token (the analyst) + consent 'actions' (GTH-04, lot L5; actions.ts): executed
+//                                     without approval (owner decision Q-L5a), 202 {requestId, state, expiresAt}
+//   GET  /action-requests/:id         app or user token + consent 'actions': the state and result (no coordinate)
+//   POST /action-requests/:id/cancel  app or user token + consent 'actions': before the execution only (else 409)
 //
-// Extension points for the next lots: a read route of L2 is `router.get(path, ...APP_READ, handler)`; an action
-// route of L5 is `router.post(path, obliwatchAuth('user'), requireConsent('actions'), handler)`.
 // =============================================================================
 
 const wrap = (fn: (req: Request, res: Response) => Promise<void>): RequestHandler =>
@@ -65,6 +68,9 @@ export function createObliwatchRouter(): Router {
   router.get('/devices/:uuid', ...APP_READ, wrap(getDevice));
   router.get('/devices/:uuid/apps', ...APP_READ, wrap(getDeviceApps));
   router.get('/apps/ai-summary', ...APP_READ, wrap(aiSummary));
+  router.post('/action-requests', obliwatchAuth('user'), requireConsent('actions'), wrap(createActionRequest));
+  router.get('/action-requests/:id', obliwatchAuth('either'), requireConsent('actions'), wrap(getActionRequest));
+  router.post('/action-requests/:id/cancel', obliwatchAuth('either'), requireConsent('actions'), wrap(cancelActionRequest));
 
   router.use((_req, res) => { sendError(res, 404, 'not_found', 'Not found'); });
 

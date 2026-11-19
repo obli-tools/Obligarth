@@ -49,6 +49,7 @@ import { FAILED_PASSWORDS_FOR_WIPE, policyHasWipeSettings, PRIVATE_SPACE_DISALLO
 import { androidSenders } from '../enrollment/senders';
 import { byodPolicy } from '../byod/policy';
 import { policyArtifactHash, syncPolicyArtifact } from './channel';
+import { clearSecurityLogPolicy, markSecurityLogPolicyInTx, securityLogsWantedInTx } from '../../integrations/obliwatch/securityLogs';
 
 export const PUSH_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.push-device' }) as DbActor;
 export const ENROLLMENT_POLICY_ACTOR: DbActor = Object.freeze({ type: 'job', name: 'android.policies.enrollment-policy' }) as DbActor;
@@ -214,7 +215,13 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
         const app = profile?.settings.deviceUsage === 'kiosk' ? profile.settings.kioskApp ?? null : null;
         kiosk = { app, appInCatalog: app ? await kioskAppInCatalog(trx, tenantId, app) : false, exit: !!(await runningKioskExit(trx, tenantId, deviceId)) };
       }
-      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled, kiosk, networkInfo: privacy.networkInfo };
+      // Obliwatch lot L5 (SEC-13): the security logs of a company-owned fully managed device of a tenant with the push
+      // consent (false at once while the integration is off).
+      const securityLogs = await securityLogsWantedInTx(trx, tenantId, { ownership: row.ownership, mode: row.management_mode });
+      // Marked before the policy can carry them: the sweep turns them off again when the integration or the consent is off.
+      if (securityLogs) await markSecurityLogPolicyInTx(trx, tenantId, deviceId);
+      return { kind: 'ok' as const, e, row, desired, adminDomain: enterprise?.admin_domain ?? null, operatorDisabled, kiosk, networkInfo: privacy.networkInfo,
+        securityLogs };
     });
     if (prep.kind !== 'ok') return prep.kind;
     const { e, row, desired } = prep;
@@ -227,6 +234,7 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
         purpose: 'device', variables: desired.variables,
         privacy: { networkInfo: prep.networkInfo },
         guards: { adminDomain: prep.adminDomain, minFailedPasswordsForWipe: FAILED_PASSWORDS_FOR_WIPE.defaultFloor }, ...(prep.kiosk ? { kiosk: prep.kiosk } : {}),
+        ...(prep.securityLogs ? { securityLogs: true } : {}),
       });
     } catch (err) {
       await setPolicyError(tenantId, deviceId, [`compile:${err instanceof AndroidCompileError ? err.code : 'invalid_value'}`], false);
@@ -286,7 +294,10 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
     const sameRender = rendered.renderedHash === row.pushed_rendered_hash && row.pushed_policy_version !== null;
     const attach = row.policy_name !== compiled.policyId;
     const activate = row.approval_state === 'approved' && row.state === 'DISABLED' && !prep.operatorDisabled;
+    // Obliwatch lot L5 (SEC-13): the device holds (or now gets) a policy without usageLog: its mark cleared.
+    const logsOffDelivered = async () => { if (!prep.securityLogs) await clearSecurityLogPolicy(db, tenantId, deviceId); };
     if (sameRender && !attach && !activate) {
+      await logsOffDelivered();
       await lockAccepted();
       if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
       await settleDegraded();
@@ -330,6 +341,7 @@ async function pushOnce(tenantId: number, deviceId: number, o: { gateway?: Andro
         policy_name: compiled.policyId, ...(activate ? { state: typeof patched?.state === 'string' ? patched.state : 'ACTIVE' } : {}), updated_at: trx.fn.now(),
       }));
     }
+    await logsOffDelivered();
     await lockAccepted();
     if (!wipeWithheld) await markKioskWipeSettingsApplied(tenantId, deviceId);
     await settleDegraded();

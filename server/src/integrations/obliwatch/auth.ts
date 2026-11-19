@@ -20,6 +20,7 @@ import { consumeJti } from './jti';
 // Then, for both: the tenant from the SIGNED slug (403 tenant_unknown), the limit of the (app, tenant) pair (429 with
 // Retry-After), and the jti burned (401 replayed; 503 when the store cannot be written). The consent is checked by
 // the route (consent.ts), after this.
+//   either  (lot L5, GET and cancel of an action request) the app token or a user token, each verified as above.
 // Header: Authorization: Bearer <JWS> (Obliwatch's client) or X-Obli-Delegation: <JWS> (the suite's delegation
 // header); both at once: 401 credentials_ambiguous.
 // =============================================================================
@@ -108,6 +109,15 @@ async function verifyApp(req: Request, res: Response, token: string): Promise<Ve
   return { claims: r.claims, kid: r.kid };
 }
 
+/** Lot L5: an app token, or else (its subject is a user) a user token, each with its own policy. */
+async function verifyEither(req: Request, res: Response, token: string): Promise<Verified | null> {
+  const r = await delegationVerifyService.verifyApp(token);
+  if (!r.ok && r.reason === 'subject_invalid' && r.detail === 'user_subject') return verifyUser(req, res, token);
+  if (!r.ok) { refuse(req, res, r.reason, { claims: r.claims }); return null; }
+  if (r.app !== OBLIWATCH_APP) { refuse(req, res, 'azp_not_allowed', { claims: r.claims }); return null; }
+  return { claims: r.claims, kid: r.kid };
+}
+
 async function verifyUser(req: Request, res: Response, token: string): Promise<Verified | null> {
   const r = await delegationVerifyService.verify(token);
   if (!r.ok) {
@@ -130,12 +140,12 @@ async function verifyUser(req: Request, res: Response, token: string): Promise<V
  * The authentication of a route of the router, for one kind of token. On success req.obliwatch is set and the jti
  * is burned; the route then checks the consent it needs (requireConsent).
  */
-export function obliwatchAuth(kind: ObliwatchTokenKind) {
+export function obliwatchAuth(kind: ObliwatchTokenKind | 'either') {
   return (req: Request, res: Response, next: NextFunction): void => {
     const t = tokenOf(req);
     if ('error' in t) { refuse(req, res, t.error); return; }
     (async () => {
-      const v = await asIdentity(OBLIWATCH_ACTOR, () => (kind === 'app' ? verifyApp(req, res, t.token) : verifyUser(req, res, t.token)));
+      const v = await asIdentity(OBLIWATCH_ACTOR, () => (kind === 'app' ? verifyApp(req, res, t.token) : kind === 'user' ? verifyUser(req, res, t.token) : verifyEither(req, res, t.token)));
       if (!v) return;
       const { claims, kid } = v;
 
@@ -161,7 +171,7 @@ export function obliwatchAuth(kind: ObliwatchTokenKind) {
       }
       if (outcome === 'replayed') { refuse(req, res, 'replayed', { claims, tenantId }); return; }
 
-      req.obliwatch = { kind, azp: claims.azp, jti: claims.jti, kid, ost: claims.ost, tenantId, ...(v.user ? { user: v.user } : {}) };
+      req.obliwatch = { kind: v.user ? 'user' : 'app', azp: claims.azp, jti: claims.jti, kid, ost: claims.ost, tenantId, ...(v.user ? { user: v.user } : {}) };
       next();
     })().catch((err) => {
       // Fail closed: an unexpected error is a refusal, never a pass.

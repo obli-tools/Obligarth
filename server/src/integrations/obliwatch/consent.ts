@@ -12,6 +12,8 @@ import { OBLIWATCH_ACTOR } from './config';
 import { sendError } from './auth';
 import { pushStatusOf, requeueDeadInTx, withdrawPushInTx } from './push';
 import { bootstrapSignalStateInTx, invalidatePushConsent, requestPushAfterCommit, requestReconcileInTx } from './signals';
+import { requestSecurityLogPoliciesInTx } from './securityLogs';
+import { closeOpenRequests } from './actionTrack';
 import { logger } from '../../utils/logger';
 
 // =============================================================================
@@ -26,6 +28,15 @@ import { logger } from '../../utils/logger';
 //     in ONE transaction: a journal that cannot be written leaves the consent unchanged (503 auditUnavailable).
 //     Turning anything on is refused while the tenant's slug does not fit Obliwatch's format (422 slugIncompatible):
 //     Obliwatch would refuse every token minted for it.
+//   - the nominative view of the AI apps (peer request AR-55/AR-57, decision of the owner of Obliwatch) is ON by default
+//     for a tenant that consents to be read: the read access turned on turns it on too, unless the same request changes it
+//     or the tenant turned it off on purpose before (nominative_ai_apps_opted_out, set when it goes from on to off or when
+//     the read access is turned on with it explicitly off, cleared when it goes on). Only a body that leaves
+//     nominativeAiApps out gets the default (kept, or on with the read access); an explicit value always wins. The
+//     console turns it on in its draft when the read access is switched on and sends the value it shows. Still
+//     revocable, and journaled in the same entry (changes.nominativeAiApps).
+//   - the consent to the actions withdrawn (lot L5): every open action request of Obliwatch is withdrawn at once
+//     (actionTrack.ts closeOpenRequests: consent_revoked).
 // =============================================================================
 
 export type ObliwatchConsentFlag = keyof ObliwatchConsentFlags;
@@ -74,8 +85,18 @@ export function requireConsent(flag: ObliwatchConsentFlag) {
 // ── Console ─────────────────────────────────────────────────────────────────────
 
 const Body = z.object({
-  read: z.boolean(), push: z.boolean(), actions: z.boolean(), nominativeAiApps: z.boolean(),
+  read: z.boolean(), push: z.boolean(), actions: z.boolean(), nominativeAiApps: z.boolean().optional(),
 }).strict();
+
+/** The flags a PUT asks, the default of the nominative view applied (see the header). */
+function nextFlags(body: z.infer<typeof Body>, before: ObliwatchConsentFlags, optedOut: boolean): ObliwatchConsentFlags {
+  const next: ObliwatchConsentFlags = { read: body.read, push: body.push, actions: body.actions, nominativeAiApps: body.nominativeAiApps ?? before.nominativeAiApps };
+  const readTurnsOn = body.read && !before.read;
+  // Only a body that leaves the field out gets the default: an explicit value is the manager's choice, even when it equals
+  // the stored one (the console sends the value it shows).
+  if (readTurnsOn && body.nominativeAiApps === undefined && !optedOut) next.nominativeAiApps = true;
+  return next;
+}
 
 async function viewOf(tenantId: number, row: Row): Promise<ObliwatchConsentView> {
   const tenant = await tenantService.getById(tenantId);
@@ -113,10 +134,11 @@ export function createObliwatchConsoleRouter(): Router {
     const tenantId = Number(req.tenantId);
     const p = Body.safeParse(req.body ?? {});
     if (!p.success) throw new AppError(400, p.error.issues[0]?.message ?? 'Invalid request', 'invalidRequest');
-    const next = p.data;
     const tenant = await tenantService.getById(tenantId);
     if (!tenant) throw new AppError(404, 'Tenant not found');
-    const before = flagsOf(await readRow(tenantId));
+    const beforeRow = await readRow(tenantId);
+    const before = flagsOf(beforeRow);
+    const next = nextFlags(p.data, before, beforeRow?.nominative_ai_apps_opted_out === true);
     const turnsOn = FLAGS.some((f) => next[f] && !before[f]);
     if (turnsOn && !OBLIWATCH_SLUG_RE.test(tenant.slug)) {
       throw new AppError(422, 'The slug of this tenant does not fit the format Obliwatch requires (a-z, 0-9, -; 64 at most)',
@@ -130,16 +152,22 @@ export function createObliwatchConsoleRouter(): Router {
     }
     if (!(await applyRestriction(res, { req, actionKey: 'obliwatch.settings_change' }))) return;
     const ctx = await audit.fromRequest(req, tenantId);
+    let actionsWithdrawn = false;
     try {
       await db.transaction(async (trx) => {
         await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`obliwatch_consent:${tenantId}`]);
         const row = await trx('tenant_obliwatch_settings').where({ tenant_id: tenantId }).forUpdate().first() as Row;
         const current = flagsOf(row);
+        // Read again under the lock: the default of the nominative view decided on the row as it is now.
+        Object.assign(next, nextFlags(p.data, current, row?.nominative_ai_apps_opted_out === true));
         const diff: Record<string, { from: boolean; to: boolean }> = {};
         for (const f of FLAGS) if (next[f] !== current[f]) diff[f] = { from: current[f], to: next[f] };
         if (Object.keys(diff).length === 0) return;
         const values = {
           read_enabled: next.read, push_enabled: next.push, actions_enabled: next.actions, nominative_ai_apps: next.nominativeAiApps,
+          ...(diff.nominativeAiApps ? { nominative_ai_apps_opted_out: !diff.nominativeAiApps.to }
+            // The read access turned on with the view explicitly off: that refusal remembered too.
+            : diff.read?.to && p.data.nominativeAiApps === false ? { nominative_ai_apps_opted_out: true } : {}),
           changed_by: req.session.userId!, changed_at: new Date(),
         };
         await trx('tenant_obliwatch_settings').insert({ tenant_id: tenantId, ...values }).onConflict('tenant_id').merge(Object.keys(values));
@@ -153,6 +181,10 @@ export function createObliwatchConsoleRouter(): Router {
         }
         // The push turns off: what waits and the dead letters are never sent, the alert of the dead letters resolved.
         if (diff.push && !diff.push.to) await withdrawPushInTx(trx, tenantId);
+        // Lot L5 (GTH-08, SEC-13): the security logs follow the push consent, both ways: the policies of the company-owned
+        // fully managed AMAPI devices pushed again (their usageLog added or removed).
+        if (diff.push) await requestSecurityLogPoliciesInTx(trx, tenantId);
+        actionsWithdrawn = !!diff.actions && !diff.actions.to;
         await audit.appendInTx(trx, {
           tenantId, action: 'obliwatch.consent.changed', outcome: 'success',
           target: { type: 'tenant', id: String(tenantId) }, details: { changes: diff },
@@ -165,6 +197,10 @@ export function createObliwatchConsoleRouter(): Router {
       throw err;
     }
     invalidatePushConsent(tenantId);
+    // Lot L5 (GTH-04): the consent to the actions withdrawn: every open request of Obliwatch withdrawn now (what it would
+    // still send cancelled, the request closed 'cancelled', consent_revoked, journaled under this manager). The guard
+    // engine refuses their guarded actions anyway, and the minute step closes what this pass could not.
+    if (actionsWithdrawn) await closeOpenRequests(tenantId, 'consent_revoked', ctx);
     res.json({ success: true, data: await viewOf(tenantId, await readRow(tenantId)) });
   }));
 

@@ -28,6 +28,17 @@ export const RULES: Readonly<Record<ObliwatchRuleId, RuleDefinition>> = {
   'D-MOB-NONCOMPLIANT': { title: 'Mobile device non-compliant', severity: 'low' },
   'D-MOB-STALE': { title: 'Mobile device without contact', severity: 'info' },
   'D-MOB-LOST-EXIT': { title: 'Lost mode left by the user', severity: 'high' },
+  // Lot L5 (GTH-08). A state rule: active while the last Apple managed device attestation of the device failed (reason
+  // codes attestation_failed and the cause: chain_invalid, identity_mismatch, freshness_mismatch, malformed), cleared by
+  // the next one that verifies (appleAttestation.ts).
+  'D-MOB-ATTEST-FAILED': { title: 'Apple managed device attestation failed', severity: 'high' },
+  // SEC-13: events of the AMAPI security logs, aggregated (securityLogs.ts): at most one transition per device, rule and
+  // window (details.count, details.windowMinutes), never a raw log.
+  'D-MOB-SEC-USER-CA': { title: 'Certificate authority installed on a company Android device', severity: 'medium' },
+  'D-MOB-SEC-ADB': { title: 'ADB shell used on a company Android device', severity: 'medium' },
+  'D-MOB-SEC-UNLOCK-BURST': { title: 'Burst of failed unlock attempts on a company Android device', severity: 'medium' },
+  'D-MOB-SEC-KEY-INTEGRITY': { title: 'Key integrity violation on a company Android device', severity: 'high' },
+  'D-MOB-SEC-LOGGING-STOPPED': { title: 'Security logging stopped on a company Android device', severity: 'medium' },
 };
 
 /** A wanted state of a rule of a device (signals.ts compares it with device_signal_state). */
@@ -42,6 +53,9 @@ export interface RuleState {
   reasonCodes: string[];
   posture?: string | null;
   risks?: string[] | null;
+  /** An aggregated detection (SEC-13): the events counted in its window, and the window's length. */
+  count?: number;
+  windowMinutes?: number;
 }
 
 const CODE_RE = /^[a-z_]{1,40}$/;

@@ -19,9 +19,11 @@ export interface ObliwatchConsentFlags {
   read: boolean;
   /** Obligarth pushes the D-MOB-* signals of this tenant to Obliwatch. */
   push: boolean;
-  /** Obliwatch analysts may ask actions (each one approved in Obligarth with a second factor). */
+  /** Obliwatch analysts may ask actions on one device (lot L5, owner decision Q-L5a: a valid request is executed at
+   *  once, without a second factor nor an approver; erase and removal always refused, capped, journaled). */
   actions: boolean;
-  /** The nominative view of the AI apps (aggregates otherwise). */
+  /** The nominative view of the AI apps (aggregates otherwise). On by default for a tenant that consents to be read
+   *  (decision AR-55/AR-57): turned on with the read access unless turned off explicitly; revocable. */
   nominativeAiApps: boolean;
 }
 
@@ -37,7 +39,8 @@ export interface ObliwatchConsentView extends ObliwatchConsentFlags {
   pushStatus: ObliwatchPushStatus | null;
 }
 
-export type ObliwatchConsentBody = ObliwatchConsentFlags;
+/** PUT body. nominativeAiApps may be left out (kept, or turned on with the read access: see ObliwatchConsentFlags). */
+export type ObliwatchConsentBody = Omit<ObliwatchConsentFlags, 'nominativeAiApps'> & { nominativeAiApps?: boolean };
 
 /** GET /ping. Served without consent, for the diagnostic of the link. */
 export interface ObliwatchPingResponse {
@@ -98,11 +101,21 @@ export type ObliwatchIntegrityCoverage = 'covered' | 'unknown' | 'not_covered_ap
  *  ownership), or nothing yet. */
 export type ObliwatchAppsCoverage = 'full' | 'managed_only' | 'none';
 
+/** The Apple managed device attestation of a device (GTH-08, added in lot L5): 'verified' (the last attestation, at most
+ *  30 days old, chains to Apple's Enterprise Attestation root and matches the device), 'failed' (D-MOB-ATTEST-FAILED is
+ *  active), 'not_collected' (an Apple device not attested: no push consent, an OS without the query, nothing yet: never
+ *  read as healthy), 'not_applicable' (Android, bridge agent). */
+export type ObliwatchAttestationCoverage = 'verified' | 'failed' | 'not_collected' | 'not_applicable';
+
 export interface ObliwatchCoverage {
   integrity: ObliwatchIntegrityCoverage;
   apps: ObliwatchAppsCoverage;
-  /** Always false: no security log is ingested (GTH-08). */
+  /** True only when the security logs of the device are actually collected (GTH-08, SEC-13): an AMAPI company-owned
+   *  fully managed device of a tenant with the push consent, whose security logs reached Obligarth within 7 days. False
+   *  means NOT COLLECTED (never "nothing to report"). */
   securityLogs: boolean;
+  /** Added in lot L5 (GTH-08): see ObliwatchAttestationCoverage. */
+  attestation: ObliwatchAttestationCoverage;
 }
 
 /**
@@ -183,6 +196,9 @@ export interface ObliwatchDeviceAppsResponse {
 export const OBLIWATCH_RULE_IDS = [
   'D-MOB-INT-COMPROMISED', 'D-MOB-INT-ATRISK', 'D-MOB-MGMT-REMOVED', 'D-MOB-ID-MISMATCH', 'D-MOB-OS-OUTDATED',
   'D-MOB-NONCOMPLIANT', 'D-MOB-STALE', 'D-MOB-LOST-EXIT',
+  // Lot L5 (GTH-08): Apple managed device attestation, and the aggregated detections of the AMAPI security logs (SEC-13).
+  'D-MOB-ATTEST-FAILED',
+  'D-MOB-SEC-USER-CA', 'D-MOB-SEC-ADB', 'D-MOB-SEC-UNLOCK-BURST', 'D-MOB-SEC-KEY-INTEGRITY', 'D-MOB-SEC-LOGGING-STOPPED',
 ] as const;
 export type ObliwatchRuleId = (typeof OBLIWATCH_RULE_IDS)[number];
 
@@ -243,4 +259,94 @@ export interface ObliwatchAiSummaryResponse {
   nominative: boolean;
   items: ObliwatchAiSummaryItem[];
   coverage: { full: number; managed_only: number; none: number };
+}
+
+// ── Action requests (GTH-04) and their results (GTH-05), lot L5 ─────────────────────────────────────────────────────
+
+/** The actions Obliwatch may ask, one device per request. Anything else (erase, removal from management, passcode
+ *  clearing, password reset, a list of targets) is refused: 422 actionNotAllowed. */
+export const OBLIWATCH_ACTIONS = ['lost_mode_enable', 'lost_mode_disable', 'device_location', 'play_sound', 'device_lock'] as const;
+export type ObliwatchAction = (typeof OBLIWATCH_ACTIONS)[number];
+
+/**
+ * The states of a request. Owner decision Q-L5a (Obliwatch has the "god mode"): no human approval, a valid request is
+ * executed at once; the machine is accepted → executing → done | failed | refused | expired | cancelled.
+ * 'awaiting_approval' and 'approved' belong to the brief's enumeration and are NEVER used (kept so that a consumer
+ * written against the brief still parses the type).
+ *   accepted   recorded, the execution not started yet (a guarded action scheduled; a tenant frozen meanwhile keeps it
+ *              here until it expires)
+ *   executing  the command is written for the device and waits for its answer
+ *   done       the device acknowledged the command
+ *   failed     the device answered an error, or the execution failed
+ *   refused    refused at execution (rights, device no longer eligible, the device service refused the command)
+ *   expired    no answer within 24 hours of the request (its open commands withdrawn), or the command expired
+ *   cancelled  cancelled before its execution (POST …/cancel), or the command was cancelled
+ */
+export const OBLIWATCH_ACTION_STATES = ['accepted', 'awaiting_approval', 'approved', 'executing', 'done', 'failed', 'refused', 'expired', 'cancelled'] as const;
+export type ObliwatchActionState = (typeof OBLIWATCH_ACTION_STATES)[number];
+
+/** The final states (a request that reached one never changes again). */
+export const OBLIWATCH_ACTION_FINAL_STATES: readonly ObliwatchActionState[] = ['done', 'failed', 'refused', 'expired', 'cancelled'];
+
+/** The refusal codes of POST /action-requests (422 {error, code, reason, message}). */
+export type ObliwatchActionRefusal =
+  | 'actionNotAllowed' | 'notSupported' | 'supervisionRequired' | 'ownershipForbidden' | 'lostModeRequired' | 'lostModeCooldown'
+  | 'notEnrolled' | 'locationDisabled';
+
+/** POST /action-requests (user token of the analyst, consent 'actions'). params: lost_mode_enable {message, phone}
+ *  required (footnote optional, Apple); device_lock {message?, phone?} (Apple only, ignored elsewhere); the others {}. */
+export interface ObliwatchActionRequestBody {
+  deviceUuid: string;
+  action: ObliwatchAction;
+  params?: Record<string, unknown>;
+  /** 10 to 500 characters. */
+  reason: string;
+  /** Obliwatch's reference of the incident (1 to 200 characters), e.g. obliwatch:INC-42@example. */
+  incidentRef: string;
+  /** Idempotency: Obliwatch's own uuid of the request, which becomes the requestId; the same uuid again answers the
+   *  request already recorded (202), a different payload under it 409 idempotency_conflict. */
+  requestUuid?: string;
+  /** The analyst as Obliwatch names them (display only, recorded in the journal next to the local account). */
+  requestedBy?: string;
+}
+
+/** 202 of POST /action-requests. approvalUrl is always null (no approval, Q-L5a). */
+export interface ObliwatchActionRequestAccepted {
+  requestId: string;
+  state: ObliwatchActionState;
+  expiresAt: string;
+  approvalRequired: false;
+  approvalUrl: null;
+}
+
+/** The result of a request, never a coordinate: for device_location, whether a position was obtained and its accuracy
+ *  bucket only. `code`: why a request failed, was refused or expired (absent otherwise). */
+export interface ObliwatchActionResult {
+  action: ObliwatchAction;
+  code?: string;
+  locationObtained?: boolean;
+  accuracyBucket?: '<100m' | '100m-1km' | '>1km';
+}
+
+/** GET /action-requests/:id (app or user token). */
+export interface ObliwatchActionRequestView {
+  requestId: string;
+  deviceUuid: string;
+  action: ObliwatchAction;
+  state: ObliwatchActionState;
+  /** Increments on each transition (the seq of the results pushed). */
+  seq: number;
+  createdAt: string;
+  updatedAt: string;
+  expiresAt: string;
+  result: ObliwatchActionResult | null;
+}
+
+/** One item of POST {obliwatch}/api/ingest/v1/action-results {results: [...]} (GTH-05), one per transition. */
+export interface ObliwatchActionResultItem {
+  uuid: string;
+  status: ObliwatchActionState;
+  at: string;
+  seq: number;
+  result: ObliwatchActionResult;
 }

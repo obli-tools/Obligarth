@@ -53,7 +53,68 @@ export const OperationSchema = z.object({
 export const UsageLogsSchema = z.object({
   device: deviceName,
   usageLogEvents: z.array(z.object({ eventType: str(80).optional(), eventTime: time.optional() }).passthrough()).max(5000).optional(),
+  /** Set by reduceUsageLogs: the events of the batch that were neither of the lost mode nor read by a detection. */
+  otherEventCount: z.number().int().min(0).max(10_000_000).optional(),
 }).passthrough();
+
+// ── Reduction of the USAGE_LOGS batches before the inbox (Obliwatch lot L5, SEC-13) ──────────────────────────────
+// Once the security logs are on (integrations/obliwatch/securityLogs.ts), a batch mixes the events of the lost mode with
+// high-volume security events (process starts, shell commands, certificates…). The inbox never keeps those: a batch is
+// reduced at intake, before it is written, whatever the switch of the integration says:
+//   - the events of the lost mode are kept whole (their handler reads them; first, so no cap reaches them before the
+//     others), 500 at most;
+//   - the events a detection reads keep their type, their time and the one boolean the classifier reads
+//     (certAuthorityInstalledEvent.success, keyguardDismissAuthAttemptEvent.success), 4,500 at most;
+//   - every other event is only counted (otherEventCount): never its fields (no shell command, no certificate subject,
+//     no package, no uid).
+// The reduced batch is always within the schema's cap (5,000 events), so a large batch never goes dead for its size.
+export const USAGE_LOG_LOST_MODE_TYPES: ReadonlySet<string> = new Set(['LOST_MODE_LOCATION', 'STOP_LOST_MODE_USER_ATTEMPT', 'LOST_MODE_OUTGOING_PHONE_CALL']);
+const SECURITY_KEPT: Readonly<Record<string, string | null>> = {
+  CERT_AUTHORITY_INSTALLED: 'certAuthorityInstalledEvent',
+  KEYGUARD_DISMISS_AUTH_ATTEMPT: 'keyguardDismissAuthAttemptEvent',
+  ADB_SHELL_COMMAND: null,
+  ADB_SHELL_INTERACTIVE: null,
+  KEY_INTEGRITY_VIOLATION: null,
+  LOGGING_STOPPED: null,
+};
+const MAX_LOST_MODE_KEPT = 500;
+const MAX_SECURITY_KEPT = 4_500;
+
+/** A USAGE_LOGS payload reduced to what the handlers read (see above). Pure; any other shape is returned as is. */
+export function reduceUsageLogs(decoded: unknown): unknown {
+  if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) return decoded;
+  const p = decoded as Record<string, unknown>;
+  const events = Array.isArray(p.usageLogEvents) ? p.usageLogEvents : [];
+  const lost: unknown[] = [];
+  const kept: Array<Record<string, unknown>> = [];
+  let other = typeof p.otherEventCount === 'number' && Number.isSafeInteger(p.otherEventCount) && p.otherEventCount >= 0 ? p.otherEventCount : 0;
+  for (const raw of events) {
+    const e = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {}) as Record<string, unknown>;
+    const type = typeof e.eventType === 'string' ? e.eventType : '';
+    if (USAGE_LOG_LOST_MODE_TYPES.has(type)) {
+      if (lost.length < MAX_LOST_MODE_KEPT) lost.push(raw);
+      continue;
+    }
+    if (type in SECURITY_KEPT && kept.length < MAX_SECURITY_KEPT) {
+      const r: Record<string, unknown> = { eventType: type };
+      if (typeof e.eventTime === 'string') r.eventTime = e.eventTime;
+      const field = SECURITY_KEPT[type];
+      if (field) {
+        const inner = e[field];
+        const success = inner && typeof inner === 'object' && (inner as Record<string, unknown>).success === true;
+        r[field] = success ? { success: true } : {};
+      }
+      kept.push(r);
+      continue;
+    }
+    other++;
+  }
+  return {
+    ...(typeof p.device === 'string' ? { device: p.device } : {}),
+    usageLogEvents: [...lost, ...kept],
+    ...(other > 0 ? { otherEventCount: other } : {}),
+  };
+}
 
 export const EnterpriseUpgradeSchema = z.object({
   enterprise: z.string().max(128).regex(/^enterprises\/[A-Za-z0-9_-]{1,100}$/),
@@ -117,6 +178,6 @@ export function classifyMessage(notificationType: string | undefined, decoded: u
   }
   return {
     kind: 'event', eventType, enterpriseName: enterprise, resourceName: resource && resource.length <= 255 ? resource : null,
-    occurredAt: bestTime(eventType, p, publishTime), payload: decoded,
+    occurredAt: bestTime(eventType, p, publishTime), payload: eventType === 'amapi.usage_logs' ? reduceUsageLogs(decoded) : decoded,
   };
 }

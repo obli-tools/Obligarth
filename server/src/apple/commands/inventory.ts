@@ -9,6 +9,7 @@ import { registerOnboardStep } from '../../mdm/registry/onboard';
 import type { AuditWriteContext } from '../../audit';
 import { mdmCommands, type EnqueueOutcome } from './bus';
 import { setAfterDeviceInformation } from './results';
+import { planAttestationNoncesInTx } from '../../integrations/obliwatch/appleAttestation';
 
 // =============================================================================
 // Inventory through the command queue (docs: integration-apple-edge §8.10;
@@ -124,12 +125,20 @@ async function refreshTenant(ctx: JobContext<Tenant>): Promise<JobResult> {
     // A device keeps its slot for all its commands of the run: one wake-up serves them all.
     const slots = Math.max(1, Math.min(SPREAD_SECONDS / SLOT_SECONDS, Math.ceil(rows.length / 20)));
     const slotOf = new Map(rows.map((r) => [Number(r.id), Math.floor(Math.random() * slots)]));
+    // Obliwatch lot L5 (GTH-08): the Apple managed device attestation rides on the DeviceInformation of the company
+    // devices of a tenant that consented to the push, a nonce per device at most once every 7 days (nothing at all while
+    // OBLIWATCH_INTEGRATION is off or without the consent: the commands are the same as before).
+    const nonces = await planAttestationNoncesInTx(trx, tenantId, due.DeviceInformation);
     for (const [requestType, ids] of Object.entries(due)) {
       for (let slot = 0; slot < slots; slot++) {
         const deviceIds = ids.filter((id) => slotOf.get(id) === slot);
         if (deviceIds.length === 0) continue;
         ctx.throwIfAborted();
-        const o = await mdmCommands.enqueue(trx, { tenantId, requestType, deviceIds, origin: 'inventory', actor, delaySeconds: slot * SLOT_SECONDS });
+        const attest = requestType === 'DeviceInformation' ? deviceIds.filter((id) => nonces.has(id)) : [];
+        const deviceParams = attest.length
+          ? Object.fromEntries(attest.map((id) => [id, { attestationNonce: nonces.get(id) as string }])) : undefined;
+        const o = await mdmCommands.enqueue(trx, { tenantId, requestType, deviceIds, origin: 'inventory', actor, delaySeconds: slot * SLOT_SECONDS,
+          ...(deviceParams ? { deviceParams } : {}) });
         commands += o.commandIds.length;
       }
     }

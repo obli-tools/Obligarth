@@ -72,7 +72,8 @@ const eventIdOf = (r: Pick<Row, 'device_uuid' | 'rule_id' | 'seq'>): string => `
 const strings = (v: unknown, max: number, len: number): string[] =>
   (Array.isArray(v) ? v : []).filter((x): x is string => typeof x === 'string' && x.length > 0).map((x) => x.slice(0, len)).slice(0, max);
 
-/** The whitelisted details of the brief (§5.1: platform, ownership, managementMode, reasonCodes, posture, risks, state). */
+/** The whitelisted details of the brief (§5.1: platform, ownership, managementMode, reasonCodes, posture, risks, state;
+ *  lot L5: count and windowMinutes of an aggregated detection). */
 function detailsOf(r: Row): Record<string, unknown> {
   const d = (r.details && typeof r.details === 'object' ? r.details : {}) as Record<string, unknown>;
   const s = (v: unknown, n: number): string | null => (typeof v === 'string' && v ? v.slice(0, n) : null);
@@ -82,6 +83,10 @@ function detailsOf(r: Row): Record<string, unknown> {
   };
   if ('posture' in d) out.posture = s(d.posture, 40);
   if ('risks' in d) out.risks = d.risks === null ? null : strings(d.risks, 20, 60);
+  // Lot L5 (GTH-08, SEC-13): the aggregate of a security-log detection, numbers only.
+  const n = (v: unknown, max: number): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v > 0 ? Math.min(v, max) : null);
+  if (n(d.count, 1_000_000) !== null) out.count = n(d.count, 1_000_000);
+  if (n(d.windowMinutes, 10_080) !== null) out.windowMinutes = n(d.windowMinutes, 10_080);
   return out;
 }
 

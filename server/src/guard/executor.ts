@@ -4,7 +4,9 @@
 // Execution (job actions.execute-delayed, in the tenant's context, actor
 // j:actions.execute-delayed, X-Request-ID job-<id>):
 //   1. revalidation, the row locked: still scheduled and still this job's;
-//      not frozen (else paused, 'frozen'); the requester active and keeping
+//      an action of Obliwatch (lot L5) still allowed by the switch and the
+//      tenant's consent (else refused, obliwatchIntegrationOff or
+//      obliwatchConsentOff); not frozen (else paused, 'frozen'); the requester active and keeping
 //      their rights on each target; the hourly cap (else paused, 'cap', and
 //      an anomaly); the action's own revalidation per target. Targets set
 //      aside are listed in the result; none left: refused. Then 'executing'
@@ -38,6 +40,7 @@ import { targetsWithoutRights } from './selection';
 import { readSettings } from './settings';
 import { ACTION_COLUMNS, findAction, normaliseRow, toDto, toDtos, type PendingActionRow } from './store';
 import { lateCancelOf, type GuardExecutionContext, type GuardResultSummary, type GuardTargetResult, type GuardedActionDef } from './types';
+import { isObliwatchSelection, obliwatchActionsClosed } from '../integrations/obliwatch/actionGate';
 
 const MAX_LISTED = 200;
 
@@ -119,6 +122,13 @@ async function revalidate(trx: Knex.Transaction, ctx: JobContext<{ tenantId: num
   if (row.state !== 'scheduled') return { kind: 'skip', why: row.state };
   const empty: GuardResultSummary = { done: 0, failed: 0, skipped: 0 };
   if (!def) return closeRefused(trx, row, 'unknownAction', empty);
+  // Lot L5 (GTH-04): an action requested by Obliwatch runs only while the integration is on and the tenant still
+  // consents to the actions (withdrawn meanwhile: refused, never executed later; before the freeze, so a resumed pause
+  // cannot run it either).
+  if (isObliwatchSelection(row.selection)) {
+    const closed = await obliwatchActionsClosed(trx, tenantId);
+    if (closed) return closeRefused(trx, row, closed === 'integration_off' ? 'obliwatchIntegrationOff' : 'obliwatchConsentOff', empty);
+  }
 
   const settings = await readSettings(tenantId, trx);
   if (settings.frozen_at) {

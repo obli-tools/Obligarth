@@ -20,9 +20,9 @@ import { apiErrorMessage } from '@/utils/apiError';
 
 const FLAGS: Array<{ key: keyof ObliwatchConsentFlags; label: string; hint: string }> = [
   { key: 'read', label: 'Obliwatch may read this tenant', hint: 'Devices, their posture and coverage, and the access keys of AI agents. Never a serial number, IMEI, phone number, MAC address or location.' },
-  { key: 'push', label: 'Send the mobile security signals', hint: 'Compliance, integrity, management and lost mode changes, sent to Obliwatch as they happen.' },
-  { key: 'actions', label: 'Accept action requests from Obliwatch', hint: 'Lock, lost mode, location or sound on one device: each request waits for a second factor or an approver in Obligarth.' },
-  { key: 'nominativeAiApps', label: 'Nominative view of the AI apps', hint: 'Which device runs which AI app, instead of counts only.' },
+  { key: 'push', label: 'Send the mobile security signals', hint: 'Compliance, integrity, management, lost mode, Apple attestation and Android security-log detections (counts only, company-owned fully managed devices, which then show that logging is on), sent to Obliwatch as they happen.' },
+  { key: 'actions', label: 'Accept action requests from Obliwatch', hint: 'Lock, lost mode, location or sound on one device: a valid request is executed at once, without a second factor or an approver (erase and removal always refused, capped, journaled).' },
+  { key: 'nominativeAiApps', label: 'Nominative view of the AI apps', hint: 'Which device runs which AI app, instead of counts only. On by default with the read access; can be turned off.' },
 ];
 
 const sameFlags = (a: ObliwatchConsentFlags, b: ObliwatchConsentFlags): boolean => FLAGS.every((f) => a[f.key] === b[f.key]);
@@ -118,7 +118,12 @@ export function ObliwatchConsentCard() {
               </div>
               <ToggleSwitch checked={draft[f.key]} disabled={busy || (!view.slugCompatible && !draft[f.key])}
                 ariaLabel={t(`obliwatch.consent.${f.key}`) || f.label}
-                onChange={(next) => setDraft({ ...draft, [f.key]: next })} />
+                onChange={(next) => setDraft({
+                  ...draft, [f.key]: next,
+                  // The read access turned on brings the nominative view of the AI apps along (decision AR-55/AR-57), unless
+                  // it was changed in this draft; the server applies the same rule.
+                  ...(f.key === 'read' && next && !view.read && draft.nominativeAiApps === view.nominativeAiApps ? { nominativeAiApps: true } : {}),
+                })} />
             </li>
           ))}
         </ul>

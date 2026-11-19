@@ -191,10 +191,21 @@ export function registerMvpCommandSpecs(): void {
   // 1 to 6: inventory. What is asked follows the privacy rules of the device's ownership (§10.7, modele §5.2).
   registerCommandSpec({
     ...inventory, requestType: 'DeviceInformation', perDevice: true,
-    params: z.object({ queries: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)).min(1).max(100).optional() }).strict(),
-    build: (p, d) => {
+    params: z.object({
+      queries: z.array(z.string().regex(/^[A-Za-z][A-Za-z0-9]{0,63}$/)).min(1).max(100).optional(),
+      /** Obliwatch lot L5 (GTH-08): the Apple managed device attestation is asked too, with this nonce (base64 of 32
+       *  bytes, integrations/obliwatch/appleAttestation.ts). Reserved to the system origins (the daily inventory). */
+      attestationNonce: z.string().regex(/^[A-Za-z0-9+/]{43}=$/).optional(),
+    }).strict(),
+    systemOnly: (p) => p.attestationNonce !== undefined,
+    build: (p, d): PlistDict => {
       const allowed = d.privacy.deviceInformationQueries;
       const asked = p.queries ? allowed.filter((q) => p.queries!.includes(q)) : allowed;
+      // The attestation of a company device (the query is never in the privacy lists: what it carries of identifiers is
+      // compared and dropped, never stored).
+      if (p.attestationNonce && d.ownership !== 'personal') {
+        return { Queries: [...asked, 'DevicePropertiesAttestation'], DeviceAttestationNonce: new PlistData(Buffer.from(p.attestationNonce, 'base64')) };
+      }
       return { Queries: [...asked] };
     },
     summarize: (r) => ({ keys: r.QueryResponses && typeof r.QueryResponses === 'object' ? Object.keys(r.QueryResponses as object).length : 0 }),

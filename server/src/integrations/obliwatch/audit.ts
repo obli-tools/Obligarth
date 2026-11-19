@@ -26,6 +26,15 @@ export function registerObliwatchAuditActions(): void {
     // Lot L3: the push of the D-MOB-* signals (the push itself is not journaled: device_signal_transitions holds it).
     { name: 'obliwatch.push.dead', criticality: 'standard', label: 'Obliwatch signals given up (dead letters)' },
     { name: 'obliwatch.push.requeued', criticality: 'standard', label: 'Obliwatch dead letters sent again' },
+    // Lot L5 (GTH-04, GTH-05): every step of an action request of Obliwatch (executed without approval, Q-L5a), critical.
+    { name: 'obliwatch.action.requested', criticality: 'critical', label: 'Action requested by Obliwatch' },
+    { name: 'obliwatch.action.executing', criticality: 'critical', label: 'Action of Obliwatch being executed' },
+    { name: 'obliwatch.action.executed', criticality: 'critical', label: 'Action of Obliwatch executed' },
+    { name: 'obliwatch.action.failed', criticality: 'critical', label: 'Action of Obliwatch failed' },
+    { name: 'obliwatch.action.refused', criticality: 'critical', label: 'Action of Obliwatch refused' },
+    { name: 'obliwatch.action.expired', criticality: 'critical', label: 'Action of Obliwatch expired' },
+    { name: 'obliwatch.action.cancelled', criticality: 'critical', label: 'Action of Obliwatch cancelled' },
+    { name: 'obliwatch.action.result_dead', criticality: 'standard', label: 'Obliwatch action results given up (dead letters)' },
   ]);
 }
 

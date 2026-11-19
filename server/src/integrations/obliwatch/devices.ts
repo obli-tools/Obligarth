@@ -83,6 +83,9 @@ SELECT d.id, d.uuid::text AS uuid, d.platform, d.management_channel, d.ownership
        la.last_inventory_at AS agent_inventory_at,
        ap.last_apps_at AS apple_apps_at, ap.last_managed_apps_at AS apple_managed_apps_at,
        EXISTS (SELECT 1 FROM obligarth.device_apps x WHERE x.tenant_id = d.tenant_id AND x.device_id = d.id) AS has_apps,
+       (SELECT s.push_enabled FROM obligarth.tenant_obliwatch_settings s WHERE s.tenant_id = d.tenant_id) AS push_consent,
+       (SELECT sl.last_received_at FROM obligarth.device_security_log_status sl WHERE sl.tenant_id = d.tenant_id AND sl.device_id = d.id) AS security_logs_at,
+       atx.state AS attestation_state, atx.checked_at AS attestation_at,
        d.signal_updated_at,
        to_char(d.signal_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS marker_pos
   FROM obligarth.devices d
@@ -90,6 +93,7 @@ SELECT d.id, d.uuid::text AS uuid, d.platform, d.management_channel, d.ownership
   LEFT JOIN obligarth.android_devices an ON an.tenant_id = d.tenant_id AND an.device_id = d.id
   LEFT JOIN obligarth.legacy_agent_devices la ON la.tenant_id = d.tenant_id AND la.device_id = d.id
   LEFT JOIN obligarth.apple_devices ap ON ap.tenant_id = d.tenant_id AND ap.device_id = d.id
+  LEFT JOIN obligarth.apple_device_attestations atx ON atx.tenant_id = d.tenant_id AND atx.device_id = d.id
   LEFT JOIN LATERAL (
     -- Microsoft Authenticator (GTH-06), by the unique key (tenant_id, device_id, identifier) of device_apps.
     SELECT x.version, x.short_version, x.managed
@@ -136,6 +140,8 @@ export const factsOf = (r: Row): CoverageFacts => ({
   channel: String(r.management_channel), posture: r.amapi_posture ?? null, amapiReportAt: r.amapi_report_at,
   agentInventoryAt: r.agent_inventory_at, appleAppsAt: r.apple_apps_at, appleManagedAppsAt: r.apple_managed_apps_at,
   hasApps: r.has_apps === true,
+  ownership: String(r.ownership), mode: String(r.management_mode), pushConsent: r.push_consent === true,
+  securityLogsAt: r.security_logs_at ?? null, attestationState: r.attestation_state ?? null, attestationAt: r.attestation_at ?? null,
 });
 
 function postureOf(v: unknown): { posture: string | null; risks: string[] | null } {
