@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android：セキュリティパッチの期限切れ（日数）",
+        "description": "セキュリティパッチがこの日数より古い Android デバイス（Android Enterprise）は非準拠（os_outdated）になります。0：確認しない。"
+      }
+    }
   },
   "users": {
     "resetMfa": "MFA をリセット",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "デバイスから返送された APK を確認",
       "obliwatch_consent_changed": "テナントの Obliwatch 同意が変更されました",
       "obliwatch_read": "Obliwatch が読み取ったデータ",
-      "obliwatch_auth_rejected": "Obliwatch のリクエストを拒否"
+      "obliwatch_auth_rejected": "Obliwatch のリクエストを拒否",
+      "obliwatch_push_dead": "Obliwatch シグナルを断念（配信不能）",
+      "obliwatch_push_requeued": "配信不能の Obliwatch シグナルを再送信"
     },
     "families": {
       "legacy_agent": "Android エージェント",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch シグナル未配信",
+          "message": "{{count}} 件のモバイルセキュリティシグナルを 72 時間 Obliwatch に配信できませんでした。Obliwatch との連携を確認し、［連携］ページから再送信してください。"
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch の同意を保存しました",
       "lastChange": "最終変更：{{date}}（{{user}}）",
       "neverChanged": "変更なし：すべてオフです。"
+    },
+    "push": {
+      "status": "Obliwatch に送信したシグナル",
+      "lastSent": "最終送信：{{date}}",
+      "neverSent": "まだ何も送信していません",
+      "pending": "{{count}} 件待機中",
+      "deadLetters": "{{count}} 件未配信",
+      "retry": "再送信",
+      "lastError": "最後のエラー：{{error}}",
+      "requeued": "{{count}} 件のシグナルを再度キューに入れました"
     }
   }
 }

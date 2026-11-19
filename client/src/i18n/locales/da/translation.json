@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: sikkerhedsopdatering forældet efter",
+        "description": "En Android-enhed (Android Enterprise), hvis sikkerhedsopdatering er ældre end dette antal dage, overholder ikke reglerne (os_outdated). 0: kontrolleres ikke."
+      }
+    }
   },
   "users": {
     "resetMfa": "Nulstil MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "APK sendt tilbage af en enhed bekræftet",
       "obliwatch_consent_changed": "Tenantens Obliwatch-samtykke ændret",
       "obliwatch_read": "Data læst af Obliwatch",
-      "obliwatch_auth_rejected": "Anmodning fra Obliwatch afvist"
+      "obliwatch_auth_rejected": "Anmodning fra Obliwatch afvist",
+      "obliwatch_push_dead": "Obliwatch-signaler opgivet (døde breve)",
+      "obliwatch_push_requeued": "Døde Obliwatch-breve sendt igen"
     },
     "families": {
       "legacy_agent": "Android-agent",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch-signaler ikke leveret",
+          "message": "{{count}} mobile sikkerhedssignal(er) kunne ikke leveres til Obliwatch i 72 timer: kontrollér forbindelsen til Obliwatch, og send dem derefter igen fra siden Integrationer."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch-samtykke gemt",
       "lastChange": "Seneste ændring: {{date}} af {{user}}",
       "neverChanged": "Aldrig ændret: alt er slået fra."
+    },
+    "push": {
+      "status": "Signaler sendt til Obliwatch",
+      "lastSent": "Senest sendt: {{date}}",
+      "neverSent": "Intet sendt endnu",
+      "pending": "{{count}} venter",
+      "deadLetters": "{{count}} ikke leveret",
+      "retry": "Send igen",
+      "lastError": "Seneste fejl: {{error}}",
+      "requeued": "{{count}} signal(er) sat i kø igen"
     }
   }
 }

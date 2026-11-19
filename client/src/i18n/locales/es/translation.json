@@ -306,7 +306,13 @@
       "description": "Connect this app to your Obligate SSO gateway for centralized authentication and cross-app navigation. Register this app in Obligate first, then paste the API key here.",
       "warning": "When enabled, local authentication is disabled. Users must sign in through the Obligate gateway. If the gateway becomes unreachable, local authentication is automatically restored as a fallback."
     },
-    "defaultMonitorSettings": "Default Monitor Settings"
+    "defaultMonitorSettings": "Default Monitor Settings",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: parche de seguridad obsoleto después de",
+        "description": "Un dispositivo Android (Android Enterprise) cuyo parche de seguridad tenga más de este número de días no cumple (os_outdated). 0: no se comprueba."
+      }
+    }
   },
   "profile": {
     "title": "Mi perfil",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "APK devuelto por un dispositivo confirmado",
       "obliwatch_consent_changed": "Consentimiento de Obliwatch del inquilino modificado",
       "obliwatch_read": "Datos leídos por Obliwatch",
-      "obliwatch_auth_rejected": "Solicitud de Obliwatch rechazada"
+      "obliwatch_auth_rejected": "Solicitud de Obliwatch rechazada",
+      "obliwatch_push_dead": "Señales de Obliwatch abandonadas (cartas muertas)",
+      "obliwatch_push_requeued": "Cartas muertas de Obliwatch reenviadas"
     },
     "families": {
       "legacy_agent": "Agente Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Señales de Obliwatch no entregadas",
+          "message": "{{count}} señal(es) de seguridad móvil no se pudieron entregar a Obliwatch durante 72 horas: compruebe el enlace con Obliwatch y reenvíelas desde la página Integraciones."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Consentimiento de Obliwatch guardado",
       "lastChange": "Último cambio: {{date}} por {{user}}",
       "neverChanged": "Nunca modificado: todo está desactivado."
+    },
+    "push": {
+      "status": "Señales enviadas a Obliwatch",
+      "lastSent": "Último envío: {{date}}",
+      "neverSent": "Aún no se ha enviado nada",
+      "pending": "{{count}} en espera",
+      "deadLetters": "{{count}} no entregadas",
+      "retry": "Reenviar",
+      "lastError": "Último fallo: {{error}}",
+      "requeued": "{{count}} señal(es) de nuevo en cola"
     }
   }
 }

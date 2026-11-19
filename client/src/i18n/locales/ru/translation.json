@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: исправление безопасности устарело через",
+        "description": "Устройство Android (Android Enterprise), исправление безопасности которого старше этого числа дней, не соответствует требованиям (os_outdated). 0: не проверяется."
+      }
+    }
   },
   "users": {
     "resetMfa": "Сбросить MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "Подтверждён APK, отправленный устройством",
       "obliwatch_consent_changed": "Согласие Obliwatch арендатора изменено",
       "obliwatch_read": "Данные прочитаны Obliwatch",
-      "obliwatch_auth_rejected": "Запрос Obliwatch отклонён"
+      "obliwatch_auth_rejected": "Запрос Obliwatch отклонён",
+      "obliwatch_push_dead": "Сигналы Obliwatch оставлены (недоставленные)",
+      "obliwatch_push_requeued": "Недоставленные сигналы Obliwatch отправлены снова"
     },
     "families": {
       "legacy_agent": "Агент Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Сигналы Obliwatch не доставлены",
+          "message": "Не удалось доставить в Obliwatch {{count}} сигнал(ов) мобильной безопасности в течение 72 часов: проверьте связь с Obliwatch, затем отправьте их снова со страницы «Интеграции»."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Согласие Obliwatch сохранено",
       "lastChange": "Последнее изменение: {{date}}, {{user}}",
       "neverChanged": "Не изменялось: всё выключено."
+    },
+    "push": {
+      "status": "Сигналы, отправленные в Obliwatch",
+      "lastSent": "Последняя отправка: {{date}}",
+      "neverSent": "Пока ничего не отправлено",
+      "pending": "Ожидают: {{count}}",
+      "deadLetters": "Не доставлено: {{count}}",
+      "retry": "Отправить снова",
+      "lastError": "Последняя ошибка: {{error}}",
+      "requeued": "Снова в очереди: {{count}}"
     }
   }
 }

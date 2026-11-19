@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: säkerhetsuppdatering föråldrad efter",
+        "description": "En Android-enhet (Android Enterprise) vars säkerhetsuppdatering är äldre än detta antal dagar är inte kompatibel (os_outdated). 0: kontrolleras inte."
+      }
+    }
   },
   "users": {
     "resetMfa": "Återställ MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "APK tillbakaskickad av en enhet bekräftad",
       "obliwatch_consent_changed": "Tenantens Obliwatch-samtycke ändrat",
       "obliwatch_read": "Data läst av Obliwatch",
-      "obliwatch_auth_rejected": "Begäran från Obliwatch nekad"
+      "obliwatch_auth_rejected": "Begäran från Obliwatch nekad",
+      "obliwatch_push_dead": "Obliwatch-signaler övergivna (döda brev)",
+      "obliwatch_push_requeued": "Döda Obliwatch-brev skickade igen"
     },
     "families": {
       "legacy_agent": "Android-agent",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch-signaler inte levererade",
+          "message": "{{count}} mobila säkerhetssignal(er) kunde inte levereras till Obliwatch under 72 timmar: kontrollera länken till Obliwatch och skicka dem sedan igen från sidan Integrationer."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch-samtycke sparat",
       "lastChange": "Senaste ändring: {{date}} av {{user}}",
       "neverChanged": "Aldrig ändrat: allt är avstängt."
+    },
+    "push": {
+      "status": "Signaler skickade till Obliwatch",
+      "lastSent": "Senast skickat: {{date}}",
+      "neverSent": "Inget skickat ännu",
+      "pending": "{{count}} väntar",
+      "deadLetters": "{{count}} inte levererade",
+      "retry": "Skicka igen",
+      "lastError": "Senaste fel: {{error}}",
+      "requeued": "{{count}} signal(er) köade igen"
     }
   }
 }

@@ -8,6 +8,7 @@
 // the identity once 3b is applied.
 import type { Knex } from 'knex';
 import type { AndroidReleaseReason } from '@obligarth/shared';
+import { recordEventSignalInTx } from '../../integrations/obliwatch/signals';
 
 /** Core reasons known by the CHECKs of main (devices and device_enrollments). */
 type CoreReason = 'superseded' | 'removed_by_command' | 'disabled_in_edge' | 'retired';
@@ -47,5 +48,13 @@ export async function exitManagement(trx: Knex.Transaction, tenantId: number, de
     .update({ ended_at: now, end_reason: core });
   await trx('android_presumed_gone').where({ tenant_id: tenantId, device_id: deviceId, state: 'open' })
     .update({ state: reason === 'presumed_gone' || reason === 'forgotten' ? 'forgotten' : 'cleared', ended_at: now });
+  // Obliwatch (lot L3): a company device gone at Google without a command of Obligarth (wiped or its work profile
+  // removed on the device): D-MOB-MGMT-REMOVED. The departures Obligarth decided (a command, a forget, a superseded
+  // record, and every device released while an offboarding of the tenant is open, even as missing_in_provider from its
+  // step waiting_devices) are not signals. Nothing while the push is off, never a failure.
+  if (reason === 'missing_in_provider') {
+    await recordEventSignalInTx(trx, tenantId, deviceId, 'D-MOB-MGMT-REMOVED', ['missing_in_provider'],
+      { occurredAt: now, companyOnly: true, notDuringOffboarding: true });
+  }
   return true;
 }

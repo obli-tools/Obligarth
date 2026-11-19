@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: 보안 패치 기한 경과 일수",
+        "description": "보안 패치가 이 일수보다 오래된 Android 기기(Android Enterprise)는 규정 미준수(os_outdated)입니다. 0: 확인 안 함."
+      }
+    }
   },
   "users": {
     "resetMfa": "MFA 초기화",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "기기가 돌려보낸 APK 확인됨",
       "obliwatch_consent_changed": "테넌트의 Obliwatch 동의 변경됨",
       "obliwatch_read": "Obliwatch가 읽은 데이터",
-      "obliwatch_auth_rejected": "Obliwatch 요청 거부됨"
+      "obliwatch_auth_rejected": "Obliwatch 요청 거부됨",
+      "obliwatch_push_dead": "Obliwatch 신호 포기됨(전달 불가)",
+      "obliwatch_push_requeued": "전달 불가 Obliwatch 신호 다시 보냄"
     },
     "families": {
       "legacy_agent": "Android 에이전트",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch 신호 전달 안 됨",
+          "message": "모바일 보안 신호 {{count}}개를 72시간 동안 Obliwatch에 전달하지 못했습니다. Obliwatch 연결을 확인한 다음 통합 페이지에서 다시 보내세요."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch 동의를 저장했습니다",
       "lastChange": "마지막 변경: {{date}}, {{user}}",
       "neverChanged": "변경된 적 없음: 모두 꺼져 있습니다."
+    },
+    "push": {
+      "status": "Obliwatch로 보낸 신호",
+      "lastSent": "마지막 전송: {{date}}",
+      "neverSent": "아직 보낸 것이 없습니다",
+      "pending": "{{count}}개 대기 중",
+      "deadLetters": "{{count}}개 전달 안 됨",
+      "retry": "다시 보내기",
+      "lastError": "마지막 실패: {{error}}",
+      "requeued": "신호 {{count}}개를 다시 대기열에 넣었습니다"
     }
   }
 }

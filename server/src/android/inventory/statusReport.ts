@@ -12,7 +12,7 @@
 // unchanged); the management mode of an AMAPI device never changes.
 // No network call (G-A3); identifiers only in the real-time events and the alerts (G-A4).
 import type { z } from 'zod';
-import { raiseAndroidTenantAlert } from '../alerts';
+import { raiseAndroidTenantAlert, resolveAndroidTenantAlert } from '../alerts';
 import { MissingPrerequisite, registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { DeviceSchema } from '../inbox/schemas';
 import { evaluateAndroidDevices } from './compliance';
@@ -26,6 +26,7 @@ import { requestDeviceResolution } from '../../mdm/policies/triggers';
 import { requestGroupEvaluation } from '../../mdm/groups/triggers';
 import { androidSenders } from '../enrollment/senders';
 import { signalMark, touchSignalInTx } from '../../integrations/obliwatch/marker';
+import { recordPostureSignalsInTx } from '../../integrations/obliwatch/signals';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -158,7 +159,8 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
   cols.config_state = policyState === 'applied' ? 'applied' : policyState === 'error' ? 'error' : 'pending';
   // The Obliwatch read API exposes the posture and the patch level of the satellite: marked in this same write (no
   // extra one) when they change, and on the first report (the coverage of the integrity changes).
-  if (!row.last_status_report_at || postureKey(row.security_posture) !== postureKey(posture)
+  const postureChanged = postureKey(row.security_posture) !== postureKey(posture);
+  if (!row.last_status_report_at || postureChanged
     || patchKey(row.security_patch_level) !== (inv.securityPatchLevel ?? null)) cols.signal_updated_at = signalMark(trx);
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(cols);
   // Lot AN-P: the state of the policy on the artifact amapi:policy when the version pushed is the one desired; the
@@ -207,11 +209,16 @@ export async function onStatusReport(ctx: Ctx): Promise<'applied' | 'stale' | 'i
     await requestDeviceResolution(trx, tenantId, [deviceId]);
     if (row.policy_name && row.approval_state !== 'pending') await androidSenders.push(trx, { tenantId, deviceId });
   }
+  // Obliwatch (lot L3): D-MOB-INT-COMPROMISED / D-MOB-INT-ATRISK on a change of the posture (nothing while the push is
+  // off, never a failure of the report).
+  if (postureChanged && posture) await recordPostureSignalsInTx(trx, tenantId, deviceId, posture);
   const evaluation = await evaluateAndroidDevices(trx, tenantId, [deviceId]);
   // The dynamic groups: what the base marked of this report (facts, API level, patch, applications, compliance) is
   // computed again (P0-5 T5).
   await requestGroupEvaluation(trx, tenantId, [deviceId]);
-  for (const id of evaluation.atRisk) ctx.afterCommit(() => raiseAndroidTenantAlert(tenantId, 'android.integrity_compromised', { deviceId: id }));
+  // One alert per device (its id in the stable key: lot L3, Q-L3b), resolved when the device is SECURE again.
+  for (const id of evaluation.atRisk) ctx.afterCommit(() => raiseAndroidTenantAlert(tenantId, 'android.integrity_compromised', { deviceId: id }, String(id)));
+  for (const id of evaluation.recovered) ctx.afterCommit(() => resolveAndroidTenantAlert(tenantId, 'android.integrity_compromised', String(id)));
   return 'applied';
 }
 

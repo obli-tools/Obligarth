@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: تصحيح الأمان قديم بعد",
+        "description": "يكون جهاز Android ‏(Android Enterprise) غير متوافق (os_outdated) إذا كان تصحيح الأمان فيه أقدم من هذا العدد من الأيام. 0: لا يُفحص."
+      }
+    }
   },
   "users": {
     "resetMfa": "إعادة تعيين MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "تأكيد ملف APK أعاده جهاز",
       "obliwatch_consent_changed": "تم تغيير موافقة Obliwatch للمستأجر",
       "obliwatch_read": "بيانات قرأها Obliwatch",
-      "obliwatch_auth_rejected": "تم رفض طلب Obliwatch"
+      "obliwatch_auth_rejected": "تم رفض طلب Obliwatch",
+      "obliwatch_push_dead": "إشارات Obliwatch المتخلّى عنها (رسائل ميتة)",
+      "obliwatch_push_requeued": "أُعيد إرسال رسائل Obliwatch الميتة"
     },
     "families": {
       "legacy_agent": "وكيل Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "إشارات Obliwatch لم تُسلَّم",
+          "message": "تعذّر تسليم {{count}} إشارة أمان للأجهزة المحمولة إلى Obliwatch طوال 72 ساعة: تحقق من الاتصال بـ Obliwatch، ثم أعد إرسالها من صفحة التكاملات."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "تم حفظ موافقة Obliwatch",
       "lastChange": "آخر تغيير: {{date}} بواسطة {{user}}",
       "neverChanged": "لم يتغير أبدًا: كل شيء معطّل."
+    },
+    "push": {
+      "status": "الإشارات المرسلة إلى Obliwatch",
+      "lastSent": "آخر إرسال: {{date}}",
+      "neverSent": "لم يُرسل شيء بعد",
+      "pending": "{{count}} قيد الانتظار",
+      "deadLetters": "{{count}} لم تُسلَّم",
+      "retry": "إعادة الإرسال",
+      "lastError": "آخر إخفاق: {{error}}",
+      "requeued": "أُعيد {{count}} إشارة إلى قائمة الانتظار"
     }
   }
 }

@@ -66,6 +66,21 @@ export function ObliwatchConsentCard() {
     }
   };
 
+  // The dead letters of the push (lot L3) sent again: a new window of 72 hours, journaled.
+  const retry = async () => {
+    setBusy(true);
+    try {
+      const r = await obliwatchApi.retryDead();
+      toast.success(t('obliwatch.push.requeued', { count: r.requeued }) || `${r.requeued} signal(s) queued again`);
+      load();
+    } catch (err) {
+      if (isStepUpHandled(err)) return;
+      toast.error(apiErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <section className="rounded-xl bg-bg-secondary p-4 space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -108,6 +123,34 @@ export function ObliwatchConsentCard() {
           ))}
         </ul>
       </div>
+      {view.pushStatus && (view.push || view.pushStatus.dead > 0 || view.pushStatus.pending > 0) && (
+        <div>
+          <div className="px-3 pb-1 text-[10px] uppercase tracking-wide text-text-muted">{t('obliwatch.push.status') || 'Signals sent to Obliwatch'}</div>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-bg-tertiary">
+            <span className="text-sm text-text-primary">
+              {view.pushStatus.lastSentAt
+                ? (t('obliwatch.push.lastSent', { date: formatDateTime(view.pushStatus.lastSentAt) }) || `Last sent: ${formatDateTime(view.pushStatus.lastSentAt)}`)
+                : (t('obliwatch.push.neverSent') || 'Nothing sent yet')}
+            </span>
+            {view.pushStatus.pending > 0 && (
+              <StateBadge tone="gray" label={t('obliwatch.push.pending', { count: view.pushStatus.pending }) || `${view.pushStatus.pending} waiting`} />
+            )}
+            {view.pushStatus.dead > 0 && (
+              <StateBadge tone="red" label={t('obliwatch.push.deadLetters', { count: view.pushStatus.dead }) || `${view.pushStatus.dead} not delivered`} />
+            )}
+            {view.pushStatus.dead > 0 && (
+              <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={retry}>
+                {t('obliwatch.push.retry') || 'Send again'}
+              </Button>
+            )}
+          </div>
+          {view.pushStatus.pending > 0 && view.pushStatus.lastError && (
+            <p className="px-3 text-xs text-text-muted">
+              {t('obliwatch.push.lastError', { error: view.pushStatus.lastError }) || `Last failure: ${view.pushStatus.lastError}`}
+            </p>
+          )}
+        </div>
+      )}
       <p className="text-xs text-text-muted">
         {view.changedAt
           ? (t('obliwatch.consent.lastChange', { date: formatDateTime(view.changedAt), user: view.changedBy?.username ?? '—' })

@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android：安全补丁过期天数",
+        "description": "安全补丁早于此天数的 Android 设备（Android Enterprise）为不合规（os_outdated）。0：不检查。"
+      }
+    }
   },
   "users": {
     "resetMfa": "重置 MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "已确认由设备回传的 APK",
       "obliwatch_consent_changed": "租户的 Obliwatch 同意已更改",
       "obliwatch_read": "Obliwatch 读取的数据",
-      "obliwatch_auth_rejected": "Obliwatch 请求被拒绝"
+      "obliwatch_auth_rejected": "Obliwatch 请求被拒绝",
+      "obliwatch_push_dead": "Obliwatch 信号已放弃（死信）",
+      "obliwatch_push_requeued": "Obliwatch 死信已重新发送"
     },
     "families": {
       "legacy_agent": "Android 代理",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch 信号未送达",
+          "message": "{{count}} 个移动安全信号在 72 小时内未能送达 Obliwatch：请检查与 Obliwatch 的连接，然后在“集成”页面重新发送。"
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch 同意已保存",
       "lastChange": "最近更改：{{date}}，{{user}}",
       "neverChanged": "从未更改：全部关闭。"
+    },
+    "push": {
+      "status": "已发送到 Obliwatch 的信号",
+      "lastSent": "最近发送：{{date}}",
+      "neverSent": "尚未发送任何内容",
+      "pending": "{{count}} 个等待中",
+      "deadLetters": "{{count}} 个未送达",
+      "retry": "重新发送",
+      "lastError": "最近失败：{{error}}",
+      "requeued": "已将 {{count}} 个信号重新排队"
     }
   }
 }

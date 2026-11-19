@@ -23,6 +23,9 @@ export function registerObliwatchAuditActions(): void {
     { name: 'obliwatch.consent.changed', criticality: 'critical', label: 'Obliwatch consent of the tenant changed' },
     { name: 'obliwatch.read', criticality: 'standard', label: 'Data read by Obliwatch' },
     { name: 'obliwatch.auth.rejected', criticality: 'protective', label: 'Obliwatch request refused' },
+    // Lot L3: the push of the D-MOB-* signals (the push itself is not journaled: device_signal_transitions holds it).
+    { name: 'obliwatch.push.dead', criticality: 'standard', label: 'Obliwatch signals given up (dead letters)' },
+    { name: 'obliwatch.push.requeued', criticality: 'standard', label: 'Obliwatch dead letters sent again' },
   ]);
 }
 

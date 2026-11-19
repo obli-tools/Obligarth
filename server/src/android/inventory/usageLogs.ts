@@ -14,6 +14,7 @@ import { lostModeLocationAllowed } from '../../privacy/profiles';
 import { lostModePurgeAt } from '../../privacy/retention';
 import { registerAndroidEventHandler, type AndroidEventContext } from '../inbox/handlers';
 import { UsageLogsSchema } from '../inbox/schemas';
+import { recordEventSignalInTx } from '../../integrations/obliwatch/signals';
 
 type Logs = z.infer<typeof UsageLogsSchema>;
 type Ctx = AndroidEventContext<Logs>;
@@ -75,6 +76,8 @@ export async function onUsageLogs(ctx: Ctx): Promise<'applied' | 'ignored'> {
       // The timeline of the device (§8, amapi.usage_logs; lot AN-F2 raccord): once, when the exit turned the lost mode off
       // (a replayed batch finds it off already and writes nothing).
       await deviceEvents.add(trx, tenantId, deviceId, 'lost_mode_user_exit', userExitAt, null, { cooldownHours: 12 });
+      // Obliwatch (lot L3): D-MOB-LOST-EXIT, once per real exit (nothing while the push is off, never a failure).
+      await recordEventSignalInTx(trx, tenantId, deviceId, 'D-MOB-LOST-EXIT', ['lost_mode_user_exit'], { occurredAt: userExitAt });
     }
   }
   if (positions.length && (state === 'on' || state === 'enabling') && await lostModeLocationAllowed(trx, tenantId, row.ownership)) {

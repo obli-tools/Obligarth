@@ -10,6 +10,9 @@ import { applyRestriction } from '../../services/restriction.service';
 import { tenantService } from '../../services/tenant.service';
 import { OBLIWATCH_ACTOR } from './config';
 import { sendError } from './auth';
+import { pushStatusOf, requeueDeadInTx, withdrawPushInTx } from './push';
+import { bootstrapSignalStateInTx, invalidatePushConsent, requestPushAfterCommit, requestReconcileInTx } from './signals';
+import { logger } from '../../utils/logger';
 
 // =============================================================================
 // The consent of a tenant (plan §0 F5): read, push, actions, nominative AI apps, each off until a manager of the
@@ -81,10 +84,15 @@ async function viewOf(tenantId: number, row: Row): Promise<ObliwatchConsentView>
   const username = by !== null
     ? ((await switchToIdentity(() => db('users').where({ id: by }).first('username'))) as { username?: string } | undefined)?.username ?? null
     : null;
+  let pushStatus: ObliwatchConsentView['pushStatus'] = null;
+  try { pushStatus = await pushStatusOf(db, tenantId); } catch (err) {
+    logger.warn({ err: { message: (err as Error)?.message?.slice(0, 200) } }, 'obliwatch: push status not read');
+  }
   return {
     tenantId, slug: tenant.slug, slugCompatible: OBLIWATCH_SLUG_RE.test(tenant.slug), ...flagsOf(row),
     changedAt: row?.changed_at ? new Date(row.changed_at as string).toISOString() : null,
     changedBy: by !== null ? { userId: by, username } : null,
+    pushStatus,
   };
 }
 
@@ -135,6 +143,16 @@ export function createObliwatchConsoleRouter(): Router {
           changed_by: req.session.userId!, changed_at: new Date(),
         };
         await trx('tenant_obliwatch_settings').insert({ tenant_id: tenantId, ...values }).onConflict('tenant_id').merge(Object.keys(values));
+        // The push turns on (lot L3): the state of the D-MOB-* rules filled from the current data, silently (no burst
+        // of signals that are not transitions). A failure refuses the change.
+        // A second, normal pass two minutes later catches what a hot path changed meanwhile without recording it (a
+        // transaction in flight, the consent cache of another process).
+        if (diff.push && diff.push.to) {
+          await bootstrapSignalStateInTx(trx, tenantId);
+          await requestReconcileInTx(trx, tenantId);
+        }
+        // The push turns off: what waits and the dead letters are never sent, the alert of the dead letters resolved.
+        if (diff.push && !diff.push.to) await withdrawPushInTx(trx, tenantId);
         await audit.appendInTx(trx, {
           tenantId, action: 'obliwatch.consent.changed', outcome: 'success',
           target: { type: 'tenant', id: String(tenantId) }, details: { changes: diff },
@@ -146,7 +164,31 @@ export function createObliwatchConsoleRouter(): Router {
       }
       throw err;
     }
+    invalidatePushConsent(tenantId);
     res.json({ success: true, data: await viewOf(tenantId, await readRow(tenantId)) });
+  }));
+
+  // The dead letters of the push put back in the queue (a new window of 72 hours), journaled; the alert resolved.
+  router.post('/push/retry-dead', requireTenantCapability('settings'), wrap(async (req, res) => {
+    const tenantId = Number(req.tenantId);
+    const ctx = await audit.fromRequest(req, tenantId);
+    let requeued = 0;
+    try {
+      await db.transaction(async (trx) => {
+        requeued = await requeueDeadInTx(trx, tenantId);
+        if (requeued > 0) {
+          await audit.appendInTx(trx, {
+            tenantId, action: 'obliwatch.push.requeued', outcome: 'success',
+            target: { type: 'tenant', id: String(tenantId) }, details: { count: requeued },
+          }, ctx);
+          requestPushAfterCommit(trx, tenantId);
+        }
+      });
+    } catch (err) {
+      if (isAuditUnavailable(err)) throw new AppError(503, 'Audit unavailable: nothing was requeued', 'auditUnavailable');
+      throw err;
+    }
+    res.json({ success: true, data: { requeued } });
   }));
 
   return router;

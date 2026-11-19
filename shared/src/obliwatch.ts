@@ -33,6 +33,8 @@ export interface ObliwatchConsentView extends ObliwatchConsentFlags {
   slugCompatible: boolean;
   changedAt: string | null;
   changedBy: { userId: number; username: string | null } | null;
+  /** The state of the push of the signals (lot L3); null when it cannot be read. */
+  pushStatus: ObliwatchPushStatus | null;
 }
 
 export type ObliwatchConsentBody = ObliwatchConsentFlags;
@@ -155,4 +157,30 @@ export interface ObliwatchDeviceAppsResponse {
   items: ObliwatchDeviceAppItem[];
   coverage: ObliwatchAppsCoverage;
   collectedAt: string | null;
+}
+
+// ── Push of the D-MOB-* signals (GTH-01), lot L3 ──────────────────────────────────────────────────────────────────
+
+/** The rules Obligarth computes and pushes to Obliwatch (POST /api/ingest/v1/alerts, source 'mobile'). */
+export const OBLIWATCH_RULE_IDS = [
+  'D-MOB-INT-COMPROMISED', 'D-MOB-INT-ATRISK', 'D-MOB-MGMT-REMOVED', 'D-MOB-ID-MISMATCH', 'D-MOB-OS-OUTDATED',
+  'D-MOB-NONCOMPLIANT', 'D-MOB-STALE', 'D-MOB-LOST-EXIT',
+] as const;
+export type ObliwatchRuleId = (typeof OBLIWATCH_RULE_IDS)[number];
+
+/** The state of the push of a tenant, shown in the consent card (counts and dates only). */
+export interface ObliwatchPushStatus {
+  /** Transitions waiting to be sent (retried with a backoff, for 72 hours at most). */
+  pending: number;
+  /** Transitions given up after 72 hours (or refused by Obliwatch as invalid): the dead letters. */
+  dead: number;
+  /** The last transition Obliwatch accepted. */
+  lastSentAt: string | null;
+  /** The last failure of a send (a short text, never a token), while transitions are still pending. */
+  lastError: string | null;
+}
+
+/** POST /api/integrations/obliwatch/push/retry-dead: the dead letters put back in the queue. */
+export interface ObliwatchPushRetryResponse {
+  requeued: number;
 }

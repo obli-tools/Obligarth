@@ -472,6 +472,10 @@
       "publishFleetShareFloor": {
         "label": "Second approbateur : part du parc comptée à partir de",
         "description": "Un changement de configuration (publication, affectations, groupe, appareils déplacés) demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
+      },
+      "androidPatchMaxAgeDays": {
+        "label": "Android : correctif de sécurité en retard après",
+        "description": "Un appareil Android (Android Enterprise) dont le correctif de sécurité date de plus de ce nombre de jours est non conforme (os_outdated). 0 : non vérifié."
       }
     },
     "mcp": {
@@ -1919,7 +1923,9 @@
       "legacy_agent_package_confirmed": "APK renvoyé par un appareil confirmé",
       "obliwatch_consent_changed": "Consentement Obliwatch du tenant modifié",
       "obliwatch_read": "Données lues par Obliwatch",
-      "obliwatch_auth_rejected": "Requête d’Obliwatch refusée"
+      "obliwatch_auth_rejected": "Requête d’Obliwatch refusée",
+      "obliwatch_push_dead": "Signaux Obliwatch abandonnés (lettres mortes)",
+      "obliwatch_push_requeued": "Lettres mortes Obliwatch renvoyées"
     },
     "families": {
       "auth": "Authentification",
@@ -3100,6 +3106,12 @@
         "token_quota": {
           "title": "Station de banc proche de son quota de jetons",
           "message": "Une station de banc a émis {{count}} jetons d'enrôlement en 24 heures (quota {{quota}})."
+        }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Signaux Obliwatch non transmis",
+          "message": "{{count}} signal(aux) de sécurité mobile n’ont pas pu être transmis à Obliwatch pendant 72 heures : vérifiez le lien avec Obliwatch, puis renvoyez-les depuis la page Intégrations."
         }
       }
     },
@@ -7844,6 +7856,16 @@
       "saved": "Consentement Obliwatch enregistré",
       "lastChange": "Dernier changement : {{date}} par {{user}}",
       "neverChanged": "Jamais modifié : tout est désactivé."
+    },
+    "push": {
+      "status": "Signaux envoyés à Obliwatch",
+      "lastSent": "Dernier envoi : {{date}}",
+      "neverSent": "Rien d’envoyé pour l’instant",
+      "pending": "{{count}} en attente",
+      "deadLetters": "{{count}} non transmis",
+      "retry": "Renvoyer",
+      "lastError": "Dernier échec : {{error}}",
+      "requeued": "{{count}} signal(aux) remis en file"
     }
   }
 }

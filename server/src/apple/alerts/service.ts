@@ -26,6 +26,7 @@ export function serviceAlertDef(kind: string): ServiceAlertDef | null {
   return d && d.message !== undefined ? { scope: d.scope, severity: d.severity, title: d.title, message: d.message, i18nKey: d.i18nKey } : null;
 }
 import { deliverToChannels } from './channels';
+import { recordAlertSignalInTx } from '../../integrations/obliwatch/signals';
 
 // =============================================================================
 // Alerts of the Apple integration (docs: integration-apple-edge §12.2, §12.3),
@@ -124,6 +125,9 @@ export async function raiseInTx(trx: Knex.Transaction, tenantId: number, kindNam
   }).returning('id') as Array<{ id: number }>;
   const id = Number(row.id);
   await sendDelivery(trx, tenantId, id, 'raised');
+  // Obliwatch (lot L3): an alert of a device that is the event of a D-MOB-* rule (identity, departure of a company
+  // device); nothing while the push is off, never a failure of this transaction (savepoint inside).
+  if (typeof opts.discriminant === 'number') await recordAlertSignalInTx(trx, tenantId, kind, opts.discriminant);
   return { id, created: true };
 }
 

@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: patch di sicurezza obsoleta dopo",
+        "description": "Un dispositivo Android (Android Enterprise) con una patch di sicurezza più vecchia di questo numero di giorni non è conforme (os_outdated). 0: non verificato."
+      }
+    }
   },
   "users": {
     "resetMfa": "Reimposta MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "APK rinviato da un dispositivo confermato",
       "obliwatch_consent_changed": "Consenso Obliwatch del tenant modificato",
       "obliwatch_read": "Dati letti da Obliwatch",
-      "obliwatch_auth_rejected": "Richiesta di Obliwatch rifiutata"
+      "obliwatch_auth_rejected": "Richiesta di Obliwatch rifiutata",
+      "obliwatch_push_dead": "Segnali Obliwatch abbandonati (lettere morte)",
+      "obliwatch_push_requeued": "Lettere morte Obliwatch inviate di nuovo"
     },
     "families": {
       "legacy_agent": "Agente Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Segnali Obliwatch non consegnati",
+          "message": "{{count}} segnale/i di sicurezza mobile non sono stati consegnati a Obliwatch per 72 ore: verifica il collegamento con Obliwatch, poi inviali di nuovo dalla pagina Integrazioni."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Consenso Obliwatch salvato",
       "lastChange": "Ultima modifica: {{date}} da {{user}}",
       "neverChanged": "Mai modificato: tutto è disattivato."
+    },
+    "push": {
+      "status": "Segnali inviati a Obliwatch",
+      "lastSent": "Ultimo invio: {{date}}",
+      "neverSent": "Ancora nulla inviato",
+      "pending": "{{count}} in attesa",
+      "deadLetters": "{{count}} non consegnati",
+      "retry": "Invia di nuovo",
+      "lastError": "Ultimo errore: {{error}}",
+      "requeued": "{{count}} segnale/i di nuovo in coda"
     }
   }
 }

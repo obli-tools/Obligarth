@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: beveiligingspatch verouderd na",
+        "description": "Een Android-apparaat (Android Enterprise) waarvan de beveiligingspatch ouder is dan dit aantal dagen is niet conform (os_outdated). 0: niet gecontroleerd."
+      }
+    }
   },
   "users": {
     "resetMfa": "MFA resetten",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "Door een apparaat teruggestuurde APK bevestigd",
       "obliwatch_consent_changed": "Obliwatch-toestemming van de tenant gewijzigd",
       "obliwatch_read": "Gegevens gelezen door Obliwatch",
-      "obliwatch_auth_rejected": "Verzoek van Obliwatch geweigerd"
+      "obliwatch_auth_rejected": "Verzoek van Obliwatch geweigerd",
+      "obliwatch_push_dead": "Obliwatch-signalen opgegeven (onbestelbaar)",
+      "obliwatch_push_requeued": "Onbestelbare Obliwatch-signalen opnieuw verzonden"
     },
     "families": {
       "legacy_agent": "Android-agent",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch-signalen niet afgeleverd",
+          "message": "{{count}} mobiele beveiligingssigna(a)l(en) konden 72 uur lang niet aan Obliwatch worden afgeleverd: controleer de koppeling met Obliwatch en verzend ze daarna opnieuw vanaf de pagina Integraties."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch-toestemming opgeslagen",
       "lastChange": "Laatste wijziging: {{date}} door {{user}}",
       "neverChanged": "Nooit gewijzigd: alles staat uit."
+    },
+    "push": {
+      "status": "Signalen verzonden naar Obliwatch",
+      "lastSent": "Laatst verzonden: {{date}}",
+      "neverSent": "Nog niets verzonden",
+      "pending": "{{count}} wachtend",
+      "deadLetters": "{{count}} niet afgeleverd",
+      "retry": "Opnieuw verzenden",
+      "lastError": "Laatste fout: {{error}}",
+      "requeued": "{{count}} signaal/signalen opnieuw in de wachtrij"
     }
   }
 }

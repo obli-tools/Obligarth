@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: виправлення безпеки застаріле після",
+        "description": "Пристрій Android (Android Enterprise), виправлення безпеки якого старше за цю кількість днів, не відповідає вимогам (os_outdated). 0: не перевіряється."
+      }
+    }
   },
   "users": {
     "resetMfa": "Скинути MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "Підтверджено APK, надісланий пристроєм",
       "obliwatch_consent_changed": "Згоду Obliwatch орендаря змінено",
       "obliwatch_read": "Дані прочитано Obliwatch",
-      "obliwatch_auth_rejected": "Запит Obliwatch відхилено"
+      "obliwatch_auth_rejected": "Запит Obliwatch відхилено",
+      "obliwatch_push_dead": "Сигнали Obliwatch покинуто (недоставлені)",
+      "obliwatch_push_requeued": "Недоставлені сигнали Obliwatch надіслано знову"
     },
     "families": {
       "legacy_agent": "Агент Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Сигнали Obliwatch не доставлено",
+          "message": "Не вдалося доставити до Obliwatch {{count}} сигнал(ів) мобільної безпеки протягом 72 годин: перевірте зв’язок з Obliwatch, потім надішліть їх знову зі сторінки «Інтеграції»."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Згоду Obliwatch збережено",
       "lastChange": "Остання зміна: {{date}}, {{user}}",
       "neverChanged": "Не змінювалося: усе вимкнено."
+    },
+    "push": {
+      "status": "Сигнали, надіслані до Obliwatch",
+      "lastSent": "Останнє надсилання: {{date}}",
+      "neverSent": "Ще нічого не надіслано",
+      "pending": "Очікують: {{count}}",
+      "deadLetters": "Не доставлено: {{count}}",
+      "retry": "Надіслати знову",
+      "lastError": "Остання помилка: {{error}}",
+      "requeued": "Знову в черзі: {{count}}"
     }
   }
 }

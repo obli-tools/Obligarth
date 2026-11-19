@@ -94,6 +94,9 @@ SELECT d.id, d.uuid::text AS uuid, d.platform, d.management_channel, d.ownership
 /** One device of the tenant by its uuid (bound). */
 const BY_UUID_SQL = `${SELECT} AND d.uuid = ?::uuid`;
 
+/** Devices of the tenant by their internal ids (bound): the push of the signals (lot L3), never answered as is. */
+const BY_IDS_SQL = `${SELECT} AND d.id = ANY (?::int[])`;
+
 type Row = Record<string, any>;
 
 /** What the privacy profile collects of a device, cached per request by (channel, ownership, mode). */
@@ -232,6 +235,21 @@ async function rowOf(tenantId: number, uuid: string): Promise<Row | null> {
   if (!UUID_RE.test(uuid)) return null;
   const rows = (await db.raw(BY_UUID_SQL, [tenantId, uuid]) as { rows: Row[] }).rows;
   return rows[0] ?? null;
+}
+
+/**
+ * The DeviceView of devices of the tenant by internal id, for the push of the signals (lot L3: asset.hostname, asset.os
+ * and user.upn come from it, so the name follows the read API's rule exactly). In the caller's database context (the
+ * tenant's). The key of the map is internal: it never leaves.
+ */
+export async function deviceViewsOf(tenantId: number, deviceIds: number[]): Promise<Map<number, ObliwatchDeviceView>> {
+  const ids = [...new Set(deviceIds.map(Number).filter((n) => Number.isSafeInteger(n) && n > 0))];
+  const out = new Map<number, ObliwatchDeviceView>();
+  if (ids.length === 0) return out;
+  const rows = (await db.raw(BY_IDS_SQL, [tenantId, ids]) as { rows: Row[] }).rows;
+  const collected = new CollectedCache(tenantId);
+  for (const r of rows) out.set(Number(r.id), await deviceView(r, collected));
+  return out;
 }
 
 /** GET /devices/:uuid */

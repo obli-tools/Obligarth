@@ -472,6 +472,10 @@
       "publishFleetShareFloor": {
         "label": "Second approver: share of the fleet counted from",
         "description": "A change of the configuration (publication, assignments, group, devices moved) asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
+      },
+      "androidPatchMaxAgeDays": {
+        "label": "Android: security patch outdated after",
+        "description": "An Android device (Android Enterprise) whose security patch is older than this many days is non-compliant (os_outdated). 0: not checked."
       }
     },
     "mcp": {
@@ -1919,7 +1923,9 @@
       "legacy_agent_package_confirmed": "APK sent back by a device confirmed",
       "obliwatch_consent_changed": "Obliwatch consent of the tenant changed",
       "obliwatch_read": "Data read by Obliwatch",
-      "obliwatch_auth_rejected": "Obliwatch request refused"
+      "obliwatch_auth_rejected": "Obliwatch request refused",
+      "obliwatch_push_dead": "Obliwatch signals given up (dead letters)",
+      "obliwatch_push_requeued": "Obliwatch dead letters sent again"
     },
     "families": {
       "auth": "Authentication",
@@ -3100,6 +3106,12 @@
         "token_quota": {
           "title": "Bench station near its token quota",
           "message": "A bench station issued {{count}} enrollment tokens in 24 hours (quota {{quota}})."
+        }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch signals not delivered",
+          "message": "{{count}} mobile security signal(s) could not be delivered to Obliwatch for 72 hours: check the link with Obliwatch, then send them again from the Integrations page."
         }
       }
     },
@@ -7844,6 +7856,16 @@
       "saved": "Obliwatch consent saved",
       "lastChange": "Last change: {{date}} by {{user}}",
       "neverChanged": "Never changed: everything is off."
+    },
+    "push": {
+      "status": "Signals sent to Obliwatch",
+      "lastSent": "Last sent: {{date}}",
+      "neverSent": "Nothing sent yet",
+      "pending": "{{count}} waiting",
+      "deadLetters": "{{count}} not delivered",
+      "retry": "Send again",
+      "lastError": "Last failure: {{error}}",
+      "requeued": "{{count}} signal(s) queued again"
     }
   }
 }

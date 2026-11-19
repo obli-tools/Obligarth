@@ -12,6 +12,8 @@
 // The reasons carry codes, setting names and counters only: never an inventory value nor a personal datum.
 import type { Knex } from 'knex';
 import { MDM_STALE_AFTER_DAYS_DEFAULT, SETTINGS_KEYS } from '@obligarth/shared';
+import { reasonCodesOf } from '../../integrations/obliwatch/rules';
+import { recordComplianceSignalsInTx } from '../../integrations/obliwatch/signals';
 
 export type AndroidComplianceCode = 'os_outdated' | 'amapi_noncompliant' | 'integrity_at_risk' | 'no_contact' | 'policy_not_applied'
   | 'management_disabled';
@@ -70,17 +72,31 @@ export function evaluateAndroidCompliance(f: AndroidComplianceFacts, now: Date):
   return { state: f.lastStatusReportAt ? 'compliant' : 'unknown', reasons: [] };
 }
 
-async function staleDays(trx: Knex.Transaction, tenantId: number): Promise<number> {
-  const row = await trx('settings').where({ tenant_id: tenantId, scope: 'global', key: SETTINGS_KEYS.MDM_STALE_AFTER_DAYS }).whereNull('scope_id')
-    .first('value') as { value: unknown } | undefined;
-  const n = typeof row?.value === 'number' ? row.value : typeof row?.value === 'string' ? Number(row.value) : NaN;
-  return Number.isInteger(n) && n >= 1 && n <= 90 ? n : MDM_STALE_AFTER_DAYS_DEFAULT;
+const settingNumber = (v: unknown): number => (typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN);
+
+/**
+ * The thresholds of the tenant, in ONE statement (as the stale threshold alone before): mdmStaleAfterDays (1 to 90
+ * days, the default without a value) and androidPatchMaxAgeDays (lot L3, D-MOB-OS-OUTDATED; owner decision Q-L3a: 1
+ * to 730 days, 0 or no value: the patch level is not checked, the reason os_outdated never appears).
+ */
+async function thresholds(trx: Knex.Transaction, tenantId: number): Promise<{ staleDays: number; patchMaxAgeDays: number | null }> {
+  const rows = await trx('settings').where({ tenant_id: tenantId, scope: 'global' }).whereNull('scope_id')
+    .whereIn('key', [SETTINGS_KEYS.MDM_STALE_AFTER_DAYS, SETTINGS_KEYS.ANDROID_PATCH_MAX_AGE_DAYS])
+    .select('key', 'value') as Array<{ key: string; value: unknown }>;
+  const stale = settingNumber(rows.find((r) => r.key === SETTINGS_KEYS.MDM_STALE_AFTER_DAYS)?.value);
+  const patch = settingNumber(rows.find((r) => r.key === SETTINGS_KEYS.ANDROID_PATCH_MAX_AGE_DAYS)?.value);
+  return {
+    staleDays: Number.isInteger(stale) && stale >= 1 && stale <= 90 ? stale : MDM_STALE_AFTER_DAYS_DEFAULT,
+    patchMaxAgeDays: Number.isInteger(patch) && patch >= 1 && patch <= 730 ? patch : null,
+  };
 }
 
 const date = (v: unknown): Date | null => (v ? new Date(v as string) : null);
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
 
-export interface AndroidEvaluation { changed: number[]; atRisk: number[] }
+/** changed: the devices whose verdict changed; atRisk: newly at risk (alert); recovered: at risk before, SECURE now
+ *  (the alert of the device resolved). */
+export interface AndroidEvaluation { changed: number[]; atRisk: number[]; recovered: number[] }
 
 /**
  * Evaluates the Android devices of the tenant (caller's transaction, tenant context) and writes what changed. A device
@@ -88,7 +104,7 @@ export interface AndroidEvaluation { changed: number[]; atRisk: number[] }
  */
 export async function evaluateAndroidDevices(trx: Knex.Transaction, tenantId: number, deviceIds: number[], o: { now?: Date; patchMaxAgeDays?: number | null } = {}): Promise<AndroidEvaluation> {
   const now = o.now ?? new Date();
-  const out: AndroidEvaluation = { changed: [], atRisk: [] };
+  const out: AndroidEvaluation = { changed: [], atRisk: [], recovered: [] };
   const ids = [...new Set(deviceIds.filter((n) => Number.isSafeInteger(n) && n > 0))];
   if (!ids.length) return out;
   const rows = await trx('devices as d').join('android_devices as a', function j() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
@@ -96,7 +112,12 @@ export async function evaluateAndroidDevices(trx: Knex.Transaction, tenantId: nu
     .select('d.id', 'd.compliance_state', 'd.compliance_reasons', 'd.enrolled_at', 'd.last_checkin_at', 'a.state', 'a.last_status_report_at',
       'a.security_patch_level', 'a.non_compliance', 'a.security_posture', 'a.pushed_policy_version', 'a.applied_policy_version', 'a.pushed_at') as
     Array<Record<string, any>>;
-  const stale = await staleDays(trx, tenantId);
+  const limits = await thresholds(trx, tenantId);
+  const stale = limits.staleDays;
+  // The patch threshold of the caller wins (the tests), else the tenant's setting.
+  const patchMaxAgeDays = o.patchMaxAgeDays !== undefined ? o.patchMaxAgeDays : limits.patchMaxAgeDays;
+  // Obliwatch (lot L3): the devices whose verdict changed, for the D-MOB-* rules (nothing done while the push is off).
+  const signals: Array<{ deviceId: number; channel: string; state: string; codes: string[] }> = [];
   for (const r of rows) {
     if (r.compliance_state === 'exempt') continue;
     const posture = r.security_posture && typeof r.security_posture === 'object' ? String(r.security_posture.devicePosture ?? '') || null : null;
@@ -105,7 +126,7 @@ export async function evaluateAndroidDevices(trx: Knex.Transaction, tenantId: nu
       state: r.state ?? null, enrolledAt: date(r.enrolled_at), lastStatusReportAt: date(r.last_status_report_at), lastCheckinAt: date(r.last_checkin_at),
       securityPatchLevel: patch, nonCompliance: Array.isArray(r.non_compliance) ? r.non_compliance : [], devicePosture: posture,
       pushedVersion: num(r.pushed_policy_version), appliedVersion: num(r.applied_policy_version), pushedAt: date(r.pushed_at),
-      staleAfterDays: stale, patchMaxAgeDays: o.patchMaxAgeDays ?? null, availablePackages: new Set(),
+      staleAfterDays: stale, patchMaxAgeDays, availablePackages: new Set(),
     }, now);
     const before = JSON.stringify(Array.isArray(r.compliance_reasons) ? r.compliance_reasons : []);
     const after = JSON.stringify(v.reasons);
@@ -116,6 +137,9 @@ export async function evaluateAndroidDevices(trx: Knex.Transaction, tenantId: nu
     out.changed.push(Number(r.id));
     const wasAtRisk = before.includes('"integrity_at_risk"');
     if (!wasAtRisk && v.reasons.some((x) => x.code === 'integrity_at_risk')) out.atRisk.push(Number(r.id));
+    if (wasAtRisk && posture === 'SECURE') out.recovered.push(Number(r.id));
+    signals.push({ deviceId: Number(r.id), channel: 'amapi', state: v.state, codes: reasonCodesOf(v.reasons) });
   }
+  await recordComplianceSignalsInTx(trx, tenantId, signals);
   return out;
 }

@@ -5,6 +5,8 @@ import {
 } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { evaluateAndroidDevices } from '../../android/inventory/compliance';
+import { reasonCodesOf } from '../../integrations/obliwatch/rules';
+import { recordComplianceSignalsInTx } from '../../integrations/obliwatch/signals';
 
 // =============================================================================
 // Minimal compliance (docs: modele-donnees-mdm §4.4; the compliance engine is
@@ -134,7 +136,7 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
     .leftJoin('apple_devices as a', function joinSat() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
     .where('d.tenant_id', tenantId).whereRaw('d.id = ANY (?::int[])', [ids]).whereIn('d.enrollment_state', ['enrolled', 'awaiting_configuration'])
     .whereNot('d.management_channel', 'amapi')
-    .select('d.id', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'd.os_version', 'd.last_checkin_at', 'd.enrolled_at', 'd.config_state',
+    .select('d.id', 'd.enrollment_state', 'd.ownership', 'd.supervised', 'd.os_version', 'd.last_checkin_at', 'd.enrolled_at', 'd.config_state', 'd.management_channel',
       'd.compliance_state', 'd.compliance_reasons', 'a.last_device_info_at') as Array<Record<string, any>>;
   if (devices.length === 0) return out;
   const live = devices.map((d) => Number(d.id));
@@ -162,7 +164,7 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
   const bool = (v: unknown): boolean | null => (typeof v === 'boolean' ? v : null);
   // The verdicts that changed, written in one statement at the end: a resolution of a tenant evaluates its
   // devices by slices of 200, and one UPDATE per device was a quarter of its time (essai 139, lot B6).
-  const changes: Array<{ id: number; state: string; reasons: string }> = [];
+  const changes: Array<{ id: number; state: string; reasons: string; channel: string; codes: string[] }> = [];
   for (const d of devices) {
     const id = Number(d.id);
     out.evaluated++;
@@ -185,7 +187,7 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
     }, now);
     const before = canonicalJson(parse<unknown>(d.compliance_reasons, []) ?? []);
     if (d.compliance_state === verdict.state && before === canonicalJson(verdict.reasons)) continue;
-    changes.push({ id, state: verdict.state, reasons: JSON.stringify(verdict.reasons) });
+    changes.push({ id, state: verdict.state, reasons: JSON.stringify(verdict.reasons), channel: String(d.management_channel), codes: reasonCodesOf(verdict.reasons) });
     out.changed.push(id);
   }
   for (let i = 0; i < changes.length; i += WRITE_BATCH) {
@@ -198,5 +200,8 @@ export async function evaluateDevices(trx: Knex.Transaction, tenantId: number, d
        WHERE d.tenant_id = ? AND d.id = u.id AND d.compliance_state <> 'exempt'`,
     [now, new Date(), s.map((x) => x.id), s.map((x) => x.state), s.map((x) => x.reasons), tenantId]);
   }
+  // Obliwatch (lot L3): the D-MOB-* rules of the verdicts that changed (Apple, bridge agent); nothing while the push is
+  // off, never a failure of the evaluation.
+  await recordComplianceSignalsInTx(trx, tenantId, changes.map((c) => ({ deviceId: c.id, channel: c.channel, state: c.state, codes: c.codes })));
   return out;
 }

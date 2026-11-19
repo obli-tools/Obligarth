@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: patch de segurança desatualizado após",
+        "description": "Um dispositivo Android (Android Enterprise) cujo patch de segurança tenha mais que este número de dias não está em conformidade (os_outdated). 0: não verificado."
+      }
+    }
   },
   "users": {
     "resetMfa": "Redefinir MFA",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "APK devolvido por um dispositivo confirmado",
       "obliwatch_consent_changed": "Consentimento do Obliwatch do tenant alterado",
       "obliwatch_read": "Dados lidos pelo Obliwatch",
-      "obliwatch_auth_rejected": "Solicitação do Obliwatch recusada"
+      "obliwatch_auth_rejected": "Solicitação do Obliwatch recusada",
+      "obliwatch_push_dead": "Sinais do Obliwatch abandonados (cartas mortas)",
+      "obliwatch_push_requeued": "Cartas mortas do Obliwatch enviadas novamente"
     },
     "families": {
       "legacy_agent": "Agente Android",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Sinais do Obliwatch não entregues",
+          "message": "{{count}} sinal(is) de segurança móvel não puderam ser entregues ao Obliwatch por 72 horas: verifique a ligação com o Obliwatch e envie-os novamente na página Integrações."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Consentimento do Obliwatch salvo",
       "lastChange": "Última alteração: {{date}} por {{user}}",
       "neverChanged": "Nunca alterado: tudo está desativado."
+    },
+    "push": {
+      "status": "Sinais enviados ao Obliwatch",
+      "lastSent": "Último envio: {{date}}",
+      "neverSent": "Nada enviado ainda",
+      "pending": "{{count}} aguardando",
+      "deadLetters": "{{count}} não entregues",
+      "retry": "Enviar novamente",
+      "lastError": "Última falha: {{error}}",
+      "requeued": "{{count}} sinal(is) de volta à fila"
     }
   }
 }

@@ -37,6 +37,7 @@ import { endToken } from './tokens';
 import { invitationForEnrollment, markInvitationUsed, type EnrollmentInvitation } from '../byod/enrollmentGuard';
 import { markSigninSessionUsed, signinSessionForEnrollment } from '../signin/guard';
 import type { z } from 'zod';
+import { recordEventSignalInTx } from '../../integrations/obliwatch/signals';
 
 type Device = z.infer<typeof DeviceSchema>;
 type Ctx = AndroidEventContext<Device>;
@@ -233,6 +234,9 @@ export async function onEnrollment(ctx: Ctx): Promise<EnrollmentOutcome> {
     } else if (holder) {
       // A record still under management holds this serial: never taken; a record of its own, without the serial.
       ctx.afterCommit(() => raiseAndroidTenantAlert(tenantId, 'enrollment.duplicate_serial', { deviceId: Number(holder.id) }));
+      // Obliwatch (lot L3): D-MOB-ID-MISMATCH of the device that holds the serial, in this transaction (durable; the
+      // alert above stays after the commit). Nothing while the push is off, never a failure of the enrollment.
+      await recordEventSignalInTx(trx, tenantId, Number(holder.id), 'D-MOB-ID-MISMATCH', ['duplicate_serial']);
       serial = null;
     }
   }

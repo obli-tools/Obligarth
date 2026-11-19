@@ -8,6 +8,7 @@ export const SETTINGS_KEYS = {
   TFA_TRUST_HOURS:          'tfaTrustHours',          // how long a "trust this IP" 2FA grant lasts
   MDM_STALE_AFTER_DAYS:     'mdmStaleAfterDays',      // device contact: stale after (MDM data model)
   PUBLISH_FLEET_SHARE_FLOOR: 'publishFleetShareFloor', // DM23: devices touched before the 10 % share of the fleet counts
+  ANDROID_PATCH_MAX_AGE_DAYS: 'androidPatchMaxAgeDays', // Android (AMAPI) compliance os_outdated: security patch older than (0: not checked)
 } as const;
 
 export type SettingKey = typeof SETTINGS_KEYS[keyof typeof SETTINGS_KEYS];
@@ -88,6 +89,19 @@ export const SETTINGS_DEFINITIONS: SettingDefinition[] = [
     globalOnly: true,
     guardedBy: 'guard.settings_change',
   },
+  {
+    // Lot L3 (Obliwatch, D-MOB-OS-OUTDATED; owner decision Q-L3a): the Android compliance reason os_outdated was dead
+    // code (no threshold). Off by default (0): nothing changes until a manager of the tenant sets a number of days.
+    key: SETTINGS_KEYS.ANDROID_PATCH_MAX_AGE_DAYS,
+    label: 'Android: security patch outdated after',
+    description: 'An Android device (Android Enterprise) whose security patch is older than this many days is non-compliant (os_outdated). 0: not checked.',
+    type: 'number',
+    unit: 'days',
+    min: 0,
+    max: 730,
+    defaultValue: 0,
+    globalOnly: true,
+  },
 ];
 
 export const HARDCODED_DEFAULTS: Record<SettingKey, number | boolean> = {
@@ -96,4 +110,5 @@ export const HARDCODED_DEFAULTS: Record<SettingKey, number | boolean> = {
   [SETTINGS_KEYS.TFA_TRUST_HOURS]:          24,
   [SETTINGS_KEYS.MDM_STALE_AFTER_DAYS]:     7,
   [SETTINGS_KEYS.PUBLISH_FLEET_SHARE_FLOOR]: 5,
+  [SETTINGS_KEYS.ANDROID_PATCH_MAX_AGE_DAYS]: 0,
 };

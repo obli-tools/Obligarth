@@ -19,6 +19,7 @@ import { errorReply, type AgentIdentity, type Exchange, type Reply } from './sur
 import { writeStatusItems } from './status';
 import { requestGroupEvaluation } from '../mdm/groups/triggers';
 import { requestDeviceResolution } from '../mdm/policies/triggers';
+import { recordStateSignalInTx } from '../integrations/obliwatch/signals';
 
 /** The freeze of the queue of the bridge agent: the engine's, and apple-edge's mirror (decision PONT-R; guard/frozen.ts). */
 const tenantFrozen = (trx: Knex.Transaction, tenantId: number): Promise<boolean> => frozenFor(trx, tenantId, 'legacy_agent');
@@ -69,6 +70,8 @@ async function applyOwnerRole(trx: Knex.Transaction, who: AgentIdentity, body: P
     await audit.appendInTx(trx, { tenantId: who.tenantId, action: 'legacy_agent.device_owner_gained', target, details: { agentVersionCode: body.agent.versionCode } },
       ctx, { onFailure: 'spool' });
     await resolveInTx(trx, who.tenantId, 'legacy_agent.device_owner_lost', who.deviceId);
+    // Obliwatch (lot L3): the owner role is back, D-MOB-MGMT-REMOVED of the device closed if it was open.
+    await recordStateSignalInTx(trx, who.tenantId, who.deviceId, 'D-MOB-MGMT-REMOVED', 'cleared');
   } else {
     const released = body.events.some((e) => e.type === 'device_owner_released')
       || !!(await trx('legacy_agent_commands').where({ tenant_id: who.tenantId, device_id: who.deviceId, request_type: 'agent.release', state: 'acknowledged' }).first('id'));
@@ -101,6 +104,8 @@ async function applyEvents(trx: Knex.Transaction, who: AgentIdentity, body: Poll
   }
   if (body.status.adminActive && sat.admin_active === false) {
     await resolveInTx(trx, who.tenantId, 'legacy_agent.admin_disabled', who.deviceId);
+    // Obliwatch (lot L3): the administrator is back, D-MOB-MGMT-REMOVED of the device closed if it was open.
+    await recordStateSignalInTx(trx, who.tenantId, who.deviceId, 'D-MOB-MGMT-REMOVED', 'cleared');
   }
   // Lot BANC §7.4: the shell opened a bench window (the Knox lock of the administrator lifted): always written down.
   for (const e of body.events.filter((x) => x.type === 'bench_window_opened').slice(0, 3)) {

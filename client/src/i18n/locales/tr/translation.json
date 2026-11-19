@@ -399,7 +399,13 @@
       "otpSmtpDesc": "Used to send one-time codes when Email OTP is enabled.",
       "noneOption": "— None —"
     },
-    "failedUpdate": "Failed to update setting"
+    "failedUpdate": "Failed to update setting",
+    "defs": {
+      "androidPatchMaxAgeDays": {
+        "label": "Android: güvenlik yaması şu süreden sonra eski",
+        "description": "Güvenlik yaması bu gün sayısından eski olan bir Android cihazı (Android Enterprise) uyumsuzdur (os_outdated). 0: denetlenmez."
+      }
+    }
   },
   "users": {
     "resetMfa": "MFA'yı Sıfırla",
@@ -711,7 +717,9 @@
       "legacy_agent_package_confirmed": "Bir cihazın geri gönderdiği APK onaylandı",
       "obliwatch_consent_changed": "Kiracının Obliwatch onayı değiştirildi",
       "obliwatch_read": "Obliwatch tarafından okunan veriler",
-      "obliwatch_auth_rejected": "Obliwatch isteği reddedildi"
+      "obliwatch_auth_rejected": "Obliwatch isteği reddedildi",
+      "obliwatch_push_dead": "Obliwatch sinyallerinden vazgeçildi (teslim edilemeyenler)",
+      "obliwatch_push_requeued": "Teslim edilemeyen Obliwatch sinyalleri yeniden gönderildi"
     },
     "families": {
       "legacy_agent": "Android ajanı",
@@ -1144,6 +1152,12 @@
           "title": "Required apps not installed",
           "message": "{{count}} required app(s) of the Android agent policies failed to install 3 times: check the devices (signature, storage, Knox)."
         }
+      },
+      "obliwatch": {
+        "push_dead": {
+          "title": "Obliwatch sinyalleri teslim edilmedi",
+          "message": "{{count}} mobil güvenlik sinyali 72 saat boyunca Obliwatch’a teslim edilemedi: Obliwatch bağlantısını kontrol edin, ardından Entegrasyonlar sayfasından yeniden gönderin."
+        }
       }
     }
   },
@@ -1331,6 +1345,16 @@
       "saved": "Obliwatch onayı kaydedildi",
       "lastChange": "Son değişiklik: {{date}}, {{user}}",
       "neverChanged": "Hiç değiştirilmedi: her şey kapalı."
+    },
+    "push": {
+      "status": "Obliwatch’a gönderilen sinyaller",
+      "lastSent": "Son gönderim: {{date}}",
+      "neverSent": "Henüz bir şey gönderilmedi",
+      "pending": "{{count}} bekliyor",
+      "deadLetters": "{{count}} teslim edilmedi",
+      "retry": "Yeniden gönder",
+      "lastError": "Son hata: {{error}}",
+      "requeued": "{{count}} sinyal yeniden kuyruğa alındı"
     }
   }
 }

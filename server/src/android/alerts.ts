@@ -136,22 +136,25 @@ export async function raiseAndroidPlatformAlert(key: string, params: Record<stri
   await stampI18n(MASTER_TENANT_ID, stableKey, key, reduced, message);
 }
 
-/** Raises a tenant alert in `tenantId`; never throws. */
-export async function raiseAndroidTenantAlert(tenantId: number, key: string, params: Record<string, string | number> = {}): Promise<void> {
+/** Raises a tenant alert in `tenantId`; never throws. `dedupSuffix`: an internal identifier (a device id) that makes one
+ *  alert per object (stable key <key>:<suffix>); none: one alert of the tenant. */
+export async function raiseAndroidTenantAlert(tenantId: number, key: string, params: Record<string, string | number> = {}, dedupSuffix = ''): Promise<void> {
   const def = byKey.get(key);
   if (!def || def.scope === 'platform') { logger.error({ alert: key }, 'android: undeclared tenant alert'); return; }
+  const suffix = suffixOf(dedupSuffix);
+  const stableKey = `${key}${suffix ? `:${suffix}` : ''}`;
   const reduced = alertParams(params);
   const message = markerOf(key, reduced);
   try {
     await asTenant(tenantId, PLATFORM_ACTOR, () => liveAlertService.add(tenantId, {
       severity: def.severity, title: def.title, message,
-      navigateTo: null, stableKey: key,
+      navigateTo: null, stableKey,
     }));
   } catch (err) {
     logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: tenant alert not written');
     return;
   }
-  await stampI18n(tenantId, key, key, reduced, message);
+  await stampI18n(tenantId, stableKey, key, reduced, message);
 }
 
 /**
@@ -175,12 +178,15 @@ export async function resolveAndroidPlatformAlert(key: string, dedupSuffix = '')
   }
 }
 
-/** Resolves an alert of a tenant (the condition is gone: contact again, renewal…); never throws. */
-export async function resolveAndroidTenantAlert(tenantId: number, key: string): Promise<void> {
+/** Resolves an alert of a tenant (the condition is gone: contact again, renewal…); never throws. `dedupSuffix`: the
+ *  object of a per-object alert (raiseAndroidTenantAlert). */
+export async function resolveAndroidTenantAlert(tenantId: number, key: string, dedupSuffix = ''): Promise<void> {
   const def = byKey.get(key);
   if (!def || def.scope === 'platform') return;
+  const suffix = suffixOf(dedupSuffix);
+  const stableKey = `${key}${suffix ? `:${suffix}` : ''}`;
   try {
-    await asTenant(tenantId, PLATFORM_ACTOR, () => db('live_alerts').where({ tenant_id: tenantId, stable_key: key }).whereNull('resolved_at')
+    await asTenant(tenantId, PLATFORM_ACTOR, () => db('live_alerts').where({ tenant_id: tenantId, stable_key: stableKey }).whereNull('resolved_at')
       .update({ resolved_at: db.fn.now() }));
   } catch (err) {
     logger.error({ alert: key, tenantId, err: (err as Error)?.name }, 'android: tenant alert not resolved');

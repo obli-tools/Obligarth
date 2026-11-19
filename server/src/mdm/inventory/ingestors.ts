@@ -3,6 +3,7 @@ import type { Knex } from 'knex';
 import type { NanoEnrollType, Ownership } from '@obligarth/shared';
 import { canonicalJson } from '../../audit/canonical';
 import { raiseInTx } from '../../apple/alerts/service';
+import { recordEventSignalInTx } from '../../integrations/obliwatch/signals';
 import { majorMinor } from '../../apple/ddm/baseline';
 import { requestDdmRecompute } from '../../apple/ddm/engine';
 import { privacyRulesFor, type PrivacyRules } from '../../apple/devices/privacy';
@@ -164,6 +165,7 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   const device: Record<string, unknown> = { updated_at: new Date() };
   const sat: Record<string, unknown> = { last_device_info_at: occurredAt, updated_at: new Date() };
   const effects: DeviceInformationEffects = { outcome: 'applied' };
+  let lostModeExit = false;
 
   const osVersion = str(q.OSVersion, 200);
   if (osVersion) { device.os_version = osVersion; effects.osChanged = osVersion !== f.osVersion; }
@@ -221,7 +223,11 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   if (lostMode !== null && !personal) {
     // Reconciliation of the lost mode (§4.4): the device's word after an ack that went missing.
     if (lostMode && ['off', 'enabling'].includes(f.lostModeState)) { device.lost_mode_state = 'on'; device.lost_mode_changed_at = occurredAt; }
-    if (!lostMode && ['on', 'disabling'].includes(f.lostModeState)) { device.lost_mode_state = 'off'; device.lost_mode_changed_at = occurredAt; }
+    if (!lostMode && ['on', 'disabling'].includes(f.lostModeState)) {
+      device.lost_mode_state = 'off'; device.lost_mode_changed_at = occurredAt;
+      // 'on' (not 'disabling'): the device left the lost mode without an MDM command (Obliwatch D-MOB-LOST-EXIT).
+      if (f.lostModeState === 'on') lostModeExit = true;
+    }
   }
   const al = bool(q.IsActivationLockEnabled);
   if (al !== null) sat.activation_lock_enabled = al;
@@ -234,6 +240,8 @@ export async function ingestDeviceInformation(trx: Knex.Transaction, tenantId: n
   sat.device_information = JSON.stringify(kept);
   await trx('devices').where({ tenant_id: tenantId, id: deviceId }).update(device);
   await trx('apple_devices').where({ tenant_id: tenantId, device_id: deviceId }).update(sat);
+  // Obliwatch (lot L3): nothing while the push is off, never a failure of the inventory.
+  if (lostModeExit) await recordEventSignalInTx(trx, tenantId, deviceId, 'D-MOB-LOST-EXIT', ['lost_mode_user_exit'], { occurredAt });
   // What the resolution of the policies reads changed (§7.8, §7.12): the OS version and the supervision, the
   // platform, the serial number, the model and the name of the variables (the rendered artifacts follow their
   // values). The device is resolved again (job of this transaction).
