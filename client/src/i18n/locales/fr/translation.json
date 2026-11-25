@@ -7504,7 +7504,7 @@
       },
       "release": {
         "title": "Version de l'agent servie au banc",
-        "hint": "Choisie explicitement (second facteur) : une version téléversée, jamais poussée au parc par la mise à jour automatique. La station compare son signataire à l'empreinte épinglée dans son binaire.",
+        "hint": "Choisie explicitement (second facteur) : une version téléversée, jamais poussée au parc par la mise à jour automatique. La station compare son signataire à l'empreinte épinglée dans son binaire. Le lien public de l'agent (/api/legacy-agent/public/agent.apk) sert aussi cette version : une version déposée pour un groupe pilote n'y apparaît pas tant qu'elle n'est pas choisie ici.",
         "version": "Version",
         "none": "Aucune (les stations n'obtiennent pas d'APK)",
         "saved": "Version servie au banc enregistrée",

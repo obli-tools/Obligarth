@@ -12,8 +12,10 @@ import { apkDir } from './config';
 // authenticated route.
 //
 //   GET /api/legacy-agent/public/agent.apk[?v=<versionCode>]
-//     the newest version not withdrawn, or that version (404 when withdrawn
-//     or unknown). Nothing about a tenant leaves: no configuration, no token
+//     the version served to the bench stations (bench_served, chosen by a
+//     platform administrator: a version uploaded for a pilot group stays off
+//     this link until it is chosen), else the newest version not withdrawn;
+//     or that version (404 when withdrawn or unknown). Nothing about a tenant leaves: no configuration, no token
 //     (an agent installed this way still needs its enrolment).
 //
 // The APK is no secret (anyone holding a managed device holds it), and its
@@ -24,9 +26,17 @@ const APK_MIME = 'application/vnd.android.package-archive';
 
 async function releaseOf(req: Request): Promise<{ sha256: string; versionName: string } | null> {
   const wanted = typeof req.query.v === 'string' && /^\d{1,9}$/.test(req.query.v) ? Number(req.query.v) : null;
-  const q = db('legacy_agent_releases').whereNull('withdrawn_at');
-  const row = await (wanted !== null ? q.where({ version_code: wanted }) : q.orderBy('version_code', 'desc'))
-    .first('sha256', 'version_name') as { sha256: string; version_name: string } | undefined;
+  const q = () => db('legacy_agent_releases').whereNull('withdrawn_at');
+  type Row = { sha256: string; version_name: string } | undefined;
+  let row: Row;
+  if (wanted !== null) {
+    row = await q().where({ version_code: wanted }).first('sha256', 'version_name') as Row;
+  } else {
+    // The version chosen for new installs (the one the bench stations serve), so that an uploaded version tried on a
+    // few devices first never reaches the shops through this link; the newest one only when none is chosen.
+    row = await q().where({ bench_served: true }).first('sha256', 'version_name') as Row
+      ?? await q().orderBy('version_code', 'desc').first('sha256', 'version_name') as Row;
+  }
   if (!row || !/^[0-9a-f]{64}$/.test(String(row.sha256).trim())) return null;
   return { sha256: String(row.sha256).trim(), versionName: String(row.version_name ?? '').replace(/[^0-9A-Za-z.-]/g, '') || 'agent' };
 }

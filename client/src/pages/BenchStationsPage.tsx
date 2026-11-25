@@ -94,7 +94,7 @@ function ServedReleaseCard() {
     <section className={clsx(cardCls, 'grid gap-4 text-sm md:grid-cols-2')}>
       <div>
         <h3 className={cardTitleCls}><Usb size={14} /> {t('bench.stations.release.title') || 'Agent version served to the bench'}</h3>
-        <p className="text-xs text-text-muted">{t('bench.stations.release.hint') || 'Chosen explicitly (second factor): an uploaded version, never pushed to the fleet by the automatic update. The station checks its signer against the fingerprint pinned in its binary.'}</p>
+        <p className="text-xs text-text-muted">{t('bench.stations.release.hint') || 'Chosen explicitly (second factor): an uploaded version, never pushed to the fleet by the automatic update. The station checks its signer against the fingerprint pinned in its binary. The public link of the agent (/api/legacy-agent/public/agent.apk) serves this version too: a version uploaded for a pilot group stays off it until it is chosen here.'}</p>
         <div className="mt-2 flex flex-wrap items-end gap-2">
           <label className={clsx(labelCls, 'min-w-[14rem] flex-1')}>{t('bench.stations.release.version') || 'Version'}
             <select className={fieldCls} value={choice} onChange={(e) => setChoice(e.target.value)}>

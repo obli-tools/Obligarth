@@ -7504,7 +7504,7 @@
       },
       "release": {
         "title": "Agent version served to the bench",
-        "hint": "Chosen explicitly (second factor): an uploaded version, never pushed to the fleet by the automatic update. The station checks its signer against the fingerprint pinned in its binary.",
+        "hint": "Chosen explicitly (second factor): an uploaded version, never pushed to the fleet by the automatic update. The station checks its signer against the fingerprint pinned in its binary. The public link of the agent (/api/legacy-agent/public/agent.apk) serves this version too: a version uploaded for a pilot group stays off it until it is chosen here.",
         "version": "Version",
         "none": "None (the stations get no APK)",
         "saved": "Version served to the bench saved",
