@@ -5064,7 +5064,25 @@
       "on": "Actif",
       "off": "Coupé"
     },
-    "ownerDeclaredWarning": "Le propriétaire de l'appareil restera posé sans agent fonctionnel : seule une réinitialisation le retirera."
+    "ownerDeclaredWarning": "Le propriétaire de l'appareil restera posé sans agent fonctionnel : seule une réinitialisation le retirera.",
+    "fleetApps": {
+      "action": "Réinstaller les apps du parc",
+      "actionHint": "Les apps que les autres appareils de son groupe ont et qui manquent ici (après une réinitialisation).",
+      "open": "Comparer",
+      "title": "Réinstaller les apps du parc",
+      "scopeGroup": "Comparé aux {{count}} appareil(s) du groupe {{group}}.",
+      "scopeTenant": "Comparé aux {{count}} appareil(s) du client.",
+      "prompt": "Sans licence Knox, le téléphone demande de valider chaque installation à l’écran.",
+      "none": "Il ne manque aucune des apps habituelles du parc sur cet appareil.",
+      "share": "Sur {{percent}} % du parc ({{count}})",
+      "alreadyQueued": "Une installation est déjà en file",
+      "noPackage": "Aucun APK de cette app dans le magasin : récupérez-le d’abord depuis un appareil",
+      "missingHint": "Une app sans APK dans le magasin peut être récupérée depuis un appareil qui l’a (panneau Agent Android, Récupérer un APK).",
+      "install": "Installer ({{count}})",
+      "queued": "{{count}} installation(s) mise(s) en file",
+      "pending": "{{count}} installation(s) envoyée(s) pour approbation",
+      "reason": "Réinstallation des apps du parc"
+    }
   },
   "android": {
     "device": {

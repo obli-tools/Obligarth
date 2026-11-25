@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
-import { Ban, MonitorSmartphone, Play, RefreshCw, ShieldAlert } from 'lucide-react';
+import { Ban, MonitorSmartphone, PackageSearch, Play, RefreshCw, ShieldAlert } from 'lucide-react';
 import type { LegacyAgentCommandState, LegacyAgentCommandView, LegacyAgentDeviceAction } from '@obligarth/shared';
 import { legacyAgentApi } from '@/api/legacyAgent.api';
 import { isStepUpHandled } from '@/api/client';
@@ -11,6 +11,7 @@ import { StateBadge } from '@/components/mdm/DeviceStateBadges';
 import { formatDateTime } from '@/components/mdm/PlatformIcon';
 import { legacyActionLabel, useLegacyActionRunner } from '@/components/mdm/actions/useLegacyActionRunner';
 import { apiErrorMessage, trCode } from '@/utils/apiError';
+import { FleetAppsDialog } from './FleetAppsDialog';
 
 // The Actions and Commands tabs of a device of the Android bridge agent (agent-pont-android §5, §7): its own menu
 // (lock and erase through their guarded action, message, restart, inventory) instead of the greyed Apple menu, and its
@@ -34,6 +35,7 @@ export function LegacyActionsTab({ deviceId, canAct, onQueued }: { deviceId: num
   const { t } = useTranslation();
   const [actions, setActions] = useState<LegacyAgentDeviceAction[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fleetOpen, setFleetOpen] = useState(false);
   const load = useCallback(() => {
     legacyAgentApi.actions(deviceId).then((a) => { setActions(a); setError(null); }).catch((err) => { setActions([]); setError(apiErrorMessage(err)); });
   }, [deviceId]);
@@ -64,6 +66,20 @@ export function LegacyActionsTab({ deviceId, canAct, onQueued }: { deviceId: num
           ))}
         </ul>
       )}
+      {actions !== null && (
+        <ul className="divide-y divide-border/50 rounded-lg bg-bg-secondary">
+          <li className="flex flex-wrap items-center gap-2 px-3 py-2 text-sm">
+            <span className="min-w-0 flex-1">
+              <span className="text-text-primary">{t('legacyAgent.fleetApps.action') || 'Put back the apps of the fleet'}</span>
+              <span className="block text-[11px] text-text-muted">{t('legacyAgent.fleetApps.actionHint') || 'The apps the other devices of its group carry and this one lacks (after a reset).'}</span>
+            </span>
+            <Button size="sm" variant="secondary" disabled={!canAct} onClick={() => setFleetOpen(true)}>
+              <PackageSearch className="w-3.5 h-3.5 mr-1" />{t('legacyAgent.fleetApps.open') || 'Compare'}
+            </Button>
+          </li>
+        </ul>
+      )}
+      <FleetAppsDialog deviceId={deviceId} open={fleetOpen} onClose={() => setFleetOpen(false)} onQueued={onQueued} />
       <p className="text-xs text-text-muted">
         <Link to={`/legacy-agent?device=${deviceId}`} className="text-accent hover:underline">{t('legacyAgent.openPanel') || 'Android agent panel'}</Link>
       </p>

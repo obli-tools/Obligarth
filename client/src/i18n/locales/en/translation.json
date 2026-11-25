@@ -5064,7 +5064,25 @@
       "on": "On",
       "off": "Off"
     },
-    "ownerDeclaredWarning": "The device owner stays set without a working agent: only a reset of the device will remove it."
+    "ownerDeclaredWarning": "The device owner stays set without a working agent: only a reset of the device will remove it.",
+    "fleetApps": {
+      "action": "Put back the apps of the fleet",
+      "actionHint": "The apps the other devices of its group carry and this one lacks (after a reset).",
+      "open": "Compare",
+      "title": "Put back the apps of the fleet",
+      "scopeGroup": "Compared with the {{count}} device(s) of the group {{group}}.",
+      "scopeTenant": "Compared with the {{count}} device(s) of the tenant.",
+      "prompt": "Without a Knox licence, the phone asks to confirm each install on its screen.",
+      "none": "This device lacks none of the usual apps of its fleet.",
+      "share": "On {{percent}} % of the fleet ({{count}})",
+      "alreadyQueued": "An install is already queued",
+      "noPackage": "No APK of this app in the store: pull it from a device first",
+      "missingHint": "An app without an APK in the store can be pulled from a device that carries it (Android agent panel, Pull an APK).",
+      "install": "Install ({{count}})",
+      "queued": "{{count}} install(s) queued",
+      "pending": "{{count}} install(s) sent for approval",
+      "reason": "Apps of the fleet put back"
+    }
   },
   "android": {
     "device": {

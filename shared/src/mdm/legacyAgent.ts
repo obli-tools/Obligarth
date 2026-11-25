@@ -509,3 +509,35 @@ export interface LegacyAgentDeviceValuesImportResult {
   /** Devices whose agent policy would change (a changed key is read by a template of a published policy). */
   policyImpact: number;
 }
+
+// ── The apps of the fleet a device lacks (GET /api/legacy-agent/devices/:id/fleet-apps) ──────────────────────────────
+
+/** The peers the comparison needs at least before it widens to the parent group. */
+export const LEGACY_AGENT_FLEET_APPS_MIN_PEERS = 5;
+/** The share of the peers an app is listed from (the console checks it by default from LEGACY_AGENT_FLEET_APPS_CHECKED_SHARE). */
+export const LEGACY_AGENT_FLEET_APPS_MIN_SHARE = 0.2;
+export const LEGACY_AGENT_FLEET_APPS_CHECKED_SHARE = 0.5;
+
+/** One app the device's peers carry and the device does not. */
+export interface LegacyAgentFleetAppView {
+  packageName: string;
+  /** The label the peers report most often. */
+  label: string | null;
+  peersWith: number;
+  /** peersWith / peers, from 0 to 1. */
+  share: number;
+  /** The version most of the peers run. */
+  commonVersion: { versionCode: string; versionName: string | null } | null;
+  /** The confirmed package of the tenant's store an install would send, null when the store holds none. */
+  package: { id: string; versionCode: string; versionName: string | null; label: string | null; sizeBytes: number } | null;
+  /** An install of this app is already open on the device. */
+  queued: boolean;
+}
+
+export interface LegacyAgentFleetAppsView {
+  deviceId: number;
+  evaluatedAt: string;
+  /** The group the peers were taken from (its sub-groups included); null: the whole tenant. */
+  scope: { groupId: number | null; groupName: string | null; peers: number };
+  items: LegacyAgentFleetAppView[];
+}

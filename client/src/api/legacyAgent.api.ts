@@ -4,7 +4,7 @@ import type {
   LegacyAgentInstanceSettings, LegacyAgentNameImportFormat, LegacyAgentNameImportResult,
   LegacyAgentPackageView, LegacyAgentReleaseView, LegacyAgentServerKeyView, LegacyAgentTokenCreated, LegacyAgentTokenView,
   LegacyAgentDeviceValuesImportResult, LegacyAgentDeviceValuesImportRow, LegacyAgentFileView, LegacyAgentPolicyStatusView,
-  LegacyAgentRequiredAppPackageView, LegacyAgentRequiredAppsTenantView, LegacyAgentRequiredAppsView,
+  LegacyAgentRequiredAppPackageView, LegacyAgentRequiredAppsTenantView, LegacyAgentRequiredAppsView, LegacyAgentFleetAppsView,
 } from '@obligarth/shared';
 
 /** The matching of an import of per-device values (lot PONT-POL §12.1). */
@@ -85,6 +85,11 @@ export const legacyAgentApi = {
   /** The state of each required app of a device's effective policy (computed by the server on read). */
   async deviceRequiredApps(deviceId: number): Promise<LegacyAgentRequiredAppsView> {
     const res = await apiClient.get<ApiResponse<LegacyAgentRequiredAppsView>>(`/legacy-agent/devices/${deviceId}/required-apps`);
+    return res.data.data!;
+  },
+  /** The apps of the device's peers it lacks (a reset phone), with the package of the store to install for each. */
+  async deviceFleetApps(deviceId: number): Promise<LegacyAgentFleetAppsView> {
+    const res = await apiClient.get<ApiResponse<LegacyAgentFleetAppsView>>(`/legacy-agent/devices/${deviceId}/fleet-apps`);
     return res.data.data!;
   },
   async deviceCommands(id: number): Promise<LegacyAgentCommandView[]> {
