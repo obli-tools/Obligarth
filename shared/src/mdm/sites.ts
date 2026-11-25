@@ -187,7 +187,7 @@ export interface SiteImportResult {
   dryRun: boolean;
   applied: boolean;
   /** The columns read: the code, the name, and those that went to the values. */
-  columns: { code: string; name: string; city: string | null; contact: string | null; values: string[] };
+  columns: { code: string; name: string; city: string | null; contact: string | null; group?: string; values: string[] };
   created: number;
   updated: number;
   unchanged: number;

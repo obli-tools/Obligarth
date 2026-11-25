@@ -14,8 +14,8 @@ import { customFieldsOf, loadResolutionInput } from '../mdm/policies/loader';
 import { resolveDevices, type ResolutionDevice } from '../mdm/policies/resolver';
 import { requestDeviceResolution } from '../mdm/policies/triggers';
 import {
-  checkSite, planFromDevices, planImport, siteValuesOf, type CleanSite, type FieldsDevice, type FromDevicesKeys, type FromDevicesPlan,
-  type ImportPlan, type SiteRow,
+  checkSite, importTargetGroups, planFromDevices, planImport, siteValuesOf, type CleanSite, type FieldsDevice, type FromDevicesKeys,
+  type FromDevicesPlan, type ImportGroup, type ImportPlan, type SiteRow,
 } from './model';
 import { lockSites } from './lock';
 import { revokeSiteTokensInTx } from '../legacyAgent/tokens';
@@ -528,10 +528,24 @@ function planRefused(e: { error: string; column?: string }): AppError {
   return new AppError(400, `The file cannot be imported: ${e.error}${e.column ? ` (${e.column})` : ''}`, 'importRefused', { reason: e.error, column: e.column ?? null });
 }
 
+/** The groups of the tenant an import may name (its group column: an id or a name). */
+async function importGroups(q: Q, tenantId: number): Promise<ImportGroup[]> {
+  const rows = await q('device_groups').where({ tenant_id: tenantId }).select('id', 'name') as Array<{ id: number; name: string }>;
+  return rows.map((r) => ({ id: Number(r.id), name: String(r.name ?? '') }));
+}
+
+/** The operator's right on every group an import files sites in (as PATCH /api/sites/:id does for one). */
+export async function requireImportGroups(who: SiteWho, plan: ImportPlan): Promise<void> {
+  if (who.admin) return;
+  for (const g of importTargetGroups(plan)) {
+    if (!(await permissionService.canWriteGroup(who.userId, g, false))) throw new AppError(403, 'No write permission on target group');
+  }
+}
+
 /** The plan of an import as the tenant stands (dry run), with its policy impact (outside the digest). */
 export async function previewImport(tenantId: number, csv: string): Promise<SiteImportResult> {
   const existing = await existingSites(db, tenantId);
-  const plan = planImport(csv, existing, { dryRun: true });
+  const plan = planImport(csv, existing, { dryRun: true, groups: await importGroups(db, tenantId) });
   if ('error' in plan) throw planRefused(plan);
   return { ...plan.result, policyImpact: await sitePolicyImpact(db, tenantId, importImpactChange(plan, existing)) };
 }
@@ -553,7 +567,7 @@ export function importImpactChange(plan: ImportPlan, existing: SiteRow[]): SiteI
 /** The plan of an import against the tenant as it stands, and the sites it read (the console's guard). */
 export async function importPlanNow(tenantId: number, csv: string): Promise<{ plan: ImportPlan; existing: SiteRow[] }> {
   const existing = await existingSites(db, tenantId);
-  const plan = planImport(csv, existing, { dryRun: false });
+  const plan = planImport(csv, existing, { dryRun: false, groups: await importGroups(db, tenantId) });
   if ('error' in plan) throw planRefused(plan);
   return { plan, existing };
 }
@@ -566,6 +580,7 @@ async function writeImport(trx: Knex.Transaction, tenantId: number, plan: Import
     const row = {
       code: w.site.code, name: w.site.name, values: JSON.stringify(w.site.values),
       ...(w.site.city !== undefined ? { city: w.site.city } : {}), ...(w.site.contact !== undefined ? { contact: w.site.contact } : {}),
+      ...(w.site.groupId !== undefined ? { group_id: w.site.groupId } : {}),
     };
     if (w.kind === 'create') await trx('sites').insert({ tenant_id: tenantId, ...row });
     else { await trx('sites').where({ tenant_id: tenantId, id: w.id }).update({ ...row, updated_at: now }); updated.push(w.id!); }
@@ -583,10 +598,13 @@ export async function applyImport(tenantId: number, csv: string, ctx: AuditWrite
   inTx?: (trx: Knex.Transaction, result: SiteImportResult) => Promise<void>): Promise<SiteImportResult> {
   const out = await db.transaction(async (trx) => {
     await lockSites(trx, tenantId);
-    const plan = planImport(csv, await existingSites(trx, tenantId), { dryRun: false });
+    const plan = planImport(csv, await existingSites(trx, tenantId), { dryRun: false, groups: await importGroups(trx, tenantId) });
     if ('error' in plan) throw planRefused(plan);
     if (opts.expectDigest !== undefined && plan.result.digest !== opts.expectDigest) throw planChanged();
-    if (opts.who) await requireSiteReach(trx, tenantId, opts.who, importUpdatedSites(plan));
+    if (opts.who) {
+      await requireSiteReach(trx, tenantId, opts.who, importUpdatedSites(plan));
+      await requireImportGroups(opts.who, plan);
+    }
     const ids = await writeImport(trx, tenantId, plan);
     const result = { ...plan.result, applied: true };
     await audit.appendInTx(trx, {

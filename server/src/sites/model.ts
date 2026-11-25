@@ -177,6 +177,8 @@ export interface CsvColumns {
   name: number;
   city: number | null;
   contact: number | null;
+  /** The group of the site (group or groupe): a group id or a group name of the tenant; an empty cell keeps the site's. */
+  group: number | null;
   /** Index → key of the values. */
   values: Array<{ index: number; key: string }>;
   headers: string[];
@@ -200,17 +202,33 @@ export function columnsOf(header: string[]): CsvColumns | ColumnsError {
   if (name < 0) return { error: 'name_column_missing' };
   const city = find('city', 'ville');
   const contact = find('contact');
+  const group = find('group', 'groupe');
   const values: CsvColumns['values'] = [];
   for (let i = 0; i < headers.length; i++) {
     const h = headers[i];
     if (!h) continue;
-    if (i === city || i === contact) continue;
+    if (i === city || i === contact || i === group) continue;
     if ((i === code && lower[i] === 'code') || (i === name && lower[i] === 'name')) continue;
     if (valueKeyIssue(h)) return { error: 'column_invalid', column: h };
     values.push({ index: i, key: i === code ? 'codeMag' : i === name ? 'nameMag' : h });
   }
   if (values.length > L.valuesMax) return { error: 'column_invalid', column: headers[values[L.valuesMax].index] };
-  return { code, name, city: city < 0 ? null : city, contact: contact < 0 ? null : contact, values, headers };
+  return { code, name, city: city < 0 ? null : city, contact: contact < 0 ? null : contact, group: group < 0 ? null : group, values, headers };
+}
+
+/** A group of the tenant as an import names it. */
+export interface ImportGroup { id: number; name: string }
+
+/** The group a cell names: its id, or its name (case-blind) when exactly one group of the tenant bears it; null when
+ *  none or several do (group_not_found: an import never guesses between two groups of the same name). */
+export function groupOfCell(cell: string, groups: readonly ImportGroup[]): number | null {
+  if (/^\d{1,9}$/.test(cell)) {
+    const id = Number(cell);
+    return groups.some((g) => g.id === id) ? id : null;
+  }
+  const want = cell.toLowerCase();
+  const hits = groups.filter((g) => g.name.trim().toLowerCase() === want);
+  return hits.length === 1 ? hits[0].id : null;
 }
 
 // ── Plan of an import ────────────────────────────────────────────────────────
@@ -220,8 +238,12 @@ export interface ImportWrite {
   kind: 'create' | 'update';
   /** The existing site (update). */
   id?: string;
-  site: Required<Pick<CleanSite, 'code' | 'name'>> & { city?: string | null; contact?: string | null; values: Record<string, string> };
+  site: Required<Pick<CleanSite, 'code' | 'name'>> & { city?: string | null; contact?: string | null; groupId?: number; values: Record<string, string> };
 }
+
+/** The groups an import plan files sites in (to check the operator's right on each before writing). */
+export const importTargetGroups = (plan: ImportPlan): number[] =>
+  [...new Set(plan.writes.map((w) => w.site.groupId).filter((g): g is number => typeof g === 'number'))];
 
 export interface ImportPlan { result: SiteImportResult; writes: ImportWrite[] }
 
@@ -238,7 +260,7 @@ function digestOf(result: Omit<SiteImportResult, 'digest'> | Omit<SitesFromDevic
  * an archived site is never written again by an import). `existing`: the sites of the tenant, archived ones included.
  * A file without a usable header throws { error } (answered 400 by the caller).
  */
-export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boolean }): ImportPlan | ColumnsError {
+export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boolean; groups?: readonly ImportGroup[] }): ImportPlan | ColumnsError {
   const { records } = parseCsv(csv);
   if (!records.length) return { error: 'header_missing' };
   const cols = columnsOf(records[0].fields);
@@ -262,6 +284,13 @@ export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boo
     for (const v of cols.values) { const x = cell(r.fields, v.index); if (x !== null) values[v.key] = x; }
     const checked = checkSite({ code, name: cell(r.fields, cols.name) ?? '', city: cell(r.fields, cols.city), contact: cell(r.fields, cols.contact), values }, true);
     issues.push(...checked.issues);
+    // The group: an empty cell keeps the site's; a name or an id that is not exactly one group of the tenant refuses the line.
+    const groupCell = cell(r.fields, cols.group);
+    let groupId: number | undefined;
+    if (groupCell !== null) {
+      const g = groupOfCell(groupCell, opts.groups ?? []);
+      if (g === null) issues.push('group_not_found'); else groupId = g;
+    }
     if (code && (counts.get(code.toLowerCase()) ?? 0) > 1) issues.push('duplicate_code');
     const prev = code ? byCode.get(code.toLowerCase()) : undefined;
     if (prev?.archived) issues.push('site_archived');
@@ -270,7 +299,10 @@ export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boo
     const s = checked.site as Required<Pick<CleanSite, 'code' | 'name'>> & CleanSite;
     if (!prev) {
       room--;
-      const site = { code: s.code, name: s.name, ...(s.city ? { city: s.city } : {}), ...(s.contact ? { contact: s.contact } : {}), values: s.values ?? {} };
+      const site = {
+        code: s.code, name: s.name, ...(s.city ? { city: s.city } : {}), ...(s.contact ? { contact: s.contact } : {}),
+        ...(groupId !== undefined ? { groupId } : {}), values: s.values ?? {},
+      };
       writes.push({ kind: 'create', site });
       lines.push({ line: r.line, code: s.code, action: 'create', changes: [], issues: [] });
       continue;
@@ -280,6 +312,7 @@ export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boo
     if (s.name !== prev.name) changes.push('name');
     if (s.city && s.city !== prev.city) changes.push('city');
     if (s.contact && s.contact !== prev.contact) changes.push('contact');
+    if (groupId !== undefined && groupId !== prev.groupId) changes.push('groupId');
     const merged = { ...prev.values };
     for (const [k, v] of Object.entries(s.values ?? {})) if (prev.values[k] !== v) { merged[k] = v; changes.push(`values.${k}`); }
     const mergedIssues = valuesIssues(merged).filter((i) => i === 'too_many_values' || i === 'values_too_large');
@@ -290,7 +323,10 @@ export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boo
     if (!changes.length) { lines.push({ line: r.line, code: prev.code, action: 'unchanged', changes: [], issues: [] }); continue; }
     writes.push({
       kind: 'update', id: prev.id,
-      site: { code: prev.code, name: s.name, ...(s.city ? { city: s.city } : {}), ...(s.contact ? { contact: s.contact } : {}), values: merged },
+      site: {
+        code: prev.code, name: s.name, ...(s.city ? { city: s.city } : {}), ...(s.contact ? { contact: s.contact } : {}),
+        ...(groupId !== undefined && groupId !== prev.groupId ? { groupId } : {}), values: merged,
+      },
     });
     lines.push({ line: r.line, code: prev.code, action: 'update', changes, issues: [] });
   }
@@ -298,7 +334,8 @@ export function planImport(csv: string, existing: SiteRow[], opts: { dryRun: boo
     dryRun: opts.dryRun, applied: false,
     columns: {
       code: cols.headers[cols.code], name: cols.headers[cols.name], city: cols.city === null ? null : cols.headers[cols.city],
-      contact: cols.contact === null ? null : cols.headers[cols.contact], values: cols.values.map((v) => v.key),
+      contact: cols.contact === null ? null : cols.headers[cols.contact],
+      ...(cols.group !== null ? { group: cols.headers[cols.group] } : {}), values: cols.values.map((v) => v.key),
     },
     created: lines.filter((l) => l.action === 'create').length, updated: lines.filter((l) => l.action === 'update').length,
     unchanged: lines.filter((l) => l.action === 'unchanged').length, errors: lines.filter((l) => l.action === 'error').length,

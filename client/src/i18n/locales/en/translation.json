@@ -7610,7 +7610,7 @@
       "title": "Import sites from a CSV file",
       "choose": "Choose a file",
       "tooLarge": "The file is larger than 2 MiB.",
-      "hint": "A header line, separator \";\" or \",\". Columns code (or codeMag) and name (or nameMag); city and contact optional; every other column becomes a value of the site. An empty cell keeps the value of the site. Nothing is written before you apply.",
+      "hint": "A header line, separator \";\" or \",\". Columns code (or codeMag) and name (or nameMag); city, contact and group (name or id of a group) optional; every other column becomes a value of the site. An empty cell keeps the value of the site. Nothing is written before you apply.",
       "apply": "Apply ({{count}})",
       "applied": "{{created}} site(s) created, {{updated}} updated",
       "created": "{{count}} to create",

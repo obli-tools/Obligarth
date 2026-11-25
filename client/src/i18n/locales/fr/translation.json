@@ -7610,7 +7610,7 @@
       "title": "Importer des sites depuis un fichier CSV",
       "choose": "Choisir un fichier",
       "tooLarge": "Le fichier dépasse 2 Mio.",
-      "hint": "Une ligne d’en-tête, séparateur « ; » ou « , ». Colonnes code (ou codeMag) et name (ou nameMag) ; city et contact facultatives ; toute autre colonne devient une valeur du site. Une cellule vide garde la valeur du site. Rien n’est écrit avant que vous appliquiez.",
+      "hint": "Une ligne d’en-tête, séparateur « ; » ou « , ». Colonnes code (ou codeMag) et name (ou nameMag) ; city, contact et group (ou groupe : nom ou identifiant d’un groupe) facultatives ; toute autre colonne devient une valeur du site. Une cellule vide garde la valeur du site. Rien n’est écrit avant que vous appliquiez.",
       "apply": "Appliquer ({{count}})",
       "applied": "{{created}} site(s) créé(s), {{updated}} mis à jour",
       "created": "{{count}} à créer",

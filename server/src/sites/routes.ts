@@ -14,7 +14,7 @@ import {
 import { checkSite } from './model';
 import {
   applyFromDevices, applyImport, archiveSite, createSite, fromDevicesImpact, fromDevicesUpdatedSites, importImpactChange, importPlanNow,
-  importUpdatedSites, listSites, managedDevicesOfSites, planChanged, previewFromDevices, previewImport, requireSiteReach, setDevicesSite,
+  importUpdatedSites, listSites, managedDevicesOfSites, planChanged, previewFromDevices, previewImport, requireImportGroups, requireSiteReach, setDevicesSite,
   siteAfter, siteChanges, siteDetail, sitePolicyImpact, siteRow, siteValueKeys, updateSite, usableSiteInTx, type Visible,
 } from './service';
 import { db } from '../db';
@@ -144,6 +144,7 @@ export function createSitesRouter(): Router {
     if (expected !== undefined && plan.result.digest !== expected) throw planChanged();
     const updated = importUpdatedSites(plan);
     const who = whoOf(req);
+    await requireImportGroups(who, plan);
     const ctx = await audit.fromRequest(req, tenantId);
     // Only new sites: no device reads them yet, nothing rendered changes.
     if (!updated.length) {

@@ -13,7 +13,7 @@ import { POLICY_MANAGE, SITES_APPLY, SITES_DEVICE_SITE, SITE_WRITE_APPROVAL, pre
 import { checkSite, type SiteRow } from '../../sites/model';
 import {
   applyFromDevices, applyImport, archiveSite, createSite, existingSites, fromDevicesImpact, fromDevicesUpdatedSites, importImpactChange,
-  importPlanNow, importUpdatedSites, listSites, managedDevicesOfSites, managedOnSite, planChanged, previewFromDevices, previewImport,
+  importPlanNow, importUpdatedSites, listSites, requireImportGroups, managedDevicesOfSites, managedOnSite, planChanged, previewFromDevices, previewImport,
   requireSiteReach, setDevicesSite, siteAfter, siteChanges, siteDetail, siteNotFound, sitePolicyImpact, updateSite, type SiteWho, type Visible,
 } from '../../sites/service';
 import { accessKeyDetail, mcpAuditCtx } from '../audit';
@@ -284,7 +284,7 @@ async function siteWrite(caller: McpCaller, tool: SiteTool, a: { tenant_id: numb
   }
 }
 
-const IMPORT_HELP = 'CSV text with a header line, separator ";" or ",". Column code (or codeMag) and name (or nameMag) required; city (or ville) and contact optional; every other column goes to the values of the site (a column used as the code or the name that is not literally "code" or "name" goes there too, so that {{device.custom.codeMag}} finds it).';
+const IMPORT_HELP = 'CSV text with a header line, separator ";" or ",". Column code (or codeMag) and name (or nameMag) required; city (or ville), contact and group (or groupe: the name or id of a device group of the tenant; an empty cell keeps the group of the site) optional; every other column goes to the values of the site (a column used as the code or the name that is not literally "code" or "name" goes there too, so that {{device.custom.codeMag}} finds it).';
 
 export function registerSiteTools(): void {
   registerTool({
@@ -335,7 +335,9 @@ export function registerSiteTools(): void {
       const plan = await previewImport(a.tenant_id, a.csv);
       if (a.dry_run !== false) return { ...plan, dryRun: true };
       if (plan.created + plan.updated === 0) return { ...plan, dryRun: false, status: 'nothing_to_apply' };
-      const updated = importUpdatedSites((await importPlanNow(a.tenant_id, a.csv)).plan);
+      const now = (await importPlanNow(a.tenant_id, a.csv)).plan;
+      await requireImportGroups(siteWho(caller), now);
+      const updated = importUpdatedSites(now);
       if (updated.length) {
         await requirePolicyManage(caller, a.tenant_id);
         await requireSiteReach(db, a.tenant_id, siteWho(caller), updated);
