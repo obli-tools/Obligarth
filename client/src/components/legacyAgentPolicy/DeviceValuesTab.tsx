@@ -17,7 +17,7 @@ import { ChipChoice, Field, fieldCls } from './ui';
 // per device name holding a JSON file, the MobiControl file-sync export among others), a CSV or a JSON document, read in
 // this browser; the keys renamed or left out; the matching by device name, or by a code taken from the name; a preview
 // by the server (what changes, the devices a dynamic group would move, the policy impact), then the import — a request
-// for approval beyond the publication thresholds — and the current values of each device. The values are customer data:
+// for approval when the restrictions of the tenant ask one (no longer beyond the publication thresholds, 28/11/2026) — and the current values of each device. The values are customer data:
 // they are sent to the server only, never logged.
 
 type Source = 'folder' | 'csv' | 'json';
@@ -79,7 +79,7 @@ export function DeviceValuesTab() {
       const payload = rows.slice(0, LEGACY_AGENT_DEVICE_VALUES_LIMITS.rows).map((r) => ({ deviceKey: r.deviceKey, values: r.values, source: r.source.slice(0, 300) }));
       for (let i = 0; i < payload.length; i += batch) {
         const r = await legacyAgentApi.importDeviceValues(payload.slice(i, i + batch), match, apply);
-        if ('approvalId' in r) { toast.success(t('legacyAgentPolicy.values.approval') || 'Beyond the thresholds: a request for approval was filed.'); setBusy(false); return; }
+        if ('approvalId' in r) { toast.success(t('legacyAgentPolicy.values.approval') || 'The restrictions of this tenant ask a second approver: a request for approval was filed.'); setBusy(false); return; }
         total.rows.push(...r.rows.map((x) => ({ ...x, index: x.index + i })));
         total.updated += r.updated; total.unchanged += r.unchanged; total.policyImpact += r.policyImpact;
         for (const k of Object.keys(total.skipped) as Array<keyof typeof total.skipped>) total.skipped[k] += r.skipped[k];

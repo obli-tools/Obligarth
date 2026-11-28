@@ -118,6 +118,16 @@ export function ImpactPreview({ impact, compact = false }: { impact: PolicyImpac
               {impact.approval.reasons.map((r) => <li key={r}>{approvalReasonLabel(t, r)}</li>)}
             </ul>
           )}
+          {/* Decision of the owner (28/11/2026): the thresholds and the wipe-capable settings no longer ask a second
+              approver; they are shown for information. */}
+          {impact.thresholds && impact.thresholds.length > 0 && (
+            <div className="mt-0.5 text-xs text-text-muted">
+              <p>{t('mdm.impact.thresholdsInfo') || 'Thresholds reached (for information, no second approver asked):'}</p>
+              <ul className="list-disc pl-4">
+                {impact.thresholds.map((r) => <li key={r}>{approvalReasonLabel(t, r)}</li>)}
+              </ul>
+            </div>
+          )}
           <p className="mt-0.5 text-[11px] text-text-muted">
             {t('mdm.impact.fleet', { touched: impact.devicesTouched, fleet: impact.fleetSize }) || `${impact.devicesTouched} of ${impact.fleetSize} enrolled devices`}
             {' · '}

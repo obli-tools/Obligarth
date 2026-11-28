@@ -45,7 +45,8 @@ import { agentApkUrl, enrollmentQrPng, issueEnrollmentToken, tokenLimiter } from
 // A write that changes what the templates of a site's devices read (code, name, city or values of a site, an import
 // that updates sites, the sites from the custom fields) is guarded as the import of per-device values (sites/guard.ts):
 // mdm.policies.manage, the caller's rights on every device of the sites changed, the restrictable action sites.apply
-// (a second factor), a second person beyond the publication thresholds (202 pending_approval).
+// (a second factor; a second person when the tenant restricts it: 202 pending_approval). The publication thresholds no
+// longer ask a second person (decision of the owner, 28/11/2026).
 // A change of site never moves the device: the answer names the group of the site and the devices outside it, the
 // console then asks for the guarded move (POST /api/mdm/devices/:id/group or the batch, S12).
 // =============================================================================

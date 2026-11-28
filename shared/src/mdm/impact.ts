@@ -34,7 +34,12 @@ export interface PolicyImpact {
   conflicts: PolicyConflict[];
   sample: Array<{ deviceId: number; label: string; added: string[]; changed: string[]; removed: string[] }>;  // 50 devices max
   fleetSize: number;
+  /** A second approver is required only when the tenant put the action at the restricted level in its restriction
+   *  matrix (reason 'restriction'): decision of the owner of 28/11/2026, the thresholds no longer impose one. */
   approval: { required: boolean; reasons: ImpactApprovalReason[] };
+  /** For information only (never a second approver since 28/11/2026): the thresholds this change reaches (devices
+   *  touched, share of the fleet, removals, cumulative over the window) and a wipe-capable setting changed. */
+  thresholds?: ImpactApprovalReason[];
   /** Devices with at least one removal (artifact, kiosk lock, app): the measure of the removal threshold. */
   removalDevices?: number;
   /** What the changes written without a second approver touched in the tenant over the window, this one included

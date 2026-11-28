@@ -33,7 +33,8 @@ import type { ExecContext, ExecResult } from './writes';
 // =============================================================================
 // The policies through the MCP server (lot P1-MCP-POL, spec P1-QR-SITES §3 bis): the console's own services
 // (mdm/policies/policyService.ts, publish.ts, legacyAgent/policyRoutes.ts), the same validation, the same preview,
-// the same thresholds of approval (PUBLISH_APPROVAL_THRESHOLDS) and the same audit; nothing here weakens the console.
+// the same approval (the tenant's restriction matrix; the thresholds of PUBLISH_APPROVAL_THRESHOLDS are reported only,
+// decision of the owner of 28/11/2026) and the same audit; nothing here weakens the console.
 //   reads (policies.read)      list_policies, get_policy, get_policy_version, list_policy_files, list_custom_keys,
 //                              get_device_policy: as any member of the tenant, within the key's perimeter.
 //   drafts (policies.write)    create_policy, create_policy_version, update_policy_version, validate_policy_version,
@@ -43,8 +44,8 @@ import type { ExecContext, ExecResult } from './writes';
 //                              the preview; dry_run false never publishes: ONE authorization the human approves with a
 //                              second factor, then the console's submission runs as him (its step-up proven by that
 //                              factor, mdm.policy_publish only), bound to the content and the digest of the impact he
-//                              was shown (policyChanged otherwise, nothing written); beyond the thresholds it files the
-//                              console's approval for another person (state 'filed'). A publication reaches every
+//                              was shown (policyChanged otherwise, nothing written); at the 'restricted' level of the
+//                              tenant's matrix it files the console's approval for another person (state 'filed'). A publication reaches every
 //                              device the policy is assigned to: a key limited to groups or devices cannot ask it.
 // Secrets: never read nor written. A content or a patch that holds a value typed in ({"$secretValue"}) is refused; a
 // secret is only referenced by a reference already in the vault ({"$secret": "<uuid>"}), checked in the tenant.
@@ -263,11 +264,11 @@ export function describeDelta(d: AssignmentDelta, base: PolicyBase[]): string {
 /**
  * The summary the human reads before approving with a second factor (the console's approval tells the same: the
  * policies, the counts, the keys): the head, then as many of the changes as fit ("+n more"), the counts, the setting
- * keys (describeKeys: never an instance), the thresholds and the tenant, within SUMMARY_MAX.
+ * keys (describeKeys: never an instance), the second approver the tenant's matrix asks and the tenant, within SUMMARY_MAX.
  */
 export function fitSummary(head: string, items: string[], impact: PolicyImpact, tail: string): string {
   const counts = `${impact.devicesTouched} device(s) touched, ${impact.artifacts.removals} removal(s)`;
-  const beyond = impact.approval.required ? `; beyond the thresholds (${impact.approval.reasons.join(', ')}): another person approves next` : '';
+  const beyond = impact.approval.required ? `; restricted by the tenant (${impact.approval.reasons.join(', ')}): another person approves next` : '';
   const compose = (n: number, maxKeys: number): string => {
     const list = items.length ? ` [${items.slice(0, n).join('; ')}${items.length > n ? `${n ? '; ' : ''}+${items.length - n} more` : ''}]` : '';
     return `${head}${list}: ${counts}; keys: ${describeKeys(impact, maxKeys)}${beyond}${tail}`;
@@ -285,6 +286,7 @@ export function fitSummary(head: string, items: string[], impact: PolicyImpact, 
 function impactAnswer(impact: PolicyImpact, level: string): Record<string, unknown> {
   const { devicesToken: _t, computedAt: _c, ...rest } = impact;
   return {
+    // approvalBeyondThresholds kept for the agents that read it: since 28/11/2026 true only at the restricted level.
     ...rest, level, approvalBeyondThresholds: impact.approval.required,
     notApplicable: impact.keys.filter((k) => k.notApplicable > 0).map((k) => ({ settingKey: k.settingKey, devices: k.notApplicable })),
   };
@@ -561,7 +563,7 @@ export function registerPolicyTools(): void {
 
   registerTool({
     name: 'policy_version_impact', title: 'Preview the publication of a version', scope: 'policies.write',
-    description: 'What publishing a version would do, nothing written: the devices touched, added and removed, per setting key the devices it adds, changes, removes and the ones where it would not apply (notApplicable: a variable without value, an agent too old…), the removals, the conflicts, a sample of devices within this key, the issues of its content, and the level its submission needs (sensitive: a second factor of the human; restricted / approvalBeyondThresholds: another person).',
+    description: 'What publishing a version would do, nothing written: the devices touched, added and removed, per setting key the devices it adds, changes, removes and the ones where it would not apply (notApplicable: a variable without value, an agent too old…), the removals, the conflicts, a sample of devices within this key, the issues of its content, and the level its submission needs (sensitive: a second factor of the human; restricted / approvalBeyondThresholds, true when the restrictions of the tenant ask it: another person; the thresholds reached are listed in thresholds, for information only).',
     inputSchema: js.obj({ tenant_id: js.tenant, policy_id: js.int('The policy id.'), version: js.int('The version number.') }, ['tenant_id', 'policy_id', 'version']),
     args: z.object({ tenant_id: tenantId, policy_id: policyId, version: versionNo }).strict(),
     annotations: { title: 'Preview the publication of a version', ...READ },
@@ -602,7 +604,7 @@ export function registerPolicyTools(): void {
 
   registerTool({
     name: 'submit_policy_version', title: 'Submit a policy version', scope: 'policies.publish',
-    description: 'Publishes a draft. dry_run (default true) answers the preview and the level it needs, nothing written. dry_run false NEVER publishes by itself: it asks ONE authorization the human approves with a second factor; the console\'s submission then runs as him, on the content and the impact he was shown (refused, nothing published, if either changed meanwhile), and beyond the thresholds (devices touched, share of the fleet, removals, a wipe setting) it files an approval for another person. Then call get_authorization_status.',
+    description: 'Publishes a draft. dry_run (default true) answers the preview and the level it needs, nothing written. dry_run false NEVER publishes by itself: it asks ONE authorization the human approves with a second factor; the console\'s submission then runs as him, on the content and the impact he was shown (refused, nothing published, if either changed meanwhile), and when the tenant restricts the publication (its restriction matrix) it files an approval for another person; the thresholds (devices touched, share of the fleet, removals, a wipe setting) are reported in the preview, for information. Then call get_authorization_status.',
     inputSchema: js.obj({
       tenant_id: js.tenant, policy_id: js.int('The policy id.'), version: js.int('The draft version number.'), dry_run: js.bool('true (default): the preview only.'),
     }, ['tenant_id', 'policy_id', 'version']),
@@ -632,7 +634,7 @@ export function registerPolicyTools(): void {
 
   registerTool({
     name: 'change_policy_assignments', title: 'Change the assignments of policies', scope: 'policies.publish',
-    description: 'A batch of changes of assignments of policies (1 to 100): create {policy_id, target_scope tenant|group|device|smart_group, target_id, mode include|exclude, priority (required for a dynamic group)}, update {id, mode?, priority?}, delete {id}. dry_run (default true) answers the preview; dry_run false asks ONE authorization (second factor of the human; beyond the thresholds another person approves next), bound to the impact shown. Assignments of apps are not changed here.',
+    description: 'A batch of changes of assignments of policies (1 to 100): create {policy_id, target_scope tenant|group|device|smart_group, target_id, mode include|exclude, priority (required for a dynamic group)}, update {id, mode?, priority?}, delete {id}. dry_run (default true) answers the preview; dry_run false asks ONE authorization (second factor of the human; when the tenant restricts the publication another person approves next), bound to the impact shown. Assignments of apps are not changed here.',
     inputSchema: js.obj({
       tenant_id: js.tenant,
       changes: {
@@ -690,7 +692,7 @@ export const policyExec = {
  * mdm.policies.manage, then the console's own function in his request (its step-up proven by the approval's factor
  * for mdm.policy_publish only), bound to what he was shown (expectContentSha, expectDigest: policyChanged otherwise,
  * nothing written); a direct write closes the authorization in its transaction, with the entry of the key
- * (mcp.tool.write); a request beyond the thresholds is filed for another person (state 'filed').
+ * (mcp.tool.write); a request the tenant restricts is filed for another person (state 'filed').
  */
 export async function executePolicyWrite(x: ExecContext): Promise<ExecResult> {
   const tool = String(x.row.tool);

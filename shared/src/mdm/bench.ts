@@ -24,12 +24,14 @@ export const BENCH_OPEN_PROVISIONING_STATES = ['planned', 'token_issued', 'enrol
 /** The terminal states (outcome_at set). */
 export const BENCH_TERMINAL_PROVISIONING_STATES = ['completed', 'failed', 'abandoned', 'expired'] as const;
 
-/** convert: an agent already enrolled (device administrator) turned into the owner of the device. */
-export const BENCH_PROVISIONING_KINDS = ['new', 'convert'] as const;
+/** convert: an agent already enrolled (device administrator) turned into the owner of the device. apps (lot BANC-A): a
+ *  device already enrolled brought back to the bench to complete its required apps by ADB, nothing else. */
+export const BENCH_PROVISIONING_KINDS = ['new', 'convert', 'apps'] as const;
 export type BenchProvisioningKind = typeof BENCH_PROVISIONING_KINDS[number];
 
+/** apps (lot BANC-A): the required apps installed by ADB, between the verification and the finalization. */
 export const BENCH_STEP_IDS = ['detect', 'identify', 'agent_check', 'preflight', 'install', 'role', 'prepare',
-  'configure', 'wait_enroll', 'verify', 'finalize'] as const;
+  'configure', 'wait_enroll', 'verify', 'apps', 'finalize'] as const;
 export type BenchStepId = typeof BENCH_STEP_IDS[number];
 
 export const BENCH_STEP_STATUSES = ['running', 'ok', 'warn', 'failed', 'skipped'] as const;
@@ -60,6 +62,10 @@ export const BENCH_API_CODES = [
   // Lot BANC-T §9: the site chosen on the card is not one of the target's (unknown, archived, of another tenant or
   // outside the target's group); the name of the device is already used in the site (case ignored).
   'site_refused', 'name_taken',
+  // Lot BANC-A: « compléter les apps » found no device of the station's targets for the identity proven (one answer for
+  // unknown, outside the targets, of another tenant); the proof contradicts the device found (Android ID, API level);
+  // two devices of the targets answer the same proof.
+  'device_not_found', 'identity_mismatch', 'identity_ambiguous',
 ] as const;
 export type BenchApiCode = typeof BENCH_API_CODES[number];
 
@@ -89,6 +95,9 @@ export type BenchStepDetail = {
   sdk?: number;
   versionCode?: number;
   attempt?: number;
+  /** Lot BANC-A, step apps: the package of the tenant's store (BenchRequiredAppView.packageId), never a name read on
+   *  the device. */
+  packageId?: string;
 };
 
 /** One entry of the journal of a provisioning. */
@@ -211,6 +220,96 @@ export const sameBenchName = (a: string | null | undefined, b: string | null | u
 export function truncateSerial(serial: string | null | undefined): string | null {
   if (typeof serial !== 'string' || !serial) return null;
   return serial.length <= 4 ? `…${serial}` : `…${serial.slice(-4)}`;
+}
+
+// ── Required apps installed on the bench (lot BANC-A) ─────────────────────────
+//
+// After the verification, the station installs by ADB (adb install -r, never -t nor -d) the apps the POLICY of the
+// device requires (the required apps of the bridge agent policies, decided by the server), each one downloaded from the
+// server (GET /api/bench/v1/packages/:sha256?provisioning=<id>) and checked against its SHA-256 before the install. The
+// journal (POST /v1/provisionings/:id/steps) carries one entry per app, then one summary:
+//   per app   { step: 'apps', status: 'ok' | 'failed' | 'skipped', code: <BenchAppResultCode>,
+//               detail: { packageId, versionCode } }
+//   summary   { step: 'apps', status: 'ok' (all installed) | 'warn' (some failed) | 'skipped' (none to install, or a
+//               server without these routes), detail: { counts: { installed, total, failed } } }
+// The history shows the counter of the last summary (benchAppsCounter). A failed app stops neither the others nor the
+// finalization (the outcome stays completed: « terminé avec réserves »).
+
+/** The code of the result of one app (code of its entry of the step apps; one text bench.error.<code>). */
+export const BENCH_APP_RESULT_CODES = [
+  'app_installed', 'app_older_sdk', 'app_version_downgrade', 'app_update_incompatible', 'app_insufficient_storage',
+  'app_invalid_apk', 'app_download_failed', 'app_sha_mismatch', 'app_signer_mismatch', 'app_install_failed', 'app_unavailable',
+] as const;
+export type BenchAppResultCode = typeof BENCH_APP_RESULT_CODES[number];
+
+/** The code of the answer of `adb install -r` (Success, or the INSTALL_FAILED_* / INSTALL_PARSE_FAILED_* token of
+ *  PackageManager); any other failure is app_install_failed. */
+export function benchAppInstallCode(output: string | null | undefined): BenchAppResultCode {
+  const text = String(output ?? '');
+  const token = /\[?(INSTALL_(?:FAILED|PARSE_FAILED)_[A-Z_]+)/.exec(text)?.[1] ?? null;
+  if (!token) return /^\s*Success\s*$/m.test(text) ? 'app_installed' : 'app_install_failed';
+  switch (token) {
+    case 'INSTALL_FAILED_OLDER_SDK': return 'app_older_sdk';
+    case 'INSTALL_FAILED_VERSION_DOWNGRADE': return 'app_version_downgrade';
+    case 'INSTALL_FAILED_UPDATE_INCOMPATIBLE':
+    case 'INSTALL_FAILED_SHARED_USER_INCOMPATIBLE':
+      return 'app_update_incompatible';
+    case 'INSTALL_FAILED_INSUFFICIENT_STORAGE':
+    case 'INSTALL_FAILED_MEDIA_UNAVAILABLE':
+      return 'app_insufficient_storage';
+    case 'INSTALL_FAILED_INVALID_APK':
+    case 'INSTALL_FAILED_NO_CERTIFICATES':
+      return 'app_invalid_apk';
+    default:
+      return token.startsWith('INSTALL_PARSE_FAILED_') ? 'app_invalid_apk' : 'app_install_failed';
+  }
+}
+
+/** A required app the bench installs (GET /api/bench/v1/provisionings/:id/apps): missing on the device or older than the
+ *  package (mode minVersion), confirmed in the tenant's store. */
+export interface BenchRequiredAppView {
+  packageId: string;
+  packageName: string;
+  versionCode: number;
+  versionName: string | null;
+  sha256: string;
+  size: number;
+  /** The signer declared at the upload (null: unknown; the station relies on the SHA-256 of the file then). */
+  signerSha256: string | null;
+  label: string | null;
+  mode: 'install' | 'minVersion';
+}
+
+/** POST /api/bench/v1/provisionings/apps: the provisioning « compléter les apps » of a device already enrolled. */
+export interface BenchAppsPlanAnswer {
+  provisioningId: string;
+  kind: 'apps';
+  tenantId: number;
+  tenantName: string;
+  groupId: number;
+  deviceUuid: string;
+  deviceName: string | null;
+  site: { id: string; code: string; name: string } | null;
+  roleTarget: BenchRole;
+  /** How the identity was proven: the serial pairs that matched, and the Android ID (matched; or not comparable from
+   *  Android 8, where the shell reads another value than the agent). */
+  proof: { serialPairs: number; androidId: 'matched' | 'not_comparable' };
+}
+
+/** The counter of the step apps (its last summary), or null when the step never ran. */
+export interface BenchAppsCounter { installed: number; total: number; failed: number }
+
+export function benchAppsCounter(steps: readonly BenchStepEntry[] | null | undefined): BenchAppsCounter | null {
+  if (!Array.isArray(steps)) return null;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    const c = s?.step === 'apps' ? s.detail?.counts : undefined;
+    if (c && Number.isSafeInteger(c.total)) {
+      const n = (v: unknown): number => (Number.isSafeInteger(v) && (v as number) >= 0 ? (v as number) : 0);
+      return { installed: n(c.installed), total: n(c.total), failed: n(c.failed) };
+    }
+  }
+  return null;
 }
 
 // ── Views of the console ─────────────────────────────────────────────────────
@@ -396,6 +495,8 @@ export interface BenchProvisioningView {
   siteId: string | null;
   siteCode: string | null;
   siteName: string | null;
+  /** Lot BANC-A: the required apps installed on the bench (the last summary of the step apps), null: never ran. */
+  apps: BenchAppsCounter | null;
   createdAt: string;
   updatedAt: string;
   outcomeAt: string | null;

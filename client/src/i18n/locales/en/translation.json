@@ -470,8 +470,8 @@
         "description": "A managed device without any contact for this many days is shown and counted as without contact."
       },
       "publishFleetShareFloor": {
-        "label": "Second approver: share of the fleet counted from",
-        "description": "A change of the configuration (publication, assignments, group, devices moved) asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices."
+        "label": "Share of the fleet: threshold counted from",
+        "description": "A change of the configuration (publication, assignments, group, devices moved) is shown as reaching the threshold of 10 % of the fleet, once it touches at least this many devices. For information only: the thresholds no longer ask a second approver (only the restrictions of the tenant do)."
       },
       "androidPatchMaxAgeDays": {
         "label": "Android: security patch outdated after",
@@ -2595,8 +2595,8 @@
       "help": "A change is approved by a second person (a client approver by default).",
       "requested": "Change requested: waiting for an approver",
       "unchanged": "Nothing changed",
-      "fleetShareFloor": "Second approver: 10 % of the fleet counted from (devices)",
-      "fleetShareFloorHelp": "A change of the configuration asks a second approver when it touches 10 % of the fleet or more, once it touches at least this many devices.",
+      "fleetShareFloor": "Threshold of 10 % of the fleet counted from (devices)",
+      "fleetShareFloorHelp": "A change of the configuration is shown as touching 10 % of the fleet or more once it touches at least this many devices. For information only: the thresholds no longer ask a second approver (only the restrictions of the tenant do).",
       "legacyAgentCommandsSensitive": "Second factor on the Android agent commands",
       "legacyAgentCommandsSensitiveHelp": "Installing or uninstalling an app, updating the agent, restarting a device and suspending its kiosk ask the second factor of the person who sends them (console and MCP). Off by default. Like the other settings, the change is approved by a second person.",
       "pending": "Change waiting for its approval (request #{{id}})",
@@ -3974,6 +3974,7 @@
       "noVisibleDevice": "No device within your scopes.",
       "expired": "This preview has expired: compute it again.",
       "request": "Request approval",
+      "thresholdsInfo": "Thresholds reached (for information, no second approver asked):",
       "reason": {
         "devices_threshold": "25 devices or more are touched",
         "fleet_share": "10 % of the fleet or more is touched",
@@ -5498,7 +5499,7 @@
       "deprecatedFor": "deprecated: {{replacement}}",
       "deprecated": "deprecated",
       "wipeCapable": "can wipe a device",
-      "wipeCapableHint": "Published at the restricted level (a second approver), held while the tenant is frozen.",
+      "wipeCapableHint": "Shown in the preview of every publication that adds, changes or removes it (no second approver unless the restrictions of the tenant ask one), held while the tenant is frozen.",
       "secretSlots": "secrets",
       "secretHint": "A secret is written {\"$secretValue\": \"…\"}: moved to the vault at the save.",
       "minApi": "API {{level}}+",
@@ -7001,7 +7002,7 @@
       "no": "No",
       "notManaged": "Not managed",
       "packagesHint": "One package per line (com.example.app)",
-      "wipeHint": "Corporate devices only, with a password quality set; every publication that adds, changes or removes it needs a second approver.",
+      "wipeHint": "Corporate devices only, with a password quality set; every publication that adds, changes or removes it is shown in its preview.",
       "yes": "Yes",
       "benchLockout": "Cuts ADB: the device can no longer go back to a bench station without a bench window or a reset.",
       "benchLockoutConfirm": "I confirm: cut ADB on these devices"
@@ -7201,7 +7202,7 @@
     },
     "values": {
       "apply": "Import",
-      "approval": "Beyond the thresholds: a request for approval was filed.",
+      "approval": "The restrictions of this tenant ask a second approver: a request for approval was filed.",
       "byCode": "Else match a code taken from the device name",
       "byName": "Match the device name exactly",
       "current": "Current values",
@@ -7393,7 +7394,20 @@
       "too_many_cards": "Too many devices at once",
       "internal": "Internal error",
       "site_refused": "Site outside the targets of the station",
-      "name_taken": "Name already used in the site"
+      "name_taken": "Name already used in the site",
+      "app_installed": "App installed",
+      "app_older_sdk": "App too recent for this Android version",
+      "app_version_downgrade": "A later version of the app is already installed",
+      "app_update_incompatible": "App installed with another signature",
+      "app_insufficient_storage": "Not enough storage for the app",
+      "app_invalid_apk": "Unreadable app package",
+      "app_download_failed": "App download failed",
+      "app_sha_mismatch": "App package altered (SHA-256)",
+      "app_signer_mismatch": "App signed by another certificate",
+      "app_install_failed": "App install failed",
+      "app_unavailable": "App no longer available",
+      "device_not_found": "No device of the station targets matches",
+      "identity_ambiguous": "Several devices match this identity"
     },
     "step": {
       "detect": "Detection",
@@ -7406,6 +7420,7 @@
       "configure": "Configuration",
       "wait_enroll": "Enrollment",
       "verify": "Verification",
+      "apps": "Apps",
       "finalize": "Finalisation"
     },
     "stepStatus": {
@@ -7452,7 +7467,10 @@
         "abandoned": "Abandoned",
         "expired": "Expired"
       },
-      "site": "Site"
+      "site": "Site",
+      "apps": "Apps",
+      "appsCount": "{{installed}}/{{total}} apps",
+      "appsFailed": "{{count}} failed"
     },
     "stations": {
       "title": "Bench stations",

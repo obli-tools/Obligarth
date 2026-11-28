@@ -488,6 +488,57 @@ export async function deviceRequiredApps(tenantId: number, deviceId: number, dbA
   return dbActor ? asTenant(tenantId, dbActor, run) : run();
 }
 
+// ── The bench (lot BANC-A) ───────────────────────────────────────────────────
+
+export type BenchAppSetAside = 'not_applicable' | 'package_unavailable' | 'package_not_confirmed' | 'frozen' | 'restricted' | 'installed'
+  | 'inventory_limited';
+
+/**
+ * Does the bench install this required app (pure)? The station installs by ADB, at the device, with a technician: what
+ * holds back the remote installs of the job (an install already open, the backoff, 3 failures, an inactive
+ * administrator, no contact, the storage, the breaker, a stale inventory) does not apply; what SETS THE REQUIRED APPS
+ * ASIDE does, as for the job: the package (missing, another one, not confirmed), a frozen tenant, the restrictions matrix
+ * on legacy_agent.apps for the device (a person would be asked, whatever the state of the app), the app already
+ * installed (minVersion: at the package's version or later; a non-numeric version counts as satisfied), the privacy
+ * profile that limits the inventory to the managed apps (an absent app proves nothing). No inventory yet (a device just
+ * enrolled): due (adb install -r of an app already there at that version is harmless; a later one fails as a downgrade,
+ * told by the station).
+ */
+export function benchAppDecision(f: RequiredAppFacts, restricted: boolean): 'due' | BenchAppSetAside {
+  if (!f.pkg || f.pkg.packageName !== f.entry.packageName || f.pkg.id.toLowerCase() !== f.entry.packageId.toLowerCase()) return 'package_unavailable';
+  if (!f.pkg.confirmed) return 'package_not_confirmed';
+  if (f.device.frozen) return 'frozen';
+  if (restricted) return 'restricted';
+  if (requiredAppSatisfied(f.entry.mode, f.installed, f.pkg.versionCode)) return 'installed';
+  if (f.device.appsLimited && !f.installed) return 'inventory_limited';
+  return 'due';
+}
+
+export interface BenchRequiredApp {
+  packageId: string; packageName: string; versionCode: number; versionName: string | null; sha256: string; size: number;
+  signerSha256: string | null; label: string | null; mode: AgentRequiredApp['mode'];
+}
+
+/** The required apps the bench installs on one bridge device (in the caller's database context: the tenant's), by
+ *  package name; and the count of those set aside. */
+export async function benchRequiredApps(tenantId: number, deviceId: number): Promise<{ items: BenchRequiredApp[]; setAside: number }> {
+  const f = await db.transaction((trx) => loadFacts(trx, tenantId, [deviceId]));
+  const restricted = f.pairs.length > 0 && (await restrictedDevices(tenantId, [deviceId])).has(deviceId);
+  const items: BenchRequiredApp[] = [];
+  let setAside = 0;
+  for (const p of f.pairs) {
+    if (p.availability !== 'available' || !p.entry) { setAside++; continue; }
+    if (benchAppDecision(factsOf(f, p), restricted) !== 'due' || !p.pkg) { setAside++; continue; }
+    items.push({
+      packageId: String(p.pkg.id).toLowerCase(), packageName: p.pkg.package_name, versionCode: Number(p.pkg.version_code),
+      versionName: p.pkg.version_name ?? null, sha256: String(p.pkg.sha256).trim(), size: Number(p.pkg.size_bytes),
+      signerSha256: p.pkg.signer_sha256 ? String(p.pkg.signer_sha256).trim() : null, label: p.pkg.label ?? null, mode: p.entry.mode,
+    });
+  }
+  items.sort((a, b) => (a.packageName < b.packageName ? -1 : a.packageName > b.packageName ? 1 : 0));
+  return { items, setAside };
+}
+
 // ── The reconciliation of a tenant ───────────────────────────────────────────
 
 export interface ReconcileOutput {

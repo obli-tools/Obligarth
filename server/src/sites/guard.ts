@@ -5,10 +5,9 @@ import { SITE_LIMITS as L, SITE_VALUE_KEY_RE } from '@obligarth/shared';
 import { audit, canonicalJson } from '../audit';
 import { db } from '../db';
 import { userActor } from '../db/context';
-import { beyondThresholds } from '../legacyAgent/policyRoutes';
 import { DEVICE_VALUES_ACTION } from '../mdm/registry/devicePatch';
 import { AppError } from '../middleware/errorHandler';
-import { approvalService, refuse, requireTenantCapability as requesterHolds, type ApprovalExecution } from '../services/approval.service';
+import { refuse, requireTenantCapability as requesterHolds, type ApprovalExecution } from '../services/approval.service';
 import { permissionService } from '../services/permission.service';
 import { applyRestriction, restrictionService } from '../services/restriction.service';
 import { consumeBatch, usableBatch } from './batches';
@@ -23,9 +22,9 @@ import {
 // files deposited on them, as the import of per-device values does (legacyAgent/policyRoutes.ts, D18). The same rules:
 //   - mdm.policies.manage on top of devices.manage;
 //   - the restrictable action sites.apply (floor 'sensitive': a second factor; 'restricted': a second person);
-//   - beyond the publication thresholds of its policy impact (the devices whose agent:policy changes), a second person
-//     approves it (approval request site_write), executed again as its requester, his rights read again, the plan
-//     compared with the one he saw (planChanged otherwise: nothing applied).
+//   - at 'restricted', the second person's approval (request site_write) is executed again as its requester, his rights
+//     read again, the plan compared with the one he saw (planChanged otherwise: nothing applied). The publication
+//     thresholds of its policy impact no longer ask a second person (decision of the owner, 28/11/2026).
 // What it guards: a change of the code, name, city or values of a site (PATCH /api/sites/:id, upsert_site), an applied
 // import, the sites made from the custom fields, and the attachment of several devices to a site when it changes their
 // agent policy (POST /api/sites/:id/devices, reviews F029/F116: a new site with values of one's choice, then hundreds of
@@ -112,8 +111,9 @@ export interface SiteGuardInput {
 }
 
 /**
- * The console's guard of a write of the sites (sites.apply, then the thresholds): true when the route may apply it;
- * false when the answer is sent (a second factor asked, or 202 with the approval filed for a second person).
+ * The console's guard of a write of the sites (sites.apply): true when the route may apply it; false when the answer is
+ * sent (a second factor asked, or 202 with the approval filed for a second person when the tenant's matrix restricts
+ * it). The publication thresholds no longer ask a second person (decision of the owner, 28/11/2026).
  */
 export async function guardSiteWrite(req: Request, res: Response, g: SiteGuardInput): Promise<boolean> {
   const payload = { action: SITES_APPLY, ...g.payload, policyImpact: g.impact, deviceIds: g.deviceIds.slice(0, 500) };
@@ -121,16 +121,9 @@ export async function guardSiteWrite(req: Request, res: Response, g: SiteGuardIn
     req, actionKey: SITES_APPLY, deviceIds: g.deviceIds, approvalRequestType: SITE_WRITE_APPROVAL,
     approvalDescription: g.description, approvalPayload: payload, approvalSealed: g.sealed,
   });
-  if (!ok) return false;
-  // D18: beyond the publication thresholds of its policy impact, a second person approves it.
-  if (await beyondThresholds(db, g.tenantId, g.impact)) {
-    const approval = await approvalService.create({
-      tenantId: g.tenantId, userId: req.session.userId!, requestType: SITE_WRITE_APPROVAL, description: g.description, payload, sealed: g.sealed,
-    });
-    res.status(202).json({ success: true, data: { approvalId: approval.id, status: 'pending_approval', code: 'approvalRequired', policyImpact: g.impact } });
-    return false;
-  }
-  return true;
+  // D18 withdrawn (decision of the owner, 28/11/2026): the publication thresholds no longer ask a second person; only
+  // the tenant's restriction matrix does (applyRestriction above).
+  return ok;
 }
 
 /**

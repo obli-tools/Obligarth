@@ -6,7 +6,7 @@ import { openJson, sealJson, type Protector } from './dpapi';
  * Obligarth bench station — the local history (lot BANC §5.7): one line per provisioning that ENDED on this PC, kept in
  * %LOCALAPPDATA%\Obligarth\bench-history.json, 1000 lines, protected by DPAPI (CurrentUser).
  * What is kept: time, station, tenant, group and site (names), the serial CUT to its last four characters, model, Android,
- * role aimed at and obtained, outcome, error code, provisioningId, deviceUuid. Never a token, a configuration, an
+ * role aimed at and obtained, outcome, error code, provisioningId, deviceUuid, the counter of the required apps installed. Never a token, a configuration, an
  * account. Best effort: a history that cannot be read or written never stops a provisioning.
  */
 export interface HistoryEntry {
@@ -25,6 +25,10 @@ export interface HistoryEntry {
   errorCode: string | null;
   provisioningId: string | null;
   deviceUuid: string | null;
+  /** Lot BANC-A: the kind of the provisioning (apps: « compléter les apps »), the counter of its step apps (absent in the
+   *  lines written before it; null: the step did not run). */
+  kind?: 'new' | 'convert' | 'apps' | null;
+  apps?: { installed: number; total: number; failed: number } | null;
 }
 
 export const HISTORY_KEEP = 1000;

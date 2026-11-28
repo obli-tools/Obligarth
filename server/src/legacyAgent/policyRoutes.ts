@@ -5,7 +5,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   AGENT_POLICY_ITEM_STATES, LEGACY_AGENT_DEVICE_VALUES_LIMITS as DV, deviceCodePattern, LEGACY_AGENT_POLICY_ARTIFACT_KEY, LEGACY_AGENT_POLICY_LIMITS as L,
-  LEGACY_AGENT_POLICY_MIN_VERSION_CODE, PUBLISH_APPROVAL_THRESHOLDS, isAgentTemplateVariable, variablesInString,
+  LEGACY_AGENT_POLICY_MIN_VERSION_CODE, isAgentTemplateVariable, variablesInString,
   type AgentPolicyReportItem, type AgentPolicyReportState, type LegacyAgentDeviceValuesImportResult, type LegacyAgentDeviceValuesPreviewRow,
   type LegacyAgentPolicyStatusView,
 } from '@obligarth/shared';
@@ -15,7 +15,7 @@ import { userActor } from '../db/context';
 import { tenantFrozen } from '../guard/frozen';
 import { AppError } from '../middleware/errorHandler';
 import { requireTenantCapability } from '../middleware/rbac';
-import { approvalService, activeRequester, refuse, requireTenantCapability as requesterHolds, type ApprovalExecution } from '../services/approval.service';
+import { activeRequester, refuse, requireTenantCapability as requesterHolds, type ApprovalExecution } from '../services/approval.service';
 import { deviceService } from '../services/device.service';
 import { permissionService } from '../services/permission.service';
 import { applyRestriction } from '../services/restriction.service';
@@ -27,7 +27,6 @@ import { withConfigurationLock } from '../mdm/policies/configLock';
 import { loadResolutionInput, loadDevices } from '../mdm/policies/loader';
 import { resolveDevices, variableValue } from '../mdm/policies/resolver';
 import { requestDeviceResolution } from '../mdm/policies/triggers';
-import { fleetShareFloor } from '../mdm/settings';
 import { fileUsage, fileView, mediaTypeOf, receiveFile, settleKind, storedFilePath } from './files';
 import { compileAgentPolicy, renderTemplate } from './policyChannel';
 import { frozenWithhold } from './policyDelivery';
@@ -47,8 +46,8 @@ import { body, deviceOf, uploadLimiter, visible, wrap } from './routes';
 //   POST   /policy/import-images       the store images of a MobiControl import marked origin 'import'
 //   GET    /devices/:id/policy         the state of a device's agent policy
 //   POST   /device-values              import of per-device values (devices.manage and mdm.policies.manage): preview,
-//                                      or apply (restrictable action legacy_agent.device_values_import; beyond the
-//                                      publication thresholds of its policy impact, a request for approval: D18)
+//                                      or apply (restrictable action legacy_agent.device_values_import; D18, the
+//                                      approval beyond the publication thresholds, withdrawn on 28/11/2026)
 // The values of the devices are customer data: never in a log nor an audit entry (keys only).
 // =============================================================================
 
@@ -380,12 +379,8 @@ export function policyRouter(): Router {
       approvalDescription: description, approvalPayload: payload, approvalSealed: sealed,
     });
     if (!ok) return;
-    // D18: beyond the publication thresholds of its policy impact, a second person approves the import.
-    if (await beyondThresholds(db, tenantId, plan.result.policyImpact)) {
-      const approval = await approvalService.create({ tenantId, userId, requestType: 'legacy_agent_device_values', description, payload, sealed });
-      res.status(202).json({ success: true, data: { approvalId: approval.id, status: 'pending_approval', code: 'approvalRequired', policyImpact: plan.result.policyImpact } });
-      return;
-    }
+    // D18 withdrawn (decision of the owner, 28/11/2026): the publication thresholds no longer ask a second person; only
+    // the tenant's restriction matrix does (applyRestriction above).
     const auditCtx = await audit.fromRequest(req, tenantId);
     const out = await applyDeviceValues(tenantId, b, { visible: seen, canWrite: (id) => (isAdmin ? Promise.resolve(true) : permissionService.canWriteDevice(userId, id, false)) }, auditCtx);
     res.json({ success: true, data: out });
@@ -524,17 +519,6 @@ async function policyImpactOf(q: Knex | Knex.Transaction, tenantId: number, chan
     if (a !== b) n++;
   });
   return n;
-}
-
-/** Does a policy impact reach the publication thresholds of the tenant (D18)? */
-export async function beyondThresholds(q: Knex | Knex.Transaction, tenantId: number, impact: number): Promise<boolean> {
-  if (impact <= 0) return false;
-  const T = PUBLISH_APPROVAL_THRESHOLDS;
-  if (impact >= T.devicesTouched) return true;
-  const fleet = await q('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled').count({ n: '*' }).first() as { n: string | number };
-  const size = Number(fleet?.n ?? 0);
-  const floor = await fleetShareFloor(q, tenantId);
-  return impact >= floor && size > 0 && impact >= T.fleetShare * size;
 }
 
 /** The apply of an import, in one transaction under the configuration lock: the plan made again (governed checked

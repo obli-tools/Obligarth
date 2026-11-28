@@ -174,11 +174,11 @@ async function checkVersion(q: Knex | Knex.Transaction, tenantId: number, policy
   }
   const result = await computeImpact(q, tenantId, { kind: 'version', policyId, versionId },
     { matrixLevel: await matrixLevel(tenantId), visibleDeviceIds: o.visibleDeviceIds ?? 'all' });
-  // Android (android-amapi §22.4, lot AN-A2): a version that adds, removes or changes a wipe-capable setting is
-  // published at the restricted level (a second approver), whatever the thresholds.
+  // Android (android-amapi §22.4, lot AN-A2): a version that adds, removes or changes a wipe-capable setting is shown
+  // as such; since the owner's decision of 28/11/2026 it no longer asks a second approver (information only).
   if (!issues.length && await wipeSettingsChanged(q, tenantId, policyId, content, androidWipeRules, legacyAgentWipeRules)) {
-    result.impact.approval.required = true;
-    if (!result.impact.approval.reasons.includes('wipe_settings')) result.impact.approval.reasons.push('wipe_settings');
+    const t = result.impact.thresholds ?? [];
+    if (!t.includes('wipe_settings')) result.impact.thresholds = [...t, 'wipe_settings'];
   }
   const after = await q('policy_versions').where({ tenant_id: tenantId, id: versionId }).first('content_sha256') as { content_sha256: string } | undefined;
   if (!after || String(after.content_sha256).trim() !== contentSha256) versionChanged();

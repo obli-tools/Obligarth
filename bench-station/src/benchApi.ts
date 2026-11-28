@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
+import type { BenchAppsPlanAnswer, BenchRequiredAppView } from '../../shared/src/mdm/bench';
 import { ServerClock } from './clock';
 import type { ServedAgent } from './provision/apk';
 
@@ -75,7 +76,9 @@ export interface PlanRequest {
 
 export interface PlanAnswer {
   provisioningId: string;
-  kind: 'new' | 'convert';
+  /** apps (lot BANC-A): « compléter les apps » of a device already enrolled (POST /v1/provisionings/apps), or such a
+   *  provisioning found open again. */
+  kind: 'new' | 'convert' | 'apps';
   roleTarget: 'device_owner' | 'device_admin';
   fallbackAllowed: boolean;
   fallbackConfirm: boolean;
@@ -89,7 +92,7 @@ export interface PlanAnswer {
 
 export interface ProvisioningState {
   state: 'planned' | 'token_issued' | 'enrolled' | 'completed' | 'failed' | 'abandoned' | 'expired';
-  kind: 'new' | 'convert';
+  kind: 'new' | 'convert' | 'apps';
   deviceUuid: string | null;
   managementMode: string | null;
   identityState: string | null;
@@ -101,6 +104,9 @@ export interface ProvisioningState {
   site?: { id: string; code: string; name: string } | null;
   roleTarget?: 'device_owner' | 'device_admin';
   legacyOwnerBench?: boolean;
+  /** Lot BANC-A (absent from an older server): the target the provisioning was planned in. */
+  tenantId?: number;
+  groupId?: number;
 }
 
 export interface StepEntry {
@@ -108,7 +114,18 @@ export interface StepEntry {
   status: 'running' | 'ok' | 'warn' | 'failed' | 'skipped';
   at: string;
   code?: string;
-  detail?: { code?: string; counts?: Record<string, number>; accountTypes?: string[]; sdk?: number; versionCode?: number; attempt?: number };
+  /** packageId (lot BANC-A, step apps): the package of the tenant's store the entry is about. */
+  detail?: { code?: string; counts?: Record<string, number>; accountTypes?: string[]; sdk?: number; versionCode?: number; attempt?: number; packageId?: string };
+}
+
+/** POST /v1/provisionings/apps (lot BANC-A, « compléter les apps »): what the bench reads of a device already enrolled.
+ *  The server proves the identity with it (apps.service.ts, planAppsCompletion); the station only reports. */
+export interface AppsPlanRequest {
+  device: PlanRequest['device'];
+  /** `settings get secure android_id` (hexadecimal, lower case), null when none is read. Never shown nor logged here. */
+  androidId: string | null;
+  /** The bench channel of the agent (`content call … --method state`); null when it does not answer (agent < 1.4.0). */
+  agent: { phase: 'ENROLLED'; role: 'NONE' | 'ADMIN' | 'OWNER'; versionCode: number } | null;
 }
 
 export interface ResultRequest {
@@ -132,6 +149,14 @@ export interface BenchApi {
   token(id: string): Promise<{ config: string; expiresAt: string }>;
   step(id: string, entry: StepEntry): Promise<void>;
   result(id: string, body: ResultRequest): Promise<{ state: string; warnings: string[] }>;
+  /** Lot BANC-A: the required apps the bench installs on the enrolled device of this provisioning. A server older than
+   *  the lot answers 404 `not_found` (no such route). */
+  requiredApps(id: string): Promise<BenchRequiredAppView[]>;
+  /** Lot BANC-A: the file of one of THOSE apps (by its SHA-256), written to `dest`; refusals keep their code (404
+   *  apk_unavailable, 429 rate_limited with details.retryAfter in seconds, 500 apk_mismatch). */
+  downloadPackage(sha256: string, provisioningId: string, dest: string): Promise<void>;
+  /** Lot BANC-A: « compléter les apps » of a device already enrolled (an open bench session is required). */
+  planApps(body: AppsPlanRequest): Promise<BenchAppsPlanAnswer>;
   /** The server's time, ISO (the steps are stamped with it). */
   nowIso(): string;
 }
@@ -144,6 +169,7 @@ export class BenchApiError extends Error {
 }
 
 const TIMEOUT_MS = 20_000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface HttpBenchApiOptions {
   baseUrl: string;
@@ -215,6 +241,32 @@ export class HttpBenchApi implements BenchApi {
     if (!/^[0-9a-f]{64}$/.test(sha256)) throw new BenchApiError(0, 'apk_mismatch', 'bad sha256');
     const res = await this.raw(`/v1/agent/apk/${sha256}`, { timeoutMs: 300_000 });
     if (!res.ok || !res.body) throw new BenchApiError(res.status, 'apk_mismatch', `HTTP ${res.status}`);
+    await this.streamTo(res, sha256, dest);
+  }
+
+  async downloadPackage(sha256: string, provisioningId: string, dest: string): Promise<void> {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new BenchApiError(0, 'apk_mismatch', 'bad sha256');
+    if (!UUID_RE.test(provisioningId)) throw new BenchApiError(0, 'bad_request', 'bad provisioning id');
+    const res = await this.raw(`/v1/packages/${sha256}?provisioning=${encodeURIComponent(provisioningId)}`, { timeoutMs: 300_000 });
+    if (!res.ok || !res.body) {
+      // The refusal keeps its code (404 apk_unavailable, 429 rate_limited, 500 apk_mismatch): the card says which.
+      const text = await res.text().catch(() => '');
+      let code: string | null = null;
+      try {
+        const b = JSON.parse(text) as { code?: unknown } | null;
+        code = typeof b?.code === 'string' && /^[a-z_]{1,48}$/.test(b.code) ? b.code : null;
+      } catch { code = null; }
+      if (res.status === 401 || res.status === 403) throw new BenchApiError(res.status, 'station_refused', code ?? 'refused', { stationCode: code });
+      const retry = Number.parseInt(res.headers.get('retry-after') ?? '', 10);
+      throw new BenchApiError(res.status, code ?? (res.status >= 500 ? 'internal' : 'refused'), `HTTP ${res.status}`,
+        Number.isSafeInteger(retry) && retry > 0 ? { retryAfter: retry } : null);
+    }
+    await this.streamTo(res, sha256, dest);
+  }
+
+  /** The body of a download into `dest` (created, never overwritten), its SHA-256 checked against the one asked. */
+  private async streamTo(res: Response, sha256: string, dest: string): Promise<void> {
+    if (!res.body) throw new BenchApiError(res.status, 'apk_mismatch', 'no body');
     const header = res.headers.get('x-content-sha256');
     if (header && header.toLowerCase() !== sha256) throw new BenchApiError(res.status, 'apk_mismatch', 'header sha256');
     const h = createHash('sha256');
@@ -225,10 +277,14 @@ export class HttpBenchApi implements BenchApi {
     const failed = new Promise<never>((_, reject) => out.on('error', (err) => { failure = err; reject(err); }));
     failed.catch(() => undefined);
     const reader = res.body.getReader();
+    // The stream cut mid-way (the network, the time-out): temporary, server_unreachable, never the file's fault.
+    let cut: Error | null = null;
     try {
       await Promise.race([new Promise<void>((r) => out.once('open', () => r())), failed]);
       for (;;) {
-        const { done, value } = await reader.read();
+        let chunk: Awaited<ReturnType<typeof reader.read>>;
+        try { chunk = await reader.read(); } catch (e) { cut = e instanceof Error ? e : new Error('network'); throw cut; }
+        const { done, value } = chunk;
         if (done) break;
         h.update(value);
         if (failure) throw failure;
@@ -236,6 +292,8 @@ export class HttpBenchApi implements BenchApi {
       }
     } catch (err) {
       await reader.cancel().catch(() => undefined);
+      const cutErr = cut as Error | null;
+      if (cutErr && !failure) throw new BenchApiError(0, 'server_unreachable', cutErr.name === 'TimeoutError' ? 'timeout' : 'network');
       throw new BenchApiError(0, 'apk_mismatch', err instanceof Error ? err.message.slice(0, 60) : 'write');
     } finally {
       await Promise.race([new Promise<void>((r) => out.end(() => r())), failed.catch(() => undefined)]);
@@ -251,4 +309,6 @@ export class HttpBenchApi implements BenchApi {
   result(id: string, body: ResultRequest): Promise<{ state: string; warnings: string[] }> {
     return this.call(`/v1/provisionings/${encodeURIComponent(id)}/result`, { method: 'POST', body });
   }
+  requiredApps(id: string): Promise<BenchRequiredAppView[]> { return this.call(`/v1/provisionings/${encodeURIComponent(id)}/apps`); }
+  planApps(body: AppsPlanRequest): Promise<BenchAppsPlanAnswer> { return this.call('/v1/provisionings/apps', { method: 'POST', body }); }
 }

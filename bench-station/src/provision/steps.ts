@@ -2,8 +2,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  BENCH_ERROR_CODES, BENCH_OWNER_MIN_VERSION_CODE, BENCH_STEP_IDS, benchRolePlan,
-  type BenchStepId,
+  BENCH_ERROR_CODES, BENCH_OWNER_MIN_VERSION_CODE, BENCH_STEP_IDS, benchAppInstallCode, benchRolePlan,
+  type BenchAppResultCode, type BenchAppsCounter, type BenchAppsPlanAnswer, type BenchRequiredAppView, type BenchStepId,
 } from '../../../shared/src/mdm/bench';
 import {
   AGENT_ADMIN, AGENT_PACKAGE, BENCH_AUTHORITY, identityOf, isAgentAdmin, parseAccounts, parseBenchLogLine, parseContentCall,
@@ -13,16 +13,26 @@ import {
 } from '../adb/parse';
 import { type AdbDevice } from '../adb/parse';
 import { AdbListError, DeviceGoneError, type AdbResult, type AdbRunner } from '../adb/runner';
-import { BenchApiError, type BenchApi, type BenchTarget, type PlanAnswer, type ProvisioningState, type StepEntry } from '../benchApi';
+import { BenchApiError, type AppsPlanRequest, type BenchApi, type BenchTarget, type PlanAnswer, type ProvisioningState, type StepEntry } from '../benchApi';
 import { redact } from '../redact';
-import { ensureServedApk, signerOfApk, type ServedAgent } from './apk';
+import { ensureAppApk, ensureServedApk, signerOfApk, type ServedAgent } from './apk';
 
 /**
  * Obligarth bench station — the provisioning sequence of ONE device (lot BANC §6), driven by an AdbRunner and a
  * BenchApi, both injected (the harness runs it against a fake adb and a fake platform).
  *
  *   detect → identify → agent_check → preflight → [plan] → install → role → prepare → configure → wait_enroll →
- *   verify → finalize
+ *   verify → apps → finalize
+ *
+ * « Compléter les apps » (lot BANC-A, mode `apps`): a device already enrolled brought back to the bench.
+ *
+ *   detect → identify → agent_check → [plan apps: the server proves the identity] → apps → finalize
+ *
+ * The step apps installs by ADB (`adb install -r`, never -t nor -d) the apps the POLICY of the device requires (the
+ * list the server decides, GET /v1/provisionings/:id/apps), each one downloaded into apk-cache and checked (size,
+ * SHA-256, signer when the store knows it) before its install. A failed app stops neither the others nor the
+ * finalization: the outcome stays completed, « with reservations » on the card. A server without these routes (older
+ * than lot BANC-A): the step is skipped, without error.
  *
  * Every step is idempotent and checks its precondition again before acting; a step whose effect has gone (an agent
  * uninstalled meanwhile, the owner lost) is played again. The card's state lives in memory AND can be derived from the
@@ -67,6 +77,38 @@ export interface RunOptions {
   /** Lot BANC-T Q3: the exception D3 decided on the bench. */
   allowLegacyOwner?: boolean;
   choice?: Choice;
+  /** Lot BANC-A: « compléter les apps » of a device already enrolled (no target chosen: the server finds the device). */
+  mode?: 'provision' | 'apps';
+}
+
+/** The progress of the step apps, for the card (lot BANC-A). */
+export interface AppsView {
+  state: 'running' | 'done' | 'skipped';
+  total: number;
+  /** The apps handled so far (installed or failed). */
+  done: number;
+  installed: number;
+  /** The app being installed (its label, or its package name). */
+  current: string | null;
+  failed: Array<{ name: string; code: BenchAppResultCode }>;
+  /** The server has no such routes (older than lot BANC-A): the step was skipped. */
+  unsupported: boolean;
+}
+
+/** The steps a « compléter les apps » does not play (the device is enrolled already, its role is kept). */
+const APPS_ONLY_SKIPPED: BenchStepId[] = ['preflight', 'install', 'role', 'prepare', 'configure', 'wait_enroll', 'verify'];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PACKAGE_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/;
+/** A download refused for its rate (429): tried again after Retry-After (60 s at most), 8 times at most. */
+const PACKAGE_RETRIES = 8;
+
+/** An item of the list of the server, checked before anything is done with it. */
+function validApp(a: BenchRequiredAppView): boolean {
+  return !!a && typeof a.packageId === 'string' && UUID_RE.test(a.packageId.toLowerCase())
+    && typeof a.packageName === 'string' && a.packageName.length <= 255 && PACKAGE_RE.test(a.packageName)
+    && typeof a.sha256 === 'string' && /^[0-9a-f]{64}$/.test(a.sha256)
+    && Number.isSafeInteger(a.versionCode) && a.versionCode >= 1 && a.versionCode <= 2_147_483_647
+    && Number.isSafeInteger(a.size) && a.size > 0;
 }
 
 export interface ProvisionTiming {
@@ -180,6 +222,14 @@ export class ProvisionRun {
   serverState: ProvisioningState | null = null;
   /** ADB switched off at the end, confirmed only when the agent reports adbEnabled=false (§6.7). */
   adbCut: 'none' | 'pending_agent' = 'none';
+  /** Lot BANC-A: a provisioning, or « compléter les apps » of a device already enrolled. */
+  mode: 'provision' | 'apps' = 'provision';
+  /** Lot BANC-A: the progress of the step apps (null: not reached). */
+  apps: AppsView | null = null;
+  /** Lot BANC-A: how the server proved the identity of a device brought back for its apps. */
+  appsProof: { serialPairs: number; androidId: 'matched' | 'not_comparable' } | null = null;
+  /** The result of each app in THIS run (by packageId): an app installed is not installed again when the step resumes. */
+  private readonly appResults = new Map<string, BenchAppResultCode>();
   /** Raw outputs, redacted, kept in memory for the « export » (§5.7). Never sent. */
   readonly raw: string[] = [];
   private queue: StepEntry[] = [];
@@ -198,6 +248,12 @@ export class ProvisionRun {
   }
 
   get provisioningId(): string | null { return this.plan?.provisioningId ?? null; }
+  /** The counter of the step apps (the history), null when it did not run. */
+  appsCounter(): BenchAppsCounter | null {
+    const a = this.apps;
+    if (!a || a.unsupported || a.state === 'running') return null;
+    return { installed: a.installed, total: a.total, failed: a.failed.length };
+  }
   /** The steps waiting to reach the server (they are sent again when it answers). */
   get pendingSteps(): number { return this.queue.length; }
 
@@ -251,6 +307,11 @@ export class ProvisionRun {
     this.d.onChange?.();
   }
 
+  /** An entry of the journal as it is (one per app of the step apps: never merged with the previous one). */
+  private journal(entry: StepEntry): void {
+    this.queue.push(entry);
+  }
+
   /** Sends the journal in order; stops at the first failure (sent again later), never blocks the sequence. One sending
    *  at a time: a second call gets the one under way (an entry is never sent twice nor dropped unsent). */
   flush(): Promise<void> {
@@ -296,6 +357,7 @@ export class ProvisionRun {
       if (opts.deviceName !== undefined) this.deviceName = opts.deviceName ? opts.deviceName.trim().slice(0, 100) || null : null;
       if (opts.site !== undefined) this.site = opts.site;
       if (opts.allowLegacyOwner !== undefined) this.allowLegacyOwner = opts.allowLegacyOwner;
+      if (opts.mode !== undefined) this.mode = opts.mode;
     }
     this.d.onChange?.();
     try {
@@ -304,6 +366,7 @@ export class ProvisionRun {
       await this.settle(err);
     } finally {
       for (const s of BENCH_STEP_IDS) if (this.steps[s].status === 'running') this.steps[s] = { status: 'pending', code: null };
+      if (this.apps) this.apps.current = null;
       this.busy = false;
       await this.flush().catch(() => undefined);
       this.d.onChange?.();
@@ -398,6 +461,7 @@ export class ProvisionRun {
   }
 
   private async sequence(choice: Choice | null): Promise<void> {
+    if (this.mode === 'apps') { await this.appsSequence(); return; }
     if (!this.target) throw new Hold({ code: 'choose_target', choices: [], attention: false });
     await this.d.requireApproved();
     if (choice === 'continue_admin' || choice === 'confirm_admin') this.chooseAdmin(choice);
@@ -413,6 +477,8 @@ export class ProvisionRun {
     await this.agentCheck();
     if (!this.done('preflight') || choice === 'recheck' || !this.preflight) await this.readPreflight();
     if (!this.plan) await this.planProvisioning();
+    // The open provisioning found again is a « compléter les apps » (lot BANC-A): it goes on as such.
+    if (this.plan!.kind === 'apps') { this.mode = 'apps'; await this.appsTail(); return; }
     await this.flush();
     this.ownerDecision();
     // The journal goes to the server after every step (what could not be sent is sent at the next one).
@@ -426,6 +492,29 @@ export class ProvisionRun {
     else if (this.plan!.kind === 'convert') this.mark('wait_enroll', 'skipped', 'convert');
     await this.flush();
     if (!this.done('verify')) await this.verify();
+    await this.flush();
+    if (!this.done('apps')) await this.installApps();
+    await this.finalize();
+  }
+
+  /** « Compléter les apps » (lot BANC-A): the device and its agent read again, the identity proven to the server (which
+   *  finds the device in a target of the station), then the apps and the finalization. Nothing else is done to the
+   *  device: no token, no role, no setting but the ADB cut of the target. */
+  private async appsSequence(): Promise<void> {
+    await this.d.requireApproved();
+    await this.detect();
+    await this.identify();
+    await this.agentCheck();
+    if (!this.agent) throw new Fail('apps_agent_absent');
+    if (!this.plan) await this.planApps();
+    await this.appsTail();
+  }
+
+  private async appsTail(): Promise<void> {
+    for (const s of APPS_ONLY_SKIPPED) if (this.steps[s].status === 'pending') this.steps[s] = { status: 'skipped', code: 'apps_only' };
+    this.d.onChange?.();
+    await this.flush();
+    if (!this.done('apps')) await this.installApps();
     await this.finalize();
   }
 
@@ -668,6 +757,8 @@ export class ProvisionRun {
     };
     this.roleChosen = this.roleChosen ?? roleTarget;
     this.hint = differs ? 'resumed_earlier' : 'resumed';
+    // A « compléter les apps » (lot BANC-A) goes on under ITS target (the ADB cut of the finalization), not the card's.
+    if (st.kind === 'apps') this.target = (await this.completionTarget(st)) ?? this.target;
     if (st.state === 'enrolled') {
       if (st.kind === 'new') { this.steps.configure = { status: 'ok', code: 'resumed' }; this.steps.wait_enroll = { status: 'ok', code: 'resumed' }; }
     }
@@ -958,6 +1049,219 @@ export class ProvisionRun {
     throw new Fail('configure_failed', { detail: code ?? 'unknown' });
   }
 
+  // ── « compléter les apps »: the plan (lot BANC-A) ───────────────────────
+
+  /**
+   * POST /v1/provisionings/apps: what the bench reads of the device, the server proves its identity with (the serials
+   * against what the agent declared, the Android ID below Android 8, the API level; apps.service.ts). The Android ID is
+   * read by the shell and sent, never written to the card's log nor shown. The bench channel of the agent (1.4.0+) must
+   * say ENROLLED when it answers: another phase is not a device to complete.
+   */
+  private async planApps(): Promise<void> {
+    const id = this.identity!;
+    const read = await this.d.runner.shell(this.serial, ['settings', 'get', 'secure', 'android_id']);
+    this.note(['shell', 'settings', 'get', 'secure', 'android_id'], { ...read, stdout: '<android_id read, not logged>' });
+    const raw = parseSetting(read.stdout);
+    const androidId = raw && /^[0-9a-fA-F]{1,32}$/.test(raw) ? raw.toLowerCase() : null;
+    let agent: AppsPlanRequest['agent'] = null;
+    if ((this.agent?.versionCode ?? 0) >= BENCH_OWNER_MIN_VERSION_CODE) {
+      const a = await this.benchCall('state');
+      if (a && a.phase !== null) {
+        if (a.phase !== 'ENROLLED') throw new Fail('apps_not_enrolled');
+        const role = a.role === 'OWNER' || a.role === 'ADMIN' ? a.role : 'NONE';
+        const vc = typeof a.versionCode === 'number' && Number.isSafeInteger(a.versionCode) && a.versionCode > 0 ? a.versionCode : this.agent!.versionCode;
+        agent = { phase: 'ENROLLED', role, versionCode: vc };
+      }
+    }
+    let answer: BenchAppsPlanAnswer;
+    try {
+      answer = await this.d.api.planApps({
+        device: { adbSerial: id.adbSerial!, hwSerial: id.hwSerial, model: id.model, manufacturer: id.manufacturer, sdkInt: id.sdkInt, osRelease: id.osRelease, oneUi: id.oneUi },
+        androidId, agent,
+      });
+    } catch (err) {
+      if (err instanceof BenchApiError) {
+        if (err.code === 'open_provisioning' && typeof err.details?.provisioningId === 'string') { await this.resumeApps(String(err.details.provisioningId)); return; }
+        // A server older than lot BANC-A: no such route.
+        if (err.status === 404 && err.code === 'not_found') throw new Fail('apps_unsupported');
+        if (err.code === 'no_session') throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
+        if (['device_not_found', 'identity_ambiguous', 'identity_mismatch', 'target_refused'].includes(err.code)) throw new Fail(err.code);
+      }
+      throw err;
+    }
+    this.plan = {
+      provisioningId: answer.provisioningId, kind: 'apps', roleTarget: answer.roleTarget, fallbackAllowed: false, fallbackConfirm: false,
+      deviceName: answer.deviceName, existingDeviceUuid: answer.deviceUuid, warnings: [],
+    };
+    this.roleChosen = answer.roleTarget;
+    this.deviceName = answer.deviceName;
+    this.site = answer.site;
+    this.appsProof = answer.proof;
+    this.target = await this.targetOf(answer.tenantId, answer.groupId, answer.tenantName);
+  }
+
+  /** The target of the station a completion was planned in (its ADB cut at the end), never the card's choice; unknown
+   *  here (removed meanwhile, or not given by the server): ADB is kept. */
+  private async targetOf(tenantId: number, groupId: number, tenantName: string): Promise<BenchTarget> {
+    const all = await this.d.api.targets().catch(() => [] as BenchTarget[]);
+    return all.find((t) => t.tenantId === tenantId && t.groupId === groupId) ?? {
+      tenantId, tenantName, groupId, groupPath: '', rolePolicy: 'owner_preferred', allowLegacyOwner: false, namePrefix: null, disableDevOptions: false,
+    };
+  }
+
+  /** The target of an open completion found again (its tenant and group from the server's state; null when it gives
+   *  none). */
+  private async completionTarget(st: ProvisioningState): Promise<BenchTarget | null> {
+    return typeof st.tenantId === 'number' && typeof st.groupId === 'number' ? this.targetOf(st.tenantId, st.groupId, '') : null;
+  }
+
+  /** A « compléter les apps » of this device still open on this station: resumed. Another kind is resumed by Start. */
+  private async resumeApps(id: string): Promise<void> {
+    const st = await this.d.api.provisioning(id);
+    if (st.kind !== 'apps' || st.state !== 'enrolled') throw new Fail('apps_open_provisioning');
+    this.serverState = st;
+    const role = st.roleTarget ?? (st.agent?.deviceOwner ? 'device_owner' : 'device_admin');
+    this.plan = { provisioningId: id, kind: 'apps', roleTarget: role, fallbackAllowed: false, fallbackConfirm: false, deviceName: st.deviceName ?? null, warnings: [] };
+    this.roleChosen = role;
+    this.deviceName = st.deviceName ?? null;
+    this.site = st.site ?? null;
+    this.target = await this.completionTarget(st);
+    this.hint = 'resumed';
+  }
+
+  // ── apps (lot BANC-A) ──────────────────────────────────────────────────
+
+  /**
+   * The required apps of the device, installed by ADB. The list is the server's (missing or older on the device, the
+   * privacy profile and the restriction matrix applied); each app: downloaded and checked (ensureAppApk), `adb install
+   * -r`, its result journaled ({step: apps, status, code: app_*, detail: {packageId, versionCode}}); then one summary
+   * with the counts. A failed app goes on to the next one; the summary is `warn`, the finalization still runs.
+   */
+  private async installApps(): Promise<void> {
+    const id = this.plan!.provisioningId;
+    await this.d.requireApproved();
+    // Running on the card only: an older server would refuse the step (its journal is sent once the list is known).
+    this.steps.apps = { status: 'running', code: null };
+    this.d.onChange?.();
+    let list: BenchRequiredAppView[];
+    try {
+      list = await this.d.api.requiredApps(id);
+    } catch (err) {
+      if (err instanceof BenchApiError) {
+        // A server older than lot BANC-A (no such route): skipped without error, nothing journaled (it would refuse it).
+        if (err.status === 404 && err.code === 'not_found') {
+          this.apps = { state: 'skipped', total: 0, done: 0, installed: 0, current: null, failed: [], unsupported: true };
+          this.steps.apps = { status: 'skipped', code: 'apps_unsupported' };
+          this.d.onChange?.();
+          return;
+        }
+        if (err.code === 'no_session') {
+          this.mark('apps', 'failed', 'no_session');
+          throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
+        }
+        // The device is no longer one the server lists apps for (moved outside the target…): the finalization decides.
+        if (['not_enrolled', 'device_outside_target', 'target_refused'].includes(err.code)) {
+          this.apps = { state: 'skipped', total: 0, done: 0, installed: 0, current: null, failed: [], unsupported: false };
+          this.mark('apps', 'warn', err.code);
+          this.hint = 'apps_not_listed';
+          return;
+        }
+      }
+      throw err;
+    }
+    const seen = new Set<string>();
+    const apps = (Array.isArray(list) ? list : []).filter((a) => {
+      if (!validApp(a) || seen.has(a.packageId.toLowerCase())) return false;
+      seen.add(a.packageId.toLowerCase());
+      return true;
+    });
+    // Resumed (a device unplugged mid-way…): the apps THIS run installed are no longer listed (the inventory holds them);
+    // they still count in « Apps n/N ».
+    const earlier = [...this.appResults].filter(([pid, c]) => c === 'app_installed' && !seen.has(pid)).length;
+    if (apps.length === 0 && earlier === 0) {
+      this.apps = { state: 'done', total: 0, done: 0, installed: 0, current: null, failed: [], unsupported: false };
+      this.mark('apps', 'skipped', 'apps_none', { counts: { installed: 0, total: 0, failed: 0 } });
+      return;
+    }
+    const view: AppsView = { state: 'running', total: apps.length + earlier, done: earlier, installed: earlier, current: null, failed: [], unsupported: false };
+    this.apps = view;
+    this.d.onChange?.();
+    for (const app of apps) {
+      const packageId = app.packageId.toLowerCase();
+      const name = String(app.label ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) || app.packageName;
+      let code = this.appResults.get(packageId);
+      if (code !== 'app_installed') {
+        view.current = name;
+        this.d.onChange?.();
+        // Never the agent itself by this path: its signer is the pinned one, checked by the steps install and role.
+        const own = app.packageName === PKG;
+        if (own) {
+          code = 'app_unavailable';
+        } else {
+          await this.d.requireApproved();
+          try {
+            code = await this.installApp(id, app);
+          } catch (err) {
+            // A temporary failure of the download (apk.ts, downloadIsTemporary) holds the run: the step stays to do, the
+            // apps already installed are kept (appResults), Retry resumes here. The session gone has its own prompt.
+            if (err instanceof BenchApiError && err.code === 'no_session') throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
+            throw err;
+          }
+        }
+        this.appResults.set(packageId, code);
+        this.journal({
+          step: 'apps', status: code === 'app_installed' ? 'ok' : own ? 'skipped' : 'failed', at: this.d.api.nowIso(), code,
+          detail: { packageId, versionCode: app.versionCode },
+        });
+        await this.flush();
+      }
+      view.done++;
+      if (code === 'app_installed') view.installed++;
+      else view.failed.push({ name, code });
+      this.d.onChange?.();
+    }
+    view.current = null;
+    view.state = 'done';
+    const failed = view.failed.length;
+    this.mark('apps', failed ? 'warn' : 'ok', failed ? 'apps_partial' : 'apps_installed', { counts: { installed: view.installed, total: view.total, failed } });
+  }
+
+  /** One app: its file (cache, SHA-256, signer), `adb install -r` (never -t nor -d), the code of its answer. */
+  private async installApp(provisioningId: string, app: BenchRequiredAppView): Promise<BenchAppResultCode> {
+    const check = await ensureAppApk(this.d.apkCacheDir, app, (dest) => this.downloadPackage(app.sha256, provisioningId, dest));
+    if (!check.ok) {
+      this.raw.push(redact(`[apps] ${app.packageName} ${app.versionCode}: ${check.code} (${check.reason})`));
+      return check.code;
+    }
+    if (check.signer === 'unread') {
+      this.raw.push(redact(`[apps] ${app.packageName}: its signer could not be read on this PC; the SHA-256 of the file served by Obligarth is relied on`));
+    } else if (check.signer === 'unknown') {
+      this.raw.push(redact(`[apps] ${app.packageName}: no signer known to the store; the SHA-256 of the file served by Obligarth is relied on`));
+    }
+    const r = await this.d.runner.install(this.serial, check.file, ['-r']);
+    this.note(['install', '-r', `<${app.packageName}.apk>`], r);
+    if (r.timedOut) return 'app_install_failed';
+    return benchAppInstallCode(`${r.stdout}\n${r.stderr}`);
+  }
+
+  /** The download of an app, tried again on 429 (the per-station limits of the server: 2 at once, 300 an hour). */
+  private async downloadPackage(sha256: string, provisioningId: string, dest: string): Promise<void> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.d.api.downloadPackage(sha256, provisioningId, dest);
+        return;
+      } catch (err) {
+        if (err instanceof BenchApiError && err.status === 429 && attempt < PACKAGE_RETRIES) {
+          rmSync(dest, { force: true });
+          const after = Number(err.details?.retryAfter);
+          await this.sleep(Math.min(60, Number.isFinite(after) && after > 0 ? after : 10) * 1_000);
+          continue;
+        }
+        throw err;
+      }
+    }
+  }
+
   // ── wait_enroll, verify, finalize ──────────────────────────────────────
 
   private async waitEnroll(): Promise<void> {
@@ -1043,11 +1347,13 @@ export class ProvisionRun {
       }
     }
     this.serverState = { ...(this.serverState as ProvisioningState), state: 'completed' };
-    this.mark('finalize', 'ok', this.target!.disableDevOptions ? 'adb_cut' : 'adb_kept');
+    const cut = this.target?.disableDevOptions === true;
+    this.mark('finalize', 'ok', cut ? 'adb_cut' : 'adb_kept');
     await this.flush();
     this.outcome = 'completed';
-    this.tone = 'ok';
-    if (this.target!.disableDevOptions) {
+    // « Terminé avec réserves » (lot BANC-A): an app was not installed; the device is enrolled all the same.
+    this.tone = this.apps && this.apps.failed.length > 0 ? 'warn' : 'ok';
+    if (cut) {
       // ONE script: the second of two calls would die with ADB. The device then leaves adb: expected. The cut is
       // acquired only when the agent reports adbEnabled=false.
       this.adbCut = 'pending_agent';

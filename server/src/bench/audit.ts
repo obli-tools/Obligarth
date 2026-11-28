@@ -42,6 +42,10 @@ export function registerBenchAuditActions(): void {
     { name: 'bench.provisioning_abandoned', criticality: 'standard', label: 'Bench provisioning abandoned' },
     { name: 'bench.provisioning_expired', criticality: 'standard', label: 'Bench provisioning expired' },
     { name: 'bench.identity_mismatch', criticality: 'protective', label: 'Bench enrollment refused: serial numbers differ' },
+    // Lot BANC-A: the file of a required app sent to a station (its provisioning, its package).
+    { name: 'bench.app_downloaded', criticality: 'standard', label: 'Bench station downloaded a required app' },
+    // « Compléter les apps » of a device of this tenant asked by a technician without mdm.bench.operate in it.
+    { name: 'bench.identity_probe_refused', criticality: 'protective', label: 'Bench completion refused: technician without the right' },
     { name: 'legacy_agent.device_owner_gained', criticality: 'standard', label: 'Android agent became the owner of the device' },
     { name: 'legacy_agent.device_owner_lost', criticality: 'protective', label: 'Android agent lost the owner role of the device' },
     { name: 'legacy_agent.device_owner_released', criticality: 'standard', label: 'Android agent gave the device back' },

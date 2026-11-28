@@ -46,9 +46,9 @@ async function sha256OfFile(file: string): Promise<string> {
   return h.digest('hex');
 }
 
-/** The file of the served APK checked against its SHA-256 (once per size and modification time); 'missing' or
- *  'mismatch' otherwise. */
-export async function checkedApk(apk: ServedApk): Promise<{ ok: true; size: number } | { ok: false; reason: 'missing' | 'mismatch' }> {
+/** The file of an APK (the served version; lot BANC-A: a package of a tenant's store, same folder) checked against its
+ *  SHA-256 (once per size and modification time); 'missing' or 'mismatch' otherwise. */
+export async function checkedApk(apk: Pick<ServedApk, 'file' | 'sha256'>): Promise<{ ok: true; size: number } | { ok: false; reason: 'missing' | 'mismatch' }> {
   const st = await stat(apk.file).catch(() => null);
   if (!st || !st.isFile()) return { ok: false, reason: 'missing' };
   const key = `${apk.file}|${st.size}|${st.mtimeMs}`;

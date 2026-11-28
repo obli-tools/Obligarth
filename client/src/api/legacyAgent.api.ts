@@ -9,7 +9,7 @@ import type {
 
 /** The matching of an import of per-device values (lot PONT-POL §12.1). */
 export interface DeviceValuesMatch { byName: boolean; byCode?: { nameRegex: string; field: string; pad: number } }
-/** An import beyond the thresholds, or held by the matrix: a request for approval. */
+/** An import held by the matrix: a request for approval. */
 export interface DeviceValuesPending { approvalId: number; status: string; code?: string; policyImpact?: number }
 
 /** The media type a store file travels with: images and certificates by their type, anything else as bytes (the API's
@@ -210,7 +210,7 @@ export const legacyAgentApi = {
     const res = await apiClient.get<ApiResponse<LegacyAgentPolicyStatusView>>(`/legacy-agent/devices/${deviceId}/policy`);
     return res.data.data!;
   },
-  /** Per-device values: a preview, or with `apply` the import (a request for approval beyond the thresholds). */
+  /** Per-device values: a preview, or with `apply` the import (a request for approval when the matrix restricts it). */
   async importDeviceValues(rows: LegacyAgentDeviceValuesImportRow[], match: DeviceValuesMatch, apply: boolean): Promise<LegacyAgentDeviceValuesImportResult | DeviceValuesPending> {
     const res = await apiClient.post<ApiResponse<LegacyAgentDeviceValuesImportResult | DeviceValuesPending>>('/legacy-agent/device-values', { rows, match, apply });
     return (res.data.data ?? (res.data as unknown as DeviceValuesPending))!;

@@ -3,7 +3,7 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   BENCH_ERROR_CODES, BENCH_LIMITS, BENCH_OWNER_MIN_VERSION_CODE, BENCH_ROLE_POLICIES, BENCH_STEP_IDS, BENCH_STEP_STATUSES,
-  MASTER_TENANT_ID, benchRolePlan, sameBenchName, suggestBenchName, truncateSerial,
+  MASTER_TENANT_ID, benchAppsCounter, benchRolePlan, sameBenchName, suggestBenchName, truncateSerial,
   type BenchProvisioningKind, type BenchProvisioningState, type BenchRolePolicy, type BenchSiteDeviceView, type BenchSiteDevicesView,
   type BenchStationSiteView, type BenchStationTenantView, type BenchStepEntry,
 } from '@obligarth/shared';
@@ -81,8 +81,10 @@ export const StepBody = z.object({
       .refine((o) => Object.keys(o).length <= 16, 'counts: 16 keys at most').optional(),
     accountTypes: z.array(DETAIL_TEXT.min(1)).max(16).optional(),
     sdk: z.number().int().min(1).max(100).optional(),
-    versionCode: z.number().int().min(1).max(2_000_000_000).optional(),
+    versionCode: z.number().int().min(1).max(2_147_483_647).optional(),
     attempt: z.number().int().min(1).max(1000).optional(),
+    /** Lot BANC-A, step apps: the package of the tenant's store the entry is about. */
+    packageId: z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/).transform((s) => s.toLowerCase()).optional(),
   }).strict().optional(),
 }).strict();
 
@@ -187,7 +189,7 @@ async function siteLabelsOf(trx: Knex.Transaction, tenantId: number, siteId: str
 }
 
 /** The group `group` is `root` or below it, in the tenant (its transaction). */
-async function groupWithin(trx: Knex.Transaction, tenantId: number, group: number, root: number): Promise<boolean> {
+export async function groupWithin(trx: Knex.Transaction, tenantId: number, group: number, root: number): Promise<boolean> {
   if (group === root) return true;
   const r = await trx.raw(`WITH RECURSIVE up(id, parent_id, depth) AS (
       SELECT g.id, g.parent_id, 0 FROM obligarth.device_groups g WHERE g.tenant_id = ? AND g.id = ?
@@ -204,7 +206,7 @@ async function placementGroup(trx: Knex.Transaction, tenantId: number, targetGro
 }
 
 /** The target of a tenant's group among the station's, in the tenant's transaction (tenant context): not suspended. */
-async function targetIn(trx: Knex.Transaction, stationId: string, tenantId: number, groupId: number): Promise<Record<string, any> | null> {
+export async function targetIn(trx: Knex.Transaction, stationId: string, tenantId: number, groupId: number): Promise<Record<string, any> | null> {
   const t = await trx('bench_station_targets').where({ station_id: stationId, tenant_id: tenantId, group_id: groupId }).whereNull('suspended_at')
     .first('*') as Record<string, any> | undefined;
   return t ?? null;
@@ -221,16 +223,18 @@ export async function provisioningTenant(stationId: string, id: string): Promise
 /** The audit origin of a station's request. */
 export interface Origin { ip?: string; ua?: string; requestId?: string; route?: string }
 
-const sessionUser = (station: StationLookup): number | null =>
+export const sessionUser = (station: StationLookup): number | null =>
   station.session && station.session.expiresAt.getTime() > Date.now() ? station.session.userId : null;
 
 /** The technician of the session holds mdm.bench.operate in the tenant (a platform administrator always). The lookup
- *  gives no session for an account deactivated meanwhile; a session without its technician is refused all the same. */
-async function technicianMayOperate(station: StationLookup, tenantId: number): Promise<boolean> {
+ *  gives no session for an account deactivated meanwhile; a session without its technician is refused all the same.
+ *  Read in the tenant's context (the memberships of a tenant are visible there only): called outside a provisioning's
+ *  transaction (the completion, the exception D3 of a plan), it would otherwise read no membership at all. */
+export async function technicianMayOperate(station: StationLookup, tenantId: number): Promise<boolean> {
   const s = station.session;
   if (!s || s.expiresAt.getTime() <= Date.now() || s.technician === null) return false;
   if (s.technicianPlatformAdmin) return true;
-  return permissionService.userHasTenantCapability(s.userId, tenantId, 'mdm.bench.operate');
+  return asTenant(tenantId, stationActor(station.id), () => permissionService.userHasTenantCapability(s.userId, tenantId, 'mdm.bench.operate'));
 }
 
 // ── Plan ──────────────────────────────────────────────────────────────────────
@@ -396,7 +400,7 @@ async function lockedProvisioning(trx: Knex.Transaction, station: StationLookup,
 
 class TargetGone extends Error {}
 
-async function withProvisioning<T>(station: StationLookup, id: string, fn: (trx: Knex.Transaction, p: Record<string, any>, tenantId: number) => Promise<T>): Promise<T> {
+export async function withProvisioning<T>(station: StationLookup, id: string, fn: (trx: Knex.Transaction, p: Record<string, any>, tenantId: number) => Promise<T>): Promise<T> {
   const tenantId = await provisioningTenant(station.id, id);
   if (tenantId === null) throw new AppError(404, 'Provisioning not found', 'not_found');
   try {
@@ -467,6 +471,10 @@ export interface ProvisioningState {
   site: { id: string; code: string; name: string } | null;
   roleTarget: 'device_owner' | 'device_admin';
   legacyOwnerBench: boolean;
+  /** Lot BANC-A: the target the provisioning was planned in (one of the station's own: a station resuming a « compléter
+   *  les apps » applies ITS rules, the ADB cut, never those of the card's choice). */
+  tenantId: number;
+  groupId: number;
 }
 
 export async function provisioningState(station: StationLookup, id: string): Promise<ProvisioningState> {
@@ -492,6 +500,7 @@ export async function provisioningState(station: StationLookup, id: string): Pro
       deviceName: p.device_name ?? null,
       site: site ? { id: String(site.id), code: String(site.code), name: String(site.name) } : null,
       roleTarget: p.role_target, legacyOwnerBench: p.legacy_owner_bench === true,
+      tenantId, groupId: Number(p.group_id),
     };
   });
 }
@@ -628,7 +637,8 @@ export async function recordResult(station: StationLookup, id: string, b: z.infe
       // when the provisioning aimed at the owner on a target that carries the exception (allow_legacy_owner). Any other
       // such declaration is ignored (kept in the audit entry below).
       const legacyOwner = b.roleDeclared === 'device_owner' && Number(sat.agent_version_code) < BENCH_OWNER_MIN_VERSION_CODE;
-      const exception = legacyOwner && p.role_target === 'device_owner'
+      // Never on a provisioning « compléter les apps » (lot BANC-A): it changes nothing of the role.
+      const exception = legacyOwner && p.kind !== 'apps' && p.role_target === 'device_owner'
         && (p.legacy_owner_bench === true || (await targetIn(trx, station.id, tenantId, Number(p.group_id)))?.allow_legacy_owner === true);
       if (legacyOwner && !exception) warnings.push('owner_declaration_ignored');
       if (exception) {
@@ -643,11 +653,14 @@ export async function recordResult(station: StationLookup, id: string, b: z.infe
     await trx('bench_provisionings').where({ tenant_id: tenantId, id }).update(set);
     const ctx = await stationAuditContext(station.id, station.name, tenantId, origin);
     const technician = sessionUser(station);
+    const apps = benchAppsCounter(Array.isArray(p.steps) ? p.steps : (typeof p.steps === 'string' ? JSON.parse(p.steps) : []));
     await audit.appendInTx(trx, {
       tenantId, action: `bench.provisioning_${b.outcome}`, target: { type: 'bench_provisioning', id, ...(p.device_id ? { device: Number(p.device_id) } : {}) },
       details: {
         provisioningId: id, stationId: station.id, kind: p.kind, roleTarget: p.role_target, roleDeclared: b.roleDeclared ?? null,
         errorCode: set.error_code ?? null, warnings, ...(technician ? { technicianUserId: technician } : {}),
+        // Lot BANC-A: the counter of the step apps (its last summary), when it ran.
+        ...(apps ? { apps } : {}),
       },
     }, ctx, { onFailure: 'spool' });
     return { state: b.outcome, warnings };

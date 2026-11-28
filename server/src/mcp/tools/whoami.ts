@@ -33,7 +33,7 @@ export const ALWAYS_HUMAN = [
   "Actions at the 'restricted' level: an approval request is filed for another person.",
   'Any move of devices between groups: an authorization the human approves after seeing a preview.',
   'Any applied batch of site writes (import_sites, sites_from_devices, upsert_site, archive_site, set_device_site with dry_run false): one authorization per batch; the dry runs answer at once.',
-  'Any submission of a policy version or change of policy assignments (submit_policy_version, change_policy_assignments with dry_run false): an authorization (second factor), then another person beyond the publication thresholds; the drafts and the dry runs answer at once. A secret value (Wi-Fi password, kiosk PIN) is never read nor written: only referenced.',
+  'Any submission of a policy version or change of policy assignments (submit_policy_version, change_policy_assignments with dry_run false): an authorization (second factor), then another person when the tenant restricts it (the publication thresholds are reported only); the drafts and the dry runs answer at once. A secret value (Wi-Fi password, kiosk PIN) is never read nor written: only referenced.',
   'Never available here: wipe, lock, lost mode, remove management, delete device, ownership change, remote shell, remote view/control, approving or denying requests, audit export, user/key/settings management.',
 ];
 

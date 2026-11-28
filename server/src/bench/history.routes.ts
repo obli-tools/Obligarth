@@ -1,6 +1,6 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
-  BENCH_PROVISIONING_STATES, truncateSerial,
+  BENCH_PROVISIONING_STATES, benchAppsCounter, truncateSerial,
   type BenchProvisioningView, type BenchStepEntry, type BenchTenantStationView,
 } from '@obligarth/shared';
 import { audit } from '../audit';
@@ -15,7 +15,8 @@ import { closeTargetProvisionings } from './provisioning.service';
 // The bench seen from a tenant (lot BANC §3.7, §3.12), mounted at /api/bench-provisionings in the tenant router, all
 // behind mdm.bench.manage:
 //   GET    /                                   the provisionings of the tenant (500 at most; ?stationId=&state=&deviceId=&siteId=):
-//                                              serial numbers in clear with devices.manage, cut to 4 characters otherwise
+//                                              serial numbers in clear with devices.manage, cut to 4 characters otherwise;
+//                                              lot BANC-A: the counter of the step apps (installed / to install)
 //   GET    /stations                           the stations that target the tenant or enrolled into it (no token, no
 //                                              address, no host), with the tenant's targets
 //   POST   /targets/:stationId/:groupId/suspend   no second factor (protective): its open provisionings abandoned and
@@ -100,6 +101,7 @@ export function createBenchHistoryRouter(): Router {
       errorCode: r.error_code ?? null, steps: (Array.isArray(r.steps) ? r.steps : []) as BenchStepEntry[], stepsDropped: Number(r.steps_dropped ?? 0),
       technician: r.technician_id ? labels.get(Number(r.technician_id)) ?? null : null,
       siteId: r.site_id ? String(r.site_id) : null, siteCode: r.site_code ?? null, siteName: r.site_name ?? null,
+      apps: benchAppsCounter(Array.isArray(r.steps) ? r.steps : []),
       createdAt: iso(r.created_at) as string, updatedAt: iso(r.updated_at) as string, outcomeAt: iso(r.outcome_at),
     }));
     res.json({ success: true, data });

@@ -49,7 +49,7 @@ export function SiteEditDialog({ open, site, onClose, onSaved }: {
     try {
       const body = { code: code.trim(), name: name.trim(), city: city.trim() || null, contact: contact.trim() || null, groupId, values: asValues() };
       const saved = site ? await sitesApi.update(site.id, body) : await sitesApi.create(body);
-      // Held for a second person (beyond the publication thresholds): nothing changed yet.
+      // Held for a second person (the restrictions of the tenant): nothing changed yet.
       if (pendingSaid(t, saved)) { onClose(); return; }
       toast.success(t('common.saved') || 'Saved');
       onSaved(saved);

@@ -330,7 +330,9 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       outcome: run.outcome === 'completed' ? 'completed' : run.outcome === 'abandoned' ? 'abandoned' : 'failed',
       errorCode: run.errorCode,
       provisioningId: run.provisioningId,
-      deviceUuid: run.serverState?.deviceUuid ?? null,
+      deviceUuid: run.serverState?.deviceUuid ?? run.plan?.existingDeviceUuid ?? null,
+      kind: run.plan?.kind ?? null,
+      apps: run.appsCounter(),
     };
     void history.append(entry);
   };
@@ -351,6 +353,9 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
     siteDevices: (s, g) => need().siteDevices(s, g),
     agent: () => need().agent(),
     downloadApk: (s, d) => need().downloadApk(s, d),
+    requiredApps: (id) => need().requiredApps(id),
+    downloadPackage: (s, id, d) => need().downloadPackage(s, id, d),
+    planApps: (b) => need().planApps(b),
     plan: (b) => need().plan(b),
     provisioning: (id) => need().provisioning(id),
     token: (id) => need().token(id),
@@ -434,15 +439,19 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       adbCut: r.adbCut,
       pendingSteps: r.pendingSteps,
       ownerSetHere: r.ownerSetHere,
+      // Lot BANC-A: the step apps (« Apps n/N », the failures), « compléter les apps ».
+      mode: r.mode,
+      apps: r.apps ? { ...r.apps, failed: r.apps.failed.map((f) => ({ ...f })) } : null,
+      appsProof: r.appsProof,
     };
   };
 
   const outcomes: Outcome[] = [];
-  const startRun = (card: Card, choice: Choice | undefined, op?: string): Promise<void> => {
-    const rec: Outcome = { op: op ?? randomBytes(9).toString('base64url'), serial: card.run.serial, kind: 'run', pending: true, status: 0, body: null, delivered: false };
+  const startRun = (card: Card, choice: Choice | undefined, op?: string, mode?: 'apps'): Promise<void> => {
+    const rec: Outcome = { op: op ?? randomBytes(9).toString('base64url'), serial: card.run.serial, kind: mode ?? 'run', pending: true, status: 0, body: null, delivered: false };
     outcomes.push(rec);
     if (outcomes.length > OUTCOMES_KEPT) outcomes.splice(0, outcomes.length - OUTCOMES_KEPT);
-    return card.run.run({ choice }).then(() => {
+    return card.run.run({ choice, ...(mode ? { mode } : {}) }).then(() => {
       rec.pending = false;
       rec.status = 200;
       rec.body = { card: cardView(card) };
@@ -662,7 +671,7 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       json(res, 200, { cards: board.values().map(cardView) });
       return;
     }
-    const m = /^\/api\/cards\/([A-Za-z0-9._:-]{1,64})\/(plan|run|abandon|close|export)$/.exec(path);
+    const m = /^\/api\/cards\/([A-Za-z0-9._:-]{1,64})\/(plan|run|apps|abandon|close|export)$/.exec(path);
     if (m && method === 'POST') {
       const card = cardFor(m[1]);
       const body = await readJsonBody(req);
@@ -707,7 +716,8 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
           if (!card.present) throw new HttpError(409, 'device_gone');
           await requireApprovedRoute();
           let target: BenchTarget | undefined;
-          if (!card.run.plan) {
+          // « Compléter les apps » held before its plan (no session…) resumes without a target: the server finds it.
+          if (!card.run.plan && card.run.mode !== 'apps') {
             if (card.tenantId === null || card.groupId === null) throw new HttpError(400, 'target_required');
             const all = await need().targets().catch((err: { code?: string }) => { throw new HttpError(502, err.code ?? 'server_unreachable'); });
             target = all.find((t) => t.tenantId === card.tenantId && t.groupId === card.groupId);
@@ -724,6 +734,28 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
             card.run.allowLegacyOwner = card.allowLegacyOwner;
           }
           const p = startRun(card, choice, op);
+          const rec = outcomes[outcomes.length - 1];
+          const quick = await Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), req.headers['x-bench-async'] === '1' ? 5_000 : 0))]);
+          json(res, quick ? 200 : 202, { op: rec.op, card: cardView(card) });
+          return;
+        }
+        case 'apps': {
+          // Lot BANC-A: « compléter les apps » of a device already enrolled. No target is chosen: the server finds the
+          // device in one of the station's targets from what the bench reads, in an open bench session only.
+          if (card.run.busy) throw new HttpError(409, 'busy');
+          if (!card.present) throw new HttpError(409, 'device_gone');
+          if (card.run.outcome === 'open' && card.run.provisioningId) throw new HttpError(409, 'already_planned');
+          await requireApprovedRoute();
+          const s = status as StationStatus | null;
+          if (!s || !('session' in s) || !s.session) throw new HttpError(409, 'no_session');
+          // The journal of the earlier provisioning goes to the server first: what it still cannot send keeps the card
+          // (never dropped with the old run).
+          if (card.run.pendingSteps > 0) await card.run.flush().catch(() => undefined);
+          if (card.run.pendingSteps > 0) throw new HttpError(409, 'steps_pending');
+          // A fresh run (the card may have ended on agent_already_enrolled, or held before any plan).
+          card.run = newCard(card.run.serial, card.device).run;
+          const op = typeof req.headers['x-bench-op'] === 'string' && OP_ID.test(req.headers['x-bench-op']) ? req.headers['x-bench-op'] : undefined;
+          const p = startRun(card, undefined, op, 'apps');
           const rec = outcomes[outcomes.length - 1];
           const quick = await Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), req.headers['x-bench-async'] === '1' ? 5_000 : 0))]);
           json(res, quick ? 200 : 202, { op: rec.op, card: cardView(card) });

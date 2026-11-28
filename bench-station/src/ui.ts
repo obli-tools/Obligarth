@@ -401,6 +401,36 @@ function renderChooser(c, d) {
   return h + '</div>';
 }
 
+// ── Lot BANC-A: the required apps installed by ADB (« Apps n/N », the failures), « Compléter les apps ».
+function sessionOpen() { return !!(state && state.phase === 'approved' && state.station && state.station.session); }
+function completeAppsButton() {
+  return '<button data-action="complete-apps"' + (sessionOpen() ? '' : ' disabled') + '>' + esc(t('bench.cards.completeApps') || 'Complete the apps') + '</button>';
+}
+function renderCompleteApps(c) {
+  return '<div class="row">' + completeAppsButton() + '<span class="muted">' + esc(t('bench.cards.completeAppsHelp') || 'Phone already enrolled: install the apps its policy requires.') + '</span></div>';
+}
+function renderApps(c) {
+  const a = c.apps;
+  if (!a) return '';
+  if (a.unsupported) return '<div class="muted">' + esc(t('bench.cards.appsUnsupported') || 'Apps skipped: this server does not install apps at the bench.') + '</div>';
+  if (a.total === 0) return a.state === 'done' ? '<div class="muted">' + esc(t('bench.cards.appsNone') || 'No required app to install.') + '</div>' : '';
+  let h = '<div><strong>' + esc(t('bench.cards.apps', { installed: a.installed, total: a.total }) || ('Apps ' + a.installed + '/' + a.total)) + '</strong>';
+  if (a.current) h += ' <span class="muted">' + esc(t('bench.cards.appsInstalling', { name: a.current, done: a.done + 1, total: a.total }) || a.current) + '</span>';
+  h += '</div>';
+  if (a.failed.length) {
+    h += '<div class="muted">' + esc(t('bench.cards.appsFailedTitle') || 'Not installed:') + '</div><ul class="names">'
+      + a.failed.map((f) => '<li><span class="t-bad">' + esc(f.name) + '</span> — ' + esc(errText(f.code)) + '</li>').join('') + '</ul>';
+  }
+  return h;
+}
+function completedText(c) {
+  const failed = c.apps && !c.apps.unsupported ? c.apps.failed.length : 0;
+  if (c.kind === 'apps') {
+    return failed ? (t('bench.cards.completedAppsReserved', { count: failed }) || 'Done with reservations.') : (t('bench.cards.completedApps') || 'Done: the required apps are installed.');
+  }
+  return failed ? (t('bench.cards.completedReserved', { count: failed }) || 'Done with reservations.') : (t('bench.cards.completed') || 'Done.');
+}
+
 function renderCard(c) {
   const tone = c.tone || 'idle';
   const attention = c.prompt && c.prompt.attention;
@@ -410,9 +440,11 @@ function renderCard(c) {
   if (c.targetLabel && c.provisioningId) h += '<div>' + esc(c.targetLabel) + (c.deviceName ? ' · ' + esc(c.deviceName) : '') + '</div>';
   if (c.site && c.provisioningId) h += '<div class="muted">' + esc((t('bench.choose.site') || 'Site') + ' ' + c.site.code + ' — ' + c.site.name) + '</div>';
   if (c.allowLegacyOwner && c.provisioningId) h += '<div class="muted">' + esc(t('bench.choose.legacyShort') || 'Older agent allowed as owner (decided at the bench)') + '</div>';
-  if (c.roleChosen) h += '<div class="muted">' + esc(t('bench.role.' + c.roleChosen) || c.roleChosen) + (c.kind === 'convert' ? ' · ' + esc(t('bench.cards.convert') || 'conversion') : '') + '</div>';
-  if (!c.provisioningId && !c.busy && c.outcome === 'open') h += renderChooser(c, draftOf(c.serial));
+  if (c.roleChosen) h += '<div class="muted">' + esc(t('bench.role.' + c.roleChosen) || c.roleChosen) + (c.kind === 'convert' ? ' · ' + esc(t('bench.cards.convert') || 'conversion') : '') + (c.kind === 'apps' ? ' · ' + esc(t('bench.cards.appsKind') || 'apps completion') : '') + '</div>';
+  if (c.appsProof) h += '<div class="muted">' + esc(t('bench.cards.appsProof', { pairs: c.appsProof.serialPairs, androidId: t('bench.cards.proof.' + c.appsProof.androidId) || c.appsProof.androidId }) || '') + '</div>';
+  if (!c.provisioningId && !c.busy && c.outcome === 'open' && c.mode !== 'apps') h += renderChooser(c, draftOf(c.serial)) + renderCompleteApps(c);
   h += '<ul class="steps">' + c.steps.map((s) => '<li class="s-' + esc(s.status) + '" title="' + esc(s.code ? (t('bench.code.' + s.code) || s.code) : '') + '"><span class="dot"></span>' + esc(stepLabel(s.id)) + '</li>').join('') + '</ul>';
+  h += renderApps(c);
   if (c.prompt) {
     const p = c.prompt.params || {};
     h += '<div class="prompt"><strong>' + esc(t('bench.prompt.' + c.prompt.code, p) || errText(c.prompt.code, p)) + '</strong>';
@@ -422,7 +454,7 @@ function renderCard(c) {
     h += '<div class="row">' + c.prompt.choices.map((ch) => '<button data-action="choice" data-choice="' + esc(ch) + '"' + (ch === 'recheck' || ch === 'retry' || ch === 'reissue' ? ' class="primary"' : '') + '>' + esc(t('bench.choice.' + ch) || ch) + '</button>').join('') + '</div></div>';
   }
   if (c.outcome === 'failed' && c.errorCode) h += '<div class="prompt"><strong class="t-bad">' + esc(errText(c.errorCode, c.errorParams || {})) + '</strong></div>';
-  if (c.outcome === 'completed') h += '<div class="prompt">' + esc(t('bench.cards.completed') || 'Done.') + (c.adbCut === 'pending_agent' ? ' ' + esc(t('bench.hint.adb_cut_pending') || 'ADB switched off: awaiting the confirmation of the agent.') : '') + '</div>';
+  if (c.outcome === 'completed') h += '<div class="prompt">' + esc(completedText(c)) + (c.adbCut === 'pending_agent' ? ' ' + esc(t('bench.hint.adb_cut_pending') || 'ADB switched off: awaiting the confirmation of the agent.') : '') + '</div>';
   if (c.hint) h += '<div class="muted">' + esc(t('bench.hint.' + c.hint) || c.hint) + '</div>';
   if (c.pendingSteps) h += '<div class="muted">' + esc(t('bench.cards.pendingSteps', { count: c.pendingSteps }) || '') + '</div>';
   h += '<div class="row">';
@@ -430,6 +462,8 @@ function renderCard(c) {
   if (c.outcome === 'open' && c.provisioningId && !c.busy) h += '<button class="danger" data-action="abandon">' + esc(t('bench.cards.abandon') || 'Abandon') + '</button>';
   // « Rendre l'appareil »: the owner this station set, whatever the state of the card (the agent refuses once enrolled).
   if (c.ownerSetHere && !c.busy && c.outcome !== 'completed') h += '<button class="danger" data-action="release">' + esc(t('bench.cards.release') || 'Give the device back') + '</button>';
+  // « Compléter les apps » (lot BANC-A) after « enrolled elsewhere »: the device may be one of this station's targets.
+  if (!c.busy && c.outcome === 'failed' && c.errorCode === 'agent_already_enrolled' && c.present) h += completeAppsButton();
   if (!c.busy && (c.outcome !== 'open' || !c.provisioningId)) h += '<button data-action="close">' + esc(t('bench.cards.close') || 'Close') + '</button>';
   h += '<button data-action="export">' + esc(t('bench.cards.export') || 'Export the raw log') + '</button>';
   h += '</div></div>';
@@ -452,10 +486,16 @@ function renderCards() {
   try { if (typeof keep.start === 'number') el.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ }
 }
 
+function historyApps(r) {
+  const a = r.apps;
+  if (!a || !a.total) return '';
+  return ' · ' + esc(t('bench.history.apps', { installed: a.installed, total: a.total }) || (a.installed + '/' + a.total + ' apps'))
+    + (a.failed ? ' (' + esc(t('bench.history.appsFailed', { count: a.failed }) || (a.failed + ' failed')) + ')' : '');
+}
 function renderHistory() {
   if (!historyRows.length) { document.getElementById('history').innerHTML = '<p class="muted">' + esc(t('bench.history.empty') || 'Nothing yet today.') + '</p>'; return; }
   const head = ['time', 'tenant', 'site', 'serial', 'model', 'role', 'outcome'].map((k) => '<th>' + esc(t('bench.history.' + k) || k) + '</th>').join('');
-  const rows = historyRows.map((r) => '<tr><td>' + esc(hhmm(r.at)) + '</td><td>' + esc((r.tenant || '') + (r.group ? ' › ' + r.group : '')) + '</td><td>' + esc(r.site || '') + '</td><td>' + esc(r.serial || '') + '</td><td>' + esc(r.model || '') + (r.android ? ' · ' + esc(r.android) : '') + '</td><td>' + esc(r.roleObtained ? (t('bench.role.' + r.roleObtained) || r.roleObtained) : '') + '</td><td>' + esc(t('bench.outcome.' + r.outcome) || r.outcome) + (r.errorCode ? ' — ' + esc(errText(r.errorCode)) : '') + '</td></tr>').join('');
+  const rows = historyRows.map((r) => '<tr><td>' + esc(hhmm(r.at)) + '</td><td>' + esc((r.tenant || '') + (r.group ? ' › ' + r.group : '')) + '</td><td>' + esc(r.site || '') + '</td><td>' + esc(r.serial || '') + '</td><td>' + esc(r.model || '') + (r.android ? ' · ' + esc(r.android) : '') + '</td><td>' + esc(r.roleObtained ? (t('bench.role.' + r.roleObtained) || r.roleObtained) : '') + '</td><td>' + esc(t('bench.outcome.' + r.outcome) || r.outcome) + (r.errorCode ? ' — ' + esc(errText(r.errorCode)) : '') + historyApps(r) + '</td></tr>').join('');
   document.getElementById('history').innerHTML = '<table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
@@ -576,6 +616,10 @@ document.addEventListener('click', (ev) => {
     const c = cards.find((x) => x.serial === serial);
     const release = !!(c && c.ownerSetHere) && confirm(t('bench.cards.releaseConfirm') || 'Give the device back (remove the owner set by this station)?');
     act(() => api('/api/cards/' + enc + '/abandon', { method: 'POST', body: { release } }));
+  }
+  if (action === 'complete-apps') {
+    delete drafts[serial];
+    act(() => api('/api/cards/' + enc + '/apps', { method: 'POST', body: {} }));
   }
   if (action === 'close') delete drafts[serial];
   if (action === 'close') act(() => api('/api/cards/' + enc + '/close', { method: 'POST', body: {} }));

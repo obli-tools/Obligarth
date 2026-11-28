@@ -466,6 +466,9 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
       || (removalDevices > 0 && recent.removals.size >= T.removalDevices))) reasons.push('cumulative');
   }
   if (await reachesWipeSettings(q, androidSet)) reasons.push('wipe_settings');
+  // Decision of the owner (28/11/2026): the thresholds and the wipe-capable settings no longer ask a second approver;
+  // they are kept for information (`thresholds`). Only the tenant's own restriction matrix still does ('restriction').
+  const thresholds = reasons.splice(0, reasons.length);
   if (opts.matrixLevel === 'restricted') reasons.push('restriction');
 
   const visible = opts.visibleDeviceIds ?? 'all';
@@ -483,6 +486,7 @@ export async function computeImpact(q: Knex | Knex.Transaction, tenantId: number
     sample,
     fleetSize,
     approval: { required: reasons.length > 0, reasons },
+    ...(thresholds.length ? { thresholds } : {}),
     removalDevices,
     ...(cumulative ? { cumulative } : {}),
     fleetShareFloor: floor,

@@ -470,8 +470,8 @@
         "description": "Un appareil géré sans aucun contact depuis ce nombre de jours est affiché et compté comme sans contact."
       },
       "publishFleetShareFloor": {
-        "label": "Second approbateur : part du parc comptée à partir de",
-        "description": "Un changement de configuration (publication, affectations, groupe, appareils déplacés) demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils."
+        "label": "Part du parc : seuil compté à partir de",
+        "description": "Un changement de configuration (publication, affectations, groupe, appareils déplacés) est signalé comme atteignant le seuil de 10 % du parc dès qu'il touche au moins ce nombre d'appareils. Pour information seulement : les seuils ne demandent plus de second approbateur (seules les restrictions du tenant en demandent un)."
       },
       "androidPatchMaxAgeDays": {
         "label": "Android : correctif de sécurité en retard après",
@@ -2595,8 +2595,8 @@
       "help": "Un changement est approuvé par une seconde personne (un approbateur client par défaut).",
       "requested": "Changement demandé : en attente d'un approbateur",
       "unchanged": "Rien n'a changé",
-      "fleetShareFloor": "Second approbateur : 10 % du parc comptés à partir de (appareils)",
-      "fleetShareFloorHelp": "Un changement de la configuration demande un second approbateur quand il touche 10 % du parc ou plus, dès qu'il touche au moins ce nombre d'appareils.",
+      "fleetShareFloor": "Seuil de 10 % du parc compté à partir de (appareils)",
+      "fleetShareFloorHelp": "Un changement de la configuration est signalé comme touchant 10 % du parc ou plus dès qu'il touche au moins ce nombre d'appareils. Pour information seulement : les seuils ne demandent plus de second approbateur (seules les restrictions du tenant en demandent un).",
       "legacyAgentCommandsSensitive": "Second facteur sur les commandes de l'agent Android",
       "legacyAgentCommandsSensitiveHelp": "L'installation ou la désinstallation d'une app, la mise à jour de l'agent, le redémarrage d'un appareil et la suspension de son kiosque demandent le second facteur de la personne qui les envoie (console et MCP). Désactivé par défaut. Comme pour les autres réglages, le changement est approuvé par une seconde personne.",
       "pending": "Changement en attente d'approbation (demande n° {{id}})",
@@ -3974,6 +3974,7 @@
       "noVisibleDevice": "Aucun appareil dans vos portées.",
       "expired": "Cet aperçu a expiré : recalculez-le.",
       "request": "Demander l'approbation",
+      "thresholdsInfo": "Seuils atteints (pour information, aucun second approbateur demandé) :",
       "reason": {
         "devices_threshold": "25 appareils ou plus sont touchés",
         "fleet_share": "10 % du parc ou plus est touché",
@@ -5498,7 +5499,7 @@
       "deprecatedFor": "obsolète : {{replacement}}",
       "deprecated": "obsolète",
       "wipeCapable": "peut effacer un appareil",
-      "wipeCapableHint": "Publié au niveau restreint (un second approbateur), retenu tant que le tenant est gelé.",
+      "wipeCapableHint": "Signalé dans l'aperçu de toute publication qui l'ajoute, le change ou le retire (sans second approbateur sauf si les restrictions du tenant en demandent un), retenu tant que le tenant est gelé.",
       "secretSlots": "secrets",
       "secretHint": "Un secret s'écrit {\"$secretValue\": \"…\"} : déplacé dans le coffre à l'enregistrement.",
       "minApi": "API {{level}}+",
@@ -7001,7 +7002,7 @@
       "no": "Non",
       "notManaged": "Non géré",
       "packagesHint": "Un paquet par ligne (com.example.app)",
-      "wipeHint": "Appareils d'entreprise uniquement, avec une qualité de mot de passe définie ; toute publication qui l'ajoute, le change ou le retire exige un second approbateur.",
+      "wipeHint": "Appareils d'entreprise uniquement, avec une qualité de mot de passe définie ; toute publication qui l'ajoute, le change ou le retire est signalée dans son aperçu.",
       "yes": "Oui",
       "benchLockout": "Coupe ADB : l'appareil ne pourra plus repasser au banc sans fenêtre de banc ou réinitialisation.",
       "benchLockoutConfirm": "Je confirme : couper ADB sur ces appareils"
@@ -7201,7 +7202,7 @@
     },
     "values": {
       "apply": "Importer",
-      "approval": "Au-delà des seuils : une demande d'approbation a été déposée.",
+      "approval": "Les restrictions de ce tenant demandent un second approbateur : une demande d'approbation a été déposée.",
       "byCode": "Sinon, rapprocher un code tiré du nom de l'appareil",
       "byName": "Rapprocher le nom exact de l'appareil",
       "current": "Valeurs actuelles",
@@ -7393,7 +7394,20 @@
       "too_many_cards": "Trop d'appareils à la fois",
       "internal": "Erreur interne",
       "site_refused": "Site hors des cibles de la station",
-      "name_taken": "Nom déjà employé dans le site"
+      "name_taken": "Nom déjà employé dans le site",
+      "app_installed": "App installée",
+      "app_older_sdk": "App trop récente pour cette version d'Android",
+      "app_version_downgrade": "Une version plus récente de l'app est déjà installée",
+      "app_update_incompatible": "App installée avec une autre signature",
+      "app_insufficient_storage": "Stockage insuffisant pour l'app",
+      "app_invalid_apk": "Paquet de l'app illisible",
+      "app_download_failed": "Téléchargement de l'app échoué",
+      "app_sha_mismatch": "Paquet de l'app altéré (SHA-256)",
+      "app_signer_mismatch": "App signée par un autre certificat",
+      "app_install_failed": "Installation de l'app échouée",
+      "app_unavailable": "App plus disponible",
+      "device_not_found": "Aucun appareil des cibles de la station ne correspond",
+      "identity_ambiguous": "Plusieurs appareils correspondent à cette identité"
     },
     "step": {
       "detect": "Détection",
@@ -7406,6 +7420,7 @@
       "configure": "Configuration",
       "wait_enroll": "Enrôlement",
       "verify": "Vérification",
+      "apps": "Apps",
       "finalize": "Finalisation"
     },
     "stepStatus": {
@@ -7452,7 +7467,10 @@
         "abandoned": "Abandonné",
         "expired": "Expiré"
       },
-      "site": "Site"
+      "site": "Site",
+      "apps": "Apps",
+      "appsCount": "{{installed}}/{{total}} apps",
+      "appsFailed": "{{count}} en échec"
     },
     "stations": {
       "title": "Stations de banc",

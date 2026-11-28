@@ -5,9 +5,7 @@ import { SITE_LIMITS as L, SITE_VALUE_KEY_RE } from '@obligarth/shared';
 import { audit, canonicalJson } from '../../audit';
 import { db } from '../../db';
 import { AppError } from '../../middleware/errorHandler';
-import { approvalService } from '../../services/approval.service';
 import { permissionService } from '../../services/permission.service';
-import { beyondThresholds } from '../../legacyAgent/policyRoutes';
 import { consumeBatch, insertBatch, purgeTenantBatches, usableBatch } from '../../sites/batches';
 import { POLICY_MANAGE, SITES_APPLY, SITES_DEVICE_SITE, SITE_WRITE_APPROVAL, prevDigestOf, type SiteWriteSealed } from '../../sites/guard';
 import { checkSite, type SiteRow } from '../../sites/model';
@@ -36,11 +34,11 @@ import type { ExecContext, ExecResult } from './writes';
 // the sites from the custom fields) need a key that reaches the whole tenant (groups and devices 'all'), and a change
 // of what the templates read (values, code, name, city; an import that updates sites; the sites from the custom fields)
 // needs, as in the console (sites/guard.ts), mdm.policies.manage and the human's rights on every device of the sites
-// changed, then at approval the restrictable action sites.apply and, beyond the publication thresholds of its policy
-// impact, a second person (the console's approval site_write, filed by the approval: state 'filed').
+// changed, then at approval the restrictable action sites.apply ('restricted': a second person, the console's approval
+// site_write, filed by the approval: state 'filed'; the publication thresholds no longer ask one since 28/11/2026).
 // set_device_site needs every device inside the key and the human's write access on it; when it rewrites their agent
 // policy, the rule of the console (guardSetDeviceSite: sites.device_site for one device, mdm.policies.manage, sites.apply
-// and the thresholds for several). The values of the sites are read by the holders of devices.manage or
+// for several). The values of the sites are read by the holders of devices.manage or
 // mdm.policies.manage only (readsSiteValues, review F034). Attaching a device to a site
 // never moves it between groups (move_devices_to_group, always a human, does). The values of a site are customer data:
 // stored in the batch, never in a summary nor an audit entry (keys only).
@@ -119,15 +117,14 @@ export async function readsSiteValues(who: Who, tenant: number): Promise<boolean
 const withoutValues = <T extends { values: Record<string, string> }>(s: T): T => ({ ...s, values: {} });
 
 /**
- * The two reads of the database the guard of set_device_site makes besides the services (restrictionService,
- * approvalService): an object so that the local tests replace them (mock.method), never reassigned by the code.
- *   impact  the agent policy of how many of these devices a change of their site rewrites (sites/service.ts sitePolicyImpact);
- *   beyond  is this impact beyond the publication thresholds of the tenant (a second person)?
+ * The read of the database the guard of set_device_site makes besides the services (restrictionService): an object so
+ * that the local tests replace it (mock.method), never reassigned by the code.
+ *   impact  the agent policy of how many of these devices a change of their site rewrites (sites/service.ts sitePolicyImpact).
+ * The publication thresholds no longer ask a second person (decision of the owner, 28/11/2026): no 'beyond' any more.
  */
 export const siteGuardDeps = {
   impact: (tenant: number, ids: number[], site: SiteRow | null): Promise<number> =>
     sitePolicyImpact(db, tenant, { attach: ids.map((deviceId) => ({ deviceId, site })) }),
-  beyond: (tenant: number, impact: number): Promise<boolean> => beyondThresholds(db, tenant, impact),
 };
 const attachImpact = (tenant: number, ids: number[], site: SiteRow | null): Promise<number> => siteGuardDeps.impact(tenant, ids, site);
 
@@ -461,23 +458,18 @@ function heldBy(gate: Awaited<ReturnType<ExecContext['gate']['check']>>): ExecRe
 /**
  * The console's guard of a write that changes what the templates read (sites/guard.ts), at the approval: the
  * restrictable action sites.apply (its 'sensitive' step stands proven by the fresh factor of the approval; 'restricted'
- * files the console's approval), then, beyond the publication thresholds of its policy impact, the approval site_write
- * filed as the human (a second person). null: the write may run now.
+ * files the console's approval; the publication thresholds no longer ask a second person since the decision of the
+ * owner of 28/11/2026). null: the write may run now.
  */
 async function guardApproved(x: ExecContext, tenant: number, g: ApprovedGuard): Promise<ExecResult | null> {
   const payload = { action: SITES_APPLY, ...g.payload, policyImpact: g.impact, deviceIds: g.deviceIds.slice(0, 500), source: 'mcp' };
-  const description = (x.descriptionPrefix ?? '') + g.description;
   const held = heldBy(await x.gate.check({
     tenantId: tenant, actionKey: SITES_APPLY, deviceIds: g.deviceIds, approvalRequestType: SITE_WRITE_APPROVAL,
     approvalDescription: g.description, approvalPayload: payload, approvalSealed: g.sealed,
   }));
   if (held) return held;
-  if (await siteGuardDeps.beyond(tenant, g.impact)) {
-    const approval = await approvalService.create({
-      tenantId: tenant, userId: x.consoleCaller.userId, requestType: SITE_WRITE_APPROVAL, description, payload, sealed: g.sealed,
-    });
-    return { state: 'filed', outcome: { approvalId: approval.id, policyImpact: g.impact } };
-  }
+  // D18 withdrawn (decision of the owner, 28/11/2026): the publication thresholds no longer ask a second person; only
+  // the tenant's restriction matrix does (the gate above).
   return null;
 }
 
@@ -485,11 +477,10 @@ async function guardApproved(x: ExecContext, tenant: number, g: ApprovedGuard): 
  * The guard of set_device_site at the approval, the rule of the console's routes (sites/routes.ts, reviews F029/F116),
  * only when the change rewrites the agent policy of a device:
  *   - one device: the restrictable action sites.device_site (opt-in, no level by default), sealed 'device_site';
- *   - several devices attached to a site: mdm.policies.manage, then sites.apply and the publication thresholds
- *     (guardApproved), sealed 'attach' as POST /api/sites/:id/devices;
+ *   - several devices attached to a site: mdm.policies.manage, then sites.apply (guardApproved), sealed 'attach' as POST /api/sites/:id/devices;
  *   - several devices detached (no console equivalent): the same as an attachment, the sealed 'attach' with a null
- *     site (sites/guard.ts): mdm.policies.manage, sites.apply and the thresholds (guardApproved), a second person
- *     approving the sealed detachment when the level or the impact asks one (review R1, round 3).
+ *     site (sites/guard.ts): mdm.policies.manage, sites.apply (guardApproved), a second person approving the sealed
+ *     detachment when the level asks one (review R1, round 3).
  * null: the write may run now.
  */
 export async function guardSetDeviceSite(x: ExecContext, tenant: number, ids: number[], site: SiteRow | null,

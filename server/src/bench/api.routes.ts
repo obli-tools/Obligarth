@@ -5,9 +5,9 @@ import { MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../audit';
 import { originOfRequest } from '../audit/actor';
 import { AppError } from '../middleware/errorHandler';
-import { WindowLimiter } from '../legacyAgent/limits';
+import { ConcurrencyLimiter, WindowLimiter } from '../legacyAgent/limits';
 import { clientIp } from '../utils/clientIp';
-import { BENCH_SURFACE_ACTOR } from './actor';
+import { BENCH_SURFACE_ACTOR, stationAuditContext } from './actor';
 import { AGENT_MIN_SDK, checkedApk, servedRelease, signerAdmitted } from './apk.service';
 import { assertApprovedBenchStation, requireApprovedBenchStation, requireBenchStationSelf } from './guard';
 import {
@@ -15,6 +15,7 @@ import {
   stationTargets, stationTenants, type Origin,
 } from './provisioning.service';
 import { createBenchReleaseRouter } from './release.routes';
+import { AppsPlanBody, completionLimiter, isProvisioningId, packageFile, planAppsCompletion, provisioningApps } from './apps.service';
 import { cleanLabel, normaliseStationToken, registerStation, stationTokenHash, stationVerificationCode } from './stations.service';
 
 // =============================================================================
@@ -35,10 +36,23 @@ import { cleanLabel, normaliseStationToken, registerStation, stationTokenHash, s
 //   POST /v1/provisionings/:id/token              approved + a bench session: a single-use token (120/h, 300/day)
 //   POST /v1/provisionings/:id/steps              approved: one step of the journal (never a 413: the oldest leave)
 //   POST /v1/provisionings/:id/result             approved: the outcome (idempotent)
+// Lot BANC-A (the required apps installed by ADB, apps.service.ts):
+//   GET  /v1/provisionings/:id/apps               approved: the required apps the bench installs on its enrolled device
+//                                                 (409 not_enrolled, no_session; 422 device_outside_target)
+//   GET  /v1/packages/:sha256?provisioning=<id>   approved: the file of one app of THAT list (404 apk_unavailable),
+//                                                 2 at once and 300 per hour per station (429), never cached
+//   POST /v1/provisionings/apps                   approved + a bench session: « compléter les apps » of a device already
+//                                                 enrolled, found by its proven identity (30 per hour per station)
 // =============================================================================
 
 const MAX_BODY = 64 * 1024;
 const registerLimiter = new WindowLimiter(20, 3_600_000);
+/** Lot BANC-A: the files of the required apps, per station (the agent's APK is not counted). */
+const packageDownloads = new ConcurrencyLimiter(2);
+const packageWindow = new WindowLimiter(300, 3_600_000);
+
+/** The limiters of this surface (the tests reset them). */
+export const benchSurfaceLimits = { registerLimiter, packageWindow, completionLimiter, packageDownloads };
 
 const wrap = (fn: (req: Request, res: Response) => Promise<void>) =>
   (req: Request, res: Response, next: NextFunction): void => { fn(req, res).catch(next); };
@@ -182,6 +196,63 @@ export function createBenchStationRouter(): Router {
     const s = assertApprovedBenchStation(req);
     const out = await planProvisioning(s, body(PlanBody, req), originOf(req));
     res.status(201).json({ success: true, data: out });
+  }));
+
+  // Lot BANC-A: before /provisionings/:id (a literal segment).
+  v1.post('/provisionings/apps', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    const b = body(AppsPlanBody, req);
+    const wait = completionLimiter.hit(s.id);
+    if (wait) { res.setHeader('Retry-After', String(wait)); throw new AppError(429, 'Too many completions from this station', 'rate_limited'); }
+    res.status(201).json({ success: true, data: await planAppsCompletion(s, b, originOf(req)) });
+  }));
+
+  v1.get('/provisionings/:id/apps', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    const { items } = await provisioningApps(s, String(req.params.id).toLowerCase());
+    res.json({ success: true, data: items });
+  }));
+
+  v1.get('/packages/:sha256', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    const sha = String(req.params.sha256);
+    const id = typeof req.query.provisioning === 'string' ? req.query.provisioning.toLowerCase() : '';
+    if (!isProvisioningId(id)) throw new AppError(400, 'Invalid query: provisioning', 'bad_request');
+    if (!/^[0-9a-f]{64}$/.test(sha)) throw new AppError(404, 'Not found', 'apk_unavailable');
+    // The concurrency slot first: an attempt refused for concurrency (429, Retry-After 10) never uses the hourly budget.
+    let release = packageDownloads.acquire(s.id);
+    if (!release) { res.setHeader('Retry-After', '10'); throw new AppError(429, 'Too many downloads at once from this station', 'rate_limited'); }
+    try {
+      const wait = packageWindow.hit(s.id);
+      if (wait) { res.setHeader('Retry-After', String(wait)); throw new AppError(429, 'Too many downloads from this station', 'rate_limited'); }
+      const found = await packageFile(s, id, sha);
+      if (!found) throw new AppError(404, 'Not found', 'apk_unavailable');
+      const check = await checkedApk({ file: found.file, sha256: found.app.sha256 });
+      if (!check.ok) {
+        if (check.reason === 'missing') throw new AppError(404, 'Not found', 'apk_unavailable');
+        res.status(500).json({ success: false, error: 'The package does not match its SHA-256', code: 'apk_mismatch' });
+        return;
+      }
+      await audit.append({
+        tenantId: found.tenantId, action: 'bench.app_downloaded', target: { type: 'bench_provisioning', id, device: found.deviceId },
+        details: {
+          provisioningId: id, stationId: s.id, packageId: found.app.packageId, packageName: found.app.packageName,
+          versionCode: found.app.versionCode, sha256: found.app.sha256,
+        },
+      }, await stationAuditContext(s.id, s.name, found.tenantId, originOf(req)));
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Length', String(check.size));
+      res.setHeader('X-Content-SHA256', found.app.sha256);
+      const done = release;
+      release = null;
+      await new Promise<void>((resolve, reject) => {
+        const stream = createReadStream(found.file);
+        res.on('close', () => { done(); stream.destroy(); resolve(); });
+        stream.on('error', (e) => { done(); reject(e); }).on('end', () => { done(); resolve(); }).pipe(res);
+      });
+    } finally {
+      if (release) release();
+    }
   }));
 
   v1.get('/provisionings/:id', wrap(async (req, res) => {

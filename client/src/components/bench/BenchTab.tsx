@@ -126,7 +126,15 @@ export function BenchTab() {
                     <td className={clsx(tdCls, 'text-text-secondary')}>{r.model}</td>
                     <td className={clsx(tdCls, 'text-text-secondary')}>{r.osRelease ?? '—'} <span className="text-xs text-text-muted">(API {r.sdkInt})</span></td>
                     <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{roleLabel(r.roleTarget)} / {r.managementMode ? roleLabel(r.managementMode) : '—'}</td>
-                    <td className={tdCls}><ProvisioningStatePill state={r.state} /></td>
+                    <td className={tdCls}>
+                      <ProvisioningStatePill state={r.state} />
+                      {r.apps && (
+                        <div className={clsx('mt-1 text-[11px]', r.apps.failed > 0 ? 'text-amber-400' : 'text-text-muted')}>
+                          {t('bench.history.appsCount', { installed: r.apps.installed, total: r.apps.total }) || `${r.apps.installed}/${r.apps.total} apps`}
+                          {r.apps.failed > 0 && ` · ${t('bench.history.appsFailed', { count: r.apps.failed }) || `${r.apps.failed} failed`}`}
+                        </div>
+                      )}
+                    </td>
                     <td className={clsx(tdCls, 'text-xs', r.errorCode ? 'text-red-400' : 'text-text-muted')}>{errorLabel(r.errorCode)}</td>
                   </tr>
                   {open.has(r.id) && (
