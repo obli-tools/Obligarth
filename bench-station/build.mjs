@@ -184,8 +184,17 @@ const seaConfig = join(dist, 'sea-config.json');
 writeFileSync(seaConfig, JSON.stringify({ main: bundle, output: blob, disableExperimentalSEAWarning: true, useSnapshot: false, useCodeCache: true }, null, 2));
 execFileSync(process.execPath, ['--experimental-sea-config', seaConfig], { stdio: 'inherit' });
 
+/**
+ * signtool.exe, to remove node.exe's own signature (rcedit and the injection would leave it corrupted, and no signer
+ * signs over a corrupted one): OBLIGARTH_BENCH_SIGNTOOL, else a Windows SDK, else the kit that travels with the
+ * signing script (`<its folder>\lfsign\kits\bin\<version>\x64`, then `<its folder>\lfsign\signtool`).
+ */
 function findSigntool() {
+  const forced = (process.env.OBLIGARTH_BENCH_SIGNTOOL ?? '').trim();
+  if (forced) return existsSync(forced) ? forced : null;
   const roots = ['C:\\Program Files (x86)\\Windows Kits\\10\\bin', 'C:\\Program Files\\Windows Kits\\10\\bin'];
+  const signerArg = args.includes('--signer') ? args[args.indexOf('--signer') + 1] : undefined;
+  if (signerArg && !signerArg.startsWith('--')) roots.push(join(dirname(resolve(signerArg)), 'lfsign', 'kits', 'bin'));
   const found = [];
   for (const root of roots) {
     if (!existsSync(root)) continue;
@@ -196,6 +205,10 @@ function findSigntool() {
       }
     }
   }
+  if (found.length === 0 && signerArg && !signerArg.startsWith('--')) {
+    const beside = join(dirname(resolve(signerArg)), 'lfsign', 'signtool', 'signtool.exe');
+    if (existsSync(beside)) return beside;
+  }
   if (found.length === 0) return null;
   found.sort((a, b) => (a.arch === b.arch ? b.ver.localeCompare(a.ver) : a.arch === 'x64' ? -1 : 1));
   return found[0].p;
@@ -205,8 +218,36 @@ console.log('[3] copying the node runtime, removing its signature…');
 copyFileSync(process.execPath, exe);
 if (process.platform === 'win32') {
   const signtool = findSigntool();
+  // A release is signed: with node.exe's signature still inside, the signer refuses the file (0x800700C1).
+  if (!signtool && release) refuse('signtool.exe not found (Windows SDK, OBLIGARTH_BENCH_SIGNTOOL, or the kit beside the signing script): node.exe\'s own signature cannot be removed, and the signing would fail', [dist]);
   if (!signtool) console.log('  ! signtool.exe not found: the signature of node.exe is not removed (signing may then fail)');
   else { try { execFileSync(signtool, ['remove', '/s', exe], { stdio: 'pipe' }); console.log("  node's own signature removed"); } catch { console.log('  (no signature to remove)'); } }
+}
+
+// The icon of Obligarth and the version information of the station, written into the copy of node.exe BEFORE the
+// injection (the blob is a resource added after, which rcedit would otherwise have to carry) and before any signing,
+// so that the signature covers them. Only on Windows: the resources are a PE matter, and rcedit is a Windows tool.
+if (process.platform === 'win32') {
+  console.log('    icon and version information…');
+  const { default: rcedit } = await import('rcedit');
+  const winVersion = `${version}.0`;
+  try {
+    await rcedit(exe, {
+      icon: join(here, 'installer', 'obligarth-bench.ico'),
+      'file-version': winVersion,
+      'product-version': winVersion,
+      'version-string': {
+        ProductName: 'Obligarth Bench',
+        FileDescription: 'Obligarth Bench',
+        CompanyName: 'Obli tools',
+        LegalCopyright: 'Obli tools',
+        OriginalFilename: EXE,
+        InternalName: 'obligarth-bench',
+      },
+    });
+  } catch (err) {
+    refuse(`icon and version information: ${err.message}`, [exe]);
+  }
 }
 
 console.log('[4] injecting…');
@@ -245,6 +286,7 @@ for (const f of [bundle, blob, seaConfig]) rmSync(f, { force: true });
 
 const wxs = join(dist, 'product.wxs');
 writeFileSync(wxs, readFileSync(join(here, 'installer', 'product.wxs'), 'utf8').replace('BENCH_VERSION_PLACEHOLDER', version));
+copyFileSync(join(here, 'installer', 'obligarth-bench.ico'), join(dist, 'obligarth-bench.ico'));
 writeFileSync(join(dist, 'VERSION'), `${version}\n`);
 
 if (!release) {

@@ -30,6 +30,10 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Obligarth Bench is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- The icon of Obligarth in "Apps and features"; the Start menu shortcut takes the one of the executable. -->
+    <Icon Id="ObligarthBench.ico" SourceFile="obligarth-bench.ico" />
+    <Property Id="ARPPRODUCTICON" Value="ObligarthBench.ico" />
+
     <Property Id="OBLIGARTHURL" Secure="yes">
       <RegistrySearch Id="RememberedObligarthUrl"
                       Root="HKLM"
