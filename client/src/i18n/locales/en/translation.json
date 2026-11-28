@@ -7415,7 +7415,7 @@
       "close": "Close the session",
       "current": "Session of {{technician}}, until {{until}}",
       "duration": "Duration (minutes)",
-      "hint": "The station issues enrollment tokens only during an open session (8 hours at most), each one checked against the rights of the technician in the tenant of the target."
+      "hint": "The station enrolls no device on its own: a technician opens it here for a limited time (8 hours at most). During that time, each device plugged in is enrolled in their name, after checking they may still enroll in the target tenant. Once the session is closed or expired, the station enrolls nothing."
     },
     "tenant": {
       "stations": "Bench stations of this tenant",

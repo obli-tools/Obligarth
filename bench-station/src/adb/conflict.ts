@@ -76,18 +76,29 @@ export async function stopProcesses(pids: number[]): Promise<void> {
   await powershellOut(`Stop-Process -Id ${list.join(',')} -Force -ErrorAction SilentlyContinue`, 20_000).catch(() => '');
 }
 
-/** `pnputil /enum-drivers` mentions SAMSUNG Electronics (its output is localised: only the vendor is searched). */
-export function samsungDriverPresent(pnputilOutput: string): boolean {
-  return /SAMSUNG Electronics/i.test(pnputilOutput);
+/**
+ * The driver of the Samsung phones on USB. Windows 10 and 11 drive a phone in USB debugging with their OWN generic
+ * driver (WinUSB, "ADB Interface", announced by the phone itself): Samsung's driver is not needed, and its absence is
+ * not a problem. A problem is a Samsung USB device (VID 04E8) that Windows sees with NO working driver (a status other
+ * than OK: no driver, error). Pure: the lines are `<status>|<instance id>`.
+ */
+export function samsungDriverMissing(lines: string): boolean {
+  return lines.split(/\r?\n/).some((l) => {
+    const [status, id] = l.trim().split('|');
+    return /^USB\\VID_04E8&/i.test(id ?? '') && (status ?? '').trim().toUpperCase() !== 'OK';
+  });
 }
 
-export function readSamsungDriver(): Promise<boolean | null> {
-  if (process.platform !== 'win32') return Promise.resolve(null);
-  return new Promise((resolve) => {
-    execFile('pnputil', ['/enum-drivers'], { windowsHide: true, timeout: 30_000, maxBuffer: 8 * 1024 * 1024, encoding: 'latin1' }, (err, out) => {
-      resolve(err && !out ? null : samsungDriverPresent(String(out)));
-    });
-  });
+const DRIVER_SCRIPT = "Get-PnpDevice -PresentOnly -ErrorAction SilentlyContinue | Where-Object { $_.InstanceId -like 'USB\\VID_04E8&*' } | ForEach-Object { '' + $_.Status + '|' + $_.InstanceId }";
+
+/** true: every Samsung device on USB has a working driver (or none is plugged); false: one lacks it; null: unknown. */
+export async function readSamsungDriver(): Promise<boolean | null> {
+  if (process.platform !== 'win32') return null;
+  try {
+    return !samsungDriverMissing(await powershellOut(DRIVER_SCRIPT, 20_000));
+  } catch {
+    return null;
+  }
 }
 
 /**

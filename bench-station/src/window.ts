@@ -8,9 +8,12 @@ import { logError } from './native';
  * Obligarth bench station — the desktop half: the window and one instance per user (lot BANC §5.2), ported from the
  * bench of Obliwan.
  *
- * The page is served by a loopback HTTP server (127.0.0.1, port 0, a per-run token) and opens in Microsoft Edge's APP
- * mode (`--app=<url>`, a profile of its own in %LOCALAPPDATA%\Obligarth\bench-ui): a window with no address bar, its
- * own taskbar entry, and a process whose exit is the window closing.
+ * The page is served by a loopback HTTP server (127.0.0.1, port 0, a per-run token) and opens in the station's OWN
+ * window: obligarth-bench-window.exe (bench-station/host), a native WebView2 host installed beside the executable,
+ * with the icon of Obligarth, its own taskbar entry and no browser interface (no address bar, no translation offer,
+ * no bubble); its data in %LOCALAPPDATA%\Obligarth\bench-ui\webview2; its exit is the window closing. Without the
+ * host or the WebView2 runtime, Microsoft Edge's APP mode (`--app=<url>`, a profile of its own in
+ * %LOCALAPPDATA%\Obligarth\bench-ui) is the fallback.
  *
  * NO BROWSER FALLBACK (decision of the suite, kept from Obliwan): Edge is tried three times, 1.5 s apart, re-found each
  * time, every failure written to bench-error.log; after the third the answer is `none` and the caller says so in a
@@ -54,13 +57,52 @@ export function findEdge(env: NodeJS.ProcessEnv = process.env): string | null {
   return null;
 }
 
-export type WindowMode = 'edge-app' | 'none';
+export type WindowMode = 'webview2' | 'edge-app' | 'none';
 
 export interface OpenedWindow {
   mode: WindowMode;
   child: ChildProcess | null;
-  /** `edge-app`: the msedge.exe used. `none`: a code and its cause, for the log and the message box. */
+  /** `webview2`: the host used. `edge-app`: the msedge.exe used. `none`: a code and its cause, for the log and the
+   *  message box. */
   detail: string | null;
+}
+
+// ── The window of the station: a native WebView2 host ───────────────────────
+
+/** The host installed beside obligarth-bench.exe (bench-station/host), its own icon and taskbar entry. */
+export const WINDOW_HOST = 'obligarth-bench-window.exe';
+
+/** The registry keys of the WebView2 runtime (Evergreen), per machine then per user (Microsoft's documented test). */
+const WEBVIEW2_KEYS = [
+  'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+  'HKLM\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+  'HKCU\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+];
+
+export function webView2Installed(): boolean {
+  if (process.platform !== 'win32') return false;
+  for (const key of WEBVIEW2_KEYS) {
+    try {
+      const out = execFileSync('reg', ['query', key, '/v', 'pv'], { encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'], timeout: 5_000 });
+      const m = /\bpv\s+REG_SZ\s+(\S+)/.exec(out);
+      if (m && m[1] !== '0.0.0.0') return true;
+    } catch { /* not this key */ }
+  }
+  return false;
+}
+
+/** The host beside the executable (OBLIGARTH_BENCH_WINDOW for a development run), when the runtime is there. */
+export function findWindowHost(env: NodeJS.ProcessEnv = process.env, exePath: string = process.execPath): string | null {
+  if (process.platform !== 'win32') return null;
+  const forced = (env.OBLIGARTH_BENCH_WINDOW ?? '').trim();
+  const host = forced || join(dirname(exePath), WINDOW_HOST);
+  if (!existsSync(host)) return null;
+  return webView2Installed() ? host : null;
+}
+
+/** The host's command line: the page and a WebView2 data folder of its own (never Edge's profile). */
+export function hostArguments(url: string, userDataDir: string): string[] {
+  return ['--url', url, '--data', join(userDataDir, 'webview2')];
 }
 
 export const EDGE_ATTEMPTS = 3;
@@ -74,6 +116,8 @@ export function edgeArguments(url: string, userDataDir: string): string[] {
     '--window-size=1200,880',
     '--no-first-run',
     '--no-default-browser-check',
+    // A fallback only (no WebView2 host): no translation offer on a page whose language switches at run time.
+    '--disable-features=Translate,msTranslations',
     // The page beeps when a card needs the technician, possibly before anybody clicked in the window.
     '--autoplay-policy=no-user-gesture-required',
   ];
@@ -95,10 +139,22 @@ export interface OpenWindowOptions {
   /** Injected by the harness (it records the arguments instead of starting Edge). */
   spawnEdge?: (exe: string, args: string[]) => ChildProcess;
   findEdge?: (env: NodeJS.ProcessEnv) => string | null;
+  /** Injected by the harness: the WebView2 host, and how it starts. */
+  findHost?: (env: NodeJS.ProcessEnv) => string | null;
+  spawnHost?: (exe: string, args: string[]) => ChildProcess;
+  /** Edge only: the host just failed (no runtime after all, or WebView2 could not start). */
+  noHost?: boolean;
 }
 
-/** Open the UI in Edge's app mode, up to EDGE_ATTEMPTS times; never the default browser. NOT `windowsHide` for Edge
- *  (SW_HIDE would hide its first window). */
+/** The host's exit codes that mean "no window could be shown" (Program.cs): the station falls back to Edge. */
+export const HOST_NO_WINDOW_CODES: ReadonlySet<number> = new Set([3, 4]);
+
+/**
+ * Open the UI: in the station's own window (the WebView2 host beside the executable) when it is there with its
+ * runtime; otherwise in Edge's app mode, up to EDGE_ATTEMPTS times. Never the default browser. The host keeps a pipe
+ * on its standard input: a line "focus" brings it to the front. NOT `windowsHide` (SW_HIDE would hide the first
+ * window).
+ */
 export async function openAppWindow(url: string, env: NodeJS.ProcessEnv = process.env, opts: OpenWindowOptions = {}): Promise<OpenedWindow> {
   const attempts = Math.max(1, opts.attempts ?? EDGE_ATTEMPTS);
   const retryMs = opts.retryMs ?? EDGE_RETRY_MS;
@@ -106,6 +162,19 @@ export async function openAppWindow(url: string, env: NodeJS.ProcessEnv = proces
   const find = opts.findEdge ?? findEdge;
   const start = opts.spawnEdge ?? ((exe: string, args: string[]) => spawn(exe, args, { stdio: 'ignore', detached: false }));
   const profile = uiProfileDir(env);
+  const host = opts.noHost ? null : (opts.findHost ?? findWindowHost)(env);
+  if (host) {
+    try { mkdirSync(profile, { recursive: true }); } catch { /* the host creates its folder */ }
+    const startHost = opts.spawnHost ?? ((exe: string, args: string[]) => spawn(exe, args, { stdio: ['pipe', 'ignore', 'ignore'], detached: false }));
+    try {
+      const child = startHost(host, hostArguments(url, profile));
+      const r = await spawned(child);
+      if (r.ok) return { mode: 'webview2', child, detail: host };
+      logError(`application window: the WebView2 host did not start (${r.code}) [${host}], Edge instead`, env);
+    } catch (err) {
+      logError(`application window: the WebView2 host did not start (${err instanceof Error ? err.message : String(err)}) [${host}], Edge instead`, env);
+    }
+  }
   let cause = 'unknown';
   for (let attempt = 1; attempt <= attempts; attempt++) {
     if (attempt > 1) await sleep(retryMs);

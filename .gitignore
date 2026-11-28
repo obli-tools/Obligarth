@@ -230,3 +230,6 @@ agent-android/**/*.aab
 !/bench-station/
 bench-station/testing/
 bench-station/dist/
+# Sorties de build de la fenêtre (hôte WebView2, dotnet build)
+bench-station/host/bin/
+bench-station/host/obj/

@@ -60,6 +60,27 @@
                 KeyPath="yes" />
         </Component>
 
+        <!-- The window of the station: a native WebView2 host (bench-station/host), signed like the exe, with the
+             WebView2 assemblies of Microsoft beside it. -->
+        <Component Id="BenchWindowExe">
+          <File Id="ObligarthBenchWindowExe" Source="obligarth-bench-window.exe" KeyPath="yes" />
+        </Component>
+        <Component Id="BenchWindowConfig">
+          <File Id="ObligarthBenchWindowConfig" Source="obligarth-bench-window.exe.config" KeyPath="yes" />
+        </Component>
+        <Component Id="WebView2Core">
+          <File Id="WebView2CoreDll" Source="Microsoft.Web.WebView2.Core.dll" KeyPath="yes" />
+        </Component>
+        <Component Id="WebView2WinForms">
+          <File Id="WebView2WinFormsDll" Source="Microsoft.Web.WebView2.WinForms.dll" KeyPath="yes" />
+        </Component>
+        <Component Id="WebView2Wpf">
+          <File Id="WebView2WpfDll" Source="Microsoft.Web.WebView2.Wpf.dll" KeyPath="yes" />
+        </Component>
+        <Component Id="WebView2Loader">
+          <File Id="WebView2LoaderDll" Source="WebView2Loader.dll" KeyPath="yes" />
+        </Component>
+
         <!-- Written beside the executable, removed with it; the tool reads it with fs (no native module). The
              registry copy is for the INSTALLER, which cannot read an .ini outside the Windows directory. -->
         <Component Id="BenchConfig" Guid="B7D24E19-0A5C-4F83-9E61-2C8F4A0D7B36">
@@ -106,6 +127,12 @@
 
     <Feature Id="Main" Title="Obligarth Bench" Level="1">
       <ComponentRef Id="BenchExe" />
+      <ComponentRef Id="BenchWindowExe" />
+      <ComponentRef Id="BenchWindowConfig" />
+      <ComponentRef Id="WebView2Core" />
+      <ComponentRef Id="WebView2WinForms" />
+      <ComponentRef Id="WebView2Wpf" />
+      <ComponentRef Id="WebView2Loader" />
       <ComponentRef Id="BenchConfig" />
       <ComponentRef Id="BenchShortcut" />
     </Feature>

@@ -5,7 +5,8 @@ import { t } from './i18n';
 import { showMessageBox } from './native';
 import { lockFile, stationFile } from './paths';
 import { StationStore } from './station';
-import { claimInstance, openAppWindow, type InstanceLock } from './window';
+import type { ChildProcess } from 'node:child_process';
+import { claimInstance, HOST_NO_WINDOW_CODES, openAppWindow, type InstanceLock } from './window';
 
 /**
  * Obligarth bench station — the process: one instance, one window, adb started on its own port and stopped with the
@@ -71,15 +72,36 @@ export async function runGui(): Promise<void> {
     process.exitCode = code;
     setTimeout(() => process.exit(code), 5_000).unref();
   };
-  const open = async (): Promise<void> => {
+  // The station's own window (WebView2 host) still open: asked to open again, it comes to the front instead of a
+  // second window. Edge's app mode has no such channel: a new app window, as before.
+  let hostWindow: ChildProcess | null = null;
+  const open = async (edgeOnly = false): Promise<void> => {
     if (opening) return;
+    if (!edgeOnly && hostWindow && hostWindow.exitCode === null && hostWindow.signalCode === null && hostWindow.stdin?.writable) {
+      hostWindow.stdin.write('focus\n');
+      return;
+    }
     opening = true;
     try {
-      const w = await openAppWindow(app.url());
+      const w = await openAppWindow(app.url(), process.env, { noHost: edgeOnly });
       app.setWindow(w.mode, w.detail);
       if (w.child) {
         const started = Date.now();
-        w.child.once('exit', () => app.watch.edgeExited(Date.now() - started));
+        const child = w.child;
+        if (w.mode === 'webview2') {
+          hostWindow = child;
+          child.stdin?.on('error', () => undefined);
+        }
+        child.once('exit', (code) => {
+          if (hostWindow === child) hostWindow = null;
+          // The host could not show anything (no runtime after all, WebView2 refused to start): Edge instead.
+          if (w.mode === 'webview2' && code !== null && HOST_NO_WINDOW_CODES.has(code) && !leaving) {
+            app.watch.reopened();
+            void open(true);
+            return;
+          }
+          app.watch.edgeExited(Date.now() - started);
+        });
       }
       if (w.mode === 'none') {
         await showMessageBox(TITLE, t('bench.main.windowFailed', { detail: w.detail ?? '' }) || 'The window could not open.');

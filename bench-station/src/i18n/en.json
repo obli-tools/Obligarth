@@ -25,7 +25,7 @@
   "bench.adb.stop": "Stop these processes",
   "bench.adb.stopConfirm": "Stop the other ADB processes? Unsaved work in those tools may be lost.",
   "bench.adb.smartSwitch": "Samsung Smart Switch is running: close it, it holds the phones.",
-  "bench.adb.driver": "The Samsung USB driver is not installed on this PC (not redistributed): install it from",
+  "bench.adb.driver": "Windows has no driver yet for the Samsung phone plugged in. Leave it plugged in for a minute (Windows Update installs it by itself), then unplug it and plug it back.",
   "bench.adb.keyProfile": "ADB keeps its key in your Windows profile (%USERPROFILE%\\.android), shared with any other ADB tool of this account. After the theft of this PC, also revoke the USB debugging authorizations on the devices.",
   "bench.url.title": "Address of Obligarth",
   "bench.url.help": "The address of the Obligarth console, for example https://obligarth.example.test. The installer usually sets it.",

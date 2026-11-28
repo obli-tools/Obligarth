@@ -25,7 +25,7 @@
   "bench.adb.stop": "Arrêter ces processus",
   "bench.adb.stopConfirm": "Arrêter les autres processus ADB ? Un travail non enregistré dans ces outils peut être perdu.",
   "bench.adb.smartSwitch": "Samsung Smart Switch est ouvert : fermez-le, il tient les téléphones.",
-  "bench.adb.driver": "Le pilote USB Samsung n'est pas installé sur ce PC (non redistribué) : installez-le depuis",
+  "bench.adb.driver": "Windows n'a pas encore de pilote pour le téléphone Samsung branché. Laissez-le branché une minute (Windows Update l'installe seul), puis débranchez-le et rebranchez-le.",
   "bench.adb.keyProfile": "ADB garde sa clé dans votre profil Windows (%USERPROFILE%\\.android), partagée avec tout autre outil ADB de ce compte. Après le vol de ce PC, révoquez aussi les autorisations de débogage USB sur les appareils.",
   "bench.url.title": "Adresse d'Obligarth",
   "bench.url.help": "L'adresse de la console Obligarth, par exemple https://obligarth.example.test. L'installeur la renseigne d'habitude.",

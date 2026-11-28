@@ -7415,7 +7415,7 @@
       "close": "Fermer la session",
       "current": "Session de {{technician}}, jusqu'à {{until}}",
       "duration": "Durée (minutes)",
-      "hint": "La station n'émet de jetons d'enrôlement que pendant une session ouverte (8 heures au plus), chacun revérifié contre les droits du technicien dans le tenant de la cible."
+      "hint": "La station n'enrôle aucun téléphone seule : un technicien l'ouvre ici pour une durée limitée (8 heures au plus). Pendant ce temps, chaque téléphone branché est enrôlé en son nom, après vérification qu'il a toujours le droit d'enrôler dans le tenant visé. Session fermée ou expirée : la station n'enrôle plus rien."
     },
     "tenant": {
       "stations": "Stations de banc de ce tenant",

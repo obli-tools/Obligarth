@@ -284,6 +284,35 @@ console.log('[5] Windows GUI subsystem, proven on a copy…');
 }
 for (const f of [bundle, blob, seaConfig]) rmSync(f, { force: true });
 
+// ── 5b. the window: the WebView2 host (bench-station/host) ──────────────────
+// Built with the version of the station into a temporary folder, proven to start (no argument: exit code 2, so the
+// .NET Framework and the assemblies load), then copied beside the exe, where the station looks for it. The release
+// signs the host like the exe; the WebView2 assemblies are Microsoft's, signed by Microsoft, and verified as such.
+const HOST_EXE = 'obligarth-bench-window.exe';
+const HOST_FILES = [HOST_EXE, `${HOST_EXE}.config`, 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.WinForms.dll', 'Microsoft.Web.WebView2.Wpf.dll', 'WebView2Loader.dll'];
+const MICROSOFT_FILES = HOST_FILES.filter((f) => f.endsWith('.dll'));
+if (process.platform === 'win32') {
+  console.log('[5b] the window (WebView2 host)…');
+  const hostOut = mkdtempSync(join(tmpdir(), 'obligarth-bench-window-'));
+  const dotnetEnv = { ...process.env, DOTNET_CLI_TELEMETRY_OPTOUT: '1', DOTNET_NOLOGO: '1', DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1' };
+  try {
+    runTool('dotnet', ['build', join(here, 'host', 'ObligarthBenchWindow.csproj'), '-c', 'Release', '--nologo', '-p:RestoreLockedMode=true', `-p:Version=${version}`, '-o', hostOut], { stdio: 'inherit', env: dotnetEnv });
+  } catch (err) {
+    rmSync(hostOut, { recursive: true, force: true });
+    refuse(`the window host did not build (dotnet, see above): ${err.message}`, [exe]);
+  }
+  for (const f of HOST_FILES) {
+    if (!existsSync(join(hostOut, f))) { rmSync(hostOut, { recursive: true, force: true }); refuse(`the window host lacks ${f}`, [exe]); }
+    copyFileSync(join(hostOut, f), join(dist, f));
+  }
+  rmSync(hostOut, { recursive: true, force: true });
+  let code = -1;
+  try { execFileSync(join(dist, HOST_EXE), [], { timeout: 60_000, windowsHide: true, stdio: 'ignore' }); code = 0; } catch (err) { code = typeof err.status === 'number' ? err.status : -1; }
+  if (code !== 2) refuse(`the window host, started with no argument, exited with ${code} (expected 2: it did not load)`, [exe, ...HOST_FILES.map((f) => join(dist, f))]);
+} else {
+  console.log('[5b] not on Windows: no window host (the station falls back to Edge)');
+}
+
 const wxs = join(dist, 'product.wxs');
 writeFileSync(wxs, readFileSync(join(here, 'installer', 'product.wxs'), 'utf8').replace('BENCH_VERSION_PLACEHOLDER', version));
 copyFileSync(join(here, 'installer', 'obligarth-bench.ico'), join(dist, 'obligarth-bench.ico'));
@@ -331,9 +360,29 @@ function verify(file) {
   console.log(`  ${file}: signature Valid, pinned certificate`);
 }
 
-console.log('[6] signing the exe…');
+/** A WebView2 assembly: Authenticode Valid, signed by Microsoft (it ships signed in its NuGet package). */
+function verifyMicrosoft(file) {
+  let out = '';
+  try {
+    out = execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      "$s = Get-AuthenticodeSignature -LiteralPath $env:OBLIGARTH_SIG_FILE; '' + $s.Status + '|' + $s.SignerCertificate.Subject"],
+    { encoding: 'utf8', windowsHide: true, timeout: 60_000, env: { ...process.env, OBLIGARTH_SIG_FILE: file } }).trim();
+  } catch (err) {
+    refuse(`the signature of ${file} could not be read: ${err.message}`, [dist]);
+  }
+  const [status, subject] = out.split('|');
+  if (status !== 'Valid' || !/(^|,\s*)O=Microsoft Corporation(,|$)/.test(subject ?? '')) refuse(`${file}: not a valid Microsoft signature (${status}, ${subject})`, [dist]);
+  console.log(`  ${file}: signature Valid, Microsoft`);
+}
+
+console.log('[6] signing the exe and the window…');
 sign(exe);
 verify(exe);
+if (process.platform === 'win32') {
+  sign(join(dist, HOST_EXE));
+  verify(join(dist, HOST_EXE));
+  for (const f of MICROSOFT_FILES) verifyMicrosoft(join(dist, f));
+}
 console.log('[7] building the MSI (WiX v4)…');
 try {
   runTool('wix', ['build', wxs, '-b', dist, '-arch', 'x64', '-out', join(dist, MSI)], { stdio: 'inherit' });
@@ -344,5 +393,6 @@ console.log('[8] signing the MSI…');
 sign(join(dist, MSI));
 verify(join(dist, MSI));
 const msiSha = createHash('sha256').update(readFileSync(join(dist, MSI))).digest('hex');
-writeFileSync(join(dist, 'SHA256SUMS'), `${msiSha}  ${MSI}\n${createHash('sha256').update(readFileSync(exe)).digest('hex')}  ${EXE}\n`);
+const sumOf = (f) => `${createHash('sha256').update(readFileSync(join(dist, f))).digest('hex')}  ${f}\n`;
+writeFileSync(join(dist, 'SHA256SUMS'), `${msiSha}  ${MSI}\n${sumOf(EXE)}${process.platform === 'win32' ? HOST_FILES.map(sumOf).join('') : ''}`);
 console.log(`\n  built and signed: ${join(dist, MSI)}  (v${version}, sha256 ${msiSha})\n`);

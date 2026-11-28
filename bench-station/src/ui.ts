@@ -1,5 +1,6 @@
 import en from './i18n/en.json';
 import fr from './i18n/fr.json';
+import { FAVICON_PNG_BASE64 } from './favicon';
 
 /**
  * Obligarth bench station — the page (lot BANC §5.3, §5.4): vanilla HTML, CSS and JS, no external resource (the CSP
@@ -16,11 +17,13 @@ export function catalogsLiteral(): string {
 
 export function renderPage(version: string): string {
   return `<!doctype html>
-<html lang="en">
+<html lang="en" translate="no">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="google" content="notranslate">
 <title>Obligarth Bench</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,${FAVICON_PNG_BASE64}">
 <style>
 :root{--bg:#f6f7f9;--panel:#fff;--text:#1d2330;--muted:#6b7280;--line:#e5e7eb;--hover:#f1f3f6;--accent:#2563eb;
 --ok:#16a34a;--warn:#d97706;--bad:#dc2626;--wait:#7c3aed;--hold:#ea580c;--idle:#9ca3af;--act:#2563eb}
@@ -156,7 +159,7 @@ function renderBanners() {
       + '<p class="muted">' + esc(t('bench.error.adb_blocked_by_policy') || 'USB debugging may be blocked by a policy.') + '</p></div>');
   }
   if (a.smartSwitch) out.push('<div class="banner">' + esc(t('bench.adb.smartSwitch') || 'Close Samsung Smart Switch: it holds the phones.') + '</div>');
-  if (a.samsungDriver === false) out.push('<div class="banner info">' + esc(t('bench.adb.driver') || 'The Samsung USB driver is not installed.') + ' <a href="https://developer.samsung.com/android-usb-driver" target="_blank" rel="noreferrer">developer.samsung.com</a></div>');
+  if (a.samsungDriver === false) out.push('<div class="banner info">' + esc(t('bench.adb.driver') || 'Windows has no driver for the Samsung phone plugged in.') + '</div>');
   if (a.status === 'ready' && a.keyLocation === 'profile') out.push('<div class="banner info">' + esc(t('bench.adb.keyProfile') || 'The ADB key of this station is the one of your Windows profile.') + '</div>');
   if (!state.pinPresent) out.push('<div class="banner bad">' + esc(t('bench.local.no_pin') || 'This build has no pinned agent signer: no APK can be installed.') + '</div>');
   if (state.update && state.update.available) out.push('<div class="banner ok">' + esc(t('bench.update.available', { version: state.update.available }) || ('Version ' + state.update.available + ' is available')) + ' <button data-action="update">' + esc(t('bench.update.apply') || 'Update') + '</button></div>');

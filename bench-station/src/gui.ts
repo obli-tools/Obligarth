@@ -241,7 +241,12 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
     try {
       const usb = await (deps.readSamsungUsb ?? readSamsungUsb)().catch(() => null);
       const next = usbUnseenByAdb(usb, devices.map((d) => d.serial)).map((s) => truncateSerial(s) ?? s);
-      if (JSON.stringify(next) !== JSON.stringify(usbUnseen)) { usbUnseen = next; changed(); }
+      // The driver only matters for a phone Windows sees and adb does not: Windows drives the phones itself (WinUSB).
+      const driver = next.length === 0 ? true : await (deps.readSamsungDriver ?? readSamsungDriver)().catch(() => null);
+      let moved = false;
+      if (driver !== samsungDriver) { samsungDriver = driver; moved = true; }
+      if (JSON.stringify(next) !== JSON.stringify(usbUnseen)) { usbUnseen = next; moved = true; }
+      if (moved) changed();
     } finally {
       usbReading = false;
     }
@@ -279,7 +284,6 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
     adbReason = null;
     keyLoc = keyLocation(adbHome);
     void checkConflict().catch(() => false);
-    if (samsungDriver === null) void (deps.readSamsungDriver ?? readSamsungDriver)().then((v) => { samsungDriver = v; changed(); }).catch(() => undefined);
     if (background && !stopTracking) stopTracking = runner.track((list) => devicesChanged(list));
     changed();
   };
