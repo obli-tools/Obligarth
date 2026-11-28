@@ -1,0 +1,18 @@
+{
+  "name": "obligarth-bench-station",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Obligarth bench station: the Windows tool that enrolls Android devices by ADB (lot BANC). Its version is in VERSION.",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "scripts": {
+    "check": "tsc -p . --noEmit",
+    "bundle": "node build.mjs --bundle-only",
+    "test": "node testing/run.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "postject": "1.0.0-alpha.6",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

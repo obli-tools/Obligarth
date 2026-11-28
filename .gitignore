@@ -221,3 +221,12 @@ agent-android/app/src/test/
 agent-android/app/src/androidTest/
 agent-android/**/*.apk
 agent-android/**/*.aab
+
+# Station de banc Android (lot BANC, décision D18) : sources du binaire Windows
+# (exe Node SEA et MSI WiX) que la mise à jour construit et dépose dans
+# server/bench-release/ ; indispensables au build de cet artefact livré. Jamais :
+# tests (testing/, *.verify.ts, déjà exclus plus haut), node_modules, sorties de
+# build, exe, MSI (exclus par les règles ci-dessus).
+!/bench-station/
+bench-station/testing/
+bench-station/dist/

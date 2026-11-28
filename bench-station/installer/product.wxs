@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Obligarth bench station - Windows MSI installer (WiX v4), on the model of the bench of Obliwan (lot BANC 5.9).
+
+  Built ONLY by build.mjs with its release option, in a staging folder: the exe is signed and verified BEFORE this
+  manifest is built, so the binary embedded in the installer is itself signed; the MSI is then signed and verified.
+  A failed signature aborts the build. build.mjs writes a copy of this file with the version placeholder of
+  Package/@Version replaced (the FIRST occurrence only: the token appears in this file exactly once).
+
+  What it installs: obligarth-bench.exe in Program Files\Obligarth Bench, obligarth-bench.ini beside it
+  ([server] url= from the OBLIGARTHURL property), a Start-menu shortcut. Per machine. No service, no scheduled task,
+  no autostart, no secret: the station runs when a technician starts it, and its only credential (the station token)
+  is drawn at run time, per user, protected by DPAPI in %LOCALAPPDATA%. No adb either: the station downloads
+  platform-tools from Google after the technician accepts its licence (it is not redistributed).
+
+  OBLIGARTHURL is remembered across upgrades (HKLM\Software\Obligarth\Bench\url, AppSearch before
+  RemoveExistingProducts; a value given on the command line wins over the remembered one): every upgrade is an
+  uninstall first, and without this the station would forget its server at each update.
+
+    msiexec /i obligarth-bench.msi OBLIGARTHURL=https://obligarth.example.test
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Obligarth Bench"
+           Manufacturer="Obligarth"
+           Version="BENCH_VERSION_PLACEHOLDER"
+           Language="1033"
+           Scope="perMachine"
+           UpgradeCode="5C3E9B27-8A41-4F6D-B2E0-71D49A6C8F15">
+
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Obligarth Bench is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Property Id="OBLIGARTHURL" Secure="yes">
+      <RegistrySearch Id="RememberedObligarthUrl"
+                      Root="HKLM"
+                      Key="Software\Obligarth\Bench"
+                      Name="url"
+                      Type="raw" />
+    </Property>
+    <SetProperty Id="CMDLINE_OBLIGARTHURL"
+                 Action="SaveCmdlineObligarthUrl"
+                 Value="[OBLIGARTHURL]"
+                 Before="AppSearch" />
+    <SetProperty Id="OBLIGARTHURL"
+                 Action="RestoreCmdlineObligarthUrl"
+                 Value="[CMDLINE_OBLIGARTHURL]"
+                 After="AppSearch"
+                 Condition="CMDLINE_OBLIGARTHURL" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Obligarth Bench">
+        <Component Id="BenchExe" Guid="3F8A1D52-6C07-4E9B-A4D3-9B2E5F70C1A8">
+          <File Id="ObligarthBenchExe"
+                Source="obligarth-bench.exe"
+                Name="obligarth-bench.exe"
+                KeyPath="yes" />
+        </Component>
+
+        <!-- Written beside the executable, removed with it; the tool reads it with fs (no native module). The
+             registry copy is for the INSTALLER, which cannot read an .ini outside the Windows directory. -->
+        <Component Id="BenchConfig" Guid="B7D24E19-0A5C-4F83-9E61-2C8F4A0D7B36">
+          <IniFile Id="BenchUrl"
+                   Action="addLine"
+                   Directory="INSTALLFOLDER"
+                   Name="obligarth-bench.ini"
+                   Section="server"
+                   Key="url"
+                   Value="[OBLIGARTHURL]" />
+          <RegistryValue Root="HKLM"
+                         Key="Software\Obligarth\Bench"
+                         Name="url"
+                         Type="string"
+                         Value="[OBLIGARTHURL]" />
+          <RegistryValue Root="HKLM"
+                         Key="Software\Obligarth\Bench"
+                         Name="configured"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppShortcutFolder" Name="Obligarth">
+        <Component Id="BenchShortcut" Guid="E2C59A70-4B18-4D3F-8A6E-0F97D3B21C44">
+          <Shortcut Id="BenchStartMenu"
+                    Name="Obligarth Bench"
+                    Description="Enroll Android devices into Obligarth"
+                    Target="[INSTALLFOLDER]obligarth-bench.exe"
+                    WorkingDirectory="INSTALLFOLDER" />
+          <RemoveFolder Id="RemoveAppShortcutFolder" Directory="AppShortcutFolder" On="uninstall" />
+          <RegistryValue Root="HKCU"
+                         Key="Software\Obligarth\Bench"
+                         Name="installed"
+                         Type="integer"
+                         Value="1"
+                         KeyPath="yes" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="Main" Title="Obligarth Bench" Level="1">
+      <ComponentRef Id="BenchExe" />
+      <ComponentRef Id="BenchConfig" />
+      <ComponentRef Id="BenchShortcut" />
+    </Feature>
+  </Package>
+</Wix>
