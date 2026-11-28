@@ -62,6 +62,10 @@ export interface Prompt {
 export interface RunOptions {
   target?: BenchTarget;
   deviceName?: string | null;
+  /** Lot BANC-T §9: the site of the card (null: none). */
+  site?: { id: string; code: string; name: string } | null;
+  /** Lot BANC-T Q3: the exception D3 decided on the bench. */
+  allowLegacyOwner?: boolean;
   choice?: Choice;
 }
 
@@ -157,6 +161,10 @@ export class ProvisionRun {
   errorParams: Record<string, string | number> = {};
   target: BenchTarget | null = null;
   deviceName: string | null = null;
+  /** Lot BANC-T §9: the site chosen on the card (null: none, the target's group). */
+  site: { id: string; code: string; name: string } | null = null;
+  /** Lot BANC-T Q3: the exception D3 decided on the bench (in an open session; the server audits each use). */
+  allowLegacyOwner = false;
   identity: DeviceIdentity | null = null;
   served: ServedAgent | null = null;
   agent: AgentInstalled | null = null;
@@ -286,6 +294,8 @@ export class ProvisionRun {
     if (!this.plan) {
       if (opts.target) this.target = opts.target;
       if (opts.deviceName !== undefined) this.deviceName = opts.deviceName ? opts.deviceName.trim().slice(0, 100) || null : null;
+      if (opts.site !== undefined) this.site = opts.site;
+      if (opts.allowLegacyOwner !== undefined) this.allowLegacyOwner = opts.allowLegacyOwner;
     }
     this.d.onChange?.();
     try {
@@ -592,6 +602,8 @@ export class ProvisionRun {
     try {
       this.plan = await this.d.api.plan({
         tenantId: t.tenantId, groupId: t.groupId,
+        ...(this.site ? { siteId: this.site.id } : {}),
+        ...(this.allowLegacyOwner ? { allowLegacyOwner: true } : {}),
         device: { adbSerial: id.adbSerial!, hwSerial: id.hwSerial, model: id.model, manufacturer: id.manufacturer, sdkInt: id.sdkInt, osRelease: id.osRelease, oneUi: id.oneUi },
         agentInstalled: this.agent ? { versionCode: this.agent.versionCode, signerSha256: this.agent.signerSha256, adminActive: this.agent.adminActive, phase: this.agent.phase } : null,
         deviceName: this.deviceName,
@@ -605,6 +617,19 @@ export class ProvisionRun {
         await this.resumeOpen(String(err.details.provisioningId));
         return;
       }
+      // Lot BANC-T §9: the name taken meanwhile in the site (another card, the console), the site no longer the target's:
+      // nothing was planned, the card goes back to the choice (the page reads the site again).
+      if (err instanceof BenchApiError && err.code === 'name_taken') {
+        const suggested = typeof err.details?.suggestedName === 'string' ? err.details.suggestedName.slice(0, 100) : '';
+        throw new Hold({ code: 'name_taken', params: { name: this.deviceName ?? '', suggestedName: suggested }, choices: [], attention: true });
+      }
+      if (err instanceof BenchApiError && err.code === 'site_refused') {
+        throw new Hold({ code: 'site_refused', choices: [], attention: true });
+      }
+      // The exception D3 asked without an open session (closed meanwhile).
+      if (err instanceof BenchApiError && err.code === 'no_session') {
+        throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
+      }
       if (err instanceof BenchApiError && ['target_refused', 'device_outside_target', 'agent_already_enrolled', 'agent_too_old'].includes(err.code)) {
         throw new Fail(err.code);
       }
@@ -616,18 +641,33 @@ export class ProvisionRun {
     if (this.plan.kind === 'convert') this.serverState = await this.d.api.provisioning(this.plan.provisioningId);
   }
 
-  /** The open provisioning of this station for this serial: same role rule as the server (benchRolePlan, shared). */
+  /** The open provisioning of this station for this serial: same role rule as the server (benchRolePlan, shared). It is
+   *  resumed AS IT WAS PLANNED (lot BANC-T): its name, its site and its exception D3 replace those of the new card,
+   *  which the card then shows (hint resumed_earlier when they differ); an older server gives none of them. */
   private async resumeOpen(id: string): Promise<void> {
     const st = await this.d.api.provisioning(id);
     this.serverState = st;
     const t = this.target!;
-    const rp = benchRolePlan(t.rolePolicy, this.identity!.sdkInt, this.served?.versionCode ?? 0, t.allowLegacyOwner);
+    let differs = false;
+    if (st.deviceName !== undefined) {
+      differs ||= (st.deviceName ?? null) !== (this.deviceName ?? null);
+      this.deviceName = st.deviceName ?? null;
+    }
+    if (st.site !== undefined) {
+      differs ||= (st.site?.id ?? null) !== (this.site?.id ?? null);
+      this.site = st.site ?? null;
+    }
+    if (st.legacyOwnerBench !== undefined) this.allowLegacyOwner = st.legacyOwnerBench;
+    const rp = benchRolePlan(t.rolePolicy, this.identity!.sdkInt, this.served?.versionCode ?? 0, t.allowLegacyOwner || this.allowLegacyOwner);
+    // The server's role target when it gives it (the plan's), the local rule otherwise.
+    const roleTarget = st.roleTarget ?? rp.target;
+    differs ||= st.roleTarget !== undefined && st.roleTarget !== rp.target;
     this.plan = {
-      provisioningId: id, kind: st.kind, roleTarget: rp.target, fallbackAllowed: rp.fallbackAllowed,
+      provisioningId: id, kind: st.kind, roleTarget, fallbackAllowed: rp.fallbackAllowed,
       fallbackConfirm: rp.fallbackConfirm, deviceName: this.deviceName, warnings: [],
     };
-    this.roleChosen = this.roleChosen ?? rp.target;
-    this.hint = 'resumed';
+    this.roleChosen = this.roleChosen ?? roleTarget;
+    this.hint = differs ? 'resumed_earlier' : 'resumed';
     if (st.state === 'enrolled') {
       if (st.kind === 'new') { this.steps.configure = { status: 'ok', code: 'resumed' }; this.steps.wait_enroll = { status: 'ok', code: 'resumed' }; }
     }

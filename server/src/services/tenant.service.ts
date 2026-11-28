@@ -278,9 +278,17 @@ export const tenantService = {
       const tenant = await trx('tenants').where({ id }).first('id', 'slug') as { id: number; slug: string } | undefined;
       const { auditEntry } = await vault.shredTenantKeys(trx, id, { userId }, { audit: 'return' });
       await trx.raw('SELECT obligarth.tenant_delete(?)', [id]);
+      // Lot BANC-T: the bench stations the tenant owned are revoked by the cascade (trigger bench_stations_owner_guard),
+      // never given back to the platform: one protective entry each in the master's chain.
+      const benchRevoked = (await trx.raw('SELECT id, name FROM obligarth.bench_tenant_deleted_stations()') as
+        { rows: Array<{ id: string; name: string }> }).rows;
       // vault.dek_destroyed and tenant.deleted last (COF-RC2, AUD-RC8), P1:
       // the head of the master chain is not held during the cascade.
       await audit.appendManyInTx(trx, [
+        ...benchRevoked.map((s) => ({
+          tenantId: MASTER_TENANT_ID, action: 'bench.station_revoked', onBehalfOf: id,
+          target: { type: 'bench_station', id: String(s.id) }, details: { stationId: String(s.id), name: s.name, reason: 'tenant_deleted', formerOwnerTenantId: id },
+        })),
         ...(auditEntry ? [{
           tenantId: MASTER_TENANT_ID, action: auditEntry.action, onBehalfOf: id,
           target: { type: 'tenant', id: String(id) }, details: auditEntry.details,

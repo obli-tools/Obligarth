@@ -27,6 +27,10 @@ export function registerBenchAuditActions(): void {
     { name: 'bench.target_suspended', criticality: 'protective', label: 'Bench station target suspended' },
     { name: 'bench.target_resumed', criticality: 'critical', label: 'Bench station target resumed' },
     { name: 'bench.legacy_owner_allowed', criticality: 'critical', label: 'Bench target: device owner with an agent older than 1.4.0 allowed' },
+    // Lot BANC-T: a station owned by a client tenant (its claim by the code, its assignment by the platform).
+    { name: 'bench.station_claimed', criticality: 'critical', label: 'Bench station claimed by a tenant' },
+    { name: 'bench.station_claim_refused', criticality: 'protective', label: 'Bench station claim refused' },
+    { name: 'bench.station_owner_assigned', criticality: 'critical', label: 'Bench station given to a tenant' },
     { name: 'legacy_agent.bench_release_set', criticality: 'critical', label: 'Android agent version served to the bench stations' },
     { name: 'bench.provisioning_mismatch', criticality: 'protective', label: 'Bench enrollment refused: provisioning mismatch' },
     { name: 'bench.identity_conflict_cross_tenant', criticality: 'protective', label: 'Bench serial number held in another tenant' },

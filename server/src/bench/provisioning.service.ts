@@ -3,8 +3,9 @@ import type { Knex } from 'knex';
 import { z } from 'zod';
 import {
   BENCH_ERROR_CODES, BENCH_LIMITS, BENCH_OWNER_MIN_VERSION_CODE, BENCH_ROLE_POLICIES, BENCH_STEP_IDS, BENCH_STEP_STATUSES,
-  MASTER_TENANT_ID, benchRolePlan, truncateSerial,
-  type BenchProvisioningKind, type BenchProvisioningState, type BenchRolePolicy, type BenchStepEntry,
+  MASTER_TENANT_ID, benchRolePlan, sameBenchName, suggestBenchName, truncateSerial,
+  type BenchProvisioningKind, type BenchProvisioningState, type BenchRolePolicy, type BenchSiteDeviceView, type BenchSiteDevicesView,
+  type BenchStationSiteView, type BenchStationTenantView, type BenchStepEntry,
 } from '@obligarth/shared';
 import { audit } from '../audit';
 import { config } from '../config';
@@ -25,6 +26,14 @@ import type { StationLookup } from './stations.service';
 // outcome. Every route of a provisioning resolves its tenant first (bench_provisioning_tenant: only this station's), then
 // works in that tenant's context as i:bench-station:<id>; a target removed or suspended meanwhile abandons it (422).
 // No answer depends on another tenant: a serial held elsewhere goes to the audit of the platform only.
+// Lot BANC-T §9, §10: the station chooses the tenant, then the site (inside a target: the group of the site is the
+// target group or below it; a site without a group belongs to every target of its tenant), then the name. The plan
+// names the site (siteId): the device lands in the SITE's group when it has one (it is inside the target), else in the
+// target group; its token carries the site. The name: given by the technician, else the target's template
+// (name_template: {site.code}, {site.code:N}, {n}), else the prefix and the ADB serial as before; in a site, a name
+// already used (devices of the site, open provisionings of the site, case ignored) is refused (409 name_taken), under a
+// lock per site. The exception D3 (allowLegacyOwner) may be decided on the bench, in an open session, without a second
+// factor (the session was opened with one): audited at each provisioning that uses it.
 // =============================================================================
 
 const SERIAL = z.string().trim().regex(/^[A-Za-z0-9._:-]{1,64}$/);
@@ -38,6 +47,10 @@ const ACCOUNT_TYPE = z.string().regex(/^[A-Za-z0-9._-]{1,64}$/);
 export const PlanBody = z.object({
   tenantId: z.number().int().positive(),
   groupId: z.number().int().positive(),
+  /** Lot BANC-T §9: the site chosen on the card (one of the target's: GET /v1/tenants/:id/sites). */
+  siteId: z.string().regex(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/).nullable().optional(),
+  /** Lot BANC-T, Q3: the exception D3 decided on the bench (an open session is required; audited). */
+  allowLegacyOwner: z.boolean().optional(),
   device: z.object({
     adbSerial: SERIAL, hwSerial: SERIAL.nullable().optional(), model: LABEL(64), manufacturer: LABEL(64),
     sdkInt: z.number().int().min(21).max(100), osRelease: OPT_TEXT(32), oneUi: OPT_TEXT(32),
@@ -89,7 +102,7 @@ const upper = (v: string | null | undefined): string | null => (v ? v.toUpperCas
 
 interface Target {
   tenantId: number; tenantName: string; groupId: number; groupPath: string; rolePolicy: BenchRolePolicy; allowLegacyOwner: boolean;
-  namePrefix: string | null; disableDevOptions: boolean;
+  namePrefix: string | null; disableDevOptions: boolean; nameTemplate: string | null;
 }
 
 /** The targets of a station not suspended, in every tenant (its definer function). */
@@ -100,7 +113,94 @@ export async function stationTargets(stationId: string): Promise<Target[]> {
     tenantId: Number(t.tenant_id), tenantName: String(t.tenant_name), groupId: Number(t.group_id), groupPath: t.group_path ?? '',
     rolePolicy: (BENCH_ROLE_POLICIES as readonly string[]).includes(t.role_policy) ? t.role_policy : 'owner_preferred',
     allowLegacyOwner: t.allow_legacy_owner === true, namePrefix: t.name_prefix ?? null, disableDevOptions: t.disable_dev_options === true,
+    nameTemplate: t.name_template ?? null,
   }));
+}
+
+// ── Tenants, sites, names (lot BANC-T §9) ───────────────────────────────────────
+
+/** The tenants of the station's targets (not suspended), by name. */
+export async function stationTenants(stationId: string): Promise<BenchStationTenantView[]> {
+  const seen = new Map<number, string>();
+  for (const t of await stationTargets(stationId)) if (!seen.has(t.tenantId)) seen.set(t.tenantId, t.tenantName);
+  return [...seen].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+}
+
+const siteView = (r: Record<string, any>): BenchStationSiteView & { tenantId: number } => ({
+  tenantId: Number(r.tenant_id), id: String(r.id), code: String(r.code), name: String(r.name), city: r.city ?? null,
+  groupId: r.group_id === null || r.group_id === undefined ? null : Number(r.group_id), groupPath: r.group_path ?? null,
+  deviceCount: Number(r.devices ?? 0), targetGroupIds: (Array.isArray(r.target_group_ids) ? r.target_group_ids : []).map(Number),
+});
+
+/** The sites of a tenant inside the station's targets (its definer function: 200 at most, by code). */
+export async function stationSites(stationId: string, tenantId: number, search: string | null): Promise<Array<BenchStationSiteView & { tenantId: number }>> {
+  const r = await asNone(stationActor(stationId), () => db.raw('SELECT * FROM obligarth.bench_station_sites(?::uuid, ?, NULL::uuid, ?)',
+    [stationId, tenantId, search && search.trim() ? search.trim().slice(0, 100) : null])) as { rows: Array<Record<string, any>> };
+  return r.rows.map(siteView);
+}
+
+/** One site of the station's targets (any of its tenants), or null. */
+export async function stationSite(stationId: string, siteId: string): Promise<(BenchStationSiteView & { tenantId: number }) | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(siteId)) return null;
+  const r = await asNone(stationActor(stationId), () => db.raw('SELECT * FROM obligarth.bench_station_sites(?::uuid, NULL::integer, ?::uuid, NULL::text)',
+    [stationId, siteId.toLowerCase()])) as { rows: Array<Record<string, any>> };
+  return r.rows[0] ? siteView(r.rows[0]) : null;
+}
+
+/** The names used in a site of the station's targets (its definer function). */
+async function siteNames(stationId: string, siteId: string): Promise<BenchSiteDeviceView[]> {
+  const r = await asNone(stationActor(stationId), () => db.raw('SELECT * FROM obligarth.bench_station_site_devices(?::uuid, ?::uuid)', [stationId, siteId])) as
+    { rows: Array<Record<string, any>> };
+  return r.rows.map((d) => ({
+    kind: d.kind === 'provisioning' ? 'provisioning' : 'device', label: String(d.label ?? ''), model: d.model ?? null,
+    serialTail: d.serial_tail ?? null, lastSeenAt: iso(d.last_seen_at),
+  }));
+}
+
+/** GET /v1/sites/:id/devices: the names used in the site and the name the template of a target suggests. */
+export async function siteDevices(stationId: string, siteId: string, groupId: number | null): Promise<BenchSiteDevicesView> {
+  const site = await stationSite(stationId, siteId);
+  if (!site) throw new AppError(404, 'Site not found', 'site_refused');
+  const devices = await siteNames(stationId, site.id);
+  let nameTemplate: string | null = null;
+  if (groupId !== null) {
+    if (!site.targetGroupIds.includes(groupId)) throw new AppError(422, 'This site is not inside this target', 'site_refused');
+    nameTemplate = (await stationTargets(stationId)).find((t) => t.tenantId === site.tenantId && t.groupId === groupId)?.nameTemplate ?? null;
+  }
+  // The suggestion counts every name of the site (read in its tenant), the devices outside the station's targets too,
+  // which the list does not show: the plan refuses those names all the same.
+  const suggestedName = nameTemplate
+    ? suggestBenchName(nameTemplate, site.code, await asTenant(site.tenantId, stationActor(stationId), () => db.transaction((trx) => siteLabelsOf(trx, site.tenantId, site.id, null))))
+    : null;
+  return { site, devices, nameTemplate, suggestedName };
+}
+
+/** Every name used in a site: its devices under management (but `exceptDevice`) and the open provisionings of the
+ *  benches not yet tied to a device (tenant context). */
+async function siteLabelsOf(trx: Knex.Transaction, tenantId: number, siteId: string, exceptDevice: number | null): Promise<string[]> {
+  return [
+    ...(await trx('devices').where({ tenant_id: tenantId, site_id: siteId }).whereNot('enrollment_state', 'unenrolled')
+      .modify((q) => { if (exceptDevice !== null) q.whereNot('id', exceptDevice); }).pluck('label') as string[]),
+    ...(await trx('bench_provisionings').where({ tenant_id: tenantId, site_id: siteId }).whereIn('state', OPEN_STATES).whereNull('device_id')
+      .whereNotNull('device_name').pluck('device_name') as string[]),
+  ];
+}
+
+/** The group `group` is `root` or below it, in the tenant (its transaction). */
+async function groupWithin(trx: Knex.Transaction, tenantId: number, group: number, root: number): Promise<boolean> {
+  if (group === root) return true;
+  const r = await trx.raw(`WITH RECURSIVE up(id, parent_id, depth) AS (
+      SELECT g.id, g.parent_id, 0 FROM obligarth.device_groups g WHERE g.tenant_id = ? AND g.id = ?
+      UNION ALL
+      SELECT g.id, g.parent_id, up.depth + 1 FROM obligarth.device_groups g JOIN up ON g.id = up.parent_id AND g.tenant_id = ? WHERE up.depth < 32)
+    SELECT EXISTS (SELECT 1 FROM up WHERE up.id = ?) AS inside`, [tenantId, group, tenantId, root]) as { rows: Array<{ inside: boolean }> };
+  return r.rows[0]?.inside === true;
+}
+
+/** The group a device of the site lands in: the site's, when it is the target group or below it; else the target's. */
+async function placementGroup(trx: Knex.Transaction, tenantId: number, targetGroup: number, siteGroup: number | null): Promise<number> {
+  if (siteGroup === null) return targetGroup;
+  return (await groupWithin(trx, tenantId, siteGroup, targetGroup)) ? siteGroup : targetGroup;
 }
 
 /** The target of a tenant's group among the station's, in the tenant's transaction (tenant context): not suspended. */
@@ -142,6 +242,9 @@ export interface PlanAnswer {
   fallbackAllowed: boolean;
   fallbackConfirm: boolean;
   deviceName: string | null;
+  /** Lot BANC-T: the name the target's template suggests in the site (null: no template or no site). */
+  suggestedName: string | null;
+  siteId: string | null;
   existingDeviceUuid?: string;
   warnings: string[];
 }
@@ -156,6 +259,17 @@ export async function planProvisioning(station: StationLookup, b: PlanBody, orig
   }
   const target = (await stationTargets(station.id)).find((t) => t.tenantId === b.tenantId && t.groupId === b.groupId);
   if (!target) throw new AppError(422, 'This target is not one of the station', 'target_refused');
+  // The site: one of the target's, in its tenant (one answer for any other, unknown or archived).
+  const site = b.siteId ? await stationSite(station.id, b.siteId) : null;
+  if (b.siteId && (!site || site.tenantId !== b.tenantId || !site.targetGroupIds.includes(b.groupId))) {
+    throw new AppError(422, 'This site is not one of the target', 'site_refused');
+  }
+  // The exception D3 decided on the bench: only in an open session whose technician may enroll into the tenant.
+  const benchException = b.allowLegacyOwner === true && !target.allowLegacyOwner;
+  if (benchException) {
+    if (sessionUser(station) === null) throw new AppError(409, 'No bench session is open for this station', 'no_session');
+    if (!(await technicianMayOperate(station, b.tenantId))) throw new AppError(422, 'The technician of the session may not enroll into this tenant', 'target_refused');
+  }
   const served = await servedRelease();
   const planVersion = served ? served.versionCode : (b.agentInstalled?.versionCode ?? 0);
   const serials = [upper(adb), upper(hw)].filter((s): s is string => !!s);
@@ -183,7 +297,13 @@ export async function planProvisioning(station: StationLookup, b: PlanBody, orig
     let deviceId: number | null = null;
     let existingUuid: string | undefined;
     if (agentRecords.length > 0) {
-      const inGroup = agentRecords.find((m) => Number(m.group_id) === b.groupId);
+      // Inside the target: its group or below it (a device of a site lands in the site's group, under the target: lot
+      // BANC-T); the record in the target's group itself first.
+      let inGroup = agentRecords.find((m) => Number(m.group_id) === b.groupId);
+      for (const m of agentRecords) {
+        if (inGroup) break;
+        if (m.group_id !== null && await groupWithin(trx, tenantId, Number(m.group_id), b.groupId)) inGroup = m;
+      }
       if (!inGroup) throw new AppError(422, 'This device is managed outside the target group', 'device_outside_target');
       if (!b.agentInstalled) throw new AppError(422, 'This device is managed but its agent is missing', 'agent_already_enrolled');
       kind = 'convert';
@@ -194,13 +314,25 @@ export async function planProvisioning(station: StationLookup, b: PlanBody, orig
       // An agent enrolled elsewhere would refuse the configuration (Enrollment.kt): revoke it where it is, or reset.
       throw new AppError(422, 'The agent of this device is enrolled elsewhere', 'agent_already_enrolled');
     }
-    const plan = benchRolePlan(target.rolePolicy, b.device.sdkInt, planVersion, target.allowLegacyOwner);
+    const plan = benchRolePlan(target.rolePolicy, b.device.sdkInt, planVersion, target.allowLegacyOwner || benchException);
+    // The bench's exception counts only when it changes the plan (an agent older than 1.4.0 aimed at the owner).
+    const legacyOwnerBench = benchException && plan.target === 'device_owner' && planVersion < BENCH_OWNER_MIN_VERSION_CODE;
     if (kind === 'convert' && plan.target === 'device_owner' && planVersion < BENCH_OWNER_MIN_VERSION_CODE) {
       throw new AppError(422, 'The agent served to the bench cannot own the device: no conversion', 'agent_too_old');
     }
     const given = typeof b.deviceName === 'string' ? b.deviceName.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, BENCH_LIMITS.nameMax) : '';
-    const deviceName = (given || `${target.namePrefix ?? ''}${adb}`).slice(0, BENCH_LIMITS.nameMax) || null;
-    if (deviceName && kind === 'new') {
+    // In a site: its names read under its lock (two cards of the same site never take the same name).
+    let siteLabels: string[] = [];
+    if (site) {
+      await trx.raw('SELECT pg_advisory_xact_lock(hashtext(?))', [`bench_site_names:${site.id}`]);
+      siteLabels = await siteLabelsOf(trx, tenantId, site.id, deviceId);
+    }
+    const suggestedName = site && target.nameTemplate ? suggestBenchName(target.nameTemplate, site.code, siteLabels) : null;
+    const deviceName = (given || suggestedName || `${target.namePrefix ?? ''}${adb}`).slice(0, BENCH_LIMITS.nameMax) || null;
+    if (deviceName && site && siteLabels.some((l) => sameBenchName(l, deviceName))) {
+      throw new AppError(409, 'This name is already used in the site', 'name_taken', { suggestedName });
+    }
+    if (deviceName && kind === 'new' && !site) {
       const taken = await trx('devices').where({ tenant_id: tenantId }).whereNot('enrollment_state', 'unenrolled').where('label', deviceName).first('id');
       if (taken) warnings.push('name_taken');
     }
@@ -211,20 +343,29 @@ export async function planProvisioning(station: StationLookup, b: PlanBody, orig
       state: kind === 'convert' ? 'enrolled' : 'planned', adb_serial: adb, hw_serial: hw, model: b.device.model,
       manufacturer: b.device.manufacturer, sdk_int: b.device.sdkInt, os_release: b.device.osRelease ?? null, one_ui: b.device.oneUi ?? null,
       device_name: deviceName, role_target: plan.target, preflight: JSON.stringify(b.preflight), device_id: deviceId,
+      site_id: site ? site.id : null, legacy_owner_bench: legacyOwnerBench,
     }).returning(['id']) as Array<{ id: string }>;
     const id = String(row.id).toLowerCase();
     const ctx = await stationAuditContext(station.id, station.name, tenantId, origin);
+    if (legacyOwnerBench) {
+      // Q3: decided on the bench without a second factor (the session's covers it), written at each use (critical).
+      await audit.appendInTx(trx, {
+        tenantId, action: 'bench.legacy_owner_allowed', target: { type: 'bench_provisioning', id, ...(deviceId ? { device: deviceId } : {}) },
+        details: { decidedAt: 'bench', provisioningId: id, stationId: station.id, groupId: b.groupId, agentVersionCode: planVersion,
+          ...(session ? { technicianUserId: session } : {}) },
+      }, ctx);
+    }
     await audit.appendInTx(trx, {
       tenantId, action: 'bench.provisioning_planned', target: { type: 'bench_provisioning', id, ...(deviceId ? { device: deviceId } : {}) },
       details: {
         provisioningId: id, stationId: station.id, kind, adbSerial: truncateSerial(adb), hwSerial: truncateSerial(hw), model: b.device.model,
-        sdk: b.device.sdkInt, roleTarget: plan.target, groupId: b.groupId, warnings,
+        sdk: b.device.sdkInt, roleTarget: plan.target, groupId: b.groupId, warnings, ...(site ? { siteId: site.id } : {}),
         ...(session ? { technicianUserId: session } : {}),
       },
     }, ctx, { onFailure: 'spool' });
     return {
       provisioningId: id, kind, roleTarget: plan.target, fallbackAllowed: plan.fallbackAllowed, fallbackConfirm: plan.fallbackConfirm,
-      deviceName, ...(existingUuid ? { existingDeviceUuid: existingUuid } : {}), warnings,
+      deviceName, suggestedName, siteId: site ? site.id : null, ...(existingUuid ? { existingDeviceUuid: existingUuid } : {}), warnings,
     };
   })).catch((err) => {
     if ((err as { code?: string; constraint?: string })?.code === '23505' && /bench_provisionings_open/.test(String((err as { constraint?: string }).constraint ?? ''))) {
@@ -320,6 +461,12 @@ export interface ProvisioningState {
   agent: { deviceOwner: boolean; adminActive: boolean; versionCode: number; lastSeenAt: string | null; knoxState: string; adbEnabled: boolean | null } | null;
   tokenExpiresAt: string | null;
   errorCode: string | null;
+  /** Lot BANC-T: what the provisioning was planned with (a station resuming it after a restart keeps these, not the
+   *  choice of its new card). */
+  deviceName: string | null;
+  site: { id: string; code: string; name: string } | null;
+  roleTarget: 'device_owner' | 'device_admin';
+  legacyOwnerBench: boolean;
 }
 
 export async function provisioningState(station: StationLookup, id: string): Promise<ProvisioningState> {
@@ -329,6 +476,8 @@ export async function provisioningState(station: StationLookup, id: string): Pro
       .where({ 'd.tenant_id': tenantId, 'd.id': p.device_id })
       .first('d.uuid', 'd.management_mode', 'a.identity_state', 'a.device_owner', 'a.admin_active', 'a.agent_version_code', 'a.last_poll_at',
         'a.knox_state', 'a.adb_enabled', 'a.device_id as agent') as Record<string, any> | undefined : undefined;
+    const site = p.site_id ? await trx('sites').where({ tenant_id: tenantId, id: p.site_id }).first('id', 'code', 'name') as
+      { id: string; code: string; name: string } | undefined : undefined;
     const tok = p.enrollment_token_id ? await trx('legacy_agent_enrollment_tokens').where({ tenant_id: tenantId, id: p.enrollment_token_id })
       .first('expires_at', 'revoked_at', 'uses', 'max_uses') as Record<string, any> | undefined : undefined;
     return {
@@ -340,6 +489,9 @@ export async function provisioningState(station: StationLookup, id: string): Pro
       } : null,
       tokenExpiresAt: tok && !tok.revoked_at && Number(tok.uses) < Number(tok.max_uses) ? iso(tok.expires_at) : null,
       errorCode: p.error_code ?? null,
+      deviceName: p.device_name ?? null,
+      site: site ? { id: String(site.id), code: String(site.code), name: String(site.name) } : null,
+      roleTarget: p.role_target, legacyOwnerBench: p.legacy_owner_bench === true,
     };
   });
 }
@@ -384,8 +536,19 @@ export async function issueToken(station: StationLookup, id: string, origin: Ori
       }, ctx);
     }
     const label = `Banc ${station.name} · ${id.slice(0, 8)}`.slice(0, 100);
+    // Lot BANC-T: the site of the plan, read again (archived meanwhile: refused); the device lands in its group when that
+    // group is inside the target (else the target's group).
+    let siteId: string | null = null;
+    let groupId = Number(p.group_id);
+    if (p.site_id) {
+      const site = await trx('sites').where({ tenant_id: tenantId, id: p.site_id }).first('id', 'group_id', 'archived_at') as
+        { id: string; group_id: number | null; archived_at: Date | null } | undefined;
+      if (!site || site.archived_at) throw new AppError(422, 'The site of this provisioning is no longer usable', 'site_refused');
+      siteId = String(site.id);
+      groupId = await placementGroup(trx, tenantId, groupId, site.group_id === null ? null : Number(site.group_id));
+    }
     const [tok] = await trx('legacy_agent_enrollment_tokens').insert({
-      tenant_id: tenantId, public_id: publicId, secret_sha256: sha256Hex(Buffer.from(secret, 'utf8')), label, group_id: p.group_id,
+      tenant_id: tenantId, public_id: publicId, secret_sha256: sha256Hex(Buffer.from(secret, 'utf8')), label, group_id: groupId, site_id: siteId,
       max_uses: 1, expires_at: trx.raw('now() + make_interval(mins => ?)', [BENCH_LIMITS.tokenTtlMinutes]), created_by: technician, origin: 'bench',
       bench_provisioning_id: id, created_by_station: station.id,
     }).returning(['id', 'expires_at']) as Array<{ id: string; expires_at: Date }>;
@@ -466,7 +629,7 @@ export async function recordResult(station: StationLookup, id: string, b: z.infe
       // such declaration is ignored (kept in the audit entry below).
       const legacyOwner = b.roleDeclared === 'device_owner' && Number(sat.agent_version_code) < BENCH_OWNER_MIN_VERSION_CODE;
       const exception = legacyOwner && p.role_target === 'device_owner'
-        && (await targetIn(trx, station.id, tenantId, Number(p.group_id)))?.allow_legacy_owner === true;
+        && (p.legacy_owner_bench === true || (await targetIn(trx, station.id, tenantId, Number(p.group_id)))?.allow_legacy_owner === true);
       if (legacyOwner && !exception) warnings.push('owner_declaration_ignored');
       if (exception) {
         await trx('legacy_agent_devices').where({ tenant_id: tenantId, device_id: p.device_id }).update({ bench_owner_declared: true, updated_at: new Date() });

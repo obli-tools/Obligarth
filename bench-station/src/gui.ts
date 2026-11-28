@@ -10,7 +10,8 @@ import {
 import { type AdbDevice } from './adb/parse';
 import { checkInstalled, downloadAndInstall, forgetStationKey, installFromArchive, keyLocation, PLATFORM_TOOLS, type KeyLocation } from './adb/platformTools';
 import { AdbListError, ProcessAdbRunner, type AdbRunner } from './adb/runner';
-import { HttpBenchApi, type BenchApi, type BenchTarget } from './benchApi';
+import { sameBenchName } from '../../shared/src/mdm/bench';
+import { BenchApiError, HttpBenchApi, type BenchApi, type BenchTarget } from './benchApi';
 import { ServerClock } from './clock';
 import { isDevBuild, loadBenchConfig, normaliseBenchUrl, type BenchConfig, type UrlSource } from './config';
 import { defaultProtector, type Protector } from './dpapi';
@@ -50,10 +51,20 @@ import { WindowWatch, type WindowMode } from './window';
 const BODY_LIMIT = 64 * 1024;
 const OUTCOMES_KEPT = 16;
 const OP_ID = /^[A-Za-z0-9_-]{8,64}$/;
+const SITE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const TITLE_PART = 'Obligarth Bench';
 
 class HttpError extends Error {
   constructor(readonly status: number, readonly code: string, readonly extra: Record<string, unknown> = {}) { super(code); }
+}
+
+/** A refusal of the platform for the page: its own code when the server named one about the request (404, 409, 422),
+ *  otherwise 502 (unreachable, redirected, a 5xx). */
+function relayed(err: unknown): HttpError {
+  if (err instanceof BenchApiError && [404, 409, 422].includes(err.status)) {
+    return new HttpError(err.status, err.code, typeof err.details?.suggestedName === 'string' ? { suggestedName: err.details.suggestedName } : {});
+  }
+  return new HttpError(502, (err as { code?: string })?.code ?? 'server_unreachable');
 }
 
 const SECURITY_HEADERS = {
@@ -104,6 +115,9 @@ interface Card {
   tenantId: number | null;
   groupId: number | null;
   deviceName: string | null;
+  /** Lot BANC-T §9: the site chosen (checked against the station's targets when chosen), the exception D3. */
+  site: { id: string; code: string; name: string } | null;
+  allowLegacyOwner: boolean;
   attentionSeen: string | null;
   /** The device left (or the card holds on device_gone): the first reading in state `device` resumes it (§5.4). */
   awaitingDevice: boolean;
@@ -307,6 +321,7 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       station: status && 'name' in status ? status.name : null,
       tenant: t?.tenantName ?? null,
       group: t?.groupPath ?? null,
+      site: run.site ? `${run.site.code} — ${run.site.name}` : null,
       serial: truncateSerial(run.identity?.adbSerial ?? run.serial),
       model: run.identity?.model ?? c?.device?.model ?? null,
       android: run.identity?.osRelease ?? null,
@@ -325,12 +340,15 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       runner: runner!, api: apiProxy, pin, apkCacheDir: apkCacheDir(env), requireApproved: requireApprovedLive,
       adbConflict: () => checkConflict(), timing: deps.timing, sleep: deps.sleep, onChange: () => changed(), onFinished: finished,
     }),
-    device, present: true, createdAt: Date.now(), tenantId: null, groupId: null, deviceName: null, attentionSeen: null, awaitingDevice: false,
+    device, present: true, createdAt: Date.now(), tenantId: null, groupId: null, deviceName: null, site: null, allowLegacyOwner: false, attentionSeen: null, awaitingDevice: false,
   });
 
   /** The api of the current station, resolved at each call (the URL may change between two steps). */
   const apiProxy: BenchApi = {
     targets: () => need().targets(),
+    tenants: () => need().tenants(),
+    sites: (t, s) => need().sites(t, s),
+    siteDevices: (s, g) => need().siteDevices(s, g),
     agent: () => need().agent(),
     downloadApk: (s, d) => need().downloadApk(s, d),
     plan: (b) => need().plan(b),
@@ -394,6 +412,8 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       tenantId: r.target?.tenantId ?? c.tenantId,
       groupId: r.target?.groupId ?? c.groupId,
       targetLabel: r.target ? `${r.target.tenantName} › ${r.target.groupPath}` : null,
+      site: r.site ?? c.site,
+      allowLegacyOwner: r.plan ? r.allowLegacyOwner : c.allowLegacyOwner,
       deviceName: r.deviceName ?? c.deviceName,
       kind: r.plan?.kind ?? null,
       roleTarget: r.plan?.roleTarget ?? null,
@@ -602,6 +622,29 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       }
       return;
     }
+    // Lot BANC-T §9: the choice of a card, tenant → site → names of the site (the server bounds them to the targets).
+    if (method === 'GET' && path === '/api/tenants') {
+      await requireApprovedRoute();
+      json(res, 200, { tenants: await need().tenants().catch((err: unknown) => { throw relayed(err); }) });
+      return;
+    }
+    const ts = /^\/api\/tenants\/([1-9][0-9]{0,9})\/sites$/.exec(path);
+    if (method === 'GET' && ts) {
+      await requireApprovedRoute();
+      const search = (url.searchParams.get('search') ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) || null;
+      json(res, 200, { sites: await need().sites(Number(ts[1]), search).catch((err: unknown) => { throw relayed(err); }) });
+      return;
+    }
+    const sd = /^\/api\/sites\/([0-9a-fA-F-]{36})\/devices$/.exec(path);
+    if (method === 'GET' && sd) {
+      if (!SITE_ID.test(sd[1])) throw new HttpError(400, 'bad_request');
+      const rawGroup = url.searchParams.get('groupId');
+      const groupId = rawGroup !== null && /^[1-9][0-9]{0,9}$/.test(rawGroup) ? Number(rawGroup) : null;
+      if (rawGroup !== null && groupId === null) throw new HttpError(400, 'bad_request');
+      await requireApprovedRoute();
+      json(res, 200, await need().siteDevices(sd[1].toLowerCase(), groupId).catch((err: unknown) => { throw relayed(err); }));
+      return;
+    }
     if (method === 'GET' && path === '/api/cards') {
       json(res, 200, { cards: board.values().sort((a, b) => a.createdAt - b.createdAt).map(cardView), devices: devices.length, now: Date.now() });
       return;
@@ -629,9 +672,33 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
           const tenantId = Number(body.tenantId);
           const groupId = Number(body.groupId);
           if (!Number.isInteger(tenantId) || tenantId <= 0 || !Number.isInteger(groupId) || groupId <= 0) throw new HttpError(400, 'target_required');
+          const deviceName = typeof body.deviceName === 'string' ? body.deviceName.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) || null : null;
+          const siteId = typeof body.siteId === 'string' && body.siteId ? body.siteId.toLowerCase() : null;
+          if (siteId !== null && !SITE_ID.test(siteId)) throw new HttpError(400, 'bad_request');
+          if (body.allowLegacyOwner !== undefined && typeof body.allowLegacyOwner !== 'boolean') throw new HttpError(400, 'bad_request');
+          const allowLegacyOwner = body.allowLegacyOwner === true;
+          let site: Card['site'] = null;
+          if (siteId) {
+            // The site read again now: one of this target's, and the name not already used in it (§9: a duplicate is
+            // refused before anything is prepared; the server checks it again under its lock).
+            await requireApprovedRoute();
+            const info = await need().siteDevices(siteId, groupId).catch((err: unknown) => { throw relayed(err); });
+            if (info.site.tenantId !== tenantId || !info.site.targetGroupIds.includes(groupId)) throw new HttpError(422, 'site_refused');
+            if (deviceName && info.devices.some((d) => sameBenchName(d.label, deviceName))) {
+              throw new HttpError(409, 'name_taken', { suggestedName: info.suggestedName });
+            }
+            site = { id: info.site.id, code: info.site.code, name: info.site.name };
+          }
+          // Q3: the exception D3 is decided on the bench in an open session only (its second factor covers it).
+          if (allowLegacyOwner) {
+            const s = status as StationStatus | null;
+            if (!s || !('session' in s) || !s.session) throw new HttpError(409, 'no_session');
+          }
           card.tenantId = tenantId;
           card.groupId = groupId;
-          card.deviceName = typeof body.deviceName === 'string' ? body.deviceName.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) || null : null;
+          card.deviceName = deviceName;
+          card.site = site;
+          card.allowLegacyOwner = allowLegacyOwner;
           json(res, 200, { card: cardView(card) });
           return;
         }
@@ -650,7 +717,12 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
           const choice = typeof body.choice === 'string' && (choices as string[]).includes(body.choice) ? (body.choice as Choice) : undefined;
           if (choice && card.run.prompt && !card.run.prompt.choices.includes(choice) && choice !== 'retry') throw new HttpError(409, 'choice_not_offered');
           const op = typeof req.headers['x-bench-op'] === 'string' && OP_ID.test(req.headers['x-bench-op']) ? req.headers['x-bench-op'] : undefined;
-          if (target) { card.run.target = target; card.run.deviceName = card.deviceName; }
+          if (target) {
+            card.run.target = target;
+            card.run.deviceName = card.deviceName;
+            card.run.site = card.site;
+            card.run.allowLegacyOwner = card.allowLegacyOwner;
+          }
           const p = startRun(card, choice, op);
           const rec = outcomes[outcomes.length - 1];
           const quick = await Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), req.headers['x-bench-async'] === '1' ? 5_000 : 0))]);

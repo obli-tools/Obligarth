@@ -21,12 +21,52 @@ export interface BenchTarget {
   rolePolicy: 'owner_required' | 'owner_preferred' | 'admin_only';
   allowLegacyOwner: boolean;
   namePrefix: string | null;
+  /** Lot BANC-T §10: the template of the suggested name ({site.code}, {site.code:N}, {n}); null or absent: none. */
+  nameTemplate?: string | null;
   disableDevOptions: boolean;
+}
+
+/** GET /v1/tenants: the tenants of the station's targets (lot BANC-T §9). */
+export interface BenchTenant { id: number; name: string }
+
+/** GET /v1/tenants/:id/sites?search=: a site inside one of the station's targets (200 at most, by code). */
+export interface BenchSite {
+  id: string;
+  code: string;
+  name: string;
+  city: string | null;
+  groupId: number | null;
+  groupPath: string | null;
+  /** The devices of the site under management (0: a new site). */
+  deviceCount: number;
+  /** The groups of the station's targets this site may be planned into. */
+  targetGroupIds: number[];
+}
+
+/** A name already used in the site: a device under management, or an open provisioning of a bench. */
+export interface BenchSiteDevice {
+  kind: 'device' | 'provisioning';
+  label: string;
+  model: string | null;
+  serialTail: string | null;
+  lastSeenAt: string | null;
+}
+
+/** GET /v1/sites/:id/devices[?groupId=]: the names used in the site, the name the target's template suggests. */
+export interface BenchSiteDevices {
+  site: BenchSite & { tenantId: number };
+  devices: BenchSiteDevice[];
+  nameTemplate: string | null;
+  suggestedName: string | null;
 }
 
 export interface PlanRequest {
   tenantId: number;
   groupId: number;
+  /** Lot BANC-T §9: the site chosen on the card (one of the target's). */
+  siteId?: string | null;
+  /** Lot BANC-T Q3: the exception D3 decided on the bench (an open session is required; the server audits it). */
+  allowLegacyOwner?: boolean;
   device: { adbSerial: string; hwSerial: string | null; model: string; manufacturer: string; sdkInt: number; osRelease: string | null; oneUi: string | null };
   agentInstalled: { versionCode: number; signerSha256: string | null; adminActive: boolean; phase: string | null } | null;
   deviceName: string | null;
@@ -41,6 +81,9 @@ export interface PlanAnswer {
   fallbackConfirm: boolean;
   deviceName: string | null;
   existingDeviceUuid?: string;
+  /** Lot BANC-T: the name the target's template suggests in the site (null: none). */
+  suggestedName?: string | null;
+  siteId?: string | null;
   warnings: string[];
 }
 
@@ -53,6 +96,11 @@ export interface ProvisioningState {
   agent: { deviceOwner: boolean; adminActive: boolean; versionCode: number; lastSeenAt: string | null; knoxState: string; adbEnabled: boolean | null } | null;
   tokenExpiresAt: string | null;
   errorCode: string | null;
+  /** Lot BANC-T (absent from an older server): what the provisioning was planned with. */
+  deviceName?: string | null;
+  site?: { id: string; code: string; name: string } | null;
+  roleTarget?: 'device_owner' | 'device_admin';
+  legacyOwnerBench?: boolean;
 }
 
 export interface StepEntry {
@@ -73,6 +121,10 @@ export interface ResultRequest {
 /** What the provisioning sequence needs from the platform (faked by the harness). */
 export interface BenchApi {
   targets(): Promise<BenchTarget[]>;
+  /** Lot BANC-T §9: the choice of the card, tenant → site → name. */
+  tenants(): Promise<BenchTenant[]>;
+  sites(tenantId: number, search: string | null): Promise<BenchSite[]>;
+  siteDevices(siteId: string, groupId: number | null): Promise<BenchSiteDevices>;
   agent(): Promise<ServedAgent>;
   downloadApk(sha256: string, dest: string): Promise<void>;
   plan(body: PlanRequest): Promise<PlanAnswer>;
@@ -149,6 +201,14 @@ export class HttpBenchApi implements BenchApi {
   }
 
   targets(): Promise<BenchTarget[]> { return this.call('/v1/targets'); }
+  tenants(): Promise<BenchTenant[]> { return this.call('/v1/tenants'); }
+  sites(tenantId: number, search: string | null): Promise<BenchSite[]> {
+    const q = search ? `?search=${encodeURIComponent(search.slice(0, 100))}` : '';
+    return this.call(`/v1/tenants/${encodeURIComponent(String(tenantId))}/sites${q}`);
+  }
+  siteDevices(siteId: string, groupId: number | null): Promise<BenchSiteDevices> {
+    return this.call(`/v1/sites/${encodeURIComponent(siteId)}/devices${groupId !== null ? `?groupId=${groupId}` : ''}`);
+  }
   agent(): Promise<ServedAgent> { return this.call('/v1/agent'); }
 
   async downloadApk(sha256: string, dest: string): Promise<void> {

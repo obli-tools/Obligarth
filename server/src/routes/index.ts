@@ -73,6 +73,7 @@ import { createBenchStationRouter } from '../bench/api.routes';
 import { createBenchAdminRouter } from '../bench/admin.routes';
 import { createBenchSessionsRouter } from '../bench/sessions.routes';
 import { createBenchHistoryRouter } from '../bench/history.routes';
+import { createBenchOwnedRouter } from '../bench/owned.routes';
 
 const router = Router();
 
@@ -205,6 +206,8 @@ tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
 tenantRouter.use('/admin/bench-stations', createBenchAdminRouter());
 tenantRouter.use('/bench-sessions', createBenchSessionsRouter());
 tenantRouter.use('/bench-provisionings', createBenchHistoryRouter());
+// Lot BANC-T: the stations a client tenant owns (claim by the code of the station, management, targets of its tenant).
+tenantRouter.use('/bench-stations', createBenchOwnedRouter());
 // The MCP server in the console: the user's personal access keys and the tenant managers' oversight of them, the
 // authorizations an AI agent asked (approved with a second factor), and the platform side (settings, tenant IP
 // policies, blocks, every key; master tenant, platform administrators). /mcp itself is mounted by app.ts.

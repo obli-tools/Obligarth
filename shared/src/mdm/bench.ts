@@ -57,6 +57,9 @@ export const BENCH_API_CODES = [
   'station_pending', 'station_suspended', 'station_revoked', 'station_ip_refused', 'target_refused', 'device_outside_target',
   'agent_already_enrolled', 'open_provisioning', 'bad_state', 'no_session', 'not_enrolled', 'not_verified', 'too_many_pending',
   'apk_unavailable', 'apk_mismatch', 'verification_mismatch', 'agent_too_old',
+  // Lot BANC-T §9: the site chosen on the card is not one of the target's (unknown, archived, of another tenant or
+  // outside the target's group); the name of the device is already used in the site (case ignored).
+  'site_refused', 'name_taken',
 ] as const;
 export type BenchApiCode = typeof BENCH_API_CODES[number];
 
@@ -133,6 +136,77 @@ export function benchRolePlan(policy: BenchRolePolicy, sdk: number, agentVersion
   return { target: 'device_owner', fallbackAllowed: true, fallbackConfirm: sdk >= 35 };
 }
 
+// ── Name of a device suggested on the bench (lot BANC-T §9, §10) ─────────────────
+//
+// A template per target (bench_station_targets.name_template), generic: literal text and the tokens
+//   {site.code}      the code of the site chosen on the card
+//   {site.code:N}    the same, left-padded with zeros to N characters (never cut: a longer code stays whole)
+//   {n} / {n:N}      the number of the device in the site: the highest number already used by THIS template in the
+//                    site (the names of its devices and of its open provisionings) + 1, from 1; {n:N} left-pads it
+// Example (fictitious): « AB{site.code:5}-{n} » gives AB00042-1, AB00042-2… in the site 42. {n} appears exactly once;
+// the literal text is printable, without braces. The name is compared case-insensitively.
+
+export const BENCH_NAME_TEMPLATE_MAX = 64;
+const NAME_TOKEN_RE = /\{(site\.code|n)(?::([1-9]|1[0-6]))?\}/g;
+
+export type BenchNameTemplateCheck = { ok: true } | { ok: false; reason: 'empty' | 'too_long' | 'bad_char' | 'bad_token' | 'no_number' | 'two_numbers' };
+
+/** Validates a name template (the console, the server and the station apply the same rule). */
+export function checkBenchNameTemplate(template: unknown): BenchNameTemplateCheck {
+  if (typeof template !== 'string' || template.trim() === '') return { ok: false, reason: 'empty' };
+  if (template.length > BENCH_NAME_TEMPLATE_MAX || template !== template.trim()) return { ok: false, reason: 'too_long' };
+  if (/[\u0000-\u001f\u007f]/.test(template)) return { ok: false, reason: 'bad_char' };
+  const literal = template.replace(NAME_TOKEN_RE, '');
+  if (/[{}]/.test(literal)) return { ok: false, reason: 'bad_token' };
+  const numbers = [...template.matchAll(NAME_TOKEN_RE)].filter((m) => m[1] === 'n').length;
+  if (numbers === 0) return { ok: false, reason: 'no_number' };
+  if (numbers > 1) return { ok: false, reason: 'two_numbers' };
+  return { ok: true };
+}
+
+const pad = (s: string, width: string | undefined): string => (width ? s.padStart(Number(width), '0') : s);
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** The name of number `n` in the site of code `siteCode` (null: an invalid template). */
+export function renderBenchName(template: string, siteCode: string, n: number): string | null {
+  if (!checkBenchNameTemplate(template).ok || !Number.isSafeInteger(n) || n < 1) return null;
+  return template.replace(NAME_TOKEN_RE, (_m, token: string, width: string | undefined) => pad(token === 'n' ? String(n) : siteCode, width));
+}
+
+/** The numbers this template already used in the site, read from names (case ignored; a name of another form is
+ *  not counted). */
+export function benchNameNumbers(template: string, siteCode: string, names: readonly (string | null | undefined)[]): number[] {
+  if (!checkBenchNameTemplate(template).ok) return [];
+  let source = '';
+  let last = 0;
+  for (const m of template.matchAll(NAME_TOKEN_RE)) {
+    source += escapeRe(template.slice(last, m.index));
+    source += m[1] === 'n' ? '(\\d{1,9})' : escapeRe(pad(siteCode, m[2]));
+    last = (m.index ?? 0) + m[0].length;
+  }
+  source += escapeRe(template.slice(last));
+  const re = new RegExp(`^${source}$`, 'i');
+  const out: number[] = [];
+  for (const name of names) {
+    const hit = typeof name === 'string' ? re.exec(name.trim()) : null;
+    if (hit) out.push(Number(hit[1]));
+  }
+  return out;
+}
+
+/** The suggested name: the highest number used + 1 (1 in an empty site); null when the template is invalid or the
+ *  name would pass the bound of a device name. */
+export function suggestBenchName(template: string, siteCode: string, names: readonly (string | null | undefined)[]): string | null {
+  const used = benchNameNumbers(template, siteCode, names);
+  const next = (used.length ? Math.max(...used) : 0) + 1;
+  const name = renderBenchName(template, siteCode, next);
+  return name && name.length <= BENCH_LIMITS.nameMax ? name : null;
+}
+
+/** Two device names are the same name (the uniqueness in a site ignores the case and the outer spaces). */
+export const sameBenchName = (a: string | null | undefined, b: string | null | undefined): boolean =>
+  typeof a === 'string' && typeof b === 'string' && a.trim().toLowerCase() === b.trim().toLowerCase();
+
 /** A serial number cut to its last four characters (the audit, and a reader without devices.manage). */
 export function truncateSerial(serial: string | null | undefined): string | null {
   if (typeof serial !== 'string' || !serial) return null;
@@ -150,8 +224,12 @@ export interface BenchTargetView {
   rolePolicy: BenchRolePolicy;
   allowLegacyOwner: boolean;
   namePrefix: string | null;
+  /** The template of the suggested name (lot BANC-T §10), null: the prefix and the ADB serial as before. */
+  nameTemplate: string | null;
   disableDevOptions: boolean;
   suspendedAt: string | null;
+  /** Lot BANC-T, Q1: a target of a client's station suspended by the platform (the client does not lift it). */
+  suspendedByPlatform: boolean;
   createdAt: string;
 }
 
@@ -184,6 +262,14 @@ export interface BenchStationView {
   targetCount: number;
   enrolledCount: number;
   session: BenchSessionView | null;
+  /** Lot BANC-T: the owner of the station. The stations of the platform belong to the master tenant (Default):
+   *  ownerTenantId = MASTER_TENANT_ID, ownerSince null. A station of a client: its tenant, since its claim or its
+   *  assignment. null: a revoked station whose tenant was deleted. */
+  ownerTenantId: number | null;
+  ownerTenantName: string | null;
+  ownerSince: string | null;
+  /** A station of a client suspended by the platform: the client does not lift this suspension. */
+  suspendedByPlatform: boolean;
 }
 
 export interface BenchStationDetail extends BenchStationView {
@@ -200,6 +286,83 @@ export interface BenchTenantStationView {
   /** technician: only when that user is a member of this tenant (null otherwise); mine: the session of the requesting
    *  user, who alone (with a platform administrator) may close it. */
   session: { id: string; technician: string | null; expiresAt: string; mine: boolean } | null;
+  /** Lot BANC-T: the station belongs to this tenant (GET /api/bench-stations manages it). */
+  owned: boolean;
+}
+
+/** A target of a station of the tenant (GET /api/bench-stations): a group of this tenant. */
+export interface BenchOwnedTargetView {
+  groupId: number;
+  groupPath: string;
+  rolePolicy: BenchRolePolicy;
+  allowLegacyOwner: boolean;
+  namePrefix: string | null;
+  nameTemplate: string | null;
+  disableDevOptions: boolean;
+  suspendedAt: string | null;
+  /** Suspended by the platform (Q1): only the platform resumes it, the tenant neither resumes nor removes it. */
+  suspendedByPlatform: boolean;
+  createdAt: string;
+}
+
+/** A station that belongs to the tenant (lot BANC-T, GET /api/bench-stations): host and version, never an address
+ *  (Q4); the technician of its session named only when a member of the tenant. */
+export interface BenchOwnedStationView {
+  id: string;
+  name: string;
+  hostname: string;
+  status: BenchStationStatus;
+  stationVersion: string | null;
+  createdAt: string;
+  approvedAt: string | null;
+  suspendedAt: string | null;
+  /** Suspended by the platform: only the platform lifts it (resume answers 409 suspendedByPlatform). */
+  suspendedByPlatform: boolean;
+  revokedAt: string | null;
+  revokedReason: string | null;
+  lastSeenAt: string | null;
+  ownerSince: string | null;
+  targets: BenchOwnedTargetView[];
+  session: { id: string; technician: string | null; expiresAt: string; mine: boolean } | null;
+}
+
+// ── The choice of the station: tenant, site, name (lot BANC-T §9) ─────────────────────
+
+/** GET /api/bench/v1/tenants: the tenants of the station's targets (not suspended). */
+export interface BenchStationTenantView { id: number; name: string }
+
+/** GET /api/bench/v1/tenants/:id/sites?search=: a site of the tenant inside one of the station's targets (its group is
+ *  a target group or below one; a site without a group belongs to every target of its tenant). 200 at most, by code. */
+export interface BenchStationSiteView {
+  id: string;
+  code: string;
+  name: string;
+  city: string | null;
+  groupId: number | null;
+  groupPath: string | null;
+  /** The devices of the site under management (0: « new »). */
+  deviceCount: number;
+  /** The groups of the station's targets this site may be planned into (PlanBody.groupId among them). */
+  targetGroupIds: number[];
+}
+
+/** A device name already used in the site: a device under management, or an open provisioning of a bench. */
+export interface BenchSiteDeviceView {
+  kind: 'device' | 'provisioning';
+  label: string;
+  model: string | null;
+  /** The serial number cut to its last four characters. */
+  serialTail: string | null;
+  lastSeenAt: string | null;
+}
+
+/** GET /api/bench/v1/sites/:id/devices[?groupId=]: the names used in the site and, for a target (groupId), the name
+ *  its template suggests (null: no template, or no target given). */
+export interface BenchSiteDevicesView {
+  site: BenchStationSiteView & { tenantId: number };
+  devices: BenchSiteDeviceView[];
+  nameTemplate: string | null;
+  suggestedName: string | null;
 }
 
 /** A provisioning in the tenant's history (GET /api/bench-provisionings). */
@@ -229,6 +392,10 @@ export interface BenchProvisioningView {
   steps: BenchStepEntry[];
   stepsDropped: number;
   technician: string | null;
+  /** Lot BANC-T §9: the site chosen on the bench (null: none, or deleted since). */
+  siteId: string | null;
+  siteCode: string | null;
+  siteName: string | null;
   createdAt: string;
   updatedAt: string;
   outcomeAt: string | null;

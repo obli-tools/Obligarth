@@ -1,6 +1,6 @@
 import apiClient from './client';
 import type {
-  BenchProvisioningView, BenchRolePolicy, BenchSessionView, BenchStationDetail, BenchStationInstallerInfo, BenchStationView,
+  BenchOwnedStationView, BenchProvisioningView, BenchRolePolicy, BenchSessionView, BenchStationDetail, BenchStationInstallerInfo, BenchStationView,
   BenchTenantStationView, LegacyAgentReleaseView,
 } from '@obligarth/shared';
 
@@ -24,12 +24,15 @@ export interface BenchTargetInput {
   groupId: number;
   rolePolicy?: BenchRolePolicy;
   namePrefix?: string | null;
+  /** Lot BANC-T §10: the template of the suggested name ({site.code}, {site.code:N}, {n}, {n:N}); null clears it. */
+  nameTemplate?: string | null;
   disableDevOptions?: boolean;
 }
 
 export interface BenchTargetPatch {
   rolePolicy?: BenchRolePolicy;
   namePrefix?: string | null;
+  nameTemplate?: string | null;
   disableDevOptions?: boolean;
   allowLegacyOwner?: boolean;
   suspended?: boolean;
@@ -71,12 +74,16 @@ export const benchStationsApi = {
   async tenantGroups(tenantId: number): Promise<Array<{ id: number; path: string }>> {
     return data(await apiClient.get<ApiResponse<Array<{ id: number; path: string }>>>(`/admin/bench-stations/tenants/${tenantId}/groups`));
   },
+  /** Lot BANC-T, Q2: a platform station given to a client (strict second factor; never the other way). */
+  async assignOwner(id: string, tenantId: number): Promise<BenchStationDetail> {
+    return data(await apiClient.post<ApiResponse<BenchStationDetail>>(`/admin/bench-stations/${id}/owner`, { tenantId }));
+  },
   async installer(): Promise<BenchStationInstallerInfo> {
     return data(await apiClient.get<ApiResponse<BenchStationInstallerInfo>>('/admin/bench-stations/installer'));
   },
 
   // ── Tenant ──
-  async history(f: { stationId?: string; state?: string; deviceId?: number } = {}): Promise<BenchProvisioningView[]> {
+  async history(f: { stationId?: string; state?: string; deviceId?: number; siteId?: string } = {}): Promise<BenchProvisioningView[]> {
     return data(await apiClient.get<ApiResponse<BenchProvisioningView[]>>('/bench-provisionings', { params: f }));
   },
   async tenantStations(): Promise<BenchTenantStationView[]> {
@@ -92,4 +99,36 @@ export const benchStationsApi = {
     return data(await apiClient.post<ApiResponse<BenchSessionView>>('/bench-sessions', { stationId, minutes }));
   },
   async closeTenantSession(sessionId: string): Promise<void> { await apiClient.post(`/bench-sessions/${sessionId}/close`, {}); },
+
+  // ── The stations the tenant owns (lot BANC-T, /api/bench-stations: mdm.bench.manage, 404 in the master tenant) ──
+  /** The claim of a pending station by its name and the code its screen shows (strict second factor, asked by the
+   *  client's dialog): 422 claim_mismatch for every refusal, 409 claim_conflict, 429 rate_limited. */
+  async claim(name: string, verificationCode: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>('/bench-stations/claim', { name, verificationCode }));
+  },
+  async owned(): Promise<BenchOwnedStationView[]> { return data(await apiClient.get<ApiResponse<BenchOwnedStationView[]>>('/bench-stations')); },
+  async ownedRename(id: string, name: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.patch<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}`, { name }));
+  },
+  async ownedSuspend(id: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/suspend`, {}));
+  },
+  async ownedResume(id: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/resume`, {}));
+  },
+  async ownedRevoke(id: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/revoke`, {}));
+  },
+  async ownedAddTarget(id: string, t: Omit<BenchTargetInput, 'tenantId'>): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/targets`, t));
+  },
+  async ownedPatchTarget(id: string, groupId: number, p: BenchTargetPatch): Promise<BenchOwnedStationView> {
+    return data(await apiClient.patch<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/targets/${groupId}`, p));
+  },
+  async ownedRemoveTarget(id: string, groupId: number): Promise<BenchOwnedStationView> {
+    return data(await apiClient.delete<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/targets/${groupId}`));
+  },
+  async ownedCloseSession(id: string): Promise<BenchOwnedStationView> {
+    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/sessions/close`, {}));
+  },
 };

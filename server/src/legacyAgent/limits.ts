@@ -24,6 +24,13 @@ export class WindowLimiter {
     return 0;
   }
 
+  /** The seconds to wait if a hit were recorded now (0: it would pass); records nothing. */
+  peek(key: string, now = Date.now()): number {
+    const from = now - this.windowMs;
+    const list = (this.hits.get(key) ?? []).filter((t) => t > from);
+    return list.length >= this.max ? Math.max(1, Math.ceil((list[0] + this.windowMs - now) / 1000)) : 0;
+  }
+
   private sweep(now: number): void {
     const from = now - this.windowMs;
     for (const [k, v] of this.hits) if (!v.some((t) => t > from)) this.hits.delete(k);

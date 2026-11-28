@@ -5,7 +5,7 @@ import { openJson, sealJson, type Protector } from './dpapi';
 /**
  * Obligarth bench station — the local history (lot BANC §5.7): one line per provisioning that ENDED on this PC, kept in
  * %LOCALAPPDATA%\Obligarth\bench-history.json, 1000 lines, protected by DPAPI (CurrentUser).
- * What is kept: time, station, tenant and group (names), the serial CUT to its last four characters, model, Android,
+ * What is kept: time, station, tenant, group and site (names), the serial CUT to its last four characters, model, Android,
  * role aimed at and obtained, outcome, error code, provisioningId, deviceUuid. Never a token, a configuration, an
  * account. Best effort: a history that cannot be read or written never stops a provisioning.
  */
@@ -14,6 +14,8 @@ export interface HistoryEntry {
   station: string | null;
   tenant: string | null;
   group: string | null;
+  /** Lot BANC-T §9: the site chosen on the card, « code — name » (absent in the lines written before it). */
+  site?: string | null;
   serial: string | null;
   model: string | null;
   android: string | null;

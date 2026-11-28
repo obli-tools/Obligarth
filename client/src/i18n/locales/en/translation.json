@@ -3115,6 +3115,10 @@
         "token_quota": {
           "title": "Bench station near its token quota",
           "message": "A bench station issued {{count}} enrollment tokens in 24 hours (quota {{quota}})."
+        },
+        "claim_refused": {
+          "title": "Bench station claims refused",
+          "message": "A client tenant had {{count}} claims of a bench station refused in 24 hours ({{reason}}): check that no pending station is being taken over."
         }
       },
       "obliwatch": {
@@ -7387,7 +7391,9 @@
       "target_refused": "Target refused",
       "slot_held": "Device already on another card",
       "too_many_cards": "Too many devices at once",
-      "internal": "Internal error"
+      "internal": "Internal error",
+      "site_refused": "Site outside the targets of the station",
+      "name_taken": "Name already used in the site"
     },
     "step": {
       "detect": "Detection",
@@ -7421,7 +7427,8 @@
       "stations": "Bench stations of this tenant",
       "noStation": "No bench station targets this tenant.",
       "resumeByPlatform": "Resumed by a platform administrator only",
-      "removeConfirm": "Remove the group {{group}} from the station {{station}}?"
+      "removeConfirm": "Remove the group {{group}} from the station {{station}}?",
+      "platformStations": "Stations of the platform serving this tenant"
     },
     "history": {
       "title": "Provisioning history",
@@ -7444,7 +7451,8 @@
         "failed": "Failed",
         "abandoned": "Abandoned",
         "expired": "Expired"
-      }
+      },
+      "site": "Site"
     },
     "stations": {
       "title": "Bench stations",
@@ -7466,7 +7474,8 @@
       "revokedReason": {
         "admin": "by an administrator",
         "pending_expired": "approval not given within 24 hours",
-        "idle": "inactive for 90 days"
+        "idle": "inactive for 90 days",
+        "tenant_deleted": "its tenant was deleted"
       },
       "name": "Name",
       "host": "Host",
@@ -7535,6 +7544,72 @@
         "rolePolicy": "Role",
         "addHint": "A second factor is asked. The tenant sees the stations that target it and can suspend or remove a target."
       }
+    },
+    "nameTemplate": {
+      "label": "Template of the suggested name",
+      "hint": "Tokens: {site.code} the code of the site, {site.code:5} the same padded with zeros to 5 characters, {n} the number of the device in the site (the highest already used + 1). Empty: the name prefix and the ADB serial.",
+      "preview": "Preview, site",
+      "exampleSite": "Example site code",
+      "title": "Suggested name: {{target}}",
+      "secondFactor": "A second factor is asked. The bench refuses a name already used in the site.",
+      "short": "Suggested name",
+      "none": "none (prefix and ADB serial)",
+      "edit": "Change",
+      "error": {
+        "empty": "The template is empty.",
+        "too_long": "At most 64 characters, without spaces at the ends.",
+        "bad_char": "Control characters are not allowed.",
+        "bad_token": "Unknown token: use {site.code}, {site.code:N}, {n} or {n:N}.",
+        "no_number": "The template needs the number {n} (or {n:N}).",
+        "two_numbers": "The number {n} appears once only."
+      }
+    },
+    "claim": {
+      "button": "Add a station of this tenant",
+      "title": "Add a station of this tenant",
+      "hint": "On the PC of the station, the bench tool waits for its approval and shows its name and a verification code. Type both here: the station then belongs to this tenant and serves only it. A second factor is asked next.",
+      "name": "Name of the station (as shown on its screen)",
+      "submit": "Add the station",
+      "expiry": "A station waits 24 hours for its approval. Several wrong attempts block the claim for a while.",
+      "done": "{{name}} now belongs to this tenant",
+      "mismatch": "No station waiting for its approval has this name and this code.",
+      "conflict": "This station already serves another tenant: ask the platform.",
+      "rateLimited": "Too many attempts: try again later."
+    },
+    "owned": {
+      "title": "Stations of this tenant",
+      "badge": "This tenant",
+      "showRevoked": "Revoked",
+      "empty": "No station belongs to this tenant. Install the bench station on a PC, then add it here with the code its screen shows.",
+      "platformSuspended": "Suspended by the platform since {{at}}: only the platform resumes it. Contact it if this is unexpected.",
+      "platformSuspendedError": "The platform suspended this station or this target: only the platform resumes it.",
+      "noSession": "No bench session open.",
+      "targetRefused": "This station cannot target this group.",
+      "targetExists": "This group is a target of the station already.",
+      "addTargetTitle": "Add a target to {{name}}",
+      "addTargetHint": "A group of this tenant only. A second factor is asked.",
+      "platform": "Platform",
+      "clients": "Clients",
+      "ownerFilter": "Owner",
+      "ownerDeleted": "Tenant deleted",
+      "belongsTo": "Belongs to {{tenant}}",
+      "stationOwnedError": "This station belongs to a client: the platform only suspends or revokes it.",
+      "platformView": "This station belongs to {{tenant}} since {{since}}: the client manages its name, targets and sessions. The platform watches it and cuts it: suspend, revoke, close its session, suspend a target.",
+      "platformViewDeleted": "Its tenant was deleted: the station was revoked.",
+      "suspendedByPlatformNote": "Suspended by the platform: the client cannot lift it.",
+      "targetSuspendedByPlatform": "Suspended by the platform",
+      "targetSuspendedByPlatformNote": "The platform suspended this target: only the platform resumes it. Contact it if this is unexpected.",
+      "suspendedByOwnerNote": "Suspended by its owner: the client resumes it.",
+      "sessionByClient": "No session open. The sessions of a client station are opened by the technicians of its tenant.",
+      "give": "Give to a client",
+      "giveTitle": "Give {{name}} to a client",
+      "giveHint": "Final: the station then belongs to this client, who manages its name, targets and sessions; it never comes back to the platform. The platform keeps watching it: suspend, revoke. Its open session is closed. A second factor is asked.",
+      "giveSubmit": "Give the station",
+      "giveConfirm": "{{name}} will belong to {{tenant}} for good. Continue?",
+      "given": "{{name}} now belongs to {{tenant}}",
+      "foreignTargets": "The station targets or provisions another tenant: remove those targets first.",
+      "foreignTargetsList": "These targets are in another tenant: remove them first.",
+      "noClient": "No client tenant."
     }
   },
   "sites": {

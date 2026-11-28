@@ -3,11 +3,13 @@ import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
 import { ChevronDown, ChevronRight, Pause, Play, Timer, Trash2, XCircle } from 'lucide-react';
-import { BENCH_LIMITS, type BenchProvisioningView, type BenchTenantStationView } from '@obligarth/shared';
+import { BENCH_LIMITS, isMasterTenant, type BenchProvisioningView, type BenchTenantStationView } from '@obligarth/shared';
 import { benchStationsApi } from '@/api/benchStations.api';
 import { Button } from '@/components/common/Button';
 import { useConfirm } from '@/components/common/ConfirmDialog';
 import { useAuthStore } from '@/store/authStore';
+import { useTenantStore } from '@/store/tenantStore';
+import { OwnedStations } from './OwnedStations';
 import {
   ProvisioningStatePill, StationStatusPill, cardCls, cardTitleCls, fail, fmt, headCls, listCls, rowCls, tdCls, thCls,
   useBenchErrorLabel, useRoleLabel, useRolePolicyLabel,
@@ -16,6 +18,8 @@ import {
 // The Bench tab of the Android agent (lot BANC §3.7, §3.12; mdm.bench.manage): the stations that target the tenant (no
 // token, no address), the bench session (mdm.bench.operate, second factor), the suspension (no second factor) or the
 // removal (second factor) of a target of the tenant, and the history of the provisionings with their journal of steps.
+// Lot BANC-T §4: in a client tenant, the stations it owns come first (OwnedStations: the claim, their actions and
+// targets); the list below keeps the platform's stations that serve the tenant.
 
 export function BenchTab() {
   const { t } = useTranslation();
@@ -25,6 +29,8 @@ export function BenchTab() {
   const errorLabel = useBenchErrorLabel();
   const canOperate = useAuthStore((s) => s.isAdmin() || (s.permissions?.tenantCapabilities ?? []).includes('mdm.bench.operate'));
   const isAdmin = useAuthStore((s) => s.isAdmin());
+  const tenantId = useTenantStore((s) => s.currentTenantId);
+  const client = tenantId !== null && !isMasterTenant(tenantId);
   const [stations, setStations] = useState<BenchTenantStationView[] | null>(null);
   const [rows, setRows] = useState<BenchProvisioningView[] | null>(null);
   const [open, setOpen] = useState<Set<string>>(new Set());
@@ -39,15 +45,18 @@ export function BenchTab() {
       await run(() => benchStationsApi.removeTenantTarget(s.id, groupId));
     }
   };
+  // The stations the tenant owns are managed above (OwnedStations); this list keeps the platform's.
+  const shared = stations ? stations.filter((s) => !(client && s.owned)) : null;
   const toggle = (id: string) => setOpen((o) => { const n = new Set(o); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   return (
     <div className="space-y-5">
+      {client && <OwnedStations key={tenantId} onChanged={load} />}
       <section>
-        <h3 className={cardTitleCls}>{t('bench.tenant.stations') || 'Bench stations of this tenant'}</h3>
-        {stations && stations.length === 0 && <p className={clsx(cardCls, 'text-center text-sm text-text-muted')}>{t('bench.tenant.noStation') || 'No bench station targets this tenant.'}</p>}
+        <h3 className={cardTitleCls}>{client ? (t('bench.tenant.platformStations') || 'Stations of the platform serving this tenant') : (t('bench.tenant.stations') || 'Bench stations of this tenant')}</h3>
+        {shared && shared.length === 0 && <p className={clsx(cardCls, 'text-center text-sm text-text-muted')}>{t('bench.tenant.noStation') || 'No bench station targets this tenant.'}</p>}
         <ul className="space-y-2">
-          {(stations ?? []).map((s) => (
+          {(shared ?? []).map((s) => (
             <li key={s.id} className={clsx(cardCls, 'space-y-2 text-sm')}>
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-medium text-text-primary">{s.name}</span>
@@ -93,6 +102,7 @@ export function BenchTab() {
               <th className={thCls}>{t('bench.history.date') || 'Date'}</th>
               <th className={thCls}>{t('bench.history.station') || 'Station'}</th>
               <th className={thCls}>{t('bench.history.device') || 'Device'}</th>
+              <th className={thCls}>{t('bench.history.site') || 'Site'}</th>
               <th className={thCls}>{t('bench.history.model') || 'Model'}</th>
               <th className={thCls}>Android</th>
               <th className={thCls}>{t('bench.history.role') || 'Role aimed / obtained'}</th>
@@ -112,6 +122,7 @@ export function BenchTab() {
                         : <span className="text-text-primary">{r.deviceName ?? r.adbSerial}</span>}
                       <div className="font-mono text-[11px] text-text-muted">{r.adbSerial}{r.hwSerial ? ` · ${r.hwSerial}` : ''}</div>
                     </td>
+                    <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{r.siteCode ? `${r.siteCode} — ${r.siteName ?? ''}` : '—'}</td>
                     <td className={clsx(tdCls, 'text-text-secondary')}>{r.model}</td>
                     <td className={clsx(tdCls, 'text-text-secondary')}>{r.osRelease ?? '—'} <span className="text-xs text-text-muted">(API {r.sdkInt})</span></td>
                     <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{roleLabel(r.roleTarget)} / {r.managementMode ? roleLabel(r.managementMode) : '—'}</td>
@@ -121,7 +132,7 @@ export function BenchTab() {
                   {open.has(r.id) && (
                     <tr>
                       <td />
-                      <td colSpan={8} className="px-4 pb-3">
+                      <td colSpan={9} className="px-4 pb-3">
                         <div className="rounded-xl bg-bg-tertiary/40 py-1 text-xs">
                           {r.technician && <div className="px-3 py-1 text-text-muted">{t('bench.history.technician') || 'Technician'} : <span className="text-text-primary">{r.technician}</span></div>}
                           {r.stepsDropped > 0 && <div className="px-3 py-1 text-text-muted">{t('bench.history.stepsDropped', { count: r.stepsDropped }) || `${r.stepsDropped} older step(s) left out`}</div>}
@@ -140,7 +151,7 @@ export function BenchTab() {
                   )}
                 </Fragment>
               ))}
-              {rows && rows.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-text-muted">{t('bench.history.empty') || 'No provisioning yet.'}</td></tr>}
+              {rows && rows.length === 0 && <tr><td colSpan={10} className="p-8 text-center text-text-muted">{t('bench.history.empty') || 'No provisioning yet.'}</td></tr>}
             </tbody>
           </table>
         </div>

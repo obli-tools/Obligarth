@@ -3115,6 +3115,10 @@
         "token_quota": {
           "title": "Station de banc proche de son quota de jetons",
           "message": "Une station de banc a émis {{count}} jetons d'enrôlement en 24 heures (quota {{quota}})."
+        },
+        "claim_refused": {
+          "title": "Réclamations de station de banc refusées",
+          "message": "Un tenant client a vu {{count}} réclamations de station de banc refusées en 24 heures ({{reason}}) : vérifiez qu'aucune station en attente n'est en train d'être détournée."
         }
       },
       "obliwatch": {
@@ -7387,7 +7391,9 @@
       "target_refused": "Cible refusée",
       "slot_held": "Appareil déjà sur une autre carte",
       "too_many_cards": "Trop d'appareils à la fois",
-      "internal": "Erreur interne"
+      "internal": "Erreur interne",
+      "site_refused": "Site hors des cibles de la station",
+      "name_taken": "Nom déjà employé dans le site"
     },
     "step": {
       "detect": "Détection",
@@ -7421,7 +7427,8 @@
       "stations": "Stations de banc de ce tenant",
       "noStation": "Aucune station de banc ne cible ce tenant.",
       "resumeByPlatform": "Reprise par un administrateur de la plateforme uniquement",
-      "removeConfirm": "Retirer le groupe {{group}} de la station {{station}} ?"
+      "removeConfirm": "Retirer le groupe {{group}} de la station {{station}} ?",
+      "platformStations": "Stations de la plateforme au service de ce tenant"
     },
     "history": {
       "title": "Historique d'intégration",
@@ -7444,7 +7451,8 @@
         "failed": "Échec",
         "abandoned": "Abandonné",
         "expired": "Expiré"
-      }
+      },
+      "site": "Site"
     },
     "stations": {
       "title": "Stations de banc",
@@ -7466,7 +7474,8 @@
       "revokedReason": {
         "admin": "par un administrateur",
         "pending_expired": "approbation non donnée sous 24 heures",
-        "idle": "inactive depuis 90 jours"
+        "idle": "inactive depuis 90 jours",
+        "tenant_deleted": "son tenant a été supprimé"
       },
       "name": "Nom",
       "host": "Hôte",
@@ -7535,6 +7544,72 @@
         "rolePolicy": "Rôle",
         "addHint": "Un second facteur est demandé. Le tenant voit les stations qui le ciblent et peut suspendre ou retirer une cible."
       }
+    },
+    "nameTemplate": {
+      "label": "Modèle du nom suggéré",
+      "hint": "Jetons : {site.code} le code du site, {site.code:5} le même complété par des zéros sur 5 caractères, {n} le numéro de l'appareil dans le site (le plus grand déjà employé + 1). Vide : le préfixe et le numéro de série ADB.",
+      "preview": "Aperçu, site",
+      "exampleSite": "Code de site d'exemple",
+      "title": "Nom suggéré : {{target}}",
+      "secondFactor": "Un second facteur est demandé. Le banc refuse un nom déjà employé dans le site.",
+      "short": "Nom suggéré",
+      "none": "aucun (préfixe et numéro de série ADB)",
+      "edit": "Modifier",
+      "error": {
+        "empty": "Le modèle est vide.",
+        "too_long": "64 caractères au plus, sans espace aux extrémités.",
+        "bad_char": "Les caractères de contrôle sont interdits.",
+        "bad_token": "Jeton inconnu : employez {site.code}, {site.code:N}, {n} ou {n:N}.",
+        "no_number": "Le modèle doit contenir le numéro {n} (ou {n:N}).",
+        "two_numbers": "Le numéro {n} n'apparaît qu'une fois."
+      }
+    },
+    "claim": {
+      "button": "Ajouter une station de ce tenant",
+      "title": "Ajouter une station de ce tenant",
+      "hint": "Sur le PC de la station, l'outil de banc attend son approbation et affiche son nom et un code de vérification. Saisissez-les ici : la station appartient alors à ce tenant et ne sert que lui. Un second facteur est demandé ensuite.",
+      "name": "Nom de la station (tel qu'affiché sur son écran)",
+      "submit": "Ajouter la station",
+      "expiry": "Une station attend son approbation 24 heures. Plusieurs essais erronés bloquent la réclamation pendant un temps.",
+      "done": "{{name}} appartient désormais à ce tenant",
+      "mismatch": "Aucune station en attente d'approbation ne porte ce nom et ce code.",
+      "conflict": "Cette station sert déjà un autre tenant : adressez-vous à la plateforme.",
+      "rateLimited": "Trop d'essais : réessayez plus tard."
+    },
+    "owned": {
+      "title": "Stations de ce tenant",
+      "badge": "Ce tenant",
+      "showRevoked": "Révoquées",
+      "empty": "Aucune station n'appartient à ce tenant. Installez la station de banc sur un PC, puis ajoutez-la ici avec le code affiché sur son écran.",
+      "platformSuspended": "Suspendue par la plateforme depuis le {{at}} : seule la plateforme la reprend. Contactez-la si ce n'est pas attendu.",
+      "platformSuspendedError": "La plateforme a suspendu cette station ou cette cible : seule la plateforme la reprend.",
+      "noSession": "Aucune session de banc ouverte.",
+      "targetRefused": "Cette station ne peut pas cibler ce groupe.",
+      "targetExists": "Ce groupe est déjà une cible de la station.",
+      "addTargetTitle": "Ajouter une cible à {{name}}",
+      "addTargetHint": "Un groupe de ce tenant uniquement. Un second facteur est demandé.",
+      "platform": "Plateforme",
+      "clients": "Clients",
+      "ownerFilter": "Propriétaire",
+      "ownerDeleted": "Tenant supprimé",
+      "belongsTo": "Appartient à {{tenant}}",
+      "stationOwnedError": "Cette station appartient à un client : la plateforme peut seulement la suspendre ou la révoquer.",
+      "platformView": "Cette station appartient à {{tenant}} depuis le {{since}} : le client gère son nom, ses cibles et ses sessions. La plateforme la surveille et la coupe : suspendre, révoquer, fermer sa session, suspendre une cible.",
+      "platformViewDeleted": "Son tenant a été supprimé : la station a été révoquée.",
+      "suspendedByPlatformNote": "Suspendue par la plateforme : le client ne peut pas lever cette suspension.",
+      "targetSuspendedByPlatform": "Suspendue par la plateforme",
+      "targetSuspendedByPlatformNote": "La plateforme a suspendu cette cible : seule la plateforme la reprend. La contacter si ce n’est pas attendu.",
+      "suspendedByOwnerNote": "Suspendue par son propriétaire : c'est le client qui la reprend.",
+      "sessionByClient": "Aucune session ouverte. Les sessions d'une station de client sont ouvertes par les techniciens de son tenant.",
+      "give": "Rattacher à un client",
+      "giveTitle": "Rattacher {{name}} à un client",
+      "giveHint": "Définitif : la station appartient alors à ce client, qui gère son nom, ses cibles et ses sessions ; elle ne revient jamais à la plateforme. La plateforme continue de la surveiller : suspendre, révoquer. Sa session ouverte est fermée. Un second facteur est demandé.",
+      "giveSubmit": "Rattacher la station",
+      "giveConfirm": "{{name}} appartiendra définitivement à {{tenant}}. Continuer ?",
+      "given": "{{name}} appartient désormais à {{tenant}}",
+      "foreignTargets": "La station cible ou prépare un autre tenant : retirez d'abord ces cibles.",
+      "foreignTargetsList": "Ces cibles sont dans un autre tenant : retirez-les d'abord.",
+      "noClient": "Aucun tenant client."
     }
   },
   "sites": {

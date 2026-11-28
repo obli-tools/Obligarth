@@ -11,7 +11,8 @@ import { BENCH_SURFACE_ACTOR } from './actor';
 import { AGENT_MIN_SDK, checkedApk, servedRelease, signerAdmitted } from './apk.service';
 import { assertApprovedBenchStation, requireApprovedBenchStation, requireBenchStationSelf } from './guard';
 import {
-  PlanBody, ResultBody, StepBody, appendStep, issueToken, planProvisioning, provisioningState, recordResult, stationTargets, type Origin,
+  PlanBody, ResultBody, StepBody, appendStep, issueToken, planProvisioning, provisioningState, recordResult, siteDevices, stationSites,
+  stationTargets, stationTenants, type Origin,
 } from './provisioning.service';
 import { createBenchReleaseRouter } from './release.routes';
 import { cleanLabel, normaliseStationToken, registerStation, stationTokenHash, stationVerificationCode } from './stations.service';
@@ -25,6 +26,9 @@ import { cleanLabel, normaliseStationToken, registerStation, stationTokenHash, s
 //   POST /stations/register                       public, 20 per hour and address
 //   GET  /stations/me                             the station itself (pending, approved, suspended)
 //   GET  /v1/targets                              approved
+//   GET  /v1/tenants                              approved: the tenants of its targets (lot BANC-T §9)
+//   GET  /v1/tenants/:id/sites?search=            approved: the sites of a tenant inside its targets (200 at most, by code)
+//   GET  /v1/sites/:id/devices?groupId=           approved: the names used in the site, the name a target's template suggests
 //   GET  /v1/agent, GET /v1/agent/apk/:sha256     approved: the version served to the bench (404 apk_unavailable)
 //   POST /v1/provisionings                        approved: the plan of a device
 //   GET  /v1/provisionings/:id                    approved: its state (this station's only)
@@ -119,6 +123,28 @@ export function createBenchStationRouter(): Router {
     const s = assertApprovedBenchStation(req);
     const targets = await stationTargets(s.id);
     res.json({ success: true, data: targets });
+  }));
+
+  v1.get('/tenants', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    res.json({ success: true, data: await stationTenants(s.id) });
+  }));
+
+  v1.get('/tenants/:id/sites', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    const tenantId = Number(req.params.id);
+    if (!Number.isSafeInteger(tenantId) || tenantId <= 0) throw new AppError(404, 'Tenant not found', 'not_found');
+    if (!(await stationTenants(s.id)).some((t) => t.id === tenantId)) throw new AppError(404, 'Tenant not found', 'not_found');
+    const search = typeof req.query.search === 'string' ? req.query.search.slice(0, 100) : null;
+    res.json({ success: true, data: await stationSites(s.id, tenantId, search) });
+  }));
+
+  v1.get('/sites/:id/devices', wrap(async (req, res) => {
+    const s = assertApprovedBenchStation(req);
+    const raw = req.query.groupId;
+    const groupId = typeof raw === 'string' && /^[1-9][0-9]{0,9}$/.test(raw) ? Number(raw) : null;
+    if (raw !== undefined && groupId === null) throw new AppError(400, 'Invalid query: groupId', 'bad_request');
+    res.json({ success: true, data: await siteDevices(s.id, String(req.params.id).toLowerCase(), groupId) });
   }));
 
   v1.get('/agent', wrap(async (req, res) => {

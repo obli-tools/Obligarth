@@ -62,6 +62,21 @@ input,select{font:inherit;color:var(--text);background:var(--bg);border:1px soli
 .s-ok .dot{background:var(--ok)}.s-warn .dot{background:var(--warn)}.s-failed .dot{background:var(--bad)}.s-running .dot{background:var(--act)}.s-skipped .dot{background:var(--idle)}
 .prompt{background:var(--hover);border-radius:6px;padding:8px 10px;margin:8px 0}
 .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:6px}
+.choose{display:flex;flex-direction:column;gap:6px;margin:8px 0}
+.choose label{font-size:12px;color:var(--muted);margin-top:2px}
+.choose label.check{display:flex;gap:6px;align-items:flex-start;color:var(--text);font-size:13px}
+.choose input.bad{border-color:var(--bad)}
+.sites{max-height:220px;overflow-y:auto}
+.site{display:flex;gap:10px;align-items:baseline;padding:5px 6px;border-radius:4px;cursor:pointer}
+.site:hover{background:var(--hover)}
+.site.on{background:var(--hover);font-weight:600}
+.site.pick .sname{flex:1}
+.site .scode{font:600 13px Consolas,monospace;min-width:64px}
+.site .sname{flex:1;min-width:0}
+.names{list-style:none;margin:0;padding:0;max-height:140px;overflow-y:auto;font-size:13px}
+.names li{padding:2px 6px;border-radius:4px}
+.names li:hover{background:var(--hover)}
+table.kv th{width:40%;color:var(--muted);font-weight:normal}
 table{width:100%;border-collapse:collapse;background:var(--panel);border-radius:8px;overflow:hidden}
 th,td{text-align:left;padding:6px 10px;border-bottom:1px solid var(--line);font-size:13px}
 tr:hover td{background:var(--hover)}
@@ -104,7 +119,10 @@ async function api(path, opts) {
   try { body = await res.json(); } catch (e) { body = null; }
   return { status: res.status, ok: res.ok, body: body || {} };
 }
-let state = null, cards = [], targets = [], targetsAt = 0, historyRows = [], seenAttention = {};
+// sitesApi: the server answered GET /v1/tenants (lot BANC-T): it knows the sites and the exception D3 decided at the
+// bench; an older server refuses allowLegacyOwner in a plan (strict body), so the choice is not offered to it.
+let sitesApi = false;
+let state = null, cards = [], targets = [], tenants = [], targetsAt = 0, historyRows = [], seenAttention = {};
 function errText(code, params) { return t('bench.error.' + code, params) || t('bench.local.' + code, params) || (t('bench.error.internal') || 'Unexpected error') + ' (' + code + ')'; }
 function toast(text) { alert(text); }
 function beep() {
@@ -160,7 +178,6 @@ function renderBanners() {
   }
   if (a.smartSwitch) out.push('<div class="banner">' + esc(t('bench.adb.smartSwitch') || 'Close Samsung Smart Switch: it holds the phones.') + '</div>');
   if (a.samsungDriver === false) out.push('<div class="banner info">' + esc(t('bench.adb.driver') || 'Windows has no driver for the Samsung phone plugged in.') + '</div>');
-  if (a.status === 'ready' && a.keyLocation === 'profile') out.push('<div class="banner info">' + esc(t('bench.adb.keyProfile') || 'The ADB key of this station is the one of your Windows profile.') + '</div>');
   if (!state.pinPresent) out.push('<div class="banner bad">' + esc(t('bench.local.no_pin') || 'This build has no pinned agent signer: no APK can be installed.') + '</div>');
   if (state.update && state.update.available) out.push('<div class="banner ok">' + esc(t('bench.update.available', { version: state.update.available }) || ('Version ' + state.update.available + ' is available')) + ' <button data-action="update">' + esc(t('bench.update.apply') || 'Update') + '</button></div>');
   if (Math.abs(state.clockOffsetMs || 0) > 300000) out.push('<div class="banner">' + esc(t('bench.local.clock') || 'The clock of this PC is off by more than 5 minutes.') + '</div>');
@@ -194,20 +211,207 @@ function renderGate() {
 
 function stepLabel(id) { return t('bench.step.' + id) || id; }
 
+// ── The choice of a card (lot BANC-T §9): client → site (search) → names of the site → name checked live → summary.
+// Kept per serial in the page (drafts): a re-render (every change of any card) keeps what was typed and the focus.
+const drafts = {};
+const sameName = (a, b) => typeof a === 'string' && typeof b === 'string' && a.trim().toLowerCase() === b.trim().toLowerCase();
+function draftOf(serial) {
+  let d = drafts[serial];
+  if (!d) {
+    d = drafts[serial] = { tenantId: null, search: '', sites: null, sitesKey: null, sitesErr: null, noSite: false, noSiteChosen: false, siteId: null, site: null,
+      groupId: null, info: null, infoKey: null, infoErr: null, name: '', nameEdited: false, legacy: false, summary: false, seenPrompt: null, timer: null };
+  }
+  if (d.tenantId === null && tenants.length === 1) d.tenantId = tenants[0].id;
+  if (d.tenantId !== null && d.sites === null && d.sitesKey === null && !d.noSite) loadSites(serial);
+  return d;
+}
+function targetsOf(tenantId) { return targets.filter((tg) => tg.tenantId === tenantId); }
+function siteGroups(d) {
+  if (!d.site) return [];
+  return targetsOf(d.tenantId).filter((tg) => d.site.targetGroupIds.indexOf(tg.groupId) >= 0);
+}
+function chosenTarget(d) { return targets.find((tg) => tg.tenantId === d.tenantId && tg.groupId === d.groupId) || null; }
+function nameTaken(d) {
+  const n = (d.name || '').trim();
+  return !!(n && d.info && d.info.devices.some((x) => sameName(x.label, n)));
+}
+function legacyOffered(d) {
+  const tg = chosenTarget(d);
+  return !!(sitesApi && tg && !tg.allowLegacyOwner && tg.rolePolicy !== 'admin_only' && state.station && state.station.session);
+}
+function resetSite(d) { d.siteId = null; d.site = null; d.groupId = null; d.info = null; d.infoKey = null; d.infoErr = null; d.summary = false; d.nameEdited = false; d.name = ''; }
+
+async function loadSites(serial) {
+  const d = drafts[serial];
+  if (!d || d.tenantId === null) return;
+  const key = d.tenantId + '|' + d.search;
+  d.sitesKey = key;
+  const r = await api('/api/tenants/' + d.tenantId + '/sites' + (d.search ? '?search=' + encodeURIComponent(d.search) : ''));
+  if (d.sitesKey !== key) return;
+  if (r.ok) {
+    d.sites = r.body.sites || [];
+    d.sitesErr = null;
+    // A client without any site: the target is chosen directly (the prefix and the ADB serial name the device). « Without
+    // site » chosen meanwhile stays.
+    if (!d.noSiteChosen) d.noSite = !d.search && d.sites.length === 0;
+  } else if (r.body.code === 'not_found') {
+    d.sites = []; d.sitesErr = null; if (!d.noSiteChosen) d.noSite = !d.search;
+  } else {
+    d.sites = []; d.sitesErr = r.body.code || 'internal';
+  }
+  renderCards();
+}
+async function loadInfo(serial) {
+  const d = drafts[serial];
+  if (!d || !d.siteId) return;
+  const key = d.siteId + '|' + (d.groupId || '');
+  d.infoKey = key;
+  const r = await api('/api/sites/' + encodeURIComponent(d.siteId) + '/devices' + (d.groupId ? '?groupId=' + d.groupId : ''));
+  if (d.infoKey !== key) return;
+  if (r.ok) {
+    d.info = r.body;
+    d.infoErr = null;
+    if (!d.nameEdited) d.name = r.body.suggestedName || '';
+  } else {
+    d.info = null;
+    d.infoErr = r.body.code || 'internal';
+    if (r.body.code === 'site_refused') { resetSite(d); d.sites = null; d.sitesKey = null; }
+  }
+  renderCards();
+}
+function pickSite(serial, siteId) {
+  const d = drafts[serial];
+  const s = d && (d.sites || []).find((x) => x.id === siteId);
+  if (!s) return;
+  resetSite(d);
+  d.siteId = s.id;
+  d.site = s;
+  const groups = siteGroups(d);
+  if (groups.length === 1) d.groupId = groups[0].groupId;
+  loadInfo(serial);
+  renderCards();
+}
+
+/** The drafts follow the cards: dropped with their card; a name taken meanwhile (another card, the console) or a site
+ *  no longer the target's sends the choice back, with the names of the site read again. */
+function syncDrafts() {
+  const live = {};
+  for (const c of cards) {
+    live[c.serial] = true;
+    const d = drafts[c.serial];
+    if (!d) continue;
+    const code = c.prompt ? c.prompt.code + '|' + JSON.stringify(c.prompt.params || {}) : null;
+    if (!code || d.seenPrompt === code) continue;
+    d.seenPrompt = code;
+    if (c.prompt.code === 'name_taken') { d.summary = false; d.nameEdited = false; d.info = null; d.infoKey = null; loadInfo(c.serial); }
+    if (c.prompt.code === 'site_refused') { resetSite(d); d.sites = null; d.sitesKey = null; loadSites(c.serial); }
+  }
+  for (const s of Object.keys(drafts)) if (!live[s]) delete drafts[s];
+}
+
+function renderSummary(c, d) {
+  const tg = chosenTarget(d);
+  const tenant = tenants.find((x) => x.id === d.tenantId);
+  const rows = [
+    [t('bench.choose.tenant') || 'Client', tenant ? tenant.name : (tg ? tg.tenantName : '')],
+    [t('bench.choose.site') || 'Site', d.site ? d.site.code + ' — ' + d.site.name + (d.site.city ? ' (' + d.site.city + ')' : '') : (t('bench.choose.noSiteShort') || 'none')],
+    [t('bench.choose.group') || 'Target', tg ? tg.groupPath + ' — ' + (t('bench.rolePolicy.' + tg.rolePolicy) || tg.rolePolicy) : ''],
+    [t('bench.choose.name') || 'Name of the device', (d.name || '').trim() || (t('bench.choose.nameByServer') || 'named by Obligarth')],
+  ];
+  if (d.legacy && legacyOffered(d)) rows.push([t('bench.choose.legacyLabel') || 'Older agent as owner', t('bench.choose.yes') || 'Yes']);
+  return '<div class="choose"><strong>' + esc(t('bench.choose.summaryTitle') || 'Check before starting') + '</strong>'
+    + '<table class="kv">' + rows.map((r) => '<tr><th>' + esc(r[0]) + '</th><td>' + esc(r[1]) + '</td></tr>').join('') + '</table>'
+    + '<div class="row"><button data-action="summary-back">' + esc(t('bench.choose.back') || 'Back') + '</button>'
+    + '<button class="primary" data-action="start"' + (state.phase !== 'approved' ? ' disabled' : '') + '>' + esc(t('bench.cards.start') || 'Start') + '</button></div></div>';
+}
+
+/** A list to click (the client, the target): the chosen line is marked; items are { value, label (HTML, escaped) }. */
+function pickList(action, items, current) {
+  return '<div class="sites">' + items.map((x) => '<div class="site pick' + (current === x.value ? ' on' : '') + '" data-action="' + action + '" data-value="' + esc(String(x.value)) + '">'
+    + '<span class="sname">' + x.label + '</span>' + (current === x.value ? '<span class="t-ok">✓</span>' : '') + '</div>').join('') + '</div>';
+}
+function targetItem(tg) {
+  return { value: tg.groupId, label: esc(tg.groupPath) + ' <span class="muted">' + esc(t('bench.rolePolicy.' + tg.rolePolicy) || tg.rolePolicy) + '</span>' };
+}
+
+function renderChooser(c, d) {
+  if (d.summary) return renderSummary(c, d);
+  let h = '<div class="choose">';
+  // 1. The client (chosen at once when there is only one).
+  if (tenants.length > 1) {
+    h += '<label>' + esc(t('bench.choose.tenant') || 'Client') + '</label>'
+      + pickList('pick-tenant', tenants.map((x) => ({ value: x.id, label: esc(x.name) })), d.tenantId);
+  } else if (tenants.length === 1) {
+    h += '<div class="muted">' + esc(t('bench.choose.tenantIs', { name: tenants[0].name }) || tenants[0].name) + '</div>';
+  } else {
+    return h + '<div class="muted">' + esc(t('bench.choose.noTarget') || 'This station has no target yet: a platform or client administrator adds one in the console.') + '</div></div>';
+  }
+  if (d.tenantId === null) return h + '</div>';
+  // 2. The site: searched by code, name or city; a client without sites chooses the target directly.
+  if (d.noSite) {
+    h += (d.noSiteChosen
+      ? '<div class="row"><span class="muted">' + esc(t('bench.choose.withoutSiteHelp') || 'Without site: choose the target.') + '</span><button data-action="site-back">' + esc(t('bench.choose.backToSites') || 'Choose a site') + '</button></div>'
+      : '<div class="muted">' + esc(t('bench.choose.noSite') || 'This client has no site: choose the target.') + '</div>')
+      + pickList('pick-group', targetsOf(d.tenantId).map(targetItem), d.groupId);
+  } else if (d.site) {
+    h += '<div class="row"><span><strong>' + esc(d.site.code) + '</strong> ' + esc(d.site.name) + (d.site.city ? ' <span class="muted">' + esc(d.site.city) + '</span>' : '') + '</span>'
+      + '<button data-action="site-change">' + esc(t('bench.choose.change') || 'Change') + '</button></div>';
+    const groups = siteGroups(d);
+    if (groups.length > 1) {
+      h += '<div class="muted">' + esc(t('bench.choose.chooseGroup') || 'Choose the target…') + '</div>' + pickList('pick-group', groups.map(targetItem), d.groupId);
+    }
+  } else {
+    // « Without site »: any target of the client, chosen directly (a target with no site under it stays reachable).
+    h += '<div class="row"><label>' + esc(t('bench.choose.site') || 'Site') + '</label><button data-action="site-none">' + esc(t('bench.choose.withoutSite') || 'Without site') + '</button></div><input data-field="siteSearch" autocomplete="off" spellcheck="false" maxlength="100" value="' + esc(d.search) + '" placeholder="' + esc(t('bench.choose.searchSite') || 'Search a site (code or name)…') + '">';
+    if (d.sites === null) h += '<div class="muted">' + esc(t('bench.choose.loading') || 'Loading…') + '</div>';
+    else if (d.sitesErr) h += '<div class="t-bad">' + esc(errText(d.sitesErr)) + '</div>';
+    else if (!d.sites.length) h += '<div class="muted">' + esc(t('bench.choose.noMatch') || 'No site matches.') + '</div>';
+    else {
+      h += '<div class="sites">' + d.sites.map((s) => '<div class="site" data-action="site-pick" data-site="' + esc(s.id) + '"><span class="scode">' + esc(s.code) + '</span><span class="sname">' + esc(s.name) + (s.city ? ' <span class="muted">' + esc(s.city) + '</span>' : '') + '</span><span class="muted">'
+        + esc(s.deviceCount > 0 ? (t('bench.choose.devices', { count: s.deviceCount }) || (s.deviceCount + ' device(s)')) : (t('bench.choose.newSite') || 'new')) + '</span></div>').join('') + '</div>';
+      if (d.sites.length >= 200) h += '<div class="muted">' + esc(t('bench.choose.moreSites', { count: d.sites.length }) || 'Refine the search.') + '</div>';
+    }
+  }
+  // 3. The names already used in the site, then the name (the server's suggestion, checked live against them).
+  if (d.site) {
+    if (d.infoErr) h += '<div class="t-bad">' + esc(errText(d.infoErr)) + '</div>';
+    else if (!d.info) h += '<div class="muted">' + esc(t('bench.choose.loading') || 'Loading…') + '</div>';
+    else {
+      const list = d.info.devices;
+      h += '<div class="muted">' + esc(t('bench.choose.namesTitle', { count: list.length }) || 'Names already used in this site') + '</div>';
+      h += list.length
+        ? '<ul class="names">' + list.map((x) => '<li>' + esc(x.label) + (x.kind === 'provisioning' ? ' <span class="muted">' + esc(t('bench.choose.inPreparation') || 'being prepared') + '</span>' : '')
+          + (x.model || x.serialTail ? ' <span class="muted">' + esc([x.model, x.serialTail].filter(Boolean).join(' · ')) + '</span>' : '') + '</li>').join('') + '</ul>'
+        : '<div class="muted">' + esc(t('bench.choose.namesEmpty') || 'No device in this site yet.') + '</div>';
+    }
+  }
+  const ready = d.groupId !== null && (d.noSite || (d.site && d.info));
+  if (ready) {
+    const tg = chosenTarget(d);
+    const taken = nameTaken(d);
+    h += '<label>' + esc(t('bench.choose.name') || 'Name of the device') + '</label><input data-field="name" maxlength="100" autocomplete="off" spellcheck="false" value="' + esc(d.name) + '" placeholder="'
+      + esc(d.noSite && tg && tg.namePrefix ? tg.namePrefix + '…' : (t('bench.cards.namePlaceholder') || 'Name (optional)')) + '"' + (taken ? ' class="bad"' : '') + '>';
+    if (taken) h += '<div class="t-bad" data-check="name">' + esc(t('bench.choose.nameTaken') || 'This name is already used in this site.') + '</div>';
+    else if (d.info && d.info.nameTemplate) h += '<div class="muted" data-check="name">' + esc(t('bench.choose.nameTemplate', { template: d.info.nameTemplate }) || d.info.nameTemplate) + '</div>';
+    if (legacyOffered(d)) {
+      h += '<label class="check"><input type="checkbox" data-field="legacy"' + (d.legacy ? ' checked' : '') + '> ' + esc(t('bench.choose.legacy') || 'Allow the owner with an agent older than 1.4.0 (recorded in the audit)') + '</label>';
+    }
+    h += '<div class="row"><button class="primary" data-action="summary"' + (taken || state.phase !== 'approved' ? ' disabled' : '') + '>' + esc(t('bench.choose.next') || 'Next') + '</button></div>';
+  }
+  return h + '</div>';
+}
+
 function renderCard(c) {
   const tone = c.tone || 'idle';
   const attention = c.prompt && c.prompt.attention;
   let h = '<div class="card tone-' + esc(tone) + (attention ? ' attention' : '') + '" data-serial="' + esc(c.serial) + '">';
   h += '<h2>' + esc(c.model || c.serial) + ' <span class="pill t-' + esc(tone) + '">' + esc(t('bench.tone.' + tone) || tone) + '</span></h2>';
   h += '<div class="muted">' + esc((c.android ? 'Android ' + c.android : '') + (c.oneUi ? ' · One UI ' + c.oneUi : '') + ' · ' + c.serial + (c.present ? '' : ' · ' + (t('bench.cards.unplugged') || 'unplugged'))) + '</div>';
-  if (c.targetLabel) h += '<div>' + esc(c.targetLabel) + (c.deviceName ? ' · ' + esc(c.deviceName) : '') + '</div>';
+  if (c.targetLabel && c.provisioningId) h += '<div>' + esc(c.targetLabel) + (c.deviceName ? ' · ' + esc(c.deviceName) : '') + '</div>';
+  if (c.site && c.provisioningId) h += '<div class="muted">' + esc((t('bench.choose.site') || 'Site') + ' ' + c.site.code + ' — ' + c.site.name) + '</div>';
+  if (c.allowLegacyOwner && c.provisioningId) h += '<div class="muted">' + esc(t('bench.choose.legacyShort') || 'Older agent allowed as owner (decided at the bench)') + '</div>';
   if (c.roleChosen) h += '<div class="muted">' + esc(t('bench.role.' + c.roleChosen) || c.roleChosen) + (c.kind === 'convert' ? ' · ' + esc(t('bench.cards.convert') || 'conversion') : '') + '</div>';
-  if (!c.provisioningId && !c.busy && c.outcome === 'open') {
-    const opts = targets.map((tg) => '<option value="' + tg.tenantId + ':' + tg.groupId + '"' + (c.tenantId === tg.tenantId && c.groupId === tg.groupId ? ' selected' : '') + '>' + esc(tg.tenantName + ' › ' + tg.groupPath + ' — ' + (t('bench.rolePolicy.' + tg.rolePolicy) || tg.rolePolicy)) + '</option>').join('');
-    h += '<div class="row"><select data-field="target"><option value="">' + esc(t('bench.cards.chooseTarget') || 'Choose the target…') + '</option>' + opts + '</select>'
-      + '<input data-field="name" size="14" maxlength="100" value="' + esc(c.deviceName || '') + '" placeholder="' + esc(t('bench.cards.namePlaceholder') || 'Name (optional)') + '">'
-      + '<button class="primary" data-action="start"' + (state.phase !== 'approved' ? ' disabled' : '') + '>' + esc(t('bench.cards.start') || 'Start') + '</button></div>';
-  }
+  if (!c.provisioningId && !c.busy && c.outcome === 'open') h += renderChooser(c, draftOf(c.serial));
   h += '<ul class="steps">' + c.steps.map((s) => '<li class="s-' + esc(s.status) + '" title="' + esc(s.code ? (t('bench.code.' + s.code) || s.code) : '') + '"><span class="dot"></span>' + esc(stepLabel(s.id)) + '</li>').join('') + '</ul>';
   if (c.prompt) {
     const p = c.prompt.params || {};
@@ -233,12 +437,25 @@ function renderCard(c) {
   return h;
 }
 
-function renderCards() { document.getElementById('cards').innerHTML = cards.map(renderCard).join(''); }
+function renderCards() {
+  // The field being typed in keeps its focus and caret across the re-render (another card may change meanwhile).
+  const a = document.activeElement;
+  const field = a && a.dataset ? a.dataset.field : null;
+  const holder = field && a.closest ? a.closest('[data-serial]') : null;
+  const keep = holder ? { serial: holder.dataset.serial, field, start: a.selectionStart, end: a.selectionEnd } : null;
+  document.getElementById('cards').innerHTML = cards.map(renderCard).join('');
+  if (!keep) return;
+  const card = [...document.querySelectorAll('[data-serial]')].find((el) => el.dataset.serial === keep.serial);
+  const el = card ? card.querySelector('[data-field="' + keep.field + '"]') : null;
+  if (!el) return;
+  el.focus();
+  try { if (typeof keep.start === 'number') el.setSelectionRange(keep.start, keep.end); } catch (e) { /* not a text field */ }
+}
 
 function renderHistory() {
   if (!historyRows.length) { document.getElementById('history').innerHTML = '<p class="muted">' + esc(t('bench.history.empty') || 'Nothing yet today.') + '</p>'; return; }
-  const head = ['time', 'tenant', 'serial', 'model', 'role', 'outcome'].map((k) => '<th>' + esc(t('bench.history.' + k) || k) + '</th>').join('');
-  const rows = historyRows.map((r) => '<tr><td>' + esc(hhmm(r.at)) + '</td><td>' + esc((r.tenant || '') + (r.group ? ' › ' + r.group : '')) + '</td><td>' + esc(r.serial || '') + '</td><td>' + esc(r.model || '') + (r.android ? ' · ' + esc(r.android) : '') + '</td><td>' + esc(r.roleObtained ? (t('bench.role.' + r.roleObtained) || r.roleObtained) : '') + '</td><td>' + esc(t('bench.outcome.' + r.outcome) || r.outcome) + (r.errorCode ? ' — ' + esc(errText(r.errorCode)) : '') + '</td></tr>').join('');
+  const head = ['time', 'tenant', 'site', 'serial', 'model', 'role', 'outcome'].map((k) => '<th>' + esc(t('bench.history.' + k) || k) + '</th>').join('');
+  const rows = historyRows.map((r) => '<tr><td>' + esc(hhmm(r.at)) + '</td><td>' + esc((r.tenant || '') + (r.group ? ' › ' + r.group : '')) + '</td><td>' + esc(r.site || '') + '</td><td>' + esc(r.serial || '') + '</td><td>' + esc(r.model || '') + (r.android ? ' · ' + esc(r.android) : '') + '</td><td>' + esc(r.roleObtained ? (t('bench.role.' + r.roleObtained) || r.roleObtained) : '') + '</td><td>' + esc(t('bench.outcome.' + r.outcome) || r.outcome) + (r.errorCode ? ' — ' + esc(errText(r.errorCode)) : '') + '</td></tr>').join('');
   document.getElementById('history').innerHTML = '<table><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
@@ -253,8 +470,16 @@ async function load() {
     cards = ((await api('/api/cards')).body.cards) || [];
     if (state.phase === 'approved' && Date.now() - targetsAt > 60000) {
       const r = await api('/api/targets');
-      if (r.ok) { targets = r.body.targets || []; targetsAt = Date.now(); }
+      if (r.ok) {
+        targets = r.body.targets || [];
+        targetsAt = Date.now();
+        const tr = await api('/api/tenants');
+        // A server without the list of tenants: the tenants of the targets.
+        sitesApi = tr.ok;
+        tenants = tr.ok ? (tr.body.tenants || []) : targets.reduce((acc, tg) => acc.some((x) => x.id === tg.tenantId) ? acc : acc.concat([{ id: tg.tenantId, name: tg.tenantName }]), []);
+      }
     }
+    syncDrafts();
     historyRows = ((await api('/api/history/today')).body.history) || [];
     renderAll();
   } finally {
@@ -289,14 +514,54 @@ document.addEventListener('click', (ev) => {
   if (action === 'adb-zip') act(() => api('/api/adb/install', { method: 'POST', body: { accept: true, zipPath: document.getElementById('zipPath').value } }));
   if (action === 'stop-conflicts' && confirm(t('bench.adb.stopConfirm') || 'Stop the other ADB processes?')) act(() => api('/api/adb/stop-conflicts', { method: 'POST', body: { confirm: true } }));
   if (action === 'update') act(() => api('/api/update/apply', { method: 'POST', body: {} }));
+  if (action === 'site-pick') { pickSite(serial, el.dataset.site); return; }
+  // The client and the target are lists to click, like the sites (no native control in the suite's pages).
+  if (action === 'pick-tenant') {
+    const d = draftOf(serial);
+    d.tenantId = el.dataset.value ? Number(el.dataset.value) : null;
+    resetSite(d);
+    d.search = ''; d.sites = null; d.sitesKey = null; d.noSite = false; d.noSiteChosen = false; d.legacy = false;
+    if (d.tenantId !== null) loadSites(serial);
+    renderCards();
+    return;
+  }
+  if (action === 'pick-group') {
+    const d = draftOf(serial);
+    d.groupId = el.dataset.value ? Number(el.dataset.value) : null;
+    d.legacy = false;
+    if (d.site) { d.info = null; loadInfo(serial); }
+    renderCards();
+    return;
+  }
+  if (action === 'site-none') { const d = drafts[serial]; if (d) { resetSite(d); d.noSite = true; d.noSiteChosen = true; d.legacy = false; renderCards(); } return; }
+  if (action === 'site-back') {
+    const d = drafts[serial];
+    if (d) { resetSite(d); d.noSite = false; d.noSiteChosen = false; d.legacy = false; if (d.sites === null) loadSites(serial); renderCards(); }
+    return;
+  }
+  if (action === 'site-change') { const d = drafts[serial]; if (d) { resetSite(d); if (d.sites === null) loadSites(serial); renderCards(); } return; }
+  if (action === 'summary') {
+    const d = drafts[serial];
+    if (!d || d.groupId === null) { toast(t('bench.cards.chooseTarget') || 'Choose the target'); return; }
+    if (nameTaken(d)) { toast(t('bench.choose.nameTaken') || 'This name is already used in this site.'); return; }
+    d.summary = true;
+    renderCards();
+    return;
+  }
+  if (action === 'summary-back') { const d = drafts[serial]; if (d) { d.summary = false; renderCards(); } return; }
   if (action === 'start') {
-    const sel = card.querySelector('[data-field=target]').value;
-    if (!sel) { toast(t('bench.cards.chooseTarget') || 'Choose the target'); return; }
-    const [tenantId, groupId] = sel.split(':').map(Number);
-    const deviceName = card.querySelector('[data-field=name]').value;
+    const d = drafts[serial];
+    if (!d || d.tenantId === null || d.groupId === null) { toast(t('bench.cards.chooseTarget') || 'Choose the target'); return; }
+    const body = { tenantId: d.tenantId, groupId: d.groupId, siteId: d.siteId, deviceName: (d.name || '').trim(), allowLegacyOwner: !!(d.legacy && legacyOffered(d)) };
     act(async () => {
-      const p = await api('/api/cards/' + enc + '/plan', { method: 'POST', body: { tenantId, groupId, deviceName } });
-      if (!p.ok) return p;
+      const p = await api('/api/cards/' + enc + '/plan', { method: 'POST', body });
+      if (!p.ok) {
+        // The name taken meanwhile, the site no longer the target's: back to the choice, the site read again.
+        if (p.body.code === 'name_taken') { d.summary = false; d.nameEdited = false; d.info = null; d.infoKey = null; loadInfo(serial); }
+        if (p.body.code === 'site_refused') { resetSite(d); d.sites = null; d.sitesKey = null; loadSites(serial); }
+        return p;
+      }
+      d.summary = false;
       return api('/api/cards/' + enc + '/run', { method: 'POST', body: {} });
     });
   }
@@ -312,16 +577,38 @@ document.addEventListener('click', (ev) => {
     const release = !!(c && c.ownerSetHere) && confirm(t('bench.cards.releaseConfirm') || 'Give the device back (remove the owner set by this station)?');
     act(() => api('/api/cards/' + enc + '/abandon', { method: 'POST', body: { release } }));
   }
+  if (action === 'close') delete drafts[serial];
   if (action === 'close') act(() => api('/api/cards/' + enc + '/close', { method: 'POST', body: {} }));
   if (action === 'export') act(async () => { const r = await api('/api/cards/' + enc + '/export', { method: 'POST', body: {} }); if (r.ok) toast((t('bench.cards.exported') || 'Exported to') + ' ' + r.body.path); return r; });
 });
 document.addEventListener('change', (ev) => {
-  const sel = ev.target.closest('[data-field=target]');
-  if (!sel) return;
-  const card = sel.closest('[data-serial]');
-  const tg = targets.find((x) => x.tenantId + ':' + x.groupId === sel.value);
-  const name = card.querySelector('[data-field=name]');
-  if (tg && name && !name.value && tg.namePrefix) name.placeholder = tg.namePrefix + '…';
+  const el = ev.target.closest('[data-field]');
+  const card = el && el.closest('[data-serial]');
+  if (!card) return;
+  const serial = card.dataset.serial;
+  const d = draftOf(serial);
+  const f = el.dataset.field;
+  if (f === 'legacy') {
+    d.legacy = !!el.checked;
+  }
+});
+document.addEventListener('input', (ev) => {
+  const el = ev.target.closest('[data-field]');
+  const card = el && el.closest('[data-serial]');
+  if (!card) return;
+  const serial = card.dataset.serial;
+  const d = draftOf(serial);
+  if (el.dataset.field === 'siteSearch') {
+    // A search 300 ms after the last key (as on the bench of Obliwan).
+    d.search = el.value.replace(/[\\u0000-\\u001f\\u007f]/g, '').slice(0, 100);
+    clearTimeout(d.timer);
+    d.timer = setTimeout(() => loadSites(serial), 300);
+  } else if (el.dataset.field === 'name') {
+    // Checked live against the names of the site: the message and the button follow each key.
+    d.name = el.value;
+    d.nameEdited = true;
+    renderCards();
+  }
 });
 
 try {

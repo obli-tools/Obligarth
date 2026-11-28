@@ -5,11 +5,14 @@
 //   bench.identity_mismatch  tenant: an enrollment by a bench token refused, the serial numbers read by ADB and those
 //                            the agent declared differ (another device used the token)
 //   bench.token_quota        platform: a station used 80 % of its daily quota of enrollment tokens
+//   bench.claim_refused      platform (lot BANC-T §5): a client tenant had 3 claims of a station refused within 24 hours,
+//                            or one claim of a pending station that targets another tenant (a takeover attempt)
 // =============================================================================
 
 export const BENCH_ALERTS = {
   'bench.identity_mismatch': { scope: 'tenant', severity: 'warning', title: 'Bench enrollment refused: another device', message: 'An enrollment token of a bench station was used by a device whose serial numbers differ from those read on the bench: the enrollment was refused and the token revoked.' },
   'bench.token_quota': { scope: 'master', severity: 'warning', title: 'Bench station near its token quota', message: 'A bench station issued {count} enrollment tokens in 24 hours (quota {quota}).' },
+  'bench.claim_refused': { scope: 'master', severity: 'warning', title: 'Bench station claims refused', message: 'A client tenant had {count} claims of a bench station refused in 24 hours ({reason}): check that no pending station is being taken over.' },
 } as const;
 
 export type BenchAlertKind = keyof typeof BENCH_ALERTS;
@@ -17,6 +20,7 @@ export type BenchAlertKind = keyof typeof BENCH_ALERTS;
 export const BENCH_ALERTS_FR: Record<BenchAlertKind, { title: string; message: string }> = {
   'bench.identity_mismatch': { title: "Enrôlement par le banc refusé : autre appareil", message: "Un jeton d'enrôlement d'une station de banc a été utilisé par un appareil dont les numéros de série diffèrent de ceux lus au banc : l'enrôlement est refusé et le jeton révoqué." },
   'bench.token_quota': { title: 'Station de banc proche de son quota de jetons', message: "Une station de banc a émis {count} jetons d'enrôlement en 24 heures (quota {quota})." },
+  'bench.claim_refused': { title: 'Réclamations de station de banc refusées', message: "Un tenant client a vu {count} réclamations de station de banc refusées en 24 heures ({reason}) : vérifiez qu'aucune station en attente n'est en train d'être détournée." },
 };
 
 export function benchAlertDefinitions(): Array<{

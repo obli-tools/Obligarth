@@ -1,7 +1,7 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  BENCH_LIMITS, BENCH_ROLE_POLICIES, MASTER_TENANT_ID, isMasterTenant, normaliseBenchVerificationCode,
+  BENCH_LIMITS, MASTER_TENANT_ID, isMasterTenant, normaliseBenchVerificationCode,
   type BenchSessionView, type BenchStationDetail, type BenchStationView, type BenchTargetView,
 } from '@obligarth/shared';
 import { audit } from '../audit';
@@ -12,8 +12,8 @@ import { checkSecondFactor, sendStepUpFailure } from '../services/deviceKey/step
 import { signersFromEnv } from '../legacyAgent/config';
 import { releaseView } from '../legacyAgent/routes';
 import { installerState, servedRelease } from './apk.service';
-import { closeTargetProvisionings } from './provisioning.service';
 import { cleanLabel, planStationTransition, stationVerificationCode, type StationAction } from './stations.service';
+import { TargetFields, TargetPatch, assertGroup, insertTarget, patchTarget, removeTarget } from './targets.service';
 
 // =============================================================================
 // The bench stations in the console of the platform (lot BANC §3.3, §3.7, §3.12), mounted at /api/admin/bench-stations:
@@ -33,6 +33,13 @@ import { cleanLabel, planStationTransition, stationVerificationCode, type Statio
 //   DELETE /:id/targets/:tenantId/:groupId     simple second factor
 //   POST   /:id/sessions                       { minutes }: a bench session of the administrator, strict second factor
 //   POST   /:id/sessions/close                 the open session closed
+//   POST   /:id/owner                          { tenantId }: the platform station given to a client (lot BANC-T, Q2): strict
+//                                              second factor; every target (and open provisioning) in that tenant (409
+//                                              foreignTargets); never the other way
+// A station of a client (lot BANC-T, Q1): the platform reads it, suspends it (the client does not lift that suspension;
+// a station the client suspended already becomes the platform's suspension), resumes its own suspension, revokes it,
+// closes its session, suspends one of its targets (same rule: suspended_by_platform on the target) and resumes its own
+// suspension of one; anything else (rename, targets, sessions) is 409 stationOwned.
 //   GET    /release, PUT /release              the version of the agent served to the stations ({ releaseId | null }:
 //                                              strict second factor)
 //   GET    /installer                          the installer of the station in the image
@@ -77,15 +84,34 @@ export function sessionView(r: Record<string, any> | undefined | null): BenchSes
   };
 }
 
-function stationView(r: Record<string, any>, counts: Map<string, { targets: number; enrolled: number }>, session: BenchSessionView | null): BenchStationView {
+function stationView(r: Record<string, any>, counts: Map<string, { targets: number; enrolled: number }>, session: BenchSessionView | null,
+  tenantNames: Map<number, string>): BenchStationView {
   const id = String(r.id);
   const c = counts.get(id) ?? { targets: 0, enrolled: 0 };
+  const owner = r.owner_tenant_id === null || r.owner_tenant_id === undefined ? null : Number(r.owner_tenant_id);
   return {
     id, name: r.name, hostname: r.hostname, status: r.status, stationVersion: r.station_version ?? null,
     createdAt: iso(r.created_at) as string, approvedAt: iso(r.approved_at), suspendedAt: iso(r.suspended_at), revokedAt: iso(r.revoked_at),
     revokedReason: r.revoked_reason ?? null, lastSeenAt: iso(r.last_seen_at), lastIp: r.last_ip ?? null, registerIp: r.register_ip ?? null,
     targetCount: c.targets, enrolledCount: c.enrolled, session,
+    ownerTenantId: owner, ownerTenantName: owner === null ? null : tenantNames.get(owner) ?? null, ownerSince: iso(r.owner_since),
+    suspendedByPlatform: r.suspended_by_platform === true,
   };
+}
+
+/** The names of the owner tenants of these rows. */
+async function ownerNames(rows: Array<Record<string, any>>): Promise<Map<number, string>> {
+  const ids = [...new Set(rows.map((r) => r.owner_tenant_id).filter((v) => v !== null && v !== undefined).map(Number))];
+  if (ids.length === 0) return new Map();
+  const t = await db('tenants').whereIn('id', ids).select('id', 'name') as Array<{ id: number; name: string }>;
+  return new Map(t.map((x) => [Number(x.id), x.name]));
+}
+
+/** A station of a client (lot BANC-T): the platform watches and cuts, nothing else (Q1). */
+const isOwned = (r: Record<string, any>): boolean =>
+  r.owner_tenant_id !== null && r.owner_tenant_id !== undefined && Number(r.owner_tenant_id) !== MASTER_TENANT_ID;
+function refuseOwned(r: Record<string, any>): void {
+  if (isOwned(r)) throw new AppError(409, 'This station belongs to a client: the platform only suspends or revokes it', 'stationOwned');
 }
 
 /** The open sessions, with their technician's label (identity context). */
@@ -105,8 +131,9 @@ async function targetsOf(id: string): Promise<BenchTargetView[]> {
   const r = await db.raw('SELECT * FROM obligarth.bench_station_admin_targets(?::uuid)', [id]) as { rows: Array<Record<string, any>> };
   return r.rows.map((t) => ({
     tenantId: Number(t.tenant_id), tenantName: t.tenant_name, groupId: Number(t.group_id), groupPath: t.group_path ?? '',
-    rolePolicy: t.role_policy, allowLegacyOwner: t.allow_legacy_owner === true, namePrefix: t.name_prefix ?? null,
-    disableDevOptions: t.disable_dev_options === true, suspendedAt: iso(t.suspended_at), createdAt: iso(t.created_at) as string,
+    rolePolicy: t.role_policy, allowLegacyOwner: t.allow_legacy_owner === true, namePrefix: t.name_prefix ?? null, nameTemplate: t.name_template ?? null,
+    disableDevOptions: t.disable_dev_options === true, suspendedAt: iso(t.suspended_at), suspendedByPlatform: t.suspended_by_platform === true,
+    createdAt: iso(t.created_at) as string,
   }));
 }
 
@@ -120,21 +147,14 @@ async function detailOf(id: string): Promise<BenchStationDetail> {
   return switchToIdentity(async () => {
     const r = await stationRow(id);
     const sessions = await openSessions([id]);
-    return { ...stationView(r, await countsOf(), sessions.get(id) ?? null), targets: await targetsOf(id) };
+    return { ...stationView(r, await countsOf(), sessions.get(id) ?? null, await ownerNames([r])), targets: await targetsOf(id) };
   });
 }
 
 const ApproveBody = z.object({ verificationCode: z.string().max(20) }).strict();
 const RenameBody = z.object({ name: z.string().max(200) }).strict();
-const TargetBody = z.object({
-  tenantId: z.number().int().positive(), groupId: z.number().int().positive(),
-  rolePolicy: z.enum(BENCH_ROLE_POLICIES).optional(), namePrefix: z.string().regex(/^[A-Za-z0-9_-]{0,32}$/).nullable().optional(),
-  disableDevOptions: z.boolean().optional(),
-}).strict();
-const TargetPatch = z.object({
-  rolePolicy: z.enum(BENCH_ROLE_POLICIES).optional(), namePrefix: z.string().regex(/^[A-Za-z0-9_-]{0,32}$/).nullable().optional(),
-  disableDevOptions: z.boolean().optional(), allowLegacyOwner: z.boolean().optional(), suspended: z.boolean().optional(),
-}).strict();
+const TargetBody = z.object({ tenantId: z.number().int().positive(), groupId: z.number().int().positive(), ...TargetFields }).strict();
+const OwnerBody = z.object({ tenantId: z.number().int().positive() }).strict();
 const SessionBody = z.object({ minutes: z.number().int().min(15).max(BENCH_LIMITS.sessionMaxHours * 60).optional() }).strict();
 const ReleaseBody = z.object({ releaseId: z.string().regex(UUID_RE).nullable() }).strict();
 
@@ -143,23 +163,34 @@ async function changeStatus(req: Request, id: string, action: StationAction): Pr
   const userId = req.session.userId!;
   const ctx = await audit.fromRequest(req, MASTER_TENANT_ID);
   await switchToIdentity(() => db.transaction(async (trx) => {
-    const r = await trx('bench_stations').where({ id }).forUpdate().first('status', 'name') as { status: any; name: string } | undefined;
+    const r = await trx('bench_stations').where({ id }).forUpdate().first('status', 'name', 'owner_tenant_id', 'suspended_by_platform') as
+      { status: any; name: string; owner_tenant_id: number | null; suspended_by_platform: boolean } | undefined;
     if (!r) throw new AppError(404, 'Station not found');
-    const to = planStationTransition(r.status, action);
+    // A client's station: the platform resumes its own suspension only (the client's is the client's).
+    if (action === 'resume' && isOwned(r) && !r.suspended_by_platform) {
+      throw new AppError(409, 'This station was suspended by its owner: the client resumes it', 'stationOwned');
+    }
+    // A client's station the client suspended already: the platform makes that suspension its own (Q1: the client then
+    // no longer lifts it), the status unchanged and the cascade run again (idempotent).
+    const takeOver = action === 'suspend' && isOwned(r) && r.status === 'suspended' && !r.suspended_by_platform;
+    const to = takeOver ? 'suspended' : planStationTransition(r.status, action);
     if (!to) throw new AppError(409, `The station cannot be ${action === 'approve' ? 'approved' : `${action}d`} in its state`, 'bad_state');
     const now = new Date();
     const set: Record<string, unknown> = { status: to };
     if (action === 'approve') Object.assign(set, { approved_at: now, approved_by: userId });
-    if (action === 'suspend') Object.assign(set, { suspended_at: now, suspended_by: userId });
-    if (action === 'resume') Object.assign(set, { suspended_at: null, suspended_by: null });
-    if (action === 'revoke') Object.assign(set, { revoked_at: now, revoked_by: userId, revoked_reason: 'admin', suspended_at: null, suspended_by: null });
+    if (action === 'suspend') Object.assign(set, { suspended_at: now, suspended_by: userId, suspended_by_platform: isOwned(r) });
+    if (action === 'resume') Object.assign(set, { suspended_at: null, suspended_by: null, suspended_by_platform: false });
+    if (action === 'revoke') {
+      Object.assign(set, { revoked_at: now, revoked_by: userId, revoked_reason: 'admin', suspended_at: null, suspended_by: null, suspended_by_platform: false });
+    }
     const auditAction = action === 'approve' ? 'bench.station_approved' : action === 'resume' ? 'bench.station_resumed'
       : action === 'suspend' ? 'bench.station_suspended' : 'bench.station_revoked';
     const protective = action === 'suspend' || action === 'revoke';
     let cascade: Array<{ tenant_id: number; tokens: number; provisionings: number }> = [];
     // The critical actions are written before the change; the protective ones never wait for the journal.
     if (!protective) {
-      await audit.appendInTx(trx, { tenantId: MASTER_TENANT_ID, action: auditAction, target: { type: 'bench_station', id }, details: { stationId: id, name: r.name, from: r.status } }, ctx);
+      await audit.appendInTx(trx, { tenantId: MASTER_TENANT_ID, action: auditAction, target: { type: 'bench_station', id },
+        details: { stationId: id, name: r.name, from: r.status, ...(isOwned(r) ? { ownerTenantId: Number(r.owner_tenant_id) } : {}) } }, ctx);
     }
     await trx('bench_stations').where({ id, status: r.status }).update(set);
     if (protective) {
@@ -168,22 +199,22 @@ async function changeStatus(req: Request, id: string, action: StationAction): Pr
       cascade = out.rows.map((x) => ({ tenant_id: Number(x.tenant_id), tokens: Number(x.tokens), provisionings: Number(x.provisionings) }));
       await audit.appendManyInTx(trx, [
         { tenantId: MASTER_TENANT_ID, action: auditAction, target: { type: 'bench_station', id }, details: { stationId: id, name: r.name, from: r.status, tenants: cascade.length,
-          enrollmentsRevoked: cascade.reduce((n, c) => n + c.tokens, 0), provisioningsAbandoned: cascade.reduce((n, c) => n + c.provisionings, 0) } },
-        // Each tenant the cascade touched reads it in its own journal.
-        ...cascade.filter((c) => c.tenant_id !== MASTER_TENANT_ID).map((c) => ({
-          tenantId: c.tenant_id, action: auditAction, target: { type: 'bench_station', id },
-          details: { stationId: id, name: r.name, enrollmentsRevoked: c.tokens, provisioningsAbandoned: c.provisionings },
-        })),
+          enrollmentsRevoked: cascade.reduce((n, c) => n + c.tokens, 0), provisioningsAbandoned: cascade.reduce((n, c) => n + c.provisionings, 0),
+          ...(isOwned(r) ? { ownerTenantId: Number(r.owner_tenant_id) } : {}), ...(takeOver ? { tookOver: true } : {}) } },
+        // Each tenant the cascade touched reads it in its own journal; the owner of a client's station always does.
+        ...[...new Set([...cascade.map((c) => c.tenant_id), ...(isOwned(r) ? [Number(r.owner_tenant_id)] : [])])]
+          .filter((t) => t !== MASTER_TENANT_ID).map((t) => {
+            const c = cascade.find((x) => x.tenant_id === t);
+            return {
+              tenantId: t, action: auditAction, target: { type: 'bench_station', id },
+              details: { stationId: id, name: r.name, enrollmentsRevoked: c?.tokens ?? 0, provisioningsAbandoned: c?.provisionings ?? 0,
+                ...(isOwned(r) ? { ownerTenantId: Number(r.owner_tenant_id), byPlatform: true } : {}), ...(takeOver ? { tookOver: true } : {}) },
+            };
+          }),
       ], ctx, { onFailure: 'spool' });
     }
   }));
   return detailOf(id);
-}
-
-/** The group of a target, in its tenant (404 otherwise). */
-async function assertGroup(tenantId: number, groupId: number, userId: number): Promise<void> {
-  const ok = await asTenant(tenantId, userActor(userId), () => db('device_groups').where({ tenant_id: tenantId, id: groupId }).first('id'));
-  if (!ok) throw new AppError(404, 'Group not found');
 }
 
 export function createBenchAdminRouter(): Router {
@@ -196,7 +227,8 @@ export function createBenchAdminRouter(): Router {
         .orderBy('created_at', 'desc').limit(1000).select('*') as Array<Record<string, any>>;
       const counts = await countsOf();
       const sessions = await openSessions(null);
-      return rows.map((r) => stationView(r, counts, sessions.get(String(r.id)) ?? null));
+      const names = await ownerNames(rows);
+      return rows.map((r) => stationView(r, counts, sessions.get(String(r.id)) ?? null, names));
     });
     res.json({ success: true, data });
   }));
@@ -276,8 +308,9 @@ export function createBenchAdminRouter(): Router {
     if (!name) throw new AppError(400, 'A name is required', 'invalidRequest');
     const ctx = await audit.fromRequest(req, MASTER_TENANT_ID);
     await switchToIdentity(() => db.transaction(async (trx) => {
-      const r = await trx('bench_stations').where({ id }).forUpdate().first('name', 'status') as Record<string, any> | undefined;
+      const r = await trx('bench_stations').where({ id }).forUpdate().first('name', 'status', 'owner_tenant_id') as Record<string, any> | undefined;
       if (!r) throw new AppError(404, 'Station not found');
+      refuseOwned(r);
       if (r.name === name) return;
       await trx('bench_stations').where({ id }).update({ name });
       await audit.appendInTx(trx, { tenantId: MASTER_TENANT_ID, action: 'bench.station_renamed', target: { type: 'bench_station', id }, details: { from: r.name, to: name } }, ctx);
@@ -317,27 +350,11 @@ export function createBenchAdminRouter(): Router {
     const id = stationId(req);
     const b = body(TargetBody, req);
     const r = await switchToIdentity(() => stationRow(id));
+    refuseOwned(r);
     if (r.status === 'revoked') throw new AppError(409, 'The station is revoked', 'bad_state');
-    const userId = req.session.userId!;
-    await assertGroup(b.tenantId, b.groupId, userId);
+    await assertGroup(b.tenantId, b.groupId, req.session.userId!);
     if (!(await stepUp(req, res, 'bench.target_add', 'strict'))) return;
-    const ctx = await audit.fromRequest(req, b.tenantId);
-    await asTenant(b.tenantId, userActor(userId), () => db.transaction(async (trx) => {
-      if (await trx('bench_station_targets').where({ station_id: id, tenant_id: b.tenantId, group_id: b.groupId }).first('group_id')) {
-        throw new AppError(409, 'This group is a target of the station already', 'targetExists');
-      }
-      await audit.appendInTx(trx, {
-        tenantId: b.tenantId, action: 'bench.target_added', target: { type: 'bench_station', id },
-        details: { stationId: id, name: r.name, groupId: b.groupId, rolePolicy: b.rolePolicy ?? 'owner_preferred', disableDevOptions: b.disableDevOptions ?? true },
-      }, ctx);
-      await trx('bench_station_targets').insert({
-        station_id: id, tenant_id: b.tenantId, group_id: b.groupId, role_policy: b.rolePolicy ?? 'owner_preferred', name_prefix: b.namePrefix || null,
-        disable_dev_options: b.disableDevOptions ?? true, created_by: userId,
-      });
-    })).catch((err) => {
-      if ((err as { constraint?: string })?.constraint === 'bench_station_targets_cap') throw new AppError(422, '200 targets per station at most', 'tooManyTargets');
-      throw err;
-    });
+    await insertTarget(req, id, r.name, b.tenantId, b);
     res.status(201).json({ success: true, data: await detailOf(id) });
   }));
 
@@ -347,38 +364,12 @@ export function createBenchAdminRouter(): Router {
     const groupId = Number(req.params.groupId);
     if (!Number.isSafeInteger(tenantId) || tenantId <= 0 || !Number.isSafeInteger(groupId) || groupId <= 0) throw new AppError(404, 'Target not found');
     const b = body(TargetPatch, req);
-    const keys = Object.keys(b);
-    if (keys.length === 0) throw new AppError(400, 'Nothing to change', 'invalidRequest');
-    const onlySuspend = keys.length === 1 && b.suspended === true;
-    if (!onlySuspend && !(await stepUp(req, res, b.allowLegacyOwner ? 'bench.legacy_owner_allow' : 'bench.target_change', 'strict'))) return;
-    const userId = req.session.userId!;
-    const ctx = await audit.fromRequest(req, tenantId);
-    await asTenant(tenantId, userActor(userId), () => db.transaction(async (trx) => {
-      const t = await trx('bench_station_targets').where({ station_id: id, tenant_id: tenantId, group_id: groupId }).forUpdate().first('*') as Record<string, any> | undefined;
-      if (!t) throw new AppError(404, 'Target not found');
-      const set: Record<string, unknown> = {};
-      if (b.rolePolicy !== undefined) set.role_policy = b.rolePolicy;
-      if (b.namePrefix !== undefined) set.name_prefix = b.namePrefix || null;
-      if (b.disableDevOptions !== undefined) set.disable_dev_options = b.disableDevOptions;
-      if (b.allowLegacyOwner !== undefined) set.allow_legacy_owner = b.allowLegacyOwner;
-      if (b.suspended === true && !t.suspended_at) Object.assign(set, { suspended_at: new Date(), suspended_by: userId });
-      if (b.suspended === false && t.suspended_at) Object.assign(set, { suspended_at: null, suspended_by: null });
-      if (Object.keys(set).length === 0) return;
-      // A suspension closes at once what the target had open: its provisionings abandoned, their tokens revoked.
-      const closed = b.suspended === true && !t.suspended_at ? await closeTargetProvisionings(trx, tenantId, id, groupId, userId) : null;
-      const entries = [];
-      if (b.allowLegacyOwner === true && t.allow_legacy_owner !== true) {
-        entries.push({ tenantId, action: 'bench.legacy_owner_allowed', target: { type: 'bench_station', id }, details: { stationId: id, groupId } });
-      }
-      if (closed) entries.push({ tenantId, action: 'bench.target_suspended', target: { type: 'bench_station', id }, details: { stationId: id, groupId, ...closed } });
-      if (b.suspended === false && t.suspended_at) entries.push({ tenantId, action: 'bench.target_resumed', target: { type: 'bench_station', id }, details: { stationId: id, groupId } });
-      const changed = Object.keys(set).filter((k) => !['suspended_at', 'suspended_by'].includes(k));
-      if (changed.length > 0) {
-        entries.push({ tenantId, action: 'bench.target_changed', target: { type: 'bench_station', id }, details: { stationId: id, groupId, changed: Object.fromEntries(changed.map((k) => [k, set[k]])) } });
-      }
-      if (entries.length) await audit.appendManyInTx(trx, entries, ctx, onlySuspend ? { onFailure: 'spool' } : {});
-      await trx('bench_station_targets').where({ station_id: id, tenant_id: tenantId, group_id: groupId }).update(set);
-    }));
+    // A client's station: the platform only suspends one of its targets (protective) and resumes its own suspension of
+    // one (Q1; patchTarget refuses to resume a suspension of the client: 409 stationOwned).
+    const onlySuspension = Object.keys(b).length === 1 && typeof b.suspended === 'boolean';
+    const r = await switchToIdentity(() => stationRow(id));
+    if (!onlySuspension) refuseOwned(r);
+    if (!(await patchTarget(req, res, id, tenantId, groupId, b, { platform: true, ownedStation: isOwned(r) }))) return;
     res.json({ success: true, data: await detailOf(id) });
   }));
 
@@ -387,16 +378,9 @@ export function createBenchAdminRouter(): Router {
     const tenantId = Number(req.params.tenantId);
     const groupId = Number(req.params.groupId);
     if (!Number.isSafeInteger(tenantId) || tenantId <= 0 || !Number.isSafeInteger(groupId) || groupId <= 0) throw new AppError(404, 'Target not found');
+    refuseOwned(await switchToIdentity(() => stationRow(id)));
     if (!(await stepUp(req, res, 'bench.target_remove', 'simple'))) return;
-    const userId = req.session.userId!;
-    const ctx = await audit.fromRequest(req, tenantId);
-    await asTenant(tenantId, userActor(userId), () => db.transaction(async (trx) => {
-      const n = await trx('bench_station_targets').where({ station_id: id, tenant_id: tenantId, group_id: groupId }).delete();
-      if (n === 0) throw new AppError(404, 'Target not found');
-      const closed = await closeTargetProvisionings(trx, tenantId, id, groupId, userId);
-      await audit.appendInTx(trx, { tenantId, action: 'bench.target_removed', target: { type: 'bench_station', id }, details: { stationId: id, groupId, reason: 'admin', ...closed } },
-        ctx, { onFailure: 'spool' });
-    }));
+    await removeTarget(req, id, tenantId, groupId, 'admin');
     res.json({ success: true, data: await detailOf(id) });
   }));
 
@@ -404,10 +388,39 @@ export function createBenchAdminRouter(): Router {
     const id = stationId(req);
     const b = body(SessionBody, req);
     const r = await switchToIdentity(() => stationRow(id));
+    refuseOwned(r);
     if (r.status !== 'approved') throw new AppError(409, 'The station is not approved', 'bad_state');
     if (!(await stepUp(req, res, 'bench.session_open', 'strict'))) return;
     await openBenchSession(req, id, r.name, b.minutes ?? BENCH_LIMITS.sessionMaxHours * 60, MASTER_TENANT_ID);
     res.status(201).json({ success: true, data: await detailOf(id) });
+  }));
+
+  // Lot BANC-T, Q2: a platform station given to a client (never the other way).
+  router.post('/:id/owner', wrap(async (req, res) => {
+    const id = stationId(req);
+    const b = body(OwnerBody, req);
+    if (isMasterTenant(b.tenantId)) throw new AppError(409, 'A station of a client never goes back to the platform', 'bad_state');
+    const r = await switchToIdentity(() => stationRow(id));
+    refuseOwned(r);
+    if (!['approved', 'suspended'].includes(r.status)) throw new AppError(409, 'Only an approved or suspended station is given to a client', 'bad_state');
+    if (!(await stepUp(req, res, 'bench.station_owner_assign', 'strict'))) return;
+    const userId = req.session.userId!;
+    const ctx = await audit.fromRequest(req, MASTER_TENANT_ID);
+    await switchToIdentity(() => db.transaction(async (trx) => {
+      const out = await trx.raw('SELECT obligarth.bench_station_assign_owner(?::uuid, ?, ?) AS o', [id, b.tenantId, userId]) as { rows: Array<{ o: string }> };
+      const outcome = out.rows[0]?.o;
+      if (outcome === 'bad_tenant') throw new AppError(404, 'Tenant not found');
+      if (outcome === 'not_found') throw new AppError(404, 'Station not found');
+      if (outcome === 'already_owned') throw new AppError(409, 'This station belongs to a client already', 'stationOwned');
+      if (outcome === 'foreign_targets') throw new AppError(409, 'The station targets or provisions another tenant: remove those targets first', 'foreignTargets');
+      if (outcome !== 'assigned') throw new AppError(409, 'The station cannot be given in its state', 'bad_state');
+      // Critical, in the change's transaction: the master's chain and the new owner's.
+      await audit.appendManyInTx(trx, [
+        { tenantId: MASTER_TENANT_ID, action: 'bench.station_owner_assigned', target: { type: 'bench_station', id }, details: { stationId: id, name: r.name, ownerTenantId: b.tenantId } },
+        { tenantId: b.tenantId, action: 'bench.station_owner_assigned', target: { type: 'bench_station', id }, details: { stationId: id, name: r.name, ownerTenantId: b.tenantId } },
+      ], ctx);
+    }));
+    res.json({ success: true, data: await detailOf(id) });
   }));
 
   router.post('/:id/sessions/close', wrap(async (req, res) => {

@@ -14,7 +14,7 @@ import { closeTargetProvisionings } from './provisioning.service';
 // =============================================================================
 // The bench seen from a tenant (lot BANC §3.7, §3.12), mounted at /api/bench-provisionings in the tenant router, all
 // behind mdm.bench.manage:
-//   GET    /                                   the provisionings of the tenant (500 at most; ?stationId=&state=&deviceId=):
+//   GET    /                                   the provisionings of the tenant (500 at most; ?stationId=&state=&deviceId=&siteId=):
 //                                              serial numbers in clear with devices.manage, cut to 4 characters otherwise
 //   GET    /stations                           the stations that target the tenant or enrolled into it (no token, no
 //                                              address, no host), with the tenant's targets
@@ -37,10 +37,19 @@ function targetParams(req: Request): { stationId: string; groupId: number } {
   return { stationId, groupId };
 }
 
+/** The names of every station the tenant knows, for the history: those of stations another client owns now included
+ *  (bench_tenant_stations: elsewhere, their name only). */
+async function stationNames(tenantId: number): Promise<Map<string, string>> {
+  const r = await db.raw('SELECT id, name FROM obligarth.bench_tenant_stations(?)', [tenantId]) as { rows: Array<{ id: string; name: string }> };
+  return new Map(r.rows.map((s) => [String(s.id), s.name]));
+}
+
 /** The stations of the tenant. The technician of an open session is named only when that user is a member of this
- *  tenant (bench_tenant_stations); `mine`: the session of the requesting user. */
+ *  tenant (bench_tenant_stations); `mine`: the session of the requesting user. A station another client owns now
+ *  (lot BANC-T: elsewhere) is not listed. */
 async function stationsOf(tenantId: number, userId: number): Promise<BenchTenantStationView[]> {
-  const r = await db.raw('SELECT * FROM obligarth.bench_tenant_stations(?)', [tenantId]) as { rows: Array<Record<string, any>> };
+  const all = await db.raw('SELECT * FROM obligarth.bench_tenant_stations(?)', [tenantId]) as { rows: Array<Record<string, any>> };
+  const r = { rows: all.rows.filter((s) => s.elsewhere !== true) };
   const targets = await db('bench_station_targets as t').leftJoin('device_groups as g', function j() { this.on('g.id', '=', 't.group_id').andOn('g.tenant_id', '=', 't.tenant_id'); })
     .where('t.tenant_id', tenantId).select('t.station_id', 't.group_id', 't.role_policy', 't.suspended_at', 'g.name as group_name') as Array<Record<string, any>>;
   return r.rows.map((s) => ({
@@ -52,6 +61,7 @@ async function stationsOf(tenantId: number, userId: number): Promise<BenchTenant
       id: String(s.session_id), technician: s.technician ?? null, expiresAt: iso(s.session_expires_at) as string,
       mine: s.session_user_id !== null && s.session_user_id !== undefined && Number(s.session_user_id) === userId,
     } : null,
+    owned: s.owned === true,
   }));
 }
 
@@ -66,14 +76,16 @@ export function createBenchHistoryRouter(): Router {
       .leftJoin('devices as d', function j() { this.on('d.id', '=', 'p.device_id').andOn('d.tenant_id', '=', 'p.tenant_id'); })
       .leftJoin('legacy_agent_devices as a', function j() { this.on('a.device_id', '=', 'p.device_id').andOn('a.tenant_id', '=', 'p.tenant_id'); })
       .leftJoin('legacy_agent_enrollment_tokens as k', function j() { this.on('k.id', '=', 'p.enrollment_token_id').andOn('k.tenant_id', '=', 'p.tenant_id'); })
+      .leftJoin('sites as si', function j() { this.on('si.id', '=', 'p.site_id').andOn('si.tenant_id', '=', 'p.tenant_id'); })
       .where('p.tenant_id', tenantId);
     if (typeof req.query.stationId === 'string' && UUID_RE.test(req.query.stationId)) q = q.where('p.station_id', req.query.stationId.toLowerCase());
     if (typeof req.query.state === 'string' && (BENCH_PROVISIONING_STATES as readonly string[]).includes(req.query.state)) q = q.where('p.state', req.query.state);
     const deviceId = Number(req.query.deviceId);
     if (Number.isSafeInteger(deviceId) && deviceId > 0) q = q.where('p.device_id', deviceId);
+    if (typeof req.query.siteId === 'string' && UUID_RE.test(req.query.siteId)) q = q.where('p.site_id', req.query.siteId.toLowerCase());
     const rows = await q.orderBy('p.created_at', 'desc').limit(500)
-      .select('p.*', 'd.uuid as device_uuid', 'd.management_mode', 'a.identity_state', 'k.created_by as technician_id') as Array<Record<string, any>>;
-    const names = new Map((await stationsOf(tenantId, req.session.userId!)).map((s) => [s.id, s.name]));
+      .select('p.*', 'd.uuid as device_uuid', 'd.management_mode', 'a.identity_state', 'k.created_by as technician_id', 'si.code as site_code', 'si.name as site_name') as Array<Record<string, any>>;
+    const names = await stationNames(tenantId);
     const ids = [...new Set(rows.map((r) => Number(r.technician_id)).filter((n) => Number.isSafeInteger(n) && n > 0))];
     const labels = ids.length === 0 ? new Map<number, string>()
       : new Map(((await db.raw('SELECT id, username, display_name FROM obligarth.user_labels(?::int[])', [ids])) as { rows: Array<Record<string, any>> }).rows
@@ -87,6 +99,7 @@ export function createBenchHistoryRouter(): Router {
       identityState: r.identity_state ?? null, deviceId: r.device_id === null ? null : Number(r.device_id), deviceUuid: r.device_uuid ? String(r.device_uuid) : null,
       errorCode: r.error_code ?? null, steps: (Array.isArray(r.steps) ? r.steps : []) as BenchStepEntry[], stepsDropped: Number(r.steps_dropped ?? 0),
       technician: r.technician_id ? labels.get(Number(r.technician_id)) ?? null : null,
+      siteId: r.site_id ? String(r.site_id) : null, siteCode: r.site_code ?? null, siteName: r.site_name ?? null,
       createdAt: iso(r.created_at) as string, updatedAt: iso(r.updated_at) as string, outcomeAt: iso(r.outcome_at),
     }));
     res.json({ success: true, data });
@@ -106,9 +119,14 @@ export function createBenchHistoryRouter(): Router {
     const userId = req.session.userId!;
     const ctx = await audit.fromRequest(req, tenantId);
     await db.transaction(async (trx) => {
-      const t = await trx('bench_station_targets').where({ station_id: stationId, tenant_id: tenantId, group_id: groupId }).forUpdate().first('suspended_at') as
-        { suspended_at: Date | null } | undefined;
+      const t = await trx('bench_station_targets').where({ station_id: stationId, tenant_id: tenantId, group_id: groupId }).forUpdate().first('suspended_at', 'suspended_by_platform') as
+        { suspended_at: Date | null; suspended_by_platform: boolean } | undefined;
       if (!t) throw new AppError(404, 'Target not found');
+      // Lot BANC-T, Q1: a target the platform suspended on a client's station is never removed by the client (it would
+      // add it again unsuspended).
+      if (change === 'remove' && t.suspended_by_platform === true) {
+        throw new AppError(409, 'The platform suspended this target: only the platform resumes it', 'suspendedByPlatform');
+      }
       const target = { type: 'bench_station', id: stationId };
       if (change === 'remove') {
         await trx('bench_station_targets').where({ station_id: stationId, tenant_id: tenantId, group_id: groupId }).delete();
