@@ -38,9 +38,12 @@ export const BENCH_STEP_STATUSES = ['running', 'ok', 'warn', 'failed', 'skipped'
 export type BenchStepStatus = typeof BENCH_STEP_STATUSES[number];
 
 /** What keeps a device from taking the agent as its owner (AOSP preconditions, §6.3); setup_incomplete is only a
- *  warning (§6.2). */
-export const BENCH_OWNER_BLOCKERS = ['accounts', 'extra_users', 'foreign_owner', 'profile_owner', 'agent_too_old',
-  'policy_admin_only', 'unknown'] as const;
+ *  warning (§6.2). Owner decision of 28/11/2026: accounts are a blocker only when the station cannot hide them for the
+ *  time of `dpm set-device-owner` (their app disabled, then enabled again: BENCH_ACCOUNT_APP_CODES): an account whose
+ *  type or app it cannot read, an app it never disables (Settings, launcher…), or Android refusing (accounts_hide_refused)
+ *  or still seeing them (accounts_still_seen). */
+export const BENCH_OWNER_BLOCKERS = ['accounts', 'accounts_hide_refused', 'accounts_still_seen', 'accounts_marker_failed',
+  'extra_users', 'foreign_owner', 'profile_owner', 'agent_too_old', 'policy_admin_only', 'unknown'] as const;
 export type BenchOwnerBlocker = typeof BENCH_OWNER_BLOCKERS[number];
 
 /** Named error codes of the station and of the server (one code = one text bench.error.<code>). */
@@ -52,11 +55,14 @@ export const BENCH_ERROR_CODES = [
   'identity_mismatch', 'device_outside_target', 'station_refused', 'no_session', 'server_unreachable', 'redirected',
   'target_refused', 'slot_held', 'too_many_cards', 'internal',
 ] as const;
+// no_session: no bench session since 28/11/2026, never raised any more; kept in the vocabulary (the CHECK of the base,
+// the history, a station 1.0.3 that may still send it as the code of a result).
 export type BenchErrorCode = typeof BENCH_ERROR_CODES[number];
 
 /** The codes the server answers the station with (HTTP refusals, §3.11). */
 export const BENCH_API_CODES = [
   'station_pending', 'station_suspended', 'station_revoked', 'station_ip_refused', 'target_refused', 'device_outside_target',
+  // no_session: never answered since 28/11/2026 (no bench session any more), kept for the stations 1.0.3.
   'agent_already_enrolled', 'open_provisioning', 'bad_state', 'no_session', 'not_enrolled', 'not_verified', 'too_many_pending',
   'apk_unavailable', 'apk_mismatch', 'verification_mismatch', 'agent_too_old',
   // Lot BANC-T §9: the site chosen on the card is not one of the target's (unknown, archived, of another tenant or
@@ -98,7 +104,42 @@ export type BenchStepDetail = {
   /** Lot BANC-A, step apps: the package of the tenant's store (BenchRequiredAppView.packageId), never a name read on
    *  the device. */
   packageId?: string;
+  /** Step role (owner decision of 28/11/2026): the Android package an entry account_app_* is about (the app that
+   *  carries accounts, disabled for the time of `dpm set-device-owner`), never an account name. */
+  packages?: string[];
 };
+
+/** The journal of the accounts hidden at the step role: one entry per package and per action. */
+export const BENCH_ACCOUNT_APP_CODES = ['account_app_disabled', 'account_app_disable_refused', 'account_app_enabled',
+  'account_app_enable_failed'] as const;
+export type BenchAccountAppCode = typeof BENCH_ACCOUNT_APP_CODES[number];
+
+/** What a journal says of the apps disabled to hide accounts: disabled, enabled again, refused, and those still
+ *  disabled at its end (never expected: the station re-enables them, at the latest at its next run on the device).
+ *  null when the journal has none. The oldest entries may have left a long journal (64 entries at most). */
+export interface BenchAccountAppsSummary { disabled: string[]; enabled: string[]; refused: string[]; notEnabled: string[] }
+
+export function benchAccountAppsSummary(steps: readonly BenchStepEntry[] | null | undefined): BenchAccountAppsSummary | null {
+  if (!Array.isArray(steps)) return null;
+  const disabled = new Set<string>();
+  const enabled = new Set<string>();
+  const refused = new Set<string>();
+  const open = new Set<string>();
+  let any = false;
+  for (const s of steps) {
+    if (s?.step !== 'role' || !(BENCH_ACCOUNT_APP_CODES as readonly string[]).includes(s.code ?? '')) continue;
+    any = true;
+    for (const p of Array.isArray(s.detail?.packages) ? s.detail!.packages! : []) {
+      if (typeof p !== 'string') continue;
+      if (s.code === 'account_app_disabled') { disabled.add(p); open.add(p); }
+      else if (s.code === 'account_app_enabled') { enabled.add(p); open.delete(p); }
+      else if (s.code === 'account_app_disable_refused') refused.add(p);
+    }
+  }
+  if (!any) return null;
+  const sorted = (x: Set<string>): string[] => [...x].sort().slice(0, 16);
+  return { disabled: sorted(disabled), enabled: sorted(enabled), refused: sorted(refused), notEnabled: sorted(open) };
+}
 
 /** One entry of the journal of a provisioning. */
 export interface BenchStepEntry {
@@ -332,16 +373,6 @@ export interface BenchTargetView {
   createdAt: string;
 }
 
-export interface BenchSessionView {
-  id: string;
-  stationId: string;
-  userId: number;
-  technician: string | null;
-  openedAt: string;
-  expiresAt: string;
-  closedAt: string | null;
-}
-
 /** A station seen by a platform administrator (GET /api/admin/bench-stations). */
 export interface BenchStationView {
   id: string;
@@ -360,7 +391,6 @@ export interface BenchStationView {
   registerIp: string | null;
   targetCount: number;
   enrolledCount: number;
-  session: BenchSessionView | null;
   /** Lot BANC-T: the owner of the station. The stations of the platform belong to the master tenant (Default):
    *  ownerTenantId = MASTER_TENANT_ID, ownerSince null. A station of a client: its tenant, since its claim or its
    *  assignment. null: a revoked station whose tenant was deleted. */
@@ -382,9 +412,6 @@ export interface BenchTenantStationView {
   status: BenchStationStatus;
   lastSeenAt: string | null;
   targets: Array<{ groupId: number; groupPath: string; rolePolicy: BenchRolePolicy; suspendedAt: string | null }>;
-  /** technician: only when that user is a member of this tenant (null otherwise); mine: the session of the requesting
-   *  user, who alone (with a platform administrator) may close it. */
-  session: { id: string; technician: string | null; expiresAt: string; mine: boolean } | null;
   /** Lot BANC-T: the station belongs to this tenant (GET /api/bench-stations manages it). */
   owned: boolean;
 }
@@ -405,7 +432,7 @@ export interface BenchOwnedTargetView {
 }
 
 /** A station that belongs to the tenant (lot BANC-T, GET /api/bench-stations): host and version, never an address
- *  (Q4); the technician of its session named only when a member of the tenant. */
+ *  (Q4). No bench session since 28/11/2026: an approved station acts within its targets by itself. */
 export interface BenchOwnedStationView {
   id: string;
   name: string;
@@ -422,7 +449,6 @@ export interface BenchOwnedStationView {
   lastSeenAt: string | null;
   ownerSince: string | null;
   targets: BenchOwnedTargetView[];
-  session: { id: string; technician: string | null; expiresAt: string; mine: boolean } | null;
 }
 
 // ── The choice of the station: tenant, site, name (lot BANC-T §9) ─────────────────────
@@ -453,6 +479,9 @@ export interface BenchSiteDeviceView {
   /** The serial number cut to its last four characters. */
   serialTail: string | null;
   lastSeenAt: string | null;
+  /** 28/11/2026: the device plugged in on the card asking (its serials given as adbSerial / hwSerial, matched as the
+   *  plan does): its own name, which a conversion keeps, is not a name of another device. Absent otherwise. */
+  self?: true;
 }
 
 /** GET /api/bench/v1/sites/:id/devices[?groupId=]: the names used in the site and, for a target (groupId), the name

@@ -133,13 +133,13 @@ export async function handleEnroll(ex: Exchange, raw: Buffer, perToken: (publicI
       // A token of a bench station: its provisioning and the identity of the device, BEFORE the use is consumed.
       const origin = await trx('legacy_agent_enrollment_tokens').where({ tenant_id: tenantId, id: tok.token_id })
         .first('origin', 'bench_provisioning_id', 'created_by', 'site_id') as
-        { origin: string; bench_provisioning_id: string | null; created_by: number; site_id: string | null } | undefined;
+        { origin: string; bench_provisioning_id: string | null; created_by: number | null; site_id: string | null } | undefined;
       // Lot P1-QR §3.2: the site of the token read under the sites lock, BEFORE its use is consumed (the order of an
       // archive, which revokes the tokens of its site): an archive runs wholly before or after this enrollment.
       const site = await enrollmentSiteInTx(trx, tenantId, origin?.site_id ? String(origin.site_id) : null);
       let bench: BenchEnrollmentLink | null = null;
       if (origin?.origin === 'bench') {
-        const checked = await checkBenchEnrollment(trx, tenantId, { id: tok.token_id, bench_provisioning_id: origin.bench_provisioning_id, created_by: Number(origin.created_by) },
+        const checked = await checkBenchEnrollment(trx, tenantId, { id: tok.token_id, bench_provisioning_id: origin.bench_provisioning_id, created_by: origin.created_by === null || origin.created_by === undefined ? null : Number(origin.created_by) },
           { serial: b.device.serial ?? null, samsungSerial: b.device.samsungSerial ?? null, provisioningId: b.hints?.provisioningId });
         if (checked === 'refused') return tokenInvalid();
         bench = checked;

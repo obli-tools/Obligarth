@@ -2,7 +2,7 @@ import { registerAuditActions } from '../audit';
 
 // =============================================================================
 // The audit actions of the bench stations (lot BANC §3.10): declared once. 'critical' written before the action (an
-// approval, a resumption, an open session, a target added, the exception D3, the version served, a token issued);
+// approval, a resumption, a target added, the exception D3, the version served, a token issued);
 // 'protective' never blocked (revocations, suspensions, refusals of identity); 'standard' after the fact. No entry
 // carries a token, a configuration, an account name or address; serial numbers cut to their last four characters.
 // =============================================================================
@@ -19,6 +19,7 @@ export function registerBenchAuditActions(): void {
     { name: 'bench.station_suspended', criticality: 'protective', label: 'Bench station suspended' },
     { name: 'bench.station_resumed', criticality: 'critical', label: 'Bench station resumed' },
     { name: 'bench.station_renamed', criticality: 'standard', label: 'Bench station renamed' },
+    // No bench session since 28/11/2026: both kept for the entries already written (and the job that closes the last ones).
     { name: 'bench.session_opened', criticality: 'critical', label: 'Bench session opened' },
     { name: 'bench.session_closed', criticality: 'protective', label: 'Bench session closed' },
     { name: 'bench.target_added', criticality: 'critical', label: 'Bench station target added' },
@@ -44,7 +45,10 @@ export function registerBenchAuditActions(): void {
     { name: 'bench.identity_mismatch', criticality: 'protective', label: 'Bench enrollment refused: serial numbers differ' },
     // Lot BANC-A: the file of a required app sent to a station (its provisioning, its package).
     { name: 'bench.app_downloaded', criticality: 'standard', label: 'Bench station downloaded a required app' },
-    // « Compléter les apps » of a device of this tenant asked by a technician without mdm.bench.operate in it.
+    // 28/11/2026: a conversion renamed the device (the name typed on the bench card), at its outcome completed.
+    { name: 'bench.device_renamed', criticality: 'standard', label: 'Bench conversion renamed the device' },
+    // « Compléter les apps » of a device of this tenant asked by a technician without mdm.bench.operate in it (no bench
+    // session since 28/11/2026: no longer written, kept for the entries already written).
     { name: 'bench.identity_probe_refused', criticality: 'protective', label: 'Bench completion refused: technician without the right' },
     { name: 'legacy_agent.device_owner_gained', criticality: 'standard', label: 'Android agent became the owner of the device' },
     { name: 'legacy_agent.device_owner_lost', criticality: 'protective', label: 'Android agent lost the owner role of the device' },

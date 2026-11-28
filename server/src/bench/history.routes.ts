@@ -45,10 +45,9 @@ async function stationNames(tenantId: number): Promise<Map<string, string>> {
   return new Map(r.rows.map((s) => [String(s.id), s.name]));
 }
 
-/** The stations of the tenant. The technician of an open session is named only when that user is a member of this
- *  tenant (bench_tenant_stations); `mine`: the session of the requesting user. A station another client owns now
- *  (lot BANC-T: elsewhere) is not listed. */
-async function stationsOf(tenantId: number, userId: number): Promise<BenchTenantStationView[]> {
+/** The stations of the tenant (no bench session since 28/11/2026). A station another client owns now (lot BANC-T:
+ *  elsewhere) is not listed. */
+async function stationsOf(tenantId: number): Promise<BenchTenantStationView[]> {
   const all = await db.raw('SELECT * FROM obligarth.bench_tenant_stations(?)', [tenantId]) as { rows: Array<Record<string, any>> };
   const r = { rows: all.rows.filter((s) => s.elsewhere !== true) };
   const targets = await db('bench_station_targets as t').leftJoin('device_groups as g', function j() { this.on('g.id', '=', 't.group_id').andOn('g.tenant_id', '=', 't.tenant_id'); })
@@ -58,10 +57,6 @@ async function stationsOf(tenantId: number, userId: number): Promise<BenchTenant
     targets: targets.filter((t) => String(t.station_id) === String(s.id)).map((t) => ({
       groupId: Number(t.group_id), groupPath: t.group_name ?? String(t.group_id), rolePolicy: t.role_policy, suspendedAt: iso(t.suspended_at),
     })),
-    session: s.session_id ? {
-      id: String(s.session_id), technician: s.technician ?? null, expiresAt: iso(s.session_expires_at) as string,
-      mine: s.session_user_id !== null && s.session_user_id !== undefined && Number(s.session_user_id) === userId,
-    } : null,
     owned: s.owned === true,
   }));
 }
@@ -108,7 +103,7 @@ export function createBenchHistoryRouter(): Router {
   }));
 
   router.get('/stations', wrap(async (req, res) => {
-    res.json({ success: true, data: await stationsOf(req.tenantId!, req.session.userId!) });
+    res.json({ success: true, data: await stationsOf(req.tenantId!) });
   }));
 
   async function setTarget(req: Request, res: Response, change: 'suspend' | 'remove'): Promise<void> {
@@ -140,7 +135,7 @@ export function createBenchHistoryRouter(): Router {
         await audit.appendInTx(trx, { tenantId, action: 'bench.target_suspended', target, details: { stationId, groupId, ...closed } }, ctx, { onFailure: 'spool' });
       }
     });
-    res.json({ success: true, data: await stationsOf(tenantId, userId) });
+    res.json({ success: true, data: await stationsOf(tenantId) });
   }
 
   router.post('/targets/:stationId/:groupId/suspend', wrap((req, res) => setTarget(req, res, 'suspend')));

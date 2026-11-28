@@ -1,7 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
-import { MASTER_TENANT_ID } from '@obligarth/shared';
+import { BENCH_LIMITS, MASTER_TENANT_ID } from '@obligarth/shared';
 import { audit } from '../audit';
 import { originOfRequest } from '../audit/actor';
 import { AppError } from '../middleware/errorHandler';
@@ -20,28 +20,32 @@ import { cleanLabel, normaliseStationToken, registerStation, stationTokenHash, s
 
 // =============================================================================
 // The surface of the bench station (lot BANC §3.5), mounted at /api/bench outside the tenant router (the station has no
-// session): Authorization: Bench <token> on every route but the public ones. Envelope {success, data} / {success:false,
-// error, code}; Cache-Control: no-store everywhere; bodies of 64 KiB at most; no redirection ever emitted; the server's
-// time in the Date header.
+// session of the console): Authorization: Bench <token> on every route but the public ones. Decision of 28/11/2026: no
+// bench session any more, an APPROVED station (not suspended, not revoked) acts by itself within its targets.
+// Envelope {success, data} / {success:false, error, code}; Cache-Control: no-store everywhere; bodies of 64 KiB at most;
+// no redirection ever emitted; the server's time in the Date header.
 //   GET  /version, GET /download/:file            public (release.routes.ts)
 //   POST /stations/register                       public, 20 per hour and address
-//   GET  /stations/me                             the station itself (pending, approved, suspended)
+//   GET  /stations/me                             the station itself (pending, approved, suspended); `session`: a
+//                                                 synthetic marker for an approved station (stations 1.0.3, see below)
 //   GET  /v1/targets                              approved
 //   GET  /v1/tenants                              approved: the tenants of its targets (lot BANC-T §9)
 //   GET  /v1/tenants/:id/sites?search=            approved: the sites of a tenant inside its targets (200 at most, by code)
-//   GET  /v1/sites/:id/devices?groupId=           approved: the names used in the site, the name a target's template suggests
+//   GET  /v1/sites/:id/devices?groupId=&adbSerial=&hwSerial=
+//                                                 approved: the names used in the site, the name a target's template
+//                                                 suggests; the entry of the device of these serials marked self
 //   GET  /v1/agent, GET /v1/agent/apk/:sha256     approved: the version served to the bench (404 apk_unavailable)
 //   POST /v1/provisionings                        approved: the plan of a device
 //   GET  /v1/provisionings/:id                    approved: its state (this station's only)
-//   POST /v1/provisionings/:id/token              approved + a bench session: a single-use token (120/h, 300/day)
+//   POST /v1/provisionings/:id/token              approved: a single-use token (120/h, 300/day)
 //   POST /v1/provisionings/:id/steps              approved: one step of the journal (never a 413: the oldest leave)
 //   POST /v1/provisionings/:id/result             approved: the outcome (idempotent)
 // Lot BANC-A (the required apps installed by ADB, apps.service.ts):
 //   GET  /v1/provisionings/:id/apps               approved: the required apps the bench installs on its enrolled device
-//                                                 (409 not_enrolled, no_session; 422 device_outside_target)
+//                                                 (409 not_enrolled; 422 device_outside_target)
 //   GET  /v1/packages/:sha256?provisioning=<id>   approved: the file of one app of THAT list (404 apk_unavailable),
 //                                                 2 at once and 300 per hour per station (429), never cached
-//   POST /v1/provisionings/apps                   approved + a bench session: « compléter les apps » of a device already
+//   POST /v1/provisionings/apps                   approved: « compléter les apps » of a device already
 //                                                 enrolled, found by its proven identity (30 per hour per station)
 // =============================================================================
 
@@ -67,6 +71,20 @@ function body<S extends z.ZodTypeAny>(schema: S, req: Request): z.infer<S> {
 }
 
 const originOf = (req: Request): Origin => originOfRequest(req);
+
+/** A serial of the query (the card's), or null. */
+const querySerial = (v: unknown): string | null =>
+  typeof v === 'string' && /^[A-Za-z0-9._:-]{1,64}$/.test(v.trim()) ? v.trim() : null;
+
+/**
+ * The `session` of GET /stations/me for an approved station (28/11/2026). A station 1.0.3 still in the field reads it to
+ * enable the exception D3 and « compléter les apps », and refuses both locally when it is null: an approved station is
+ * enough now, so the answer always carries this marker (the station's own name as the « technician », valid for the
+ * next 8 hours, renewed at each reading: the station polls every minute). A station 1.0.4 ignores it. Not a session of
+ * anyone: nothing is opened, recorded or checked.
+ */
+export const compatSession = (stationName: string, now = Date.now()): { technician: string; expiresAt: string } =>
+  ({ technician: stationName, expiresAt: new Date(now + BENCH_LIMITS.sessionMaxHours * 3_600_000).toISOString() });
 
 const RegisterBody = z.object({
   name: z.string().max(200),
@@ -125,8 +143,7 @@ export function createBenchStationRouter(): Router {
 
   router.get('/stations/me', requireBenchStationSelf, wrap(async (req, res) => {
     const s = req.benchStation!;
-    const session = s.status === 'approved' && s.session && s.session.expiresAt.getTime() > Date.now()
-      ? { technician: s.session.technician, expiresAt: s.session.expiresAt.toISOString() } : null;
+    const session = s.status === 'approved' ? compatSession(s.name) : null;
     res.json({ success: true, data: { stationId: s.id, status: s.status, name: s.name, verificationCode: stationVerificationCode(s.tokenSha256), session } });
   }));
 
@@ -158,7 +175,12 @@ export function createBenchStationRouter(): Router {
     const raw = req.query.groupId;
     const groupId = typeof raw === 'string' && /^[1-9][0-9]{0,9}$/.test(raw) ? Number(raw) : null;
     if (raw !== undefined && groupId === null) throw new AppError(400, 'Invalid query: groupId', 'bad_request');
-    res.json({ success: true, data: await siteDevices(s.id, String(req.params.id).toLowerCase(), groupId) });
+    // 28/11/2026: the serials of the card asking, to mark its own device (a conversion keeps its name).
+    const adb = querySerial(req.query.adbSerial);
+    if (req.query.adbSerial !== undefined && adb === null) throw new AppError(400, 'Invalid query: adbSerial', 'bad_request');
+    const hw = querySerial(req.query.hwSerial);
+    if (req.query.hwSerial !== undefined && hw === null) throw new AppError(400, 'Invalid query: hwSerial', 'bad_request');
+    res.json({ success: true, data: await siteDevices(s.id, String(req.params.id).toLowerCase(), groupId, adb ? { adb, hw } : null) });
   }));
 
   v1.get('/agent', wrap(async (req, res) => {

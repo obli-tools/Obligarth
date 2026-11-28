@@ -158,12 +158,11 @@ export function ensureAppApk(cacheDir: string, app: AppApkSpec, download: (dest:
 }
 
 /** A failure of a download that says nothing of the app: the server unreachable (a network error, a time-out, the stream
- *  cut), a 5xx other than apk_mismatch, a redirection, the bench session gone (409 no_session) or the rate still refused
- *  after the retries (429). Never app_download_failed: the run holds, the step stays to do. */
+ *  cut), a 5xx other than apk_mismatch, a redirection or the rate still refused after the retries (429). Never app_download_failed: the run holds, the step stays to do. */
 export function downloadIsTemporary(err: unknown): boolean {
   if (!(err instanceof BenchApiError)) return false;
   if (err.code === 'apk_mismatch') return false;
-  return err.code === 'server_unreachable' || err.code === 'redirected' || err.code === 'no_session' || err.code === 'rate_limited'
+  return err.code === 'server_unreachable' || err.code === 'redirected' || err.code === 'rate_limited'
     || err.status === 429 || err.status >= 500;
 }
 

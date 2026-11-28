@@ -11,7 +11,7 @@ import { type AdbDevice } from './adb/parse';
 import { checkInstalled, downloadAndInstall, forgetStationKey, installFromArchive, keyLocation, PLATFORM_TOOLS, type KeyLocation } from './adb/platformTools';
 import { AdbListError, ProcessAdbRunner, type AdbRunner } from './adb/runner';
 import { sameBenchName } from '../../shared/src/mdm/bench';
-import { BenchApiError, HttpBenchApi, type BenchApi, type BenchTarget } from './benchApi';
+import { BenchApiError, HttpBenchApi, type BenchApi, type BenchTarget, type SelfSerials } from './benchApi';
 import { ServerClock } from './clock';
 import { isDevBuild, loadBenchConfig, normaliseBenchUrl, type BenchConfig, type UrlSource } from './config';
 import { defaultProtector, type Protector } from './dpapi';
@@ -350,7 +350,7 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
     targets: () => need().targets(),
     tenants: () => need().tenants(),
     sites: (t, s) => need().sites(t, s),
-    siteDevices: (s, g) => need().siteDevices(s, g),
+    siteDevices: (s, g, self) => need().siteDevices(s, g, self),
     agent: () => need().agent(),
     downloadApk: (s, d) => need().downloadApk(s, d),
     requiredApps: (id) => need().requiredApps(id),
@@ -401,6 +401,9 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
     if (!c) throw new HttpError(404, 'card_unknown');
     return c;
   };
+  /** The serials of a card the server matches its device by (28/11/2026: its own entry marked self in the site's names):
+   *  the ADB serial (the card's, the one the run read once it did), the serial of the label once read. Never shown. */
+  const selfSerials = (c: Card): SelfSerials => ({ adbSerial: c.run.identity?.adbSerial ?? c.run.serial, hwSerial: c.run.identity?.hwSerial ?? null });
 
   const cardView = (c: Card) => {
     const r = c.run;
@@ -503,7 +506,7 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       url: station?.baseUrl ?? null,
       urlSource: typedUrl && station?.baseUrl === typedUrl ? 'typed' : urlSource,
       urlEditable: urlEditable(),
-      station: s && 'stationId' in s ? { stationId: s.stationId, name: s.name, verificationCode: s.verificationCode, session: s.session, status: s.state } : null,
+      station: s && 'stationId' in s ? { stationId: s.stationId, name: s.name, verificationCode: s.verificationCode, status: s.state } : null,
       refusal: s && 'code' in s ? { code: s.code, ...('status' in s ? { status: s.status } : {}), ...('suggestedUrl' in s ? { suggestedUrl: s.suggestedUrl, location: s.location } : {}) } : null,
       clockOffsetMs: clock.offset(),
       adb: {
@@ -650,8 +653,11 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
       const rawGroup = url.searchParams.get('groupId');
       const groupId = rawGroup !== null && /^[1-9][0-9]{0,9}$/.test(rawGroup) ? Number(rawGroup) : null;
       if (rawGroup !== null && groupId === null) throw new HttpError(400, 'bad_request');
+      // 28/11/2026: the card asking (its serial): the server marks its own device (a conversion keeps its name).
+      const rawCard = url.searchParams.get('card');
+      const own = rawCard !== null && /^[A-Za-z0-9._:-]{1,64}$/.test(rawCard) ? board.get(rawCard) ?? null : null;
       await requireApprovedRoute();
-      json(res, 200, await need().siteDevices(sd[1].toLowerCase(), groupId).catch((err: unknown) => { throw relayed(err); }));
+      json(res, 200, await need().siteDevices(sd[1].toLowerCase(), groupId, own ? selfSerials(own) : null).catch((err: unknown) => { throw relayed(err); }));
       return;
     }
     if (method === 'GET' && path === '/api/cards') {
@@ -691,18 +697,15 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
             // The site read again now: one of this target's, and the name not already used in it (§9: a duplicate is
             // refused before anything is prepared; the server checks it again under its lock).
             await requireApprovedRoute();
-            const info = await need().siteDevices(siteId, groupId).catch((err: unknown) => { throw relayed(err); });
+            const info = await need().siteDevices(siteId, groupId, selfSerials(card)).catch((err: unknown) => { throw relayed(err); });
             if (info.site.tenantId !== tenantId || !info.site.targetGroupIds.includes(groupId)) throw new HttpError(422, 'site_refused');
-            if (deviceName && info.devices.some((d) => sameBenchName(d.label, deviceName))) {
+            // The plugged device's own name (self: a conversion keeps it) is not a name of another device.
+            if (deviceName && info.devices.some((d) => !d.self && sameBenchName(d.label, deviceName))) {
               throw new HttpError(409, 'name_taken', { suggestedName: info.suggestedName });
             }
             site = { id: info.site.id, code: info.site.code, name: info.site.name };
           }
-          // Q3: the exception D3 is decided on the bench in an open session only (its second factor covers it).
-          if (allowLegacyOwner) {
-            const s = status as StationStatus | null;
-            if (!s || !('session' in s) || !s.session) throw new HttpError(409, 'no_session');
-          }
+          // Q3: the exception D3 is decided on the bench (28/11/2026: an approved station within its target; audited).
           card.tenantId = tenantId;
           card.groupId = groupId;
           card.deviceName = deviceName;
@@ -716,7 +719,7 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
           if (!card.present) throw new HttpError(409, 'device_gone');
           await requireApprovedRoute();
           let target: BenchTarget | undefined;
-          // « Compléter les apps » held before its plan (no session…) resumes without a target: the server finds it.
+          // « Compléter les apps » held before its plan resumes without a target: the server finds it.
           if (!card.run.plan && card.run.mode !== 'apps') {
             if (card.tenantId === null || card.groupId === null) throw new HttpError(400, 'target_required');
             const all = await need().targets().catch((err: { code?: string }) => { throw new HttpError(502, err.code ?? 'server_unreachable'); });
@@ -741,13 +744,11 @@ export function createBenchApp(deps: BenchAppDeps = {}): BenchApp {
         }
         case 'apps': {
           // Lot BANC-A: « compléter les apps » of a device already enrolled. No target is chosen: the server finds the
-          // device in one of the station's targets from what the bench reads, in an open bench session only.
+          // device in one of the station's targets from what the bench reads (28/11/2026: an approved station is enough).
           if (card.run.busy) throw new HttpError(409, 'busy');
           if (!card.present) throw new HttpError(409, 'device_gone');
           if (card.run.outcome === 'open' && card.run.provisioningId) throw new HttpError(409, 'already_planned');
           await requireApprovedRoute();
-          const s = status as StationStatus | null;
-          if (!s || !('session' in s) || !s.session) throw new HttpError(409, 'no_session');
           // The journal of the earlier provisioning goes to the server first: what it still cannot send keeps the card
           // (never dropped with the old run).
           if (card.run.pendingSteps > 0) await card.run.flush().catch(() => undefined);

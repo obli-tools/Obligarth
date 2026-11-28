@@ -123,7 +123,7 @@ export function readSamsungUsb(): Promise<string[] | null> {
 }
 
 /**
- * §6.1: the Samsung phones Windows sees on USB that adb does not list at all (any state): Auto Blocker (One UI 6+, on
+ * §6.1: the Samsung phones Windows sees on USB that adb does not list at all (any state): USB debugging off, Auto Blocker (One UI 6+, on
  * by default), or USB debugging blocked by a policy (Knox, left by a former MDM). Compared case-insensitively.
  */
 export function usbUnseenByAdb(usb: string[] | null, adbSerials: string[]): string[] {

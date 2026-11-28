@@ -6,7 +6,7 @@ import { audit } from '../audit';
 // The actors of the bench stations (lot BANC §3.5): the station surface before a station is known (lookup,
 // registration: i:bench-station), a known station (i:bench-station:<uuid>, the guard of its definer functions), the
 // job of the expiries (j:bench-expire). The audit names a station by its id (the actor ref) and its name (the label),
-// with the technician of the session in detail.technicianUserId.
+// never a technician (no bench session since 28/11/2026: no technicianUserId in the new entries).
 // =============================================================================
 
 export const BENCH_SURFACE_ACTOR: DbActor = { type: 'integration', name: 'bench-station' };

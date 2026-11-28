@@ -78,12 +78,12 @@ export interface StationLookup {
   allowedCidrs: string[] | null;
   /** The sha256 of the token the request presented (computed here, never read back from the base). */
   tokenSha256: string;
-  /** The open session of a technician whose account is active (bench_station_lookup), else null. */
-  session: { id: string; userId: number; expiresAt: Date; technician: string | null; technicianPlatformAdmin: boolean } | null;
 }
 
-/** The station of a token, with its open session (context none, i:bench-station); null when unknown. Never cached:
- *  a revocation or a suspension is seen by the next request. */
+/** The station of a token (context none, i:bench-station); null when unknown. Never cached: a revocation or a
+ *  suspension is seen by the next request. Decision of 28/11/2026: no bench session any more, an approved station acts
+ *  within its targets by itself (bench_station_lookup still returns the session columns of its first version: ignored,
+ *  bench_sessions is no longer written). */
 export async function lookupStation(token: string): Promise<StationLookup | null> {
   const tokenSha256 = stationTokenHash(token);
   const r = await asNone(BENCH_SURFACE_ACTOR, () => db.raw(
@@ -94,10 +94,6 @@ export async function lookupStation(token: string): Promise<StationLookup | null
   return {
     id: String(row.id).toLowerCase(), status: row.status, name: row.name, tokenSha256,
     allowedCidrs: Array.isArray(row.allowed_cidrs) ? row.allowed_cidrs.map(String) : null,
-    session: row.session_id ? {
-      id: String(row.session_id).toLowerCase(), userId: Number(row.session_user_id), expiresAt: new Date(row.session_expires_at),
-      technician: row.technician ?? null, technicianPlatformAdmin: row.technician_platform_admin === true,
-    } : null,
   };
 }
 

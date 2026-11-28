@@ -24,7 +24,7 @@ import { exportServerKey, serverKeyView } from './serverKey';
 //   GET  /releases                    the versions of the agent (uploaded, or embedded in the server image: origin,
 //                                     bundledIn; lot AGENT-RU)
 //   POST /releases/upload             the APK (raw body), stored by content: { sha256, size }
-//   POST /releases                    { sha256, versionCode, versionName, signerSha256, notes }: strict second factor;
+//   POST /releases                    { sha256, versionCode, versionName, signerSha256, notes }: no second factor (TEMPORARY, 28/11/2026);
 //                                     the signer must be in LEGACY_AGENT_SIGNERS
 //   POST /releases/:id/withdraw       strict second factor
 //   GET  /settings, PUT /settings     poll period, minimal version, inventory period, automatic update of the fleet
@@ -99,7 +99,9 @@ export function createLegacyAgentAdminRouter(): Router {
     }
     const size = await stat(path.join(apkDir(), `${m.sha256}.apk`)).then((st) => (st.isFile() ? st.size : 0)).catch(() => 0);
     if (size <= 0) throw new AppError(404, 'Upload the APK first (POST /releases/upload)', 'apkNotUploaded');
-    if (!(await strictStepUp(req, res, 'legacy_agent.release_upload'))) return;
+    // TEMPORAIRE (décision du propriétaire du 28/11/2026) : le dépôt d'une version de l'agent ne redemande plus de second
+    // facteur ; restent le rôle d'administrateur de la plateforme, le signataire épinglé (LEGACY_AGENT_SIGNERS) et l'audit.
+    // À rétablir : if (!(await strictStepUp(req, res, 'legacy_agent.release_upload'))) return;
     const ctx = await audit.fromRequest(req, MASTER_TENANT_ID);
     const row = await switchToIdentity(() => db.transaction(async (trx) => {
       if (await trx('legacy_agent_releases').where({ sha256: m.sha256 }).first('id')) throw new AppError(409, 'This APK is already a version', 'versionExists');

@@ -75,7 +75,7 @@ export const TENANT_CAPABILITY_LABELS: Record<TenantCapability, string> = {
   'mdm.privacy.manage':    'Privacy · Profiles, notice and retention',
   'mcp.access_keys':       'MCP · Personal access keys for AI agents',
   'mdm.bench.manage':      'Enrollment · Bench stations and provisioning history',
-  'mdm.bench.operate':     'Enrollment · Open a bench session',
+  'mdm.bench.operate':     'Enrollment · Bench operation (unused: no bench session since 28/11/2026)',
 };
 
 /** Device capabilities. 'monitor' is the baseline every team permission row

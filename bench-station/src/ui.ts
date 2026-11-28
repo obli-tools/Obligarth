@@ -88,7 +88,6 @@ a{color:var(--accent)}
 <header>
   <h1 id="title">Obligarth Bench</h1>
   <span id="phase" class="pill t-idle"></span>
-  <span id="session" class="muted"></span>
   <span class="grow"></span>
   <span class="muted" id="ver"></span>
   <button id="lang" data-action="lang"></button>
@@ -141,10 +140,6 @@ function renderHeader() {
   const ph = document.getElementById('phase');
   ph.className = 'pill t-' + phaseTone(state.phase);
   ph.textContent = t('bench.phase.' + state.phase) || state.phase;
-  const s = state.station && state.station.session;
-  document.getElementById('session').textContent = state.phase === 'approved'
-    ? (s ? (t('bench.session.open', { technician: s.technician || '?', until: hhmm(s.expiresAt) }) || ('Session until ' + hhmm(s.expiresAt))) : (t('bench.session.none') || 'No bench session open: open one in the console'))
-    : '';
 }
 
 function renderBanners() {
@@ -173,8 +168,8 @@ function renderBanners() {
   }
   if (a.usbUnseen && a.usbUnseen.length) {
     out.push('<div class="banner"><strong>' + esc(t('bench.adb.usbUnseen', { serials: a.usbUnseen.join(', ') }) || ('Samsung phone on USB not seen by ADB: ' + a.usbUnseen.join(', '))) + '</strong>'
-      + '<p>' + esc(t('bench.error.auto_blocker_suspected') || 'Auto Blocker seems active.') + '</p>'
-      + '<p class="muted">' + esc(t('bench.error.adb_blocked_by_policy') || 'USB debugging may be blocked by a policy.') + '</p></div>');
+      + '<p>' + esc(t('bench.error.auto_blocker_suspected') || 'USB debugging is off on this phone.') + '</p>'
+      + '<p class="muted">' + esc(t('bench.error.adb_blocked_by_policy') || 'A former MDM still installed may enforce it.') + '</p></div>');
   }
   if (a.smartSwitch) out.push('<div class="banner">' + esc(t('bench.adb.smartSwitch') || 'Close Samsung Smart Switch: it holds the phones.') + '</div>');
   if (a.samsungDriver === false) out.push('<div class="banner info">' + esc(t('bench.adb.driver') || 'Windows has no driver for the Samsung phone plugged in.') + '</div>');
@@ -233,11 +228,12 @@ function siteGroups(d) {
 function chosenTarget(d) { return targets.find((tg) => tg.tenantId === d.tenantId && tg.groupId === d.groupId) || null; }
 function nameTaken(d) {
   const n = (d.name || '').trim();
-  return !!(n && d.info && d.info.devices.some((x) => sameName(x.label, n)));
+  // The plugged phone's own entry (self, 28/11/2026: a conversion keeps its name) is not a name of another device.
+  return !!(n && d.info && d.info.devices.some((x) => !x.self && sameName(x.label, n)));
 }
 function legacyOffered(d) {
   const tg = chosenTarget(d);
-  return !!(sitesApi && tg && !tg.allowLegacyOwner && tg.rolePolicy !== 'admin_only' && state.station && state.station.session);
+  return !!(sitesApi && tg && !tg.allowLegacyOwner && tg.rolePolicy !== 'admin_only' && state.phase === 'approved');
 }
 function resetSite(d) { d.siteId = null; d.site = null; d.groupId = null; d.info = null; d.infoKey = null; d.infoErr = null; d.summary = false; d.nameEdited = false; d.name = ''; }
 
@@ -266,12 +262,15 @@ async function loadInfo(serial) {
   if (!d || !d.siteId) return;
   const key = d.siteId + '|' + (d.groupId || '');
   d.infoKey = key;
-  const r = await api('/api/sites/' + encodeURIComponent(d.siteId) + '/devices' + (d.groupId ? '?groupId=' + d.groupId : ''));
+  // The card asking (28/11/2026): the server marks the plugged phone's own entry (self).
+  const r = await api('/api/sites/' + encodeURIComponent(d.siteId) + '/devices?' + (d.groupId ? 'groupId=' + d.groupId + '&' : '') + 'card=' + encodeURIComponent(serial));
   if (d.infoKey !== key) return;
   if (r.ok) {
     d.info = r.body;
     d.infoErr = null;
-    if (!d.nameEdited) d.name = r.body.suggestedName || '';
+    // A phone already managed in this site (a conversion) keeps its own name; else the server's suggestion.
+    const own = (r.body.devices || []).find((x) => x.self && x.kind === 'device');
+    if (!d.nameEdited) d.name = own ? own.label : (r.body.suggestedName || '');
   } else {
     d.info = null;
     d.infoErr = r.body.code || 'internal';
@@ -381,6 +380,7 @@ function renderChooser(c, d) {
       h += '<div class="muted">' + esc(t('bench.choose.namesTitle', { count: list.length }) || 'Names already used in this site') + '</div>';
       h += list.length
         ? '<ul class="names">' + list.map((x) => '<li>' + esc(x.label) + (x.kind === 'provisioning' ? ' <span class="muted">' + esc(t('bench.choose.inPreparation') || 'being prepared') + '</span>' : '')
+          + (x.self ? ' <span class="muted">' + esc(t('bench.choose.thisPhone') || 'this phone') + '</span>' : '')
           + (x.model || x.serialTail ? ' <span class="muted">' + esc([x.model, x.serialTail].filter(Boolean).join(' · ')) + '</span>' : '') + '</li>').join('') + '</ul>'
         : '<div class="muted">' + esc(t('bench.choose.namesEmpty') || 'No device in this site yet.') + '</div>';
     }
@@ -402,9 +402,10 @@ function renderChooser(c, d) {
 }
 
 // ── Lot BANC-A: the required apps installed by ADB (« Apps n/N », the failures), « Compléter les apps ».
-function sessionOpen() { return !!(state && state.phase === 'approved' && state.station && state.station.session); }
+// 28/11/2026: an approved station is enough (no bench session any more).
+function stationApproved() { return !!(state && state.phase === 'approved'); }
 function completeAppsButton() {
-  return '<button data-action="complete-apps"' + (sessionOpen() ? '' : ' disabled') + '>' + esc(t('bench.cards.completeApps') || 'Complete the apps') + '</button>';
+  return '<button data-action="complete-apps"' + (stationApproved() ? '' : ' disabled') + '>' + esc(t('bench.cards.completeApps') || 'Complete the apps') + '</button>';
 }
 function renderCompleteApps(c) {
   return '<div class="row">' + completeAppsButton() + '<span class="muted">' + esc(t('bench.cards.completeAppsHelp') || 'Phone already enrolled: install the apps its policy requires.') + '</span></div>';
@@ -463,7 +464,7 @@ function renderCard(c) {
   // « Rendre l'appareil »: the owner this station set, whatever the state of the card (the agent refuses once enrolled).
   if (c.ownerSetHere && !c.busy && c.outcome !== 'completed') h += '<button class="danger" data-action="release">' + esc(t('bench.cards.release') || 'Give the device back') + '</button>';
   // « Compléter les apps » (lot BANC-A) after « enrolled elsewhere »: the device may be one of this station's targets.
-  if (!c.busy && c.outcome === 'failed' && c.errorCode === 'agent_already_enrolled' && c.present) h += completeAppsButton();
+  if (!c.busy && c.outcome === 'failed' && (c.errorCode === 'agent_already_enrolled' || c.errorCode === 'agent_too_old') && c.present) h += completeAppsButton();
   if (!c.busy && (c.outcome !== 'open' || !c.provisioningId)) h += '<button data-action="close">' + esc(t('bench.cards.close') || 'Close') + '</button>';
   h += '<button data-action="export">' + esc(t('bench.cards.export') || 'Export the raw log') + '</button>';
   h += '</div></div>';

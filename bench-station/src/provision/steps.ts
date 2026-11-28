@@ -6,9 +6,9 @@ import {
   type BenchAppResultCode, type BenchAppsCounter, type BenchAppsPlanAnswer, type BenchRequiredAppView, type BenchStepId,
 } from '../../../shared/src/mdm/bench';
 import {
-  AGENT_ADMIN, AGENT_PACKAGE, BENCH_AUTHORITY, identityOf, isAgentAdmin, parseAccounts, parseBenchLogLine, parseContentCall,
-  parseDumpsysDevicePolicy, parseDumpsysVersion, parseGetprop, parseInstall, parseListOwners, parsePmPath, parsePmVersion,
-  parseSetActiveAdmin, parseSetDeviceOwner, parseSetting, parseUsers,
+  AGENT_ADMIN, AGENT_PACKAGE, BENCH_AUTHORITY, identityOf, isAgentAdmin, isProtectedPackage, parseAccounts, parseBenchLogLine,
+  parseContentCall, parseDumpsysDevicePolicy, parseDumpsysVersion, parseGetprop, parseHiddenMarker, parseInstall, parseListOwners,
+  parsePmNewState, parsePmPath, parsePmVersion, parseSetActiveAdmin, parseSetDeviceOwner, parseSetting, parseUsers,
   type AccountsReading, type BenchAnswer, type DeviceIdentity, type PolicyReading,
 } from '../adb/parse';
 import { type AdbDevice } from '../adb/parse';
@@ -52,7 +52,14 @@ import { ensureAppApk, ensureServedApk, signerOfApk, type ServedAgent } from './
  * │ - after `dpm set-device-owner`, the REAL state is read back, whatever the │
  * │   version: a failure may have removed the administrator (§6.5);          │
  * │ - the steps sent to the server carry codes, counts and account TYPES     │
- * │   only (BenchStepDetail): the raw outputs stay in the card.               │
+ * │   only (BenchStepDetail): the raw outputs stay in the card;               │
+ * │ - accounts on the device (owner decision of 28/11/2026): the apps that    │
+ * │   carry them are disabled (`pm disable-user`) for the time of `dpm        │
+ * │   set-device-owner` only, so that AccountManager hides them, then ALWAYS  │
+ * │   enabled again (`pm enable`), even on a failure; a marker on the device  │
+ * │   lists them first, so that the next run (this station relaunched,        │
+ * │   another card) enables them again before anything else. Never the agent, │
+ * │   Settings, the system UI, a launcher, an installer (isProtectedPackage). │
  * └──────────────────────────────────────────────────────────────────────────┘
  */
 
@@ -163,13 +170,20 @@ const CONFIG_RE = /^[A-Za-z0-9_-]{16,16384}={0,2}$/;
 const SETTLE_STEP_MS = 300;
 const SETTLE_READS = 16;
 const SETTLE_MIN_READS = 5;
+/** The marker of the apps disabled to hide accounts (shell-writable, survives the station; removed once they are all
+ *  enabled again). */
+export const HIDE_MARKER = '/data/local/tmp/obligarth-bench-hidden';
+/** AccountManager drops the authenticator of a disabled app on PACKAGE_CHANGED, asynchronously: read every 300 ms, 3 s at
+ *  most, before `dpm` (whose answer decides anyway). */
+const HIDE_SETTLE_READS = 10;
 
 /** A local code turned into one the server accepts for a result (BENCH_ERROR_CODES), `internal` otherwise. */
 export function serverErrorCode(code: string): string {
   if (SERVER_ERROR_CODES.has(code)) return code;
   switch (code) {
     case 'play_protect': case 'apk_unavailable': return 'install_failed';
-    case 'accounts': case 'extra_users': case 'foreign_owner': case 'profile_owner': return 'owner_blocked';
+    case 'accounts': case 'accounts_hide_refused': case 'accounts_still_seen': case 'accounts_marker_failed':
+    case 'extra_users': case 'foreign_owner': case 'profile_owner': return 'owner_blocked';
     case 'not_verified': return 'owner_failed';
     default: return 'internal';
   }
@@ -205,7 +219,7 @@ export class ProvisionRun {
   deviceName: string | null = null;
   /** Lot BANC-T §9: the site chosen on the card (null: none, the target's group). */
   site: { id: string; code: string; name: string } | null = null;
-  /** Lot BANC-T Q3: the exception D3 decided on the bench (in an open session; the server audits each use). */
+  /** Lot BANC-T Q3: the exception D3 decided on the bench (the server audits each use; no bench session since 28/11/2026). */
   allowLegacyOwner = false;
   identity: DeviceIdentity | null = null;
   served: ServedAgent | null = null;
@@ -230,6 +244,10 @@ export class ProvisionRun {
   appsProof: { serialPairs: number; androidId: 'matched' | 'not_comparable' } | null = null;
   /** The result of each app in THIS run (by packageId): an app installed is not installed again when the step resumes. */
   private readonly appResults = new Map<string, BenchAppResultCode>();
+  /** The apps THIS run disabled to hide accounts and has not enabled again yet (also in HIDE_MARKER on the device). */
+  private hidden: string[] = [];
+  /** The apps Android refused to disable, or whose accounts it still saw: their accounts block the owner again. */
+  private readonly hideRefused = new Set<string>();
   /** Raw outputs, redacted, kept in memory for the « export » (§5.7). Never sent. */
   readonly raw: string[] = [];
   private queue: StepEntry[] = [];
@@ -254,8 +272,10 @@ export class ProvisionRun {
     if (!a || a.unsupported || a.state === 'running') return null;
     return { installed: a.installed, total: a.total, failed: a.failed.length };
   }
-  /** The steps waiting to reach the server (they are sent again when it answers). */
-  get pendingSteps(): number { return this.queue.length; }
+  /** Entries still to send: none without a provisioning (a plan refused leaves nothing on the server to complete). */
+  get pendingSteps(): number { return this.provisioningId ? this.queue.length : 0; }
+  /** The apps disabled by this run to hide accounts, not enabled again yet (empty but for an interrupted step role). */
+  get accountAppsHidden(): readonly string[] { return this.hidden; }
 
   // ── adb, through the card ──────────────────────────────────────────────
 
@@ -436,6 +456,11 @@ export class ProvisionRun {
   async abandon(release = false): Promise<{ released: boolean | null }> {
     if (this.busy) throw new Error('busy');
     let released: boolean | null = null;
+    // Apps left disabled by an interrupted step role: enabled again first (otherwise the marker on the device makes the
+    // next run on this device do it).
+    if (this.hidden.length) {
+      try { await this.restoreHidden(); } catch { /* the device is gone or refused: the marker stays */ }
+    }
     if (release && this.ownerSetHere && (this.served?.versionCode ?? 0) >= BENCH_OWNER_MIN_VERSION_CODE) {
       try {
         await this.d.requireApproved();
@@ -474,6 +499,8 @@ export class ProvisionRun {
     }
     await this.detect();
     await this.identify();
+    // Before anything else: apps an earlier run left disabled (unplugged, station relaunched) are enabled again.
+    await this.restoreHidden();
     await this.agentCheck();
     if (!this.done('preflight') || choice === 'recheck' || !this.preflight) await this.readPreflight();
     if (!this.plan) await this.planProvisioning();
@@ -504,6 +531,7 @@ export class ProvisionRun {
     await this.d.requireApproved();
     await this.detect();
     await this.identify();
+    await this.restoreHidden();
     await this.agentCheck();
     if (!this.agent) throw new Fail('apps_agent_absent');
     if (!this.plan) await this.planApps();
@@ -663,7 +691,8 @@ export class ProvisionRun {
     this.preflight = { users, accounts, policy, agentAdminActive: policy.agentAdminActive, setupComplete: this.setupComplete };
     if (this.agent) this.agent.adminActive = policy.agentAdminActive;
     const blockers = this.blockers();
-    this.mark('preflight', blockers.length ? 'warn' : 'ok', blockers.length ? 'owner_blocked' : (policy.deviceOwner === PKG ? 'owner_already' : 'owner_possible'), {
+    const hide = policy.deviceOwner !== PKG && accounts.count > 0 && !blockers.length;
+    this.mark('preflight', blockers.length ? 'warn' : 'ok', blockers.length ? 'owner_blocked' : (policy.deviceOwner === PKG ? 'owner_already' : hide ? 'owner_possible_accounts' : 'owner_possible'), {
       counts: { users: users.length || 1, accounts: accounts.count, profile_owners: policy.profileOwners },
       accountTypes: accounts.types.filter((t) => ACCOUNT_TYPE_RE.test(t)).slice(0, 16),
     });
@@ -675,11 +704,31 @@ export class ProvisionRun {
     if (!p) return [];
     if (p.policy.deviceOwner === PKG) return [];
     const b: string[] = [];
-    if (p.accounts.count > 0) b.push('accounts');
+    // Accounts block only when they cannot be hidden for the time of dpm (owner decision of 28/11/2026).
+    if (p.accounts.count > 0 && this.accountApps() === null) b.push('accounts');
     if (p.users.length > 1) b.push('extra_users');
     if (p.policy.deviceOwner && p.policy.deviceOwner !== PKG) b.push('foreign_owner');
     if (p.policy.profileOwners > 0) b.push('profile_owner');
     return b;
+  }
+
+  /**
+   * The apps to disable for the time of `dpm set-device-owner` so that AccountManager hides the accounts of the device
+   * (owner decision of 28/11/2026): the package of the authenticator of each account type, read by `dumpsys account`.
+   * [] without account; null when the accounts cannot be hidden: an account whose type or app is unknown, an app the
+   * station never disables (isProtectedPackage), an app Android refused to disable or whose accounts it still saw.
+   */
+  accountApps(): string[] | null {
+    const a = this.preflight?.accounts;
+    if (!a || a.count === 0) return [];
+    if (!a.complete || a.types.length === 0) return null;
+    const apps = new Set<string>();
+    for (const type of a.types) {
+      const pkg = a.owners[type];
+      if (!pkg || !PACKAGE_RE.test(pkg) || pkg.length > 128 || isProtectedPackage(pkg) || this.hideRefused.has(pkg)) return null;
+      apps.add(pkg);
+    }
+    return apps.size > 16 ? null : [...apps].sort();
   }
 
   // ── plan ───────────────────────────────────────────────────────────────
@@ -714,10 +763,6 @@ export class ProvisionRun {
       }
       if (err instanceof BenchApiError && err.code === 'site_refused') {
         throw new Hold({ code: 'site_refused', choices: [], attention: true });
-      }
-      // The exception D3 asked without an open session (closed meanwhile).
-      if (err instanceof BenchApiError && err.code === 'no_session') {
-        throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
       }
       if (err instanceof BenchApiError && ['target_refused', 'device_outside_target', 'agent_already_enrolled', 'agent_too_old'].includes(err.code)) {
         throw new Fail(err.code);
@@ -918,8 +963,18 @@ export class ProvisionRun {
         throw new Fail('owner_failed', { detail: 'prepare_owner' });
       }
     }
-    this.ownerAttempted = true;
-    const out = await this.sh(['dpm', 'set-device-owner', AGENT_ADMIN], 60_000);
+    // The accounts hidden for the time of dpm only (owner decision of 28/11/2026): their apps disabled right before,
+    // ALWAYS enabled again right after, whatever happened (a refusal, an exception, the device unplugged: then at the
+    // next run, from the memory of this card or the marker on the device).
+    const hide = this.accountApps() ?? [];
+    let out!: AdbResult;
+    try {
+      if (hide.length) await this.hideAccounts(hide);
+      this.ownerAttempted = true;
+      out = await this.sh(['dpm', 'set-device-owner', AGENT_ADMIN], 60_000);
+    } finally {
+      if (this.hidden.length) await this.restoreHidden();
+    }
     const verdict = parseSetDeviceOwner(`${out.stdout}\n${out.stderr}`);
     // The reading back decides (§6.5): an owner set whose output was lost (time-out, another wording) is a success; a
     // failure is read once the administrator's state has settled (its removal by DPMS is asynchronous).
@@ -927,11 +982,14 @@ export class ProvisionRun {
     if (after.deviceOwner !== PKG) after = await this.settledPolicy();
     if (after.deviceOwner === PKG) {
       this.ownerSetHere = true;
-      this.mark('role', 'ok', 'owner_set');
+      this.mark('role', 'ok', 'owner_set', hide.length ? { counts: { account_apps: hide.length } } : undefined);
+      if (hide.length) this.hint = 'accounts_restored';
       return;
     }
     // Failed: read the REAL state back; restore the administrator only when it was there or the fallback is the plan.
-    const code = verdict.ok ? 'owner_failed' : verdict.code;
+    // Android still saw accounts with their apps disabled: the workaround does not apply to this device (blocked again).
+    if (!verdict.ok && verdict.code === 'accounts' && hide.length) for (const pkg of hide) this.hideRefused.add(pkg);
+    const code = verdict.ok ? 'owner_failed' : verdict.code === 'accounts' && hide.length ? 'accounts_still_seen' : verdict.code;
     if (!after.agentAdminActive && wasAdmin) {
       if (!(await this.setActiveAdmin())) {
         this.mark('role', 'failed', 'admin_lost');
@@ -944,10 +1002,105 @@ export class ProvisionRun {
       }
     }
     this.mark('role', 'failed', code);
+    const blockers = code === 'accounts_still_seen' ? 'accounts_still_seen,accounts' : code;
     if (this.plan?.fallbackAllowed) {
-      throw new Hold({ code: code === 'owner_failed' ? 'owner_failed' : 'owner_blocked', params: { blockers: code }, choices: ['recheck', 'continue_admin'], attention: true });
+      throw new Hold({
+        code: code === 'owner_failed' ? 'owner_failed' : 'owner_blocked',
+        params: { blockers, ...(code.startsWith('accounts') ? this.accountParams() : {}) }, choices: ['recheck', 'continue_admin'], attention: true,
+      });
     }
-    throw new Fail(code === 'owner_failed' ? 'owner_failed' : 'owner_blocked', { blockers: code });
+    throw new Fail(code === 'owner_failed' ? 'owner_failed' : 'owner_blocked', { blockers });
+  }
+
+  /** The account types and the apps that carry them, for the prompt (never a name). */
+  private accountParams(): { types: string; owners: string } {
+    const a = this.preflight!.accounts;
+    return { types: a.types.join(', '), owners: Object.entries(a.owners).map(([k, v]) => `${k}=${v}`).join(', ') };
+  }
+
+  // ── accounts hidden for the time of dpm (owner decision of 28/11/2026) ──
+
+  /** Writes HIDE_MARKER (the apps about to be disabled) and reads it back: true only when the device holds that list. */
+  private async writeMarker(apps: string[]): Promise<boolean> {
+    // Package names only (PACKAGE_RE): nothing to quote but the list itself.
+    if (!apps.every((p) => PACKAGE_RE.test(p))) return false;
+    await this.script([`echo '${apps.join(' ')}' > ${HIDE_MARKER}`], 'hide_marker', 15_000);
+    const back = await this.sh(['cat', HIDE_MARKER]);
+    return back.code === 0 && parseHiddenMarker(back.stdout).join(' ') === [...apps].sort().join(' ');
+  }
+
+  /**
+   * `pm disable-user --user 0 <app>` for each app that carries accounts, the marker written first (a station that dies
+   * past this point leaves the device telling what to enable again). An app is counted as hidden BEFORE its command (an
+   * answer lost is enabled again all the same). A refusal (Samsung may refuse the shell) stops: the caller's `finally`
+   * enables again what was disabled, and the card falls back to « owner blocked » (administrator offered as before).
+   */
+  private async hideAccounts(apps: string[]): Promise<void> {
+    const a = this.preflight!.accounts;
+    if (!(await this.writeMarker(apps))) throw this.hideFailed('accounts_marker_failed');
+    for (const pkg of apps) {
+      this.hidden.push(pkg);
+      const r = await this.sh(['pm', 'disable-user', '--user', '0', pkg]);
+      const ok = parsePmNewState(`${r.stdout}\n${r.stderr}`, pkg) === 'disabled';
+      const types = a.types.filter((t) => a.owners[t] === pkg && ACCOUNT_TYPE_RE.test(t)).slice(0, 16);
+      this.journal({
+        step: 'role', status: ok ? 'warn' : 'failed', at: this.d.api.nowIso(), code: ok ? 'account_app_disabled' : 'account_app_disable_refused',
+        detail: { packages: [pkg], ...(types.length ? { accountTypes: types } : {}) },
+      });
+      if (!ok) {
+        // Refused for sure (an exception printed, a non-zero exit): nothing to enable again for this one.
+        if (r.code !== 0 && !r.timedOut && /Exception|Error|refused|not allowed|cannot/i.test(`${r.stdout}\n${r.stderr}`)) this.hidden = this.hidden.filter((x) => x !== pkg);
+        this.hideRefused.add(pkg);
+        throw this.hideFailed('accounts_hide_refused');
+      }
+    }
+    this.d.onChange?.();
+    // AccountManager drops the authenticators of disabled apps asynchronously: read until none of them is registered.
+    for (let i = 0; i < HIDE_SETTLE_READS; i++) {
+      const seen = Object.values(parseAccounts((await this.sh(['dumpsys', 'account'])).stdout).owners);
+      if (!apps.some((p) => seen.includes(p))) break;
+      await this.sleep(SETTLE_STEP_MS);
+    }
+  }
+
+  /** The workaround did not apply: the role failed, « owner blocked » with the reason, the administrator offered as for
+   *  any blocked owner (or only « Revérifier » when the target requires the owner). */
+  private hideFailed(reason: 'accounts_hide_refused' | 'accounts_marker_failed'): Hold {
+    this.mark('role', 'failed', reason);
+    return new Hold({
+      code: 'owner_blocked', params: { blockers: `${reason},accounts`, ...this.accountParams() },
+      choices: this.plan?.fallbackAllowed ? ['recheck', 'continue_admin'] : ['recheck'], attention: true,
+    });
+  }
+
+  /**
+   * Enables again (`pm enable`) the apps disabled to hide accounts: this run's, and those HIDE_MARKER lists on the device
+   * (a station relaunched, another card, an earlier run unplugged). Run before anything else at each run, and right
+   * after dpm. An app Android does not enable again holds the card (Retry, nothing else done meanwhile) with the marker
+   * kept: GMS is never left disabled silently. Not gated by the station's approval: it only undoes the station's own act.
+   */
+  private async restoreHidden(): Promise<void> {
+    const read = await this.sh(['cat', HIDE_MARKER]);
+    // An app this run knows Android refused to disable (so never disabled) is left as it is.
+    const marker = (read.code === 0 ? parseHiddenMarker(read.stdout) : []).filter((p) => this.hidden.includes(p) || !this.hideRefused.has(p));
+    const todo = [...new Set([...this.hidden, ...marker])].sort();
+    if (todo.length === 0) return;
+    const left: string[] = [];
+    for (const pkg of todo) {
+      const r = await this.sh(['pm', 'enable', pkg]);
+      const text = `${r.stdout}\n${r.stderr}`;
+      // An app uninstalled meanwhile has nothing left disabled.
+      const ok = parsePmNewState(text, pkg) === 'enabled' || /Unknown package/i.test(text);
+      this.journal({ step: 'role', status: ok ? 'ok' : 'failed', at: this.d.api.nowIso(), code: ok ? 'account_app_enabled' : 'account_app_enable_failed', detail: { packages: [pkg] } });
+      if (!ok) left.push(pkg);
+    }
+    this.hidden = left;
+    this.d.onChange?.();
+    if (left.length) {
+      await this.writeMarker(left).catch(() => false);
+      throw new Hold({ code: 'accounts_restore_failed', params: { apps: left.join(', ') }, choices: ['retry'], attention: true });
+    }
+    await this.sh(['rm', '-f', HIDE_MARKER]);
   }
 
   /**
@@ -985,8 +1138,10 @@ export class ProvisionRun {
     if (sdk >= 28) cmds.push(['cmd', 'appops', 'set', PKG, 'RUN_ANY_IN_BACKGROUND', 'allow']);
     for (const p of RUNTIME_PERMISSIONS) cmds.push(['pm', 'grant', PKG, p]);
     if (sdk >= 33) cmds.push(['pm', 'grant', PKG, 'android.permission.POST_NOTIFICATIONS']);
+    // Every role (1.5.1): the owner's kiosk draws its « back to the kiosk » button over the apps of the tiles, and an
+    // owner cannot grant itself this permission on Android 7 to 8.1.
+    cmds.push(['appops', 'set', PKG, 'SYSTEM_ALERT_WINDOW', 'allow']);
     if (this.roleChosen === 'device_admin') {
-      cmds.push(['appops', 'set', PKG, 'SYSTEM_ALERT_WINDOW', 'allow']);
       if (sdk <= 25) cmds.push(['settings', 'put', 'secure', 'install_non_market_apps', '1']);
       else cmds.push(['appops', 'set', PKG, 'REQUEST_INSTALL_PACKAGES', 'allow']);
     }
@@ -1014,10 +1169,6 @@ export class ProvisionRun {
     try {
       config = (await this.d.api.token(plan.provisioningId)).config;
     } catch (err) {
-      if (err instanceof BenchApiError && err.code === 'no_session') {
-        this.mark('configure', 'failed', 'no_session');
-        throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
-      }
       if (err instanceof BenchApiError && err.code === 'bad_state') {
         this.serverState = await this.d.api.provisioning(plan.provisioningId);
         if (this.serverState.state === 'enrolled') { this.mark('configure', 'ok', 'resumed'); this.mark('wait_enroll', 'ok', 'resumed'); return; }
@@ -1084,7 +1235,6 @@ export class ProvisionRun {
         if (err.code === 'open_provisioning' && typeof err.details?.provisioningId === 'string') { await this.resumeApps(String(err.details.provisioningId)); return; }
         // A server older than lot BANC-A: no such route.
         if (err.status === 404 && err.code === 'not_found') throw new Fail('apps_unsupported');
-        if (err.code === 'no_session') throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
         if (['device_not_found', 'identity_ambiguous', 'identity_mismatch', 'target_refused'].includes(err.code)) throw new Fail(err.code);
       }
       throw err;
@@ -1155,10 +1305,6 @@ export class ProvisionRun {
           this.d.onChange?.();
           return;
         }
-        if (err.code === 'no_session') {
-          this.mark('apps', 'failed', 'no_session');
-          throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
-        }
         // The device is no longer one the server lists apps for (moved outside the target…): the finalization decides.
         if (['not_enrolled', 'device_outside_target', 'target_refused'].includes(err.code)) {
           this.apps = { state: 'skipped', total: 0, done: 0, installed: 0, current: null, failed: [], unsupported: false };
@@ -1199,14 +1345,9 @@ export class ProvisionRun {
           code = 'app_unavailable';
         } else {
           await this.d.requireApproved();
-          try {
-            code = await this.installApp(id, app);
-          } catch (err) {
-            // A temporary failure of the download (apk.ts, downloadIsTemporary) holds the run: the step stays to do, the
-            // apps already installed are kept (appResults), Retry resumes here. The session gone has its own prompt.
-            if (err instanceof BenchApiError && err.code === 'no_session') throw new Hold({ code: 'no_session', choices: ['retry'], attention: true });
-            throw err;
-          }
+          // A temporary failure of the download (apk.ts, downloadIsTemporary) holds the run: the step stays to do, the apps
+          // already installed are kept (appResults), Retry resumes here.
+          code = await this.installApp(id, app);
         }
         this.appResults.set(packageId, code);
         this.journal({

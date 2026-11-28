@@ -1994,7 +1994,7 @@
       "mdm_privacy_manage": "Privacy · Profiles, notice and retention",
       "mcp_access_keys": "MCP · Personal access keys for AI agents",
       "mdm_bench_manage": "Enrollment · Bench stations and provisioning history",
-      "mdm_bench_operate": "Enrollment · Open a bench session"
+      "mdm_bench_operate": "Enrollment · Bench operation (unused: no bench session any more)"
     }
   },
   "notificationCenter": {
@@ -4313,7 +4313,6 @@
     "neverBlock": "This address is never blocked.",
     "invalidIp": "A single address is expected.",
     "stepUpRequired": "A second factor is required.",
-    "sessionOpen": "A bench session is open on this station already.",
     "ownerDeclaredConfirm": "The device owner stays set without a working agent: confirm the revocation explicitly.",
     "targetExists": "This group is a target of the station already.",
     "releaseWithdrawn": "This version of the agent is withdrawn.",
@@ -7407,7 +7406,15 @@
       "app_install_failed": "App install failed",
       "app_unavailable": "App no longer available",
       "device_not_found": "No device of the station targets matches",
-      "identity_ambiguous": "Several devices match this identity"
+      "identity_ambiguous": "Several devices match this identity",
+      "account_app_disabled": "App of the accounts disabled for a moment",
+      "account_app_disable_refused": "Android refused to disable the app of the accounts",
+      "account_app_enabled": "App of the accounts enabled again",
+      "account_app_enable_failed": "App of the accounts not enabled again",
+      "accounts_hide_refused": "Accounts could not be hidden",
+      "accounts_still_seen": "Accounts still seen by Android",
+      "accounts_marker_failed": "Marker not written on the device",
+      "owner_possible_accounts": "Owner possible, the accounts hidden for a moment"
     },
     "step": {
       "detect": "Detection",
@@ -7429,14 +7436,6 @@
       "warn": "Warning",
       "failed": "Failed",
       "skipped": "Skipped"
-    },
-    "session": {
-      "title": "Bench session",
-      "open": "Open a bench session",
-      "close": "Close the session",
-      "current": "Session of {{technician}}, until {{until}}",
-      "duration": "Duration (minutes)",
-      "hint": "The station enrolls no device on its own: a technician opens it here for a limited time (8 hours at most). During that time, each device plugged in is enrolled in their name, after checking they may still enroll in the target tenant. Once the session is closed or expired, the station enrolls nothing."
     },
     "tenant": {
       "stations": "Bench stations of this tenant",
@@ -7525,7 +7524,7 @@
         "button": "Stolen PC",
         "title": "A PC of a technician is stolen",
         "step1": "Suspend the station (one click, no second factor): it can no longer act.",
-        "step2": "Revoke it: its unused tokens are revoked, its open provisionings abandoned, its session closed.",
+        "step2": "Revoke it: its unused tokens are revoked and its open enrollments abandoned.",
         "step3": "Review the devices this station enrolled since the theft, and put the doubtful ones in identity quarantine.",
         "step4": "The renewed station creates a new ADB key: the old authorisation expires on Android 11 and later after 7 days; on Android 7 to 9, revoke the USB debugging authorisations at the next visit."
       },
@@ -7561,7 +7560,8 @@
         "noGroup": "No group.",
         "rolePolicy": "Role",
         "addHint": "A second factor is asked. The tenant sees the stations that target it and can suspend or remove a target."
-      }
+      },
+      "autonomy": "An approved station enrolls by itself within its targets (tenant and group, the sites below them), with no session to open: each token, conversion and app it installs is audited in the name of the station. To stop it, suspend it (one click) or revoke it."
     },
     "nameTemplate": {
       "label": "Template of the suggested name",
@@ -7601,7 +7601,6 @@
       "empty": "No station belongs to this tenant. Install the bench station on a PC, then add it here with the code its screen shows.",
       "platformSuspended": "Suspended by the platform since {{at}}: only the platform resumes it. Contact it if this is unexpected.",
       "platformSuspendedError": "The platform suspended this station or this target: only the platform resumes it.",
-      "noSession": "No bench session open.",
       "targetRefused": "This station cannot target this group.",
       "targetExists": "This group is a target of the station already.",
       "addTargetTitle": "Add a target to {{name}}",
@@ -7618,7 +7617,6 @@
       "targetSuspendedByPlatform": "Suspended by the platform",
       "targetSuspendedByPlatformNote": "The platform suspended this target: only the platform resumes it. Contact it if this is unexpected.",
       "suspendedByOwnerNote": "Suspended by its owner: the client resumes it.",
-      "sessionByClient": "No session open. The sessions of a client station are opened by the technicians of its tenant.",
       "give": "Give to a client",
       "giveTitle": "Give {{name}} to a client",
       "giveHint": "Final: the station then belongs to this client, who manages its name, targets and sessions; it never comes back to the platform. The platform keeps watching it: suspend, revoke. Its open session is closed. A second factor is asked.",

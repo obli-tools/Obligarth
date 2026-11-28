@@ -12,7 +12,7 @@ import { benchRequiredApps } from '../legacyAgent/requiredApps';
 import { stationActor, stationAuditContext } from './actor';
 import { comparableSerial } from './enrollment';
 import {
-  PlanBody, groupWithin, sessionUser, stationTargets, targetIn, technicianMayOperate, withProvisioning, type Origin,
+  PlanBody, groupWithin, stationTargets, targetIn, withProvisioning, type Origin,
 } from './provisioning.service';
 import type { StationLookup } from './stations.service';
 
@@ -22,11 +22,11 @@ import type { StationLookup } from './stations.service';
 // the bench only installs it where a remote install would wait for a person at the screen (a device administrator
 // without Knox). One source of truth: afterwards the inventory shows the apps and the job sends nothing.
 //   provisioningApps   the apps of a provisioning ENROLLED of this station (its device known): 409 not_enrolled
-//                      otherwise; for a conversion and a completion an open bench session too (409 no_session): their
-//                      device was found by its identity, not by a single-use token; the device still enrolled, a bridge
-//                      device not revoked, inside the target of the provisioning (422 device_outside_target), and the
-//                      technician of the session holding mdm.bench.operate in its tenant, checked again on every call
-//                      (422 target_refused); an open provisioning expires after 120 minutes (bench_expire_open)
+//                      otherwise; the device still enrolled, a bridge device not revoked, inside the target of the
+//                      provisioning (422 device_outside_target; a target removed or suspended: 422 target_refused),
+//                      checked again on every call; an open provisioning expires after 120 minutes (bench_expire_open).
+//                      28/11/2026: no bench session any more (an approved station within its targets is enough), for a
+//                      conversion and a completion as for a new device
 //   packageFile        the file of one of THOSE apps (by its SHA-256), nothing else of the store
 //   planAppsCompletion « compléter les apps »: a device already enrolled brought back to the bench. The proof of its
 //                      identity is described at the function; a kind 'apps' provisioning, enrolled, is created for it.
@@ -60,14 +60,6 @@ export type AppsPlanBody = z.infer<typeof AppsPlanBody>;
 async function appsDevice(station: StationLookup, id: string): Promise<{ tenantId: number; deviceId: number }> {
   return withProvisioning(station, id, async (trx, p, tenantId) => {
     if (p.state !== 'enrolled' || !p.device_id) throw new AppError(409, 'The device of this provisioning is not enrolled', 'not_enrolled');
-    if (p.kind !== 'new') {
-      if (sessionUser(station) === null) throw new AppError(409, 'No bench session is open for this station', 'no_session');
-      // Its technician answers for it on every call (the session may have changed since the plan, or the right gone):
-      // mdm.bench.operate in the provisioning's tenant, which the plan of a conversion or a completion checked once.
-      if (!(await technicianMayOperate(station, tenantId))) {
-        throw new AppError(422, 'The technician of the session may not enroll into this tenant', 'target_refused');
-      }
-    }
     const dev = await trx('devices as d')
       .join('legacy_agent_devices as a', function j() { this.on('a.device_id', '=', 'd.id').andOn('a.tenant_id', '=', 'd.tenant_id'); })
       .where({ 'd.tenant_id': tenantId, 'd.id': p.device_id }).first('d.group_id', 'd.enrollment_state', 'd.management_channel', 'a.revoked_at') as
@@ -171,8 +163,8 @@ export function completionProof(c: { androidId: string | null; apiLevel: number 
 /**
  * POST /v1/provisionings/apps: « compléter les apps » of a device already enrolled. The proof of its identity, each
  * condition necessary:
- *   1. an open bench session (its technician, signed in with a second factor, answers for it) whose technician may
- *      enroll into the tenant found (mdm.bench.operate); 30 completions per hour and station;
+ *   1. an approved station (the guard: not suspended, not revoked; 28/11/2026, no bench session any more); 30
+ *      completions per hour and station;
  *   2. the serials read by ADB (ro.serialno, ril.serialnumber) against what THE AGENT declared of the device (Build.SERIAL,
  *      ril.serialnumber, never a hint of a configuration), by pairs of the same nature: at least one comparable pair
  *      agrees, none differs;
@@ -183,16 +175,12 @@ export function completionProof(c: { androidId: string | null; apiLevel: number 
  *      never printed; from Android 8 it is not comparable (said in the answer) and 1 to 3 carry the proof;
  *   5. the API level read is not below the server's.
  * Anything else answers 404 device_not_found, the same for a serial unknown, outside the targets or held in another
- * tenant (that one goes to the audit of the platform only): no answer tells another tenant's device. A device found in a
- * tenant where the technician may not operate answers the same 404 (no oracle of what is enrolled there), audited in
- * that tenant (bench.identity_probe_refused). A contradiction of
+ * tenant (that one goes to the audit of the platform only): no answer tells another tenant's device. A contradiction of
  * 4 or 5 is 409 identity_mismatch, audited in the tenant (protective). The bench channel of the agent (phase ENROLLED,
  * its role and version) is required when it answers but proves nothing by itself: the shell can fake no device, but a
  * station could fake its words.
  */
 export async function planAppsCompletion(station: StationLookup, b: AppsPlanBody, origin: Origin): Promise<BenchAppsPlanAnswer> {
-  const technician = sessionUser(station);
-  if (technician === null) throw new AppError(409, 'No bench session is open for this station', 'no_session');
   const adbRaw = b.device.adbSerial;
   const open = await asNone(stationActor(station.id), () => db.raw('SELECT id FROM obligarth.bench_open_provisioning_of(?::uuid, ?)', [station.id, adbRaw])) as
     { rows: Array<{ id: string }> };
@@ -233,24 +221,12 @@ export async function planAppsCompletion(station: StationLookup, b: AppsPlanBody
   }
   if (candidates.length > 1) throw new AppError(409, 'Several devices of the station targets answer this identity', 'identity_ambiguous');
   const c = candidates[0];
-  if (!(await technicianMayOperate(station, c.tenantId))) {
-    // The same answer as an unknown device (never tell what is enrolled in a tenant the technician has no right in),
-    // the probe written to that tenant's audit.
-    await audit.append({
-      tenantId: c.tenantId, action: 'bench.identity_probe_refused', target: { type: 'bench_station', id: station.id, device: c.deviceId },
-      details: {
-        kind: 'apps', stationId: station.id, technicianUserId: technician, benchAdbSerial: truncateSerial(adbRaw),
-        benchHwSerial: truncateSerial(b.device.hwSerial ?? null),
-      },
-    }, await stationAuditContext(station.id, station.name, c.tenantId, origin));
-    throw notFound();
-  }
   const proof = completionProof(c, { androidId: b.androidId, sdkInt: b.device.sdkInt });
   if (!proof.ok) {
     await audit.append({
       tenantId: c.tenantId, action: 'bench.identity_mismatch', target: { type: 'bench_station', id: station.id, device: c.deviceId },
       details: {
-        kind: 'apps', reason: proof.reason, stationId: station.id, technicianUserId: technician, benchAdbSerial: truncateSerial(adbRaw),
+        kind: 'apps', reason: proof.reason, stationId: station.id, benchAdbSerial: truncateSerial(adbRaw),
         benchHwSerial: truncateSerial(b.device.hwSerial ?? null), sdk: b.device.sdkInt,
       },
     }, await stationAuditContext(station.id, station.name, c.tenantId, origin));
@@ -264,7 +240,7 @@ export async function planAppsCompletion(station: StationLookup, b: AppsPlanBody
     const roleTarget = c.deviceOwner ? 'device_owner' : 'device_admin';
     const deviceName = c.label ? c.label.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 100) || null : null;
     const [row] = await trx('bench_provisionings').insert({
-      tenant_id: c.tenantId, group_id: c.groupId, station_id: station.id, session_id: station.session!.id, kind: 'apps', state: 'enrolled',
+      tenant_id: c.tenantId, group_id: c.groupId, station_id: station.id, session_id: null, kind: 'apps', state: 'enrolled',
       adb_serial: adbRaw, hw_serial: b.device.hwSerial ?? null, model: b.device.model, manufacturer: b.device.manufacturer, sdk_int: b.device.sdkInt,
       os_release: b.device.osRelease ?? null, one_ui: b.device.oneUi ?? null, device_name: deviceName, role_target: roleTarget,
       preflight: JSON.stringify({}), device_id: c.deviceId, site_id: site ? String(site.id) : null,
@@ -276,7 +252,7 @@ export async function planAppsCompletion(station: StationLookup, b: AppsPlanBody
       details: {
         provisioningId: id, stationId: station.id, kind: 'apps', adbSerial: truncateSerial(adbRaw), hwSerial: truncateSerial(b.device.hwSerial ?? null),
         model: b.device.model, sdk: b.device.sdkInt, roleTarget, groupId: c.groupId, warnings: [], ...(site ? { siteId: String(site.id) } : {}),
-        proof: { serialPairs: c.serialPairs, androidId: proof.androidId, agentChannel: b.agent ? b.agent.role : null }, technicianUserId: technician,
+        proof: { serialPairs: c.serialPairs, androidId: proof.androidId, agentChannel: b.agent ? b.agent.role : null },
       },
     }, await stationAuditContext(station.id, station.name, c.tenantId, origin));
     return {

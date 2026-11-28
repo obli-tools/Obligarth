@@ -14,8 +14,8 @@ import { LEGACY_AGENT_ACTOR } from '../legacyAgent/actor';
 //     agent waits for a new configuration, no fallback), the use not consumed, bench.provisioning_mismatch;
 //   - the identity by pairs of the same nature: (ADB serial read on the bench, Build.SERIAL of the agent) and (serial of
 //     the label read on the bench, ril.serialnumber of the agent); a pair is comparable when both values are known and
-//     not 'unknown'. A comparable pair that differs refuses the enrollment (token revoked by the technician who issued it,
-//     provisioning failed identity_mismatch, bench.identity_mismatch and an alert); at least one comparable pair and
+//     not 'unknown'. A comparable pair that differs refuses the enrollment (token revoked by its issuer,
+//     nobody since 28/11/2026: the station issues it; provisioning failed identity_mismatch, bench.identity_mismatch and an alert); at least one comparable pair and
 //     none different: confirmed; none comparable (an administrator on Android 10 and later): unconfirmed.
 // The reply of a refusal is always the one of a refused token (no oracle).
 // =============================================================================
@@ -47,7 +47,7 @@ export function benchIdentity(prov: { adbSerial: string | null; hwSerial: string
  * The checks of a bench token. `token`: its row (origin bench). Returns the link to write once the device is created,
  * or 'refused' (the caller answers tokenInvalid; what this function wrote commits with the transaction).
  */
-export async function checkBenchEnrollment(trx: Knex.Transaction, tenantId: number, token: { id: string; bench_provisioning_id: string | null; created_by: number },
+export async function checkBenchEnrollment(trx: Knex.Transaction, tenantId: number, token: { id: string; bench_provisioning_id: string | null; created_by: number | null },
   agent: { serial: string | null; samsungSerial: string | null; provisioningId: string | null | undefined }): Promise<BenchEnrollmentLink | 'refused'> {
   if (!token.bench_provisioning_id) return 'refused';
   const p = await trx('bench_provisionings').where({ tenant_id: tenantId, id: token.bench_provisioning_id, enrollment_token_id: token.id })

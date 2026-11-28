@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
-import { Ban, Building2, Download, LifeBuoy, Pause, Pencil, Play, Plus, ShieldAlert, ShieldCheck, Tag, Timer, Trash2, Usb, XCircle } from 'lucide-react';
+import { Ban, Building2, Download, LifeBuoy, Pause, Pencil, Play, Plus, ShieldAlert, ShieldCheck, Tag, Trash2, Usb } from 'lucide-react';
 import {
-  BENCH_LIMITS, BENCH_ROLE_POLICIES, MASTER_TENANT_ID,
+  BENCH_ROLE_POLICIES, MASTER_TENANT_ID,
   type BenchRolePolicy, type BenchStationDetail, type BenchStationInstallerInfo, type BenchStationView, type BenchTargetView,
 } from '@obligarth/shared';
 import { benchStationsApi, type BenchServedInfo } from '@/api/benchStations.api';
@@ -81,7 +81,7 @@ function TheftHelp() {
   const { t } = useTranslation();
   const steps = [
     t('bench.stations.theft.step1') || 'Suspend the station (one click, no second factor): it can no longer act.',
-    t('bench.stations.theft.step2') || 'Revoke it: its unused tokens are revoked, its open provisionings abandoned, its session closed.',
+    t('bench.stations.theft.step2') || 'Revoke it: its unused tokens are revoked and its open enrollments abandoned.',
     t('bench.stations.theft.step3') || 'Review the devices this station enrolled since the theft, and put the doubtful ones in identity quarantine.',
     t('bench.stations.theft.step4') || 'The renewed station creates a new ADB key: the old authorisation expires on Android 11 and later after 7 days; on Android 7 to 9, revoke the USB debugging authorisations at the next visit.',
   ];
@@ -210,7 +210,6 @@ function StationsList({ rows: all, onOpen }: { rows: BenchStationView[] | null; 
             <th className={thCls}>{t('bench.stations.lastSeen') || 'Last activity'}</th>
             <th className={thCls}>{t('bench.stations.targetsCount') || 'Targets'}</th>
             <th className={thCls}>{t('bench.stations.enrolledCount') || 'Enrolled'}</th>
-            <th className={thCls}>{t('bench.session.title') || 'Bench session'}</th>
           </tr></thead>
           <tbody>
             {shown.map((r) => (
@@ -223,10 +222,9 @@ function StationsList({ rows: all, onOpen }: { rows: BenchStationView[] | null; 
                 <td className={clsx(tdCls, 'whitespace-nowrap text-xs text-text-secondary')}>{fmt(r.lastSeenAt)}<span className="ml-1 font-mono text-text-muted">{r.lastIp ?? ''}</span></td>
                 <td className={clsx(tdCls, 'tabular-nums text-text-secondary')}>{r.targetCount}</td>
                 <td className={clsx(tdCls, 'tabular-nums text-text-secondary')}>{r.enrolledCount}</td>
-                <td className={clsx(tdCls, 'text-xs text-text-secondary')}>{r.session ? `${r.session.technician ?? '—'} · ${fmt(r.session.expiresAt)}` : '—'}</td>
               </tr>
             ))}
-            {rows && shown.length === 0 && <tr><td colSpan={9} className="p-8 text-center text-text-muted">{t('bench.stations.empty') || 'No station.'}</td></tr>}
+            {rows && shown.length === 0 && <tr><td colSpan={8} className="p-8 text-center text-text-muted">{t('bench.stations.empty') || 'No station.'}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -242,7 +240,6 @@ function StationDetail({ id, onClose, onChanged }: { id: string; onClose: () => 
   const [approving, setApproving] = useState(false);
   const [adding, setAdding] = useState(false);
   const [giving, setGiving] = useState(false);
-  const [minutes, setMinutes] = useState(String(BENCH_LIMITS.sessionMaxHours * 60));
   const load = useCallback(() => { benchStationsApi.get(id).then(setS).catch(fail); }, [id]);
   useEffect(() => { load(); }, [load]);
   const act = async (fn: () => Promise<BenchStationDetail>, done?: string) => {
@@ -307,29 +304,8 @@ function StationDetail({ id, onClose, onChanged }: { id: string; onClose: () => 
           {row(t('bench.stations.enrolledCount') || 'Enrolled', s.enrolledCount)}
         </div>
 
-        <section>
-          <h3 className={cardTitleCls}><Timer size={14} /> {t('bench.session.title') || 'Bench session'}</h3>
-          <div className={clsx(cardCls, 'space-y-2')}>
-            {s.session ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-text-secondary">{t('bench.session.current', { technician: s.session.technician ?? '—', until: fmt(s.session.expiresAt) }) || `Session of ${s.session.technician ?? '—'}, until ${fmt(s.session.expiresAt)}`}</span>
-                <Button size="sm" variant="ghost" className="ml-auto" onClick={() => void act(() => benchStationsApi.closeSession(s.id))}><XCircle className="mr-1 h-4 w-4" />{t('bench.session.close') || 'Close the session'}</Button>
-              </div>
-            ) : owned ? (
-              <p className="text-xs text-text-muted">{t('bench.owned.sessionByClient') || 'No session open. The sessions of a client station are opened by the technicians of its tenant.'}</p>
-            ) : (
-              <div className="flex flex-wrap items-end gap-2">
-                <p className="w-full text-xs text-text-muted">{t('bench.session.hint') || 'The station issues enrollment tokens only during an open session (8 hours at most), each one checked against the rights of the technician in the tenant of the target.'}</p>
-                <label className={labelCls}>{t('bench.session.duration') || 'Duration (minutes)'}
-                  <input className={`${fieldCls} max-w-[8rem]`} type="number" min={15} max={BENCH_LIMITS.sessionMaxHours * 60} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
-                </label>
-                <Button size="sm" disabled={s.status !== 'approved'} onClick={() => void act(() => benchStationsApi.openSession(s.id, Number(minutes) || BENCH_LIMITS.sessionMaxHours * 60))}>
-                  <Play className="mr-1 h-4 w-4" />{t('bench.session.open') || 'Open a bench session'}
-                </Button>
-              </div>
-            )}
-          </div>
-        </section>
+        {/* 28/11/2026: no bench session any more; an approved station enrolls within its targets by itself. */}
+        <p className="text-xs text-text-muted">{t('bench.stations.autonomy') || 'An approved station enrolls by itself within its targets (tenant and group, the sites below them), with no session to open: each token, conversion and app it installs is audited in the name of the station. To stop it, suspend it (one click) or revoke it.'}</p>
 
         <section>
           <div className="mb-2 flex items-center">

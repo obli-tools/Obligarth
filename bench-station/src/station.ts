@@ -13,7 +13,8 @@ import { openJson, sealJson, type Protector } from './dpapi';
  *   POST /api/bench/stations/register  {name, hostname, token, stationVersion}  public, 20/h per address;
  *        201 created / 200 known: {stationId (uuid), status, verificationCode}; 429 `too_many_pending`.
  *   GET  /api/bench/stations/me        Authorization: Bench <token>
- *        200 {stationId, status: pending|approved|suspended, name, verificationCode, session: {technician, expiresAt}|null}
+ *        200 {stationId, status: pending|approved|suspended, name, verificationCode}; `session` (a server of before
+ *        28/11/2026, or the marker a newer one keeps for the stations 1.0.3) is ignored: no bench session any more.
  *        401 unknown token (⇒ register); 403 `station_revoked`, `station_ip_refused`, `station_refused`.
  *   `x-bench-version: <version>` on every call (the server keeps the station's version).
  *
@@ -26,9 +27,9 @@ import { openJson, sealJson, type Protector } from './dpapi';
  * │ roam — and its content is protected by DPAPI (CurrentUser): another      │
  * │ account, or the same file copied to another PC, cannot read it. An       │
  * │ unreadable file is set aside (`.illisible-<ts>`), never overwritten.     │
- * │ It is the station's only durable secret, and it does NOT suffice to      │
- * │ enroll anything: tokens of enrollment need a bench session opened in    │
- * │ the console by an authenticated technician (§3.3 bis).                  │
+ * │ It is the station's only durable secret: once the station is approved   │
+ * │ (in the console, with a second factor), it enrolls within its targets   │
+ * │ by itself (28/11/2026: no bench session); suspend or revoke it to stop. │
  * └──────────────────────────────────────────────────────────────────────────┘
  *
  * No request carrying the token FOLLOWS a redirect (`redirect: 'manual'`): a 3xx is its own answer (`redirected`).
@@ -143,10 +144,8 @@ export class StationStore {
   }
 }
 
-export interface StationSession { technician: string | null; expiresAt: string }
-
 export type StationStatus =
-  | { state: 'pending' | 'approved' | 'suspended'; stationId: string; name: string; verificationCode: string | null; session: StationSession | null }
+  | { state: 'pending' | 'approved' | 'suspended'; stationId: string; name: string; verificationCode: string | null }
   | { state: 'revoked'; code: string }
   /** Network, DNS, timeout: nothing is known. */
   | { state: 'unreachable'; code: 'server_unreachable'; detail: string }
@@ -195,18 +194,12 @@ function unreachable(err: unknown): StationStatus {
 
 function knownStation(data: Record<string, unknown> | null): StationStatus | null {
   if (!data) return null;
-  const { stationId, status, name, verificationCode, session } = data;
+  const { stationId, status, name, verificationCode } = data;
   if (typeof stationId !== 'string' || !/^[0-9a-f-]{36}$/i.test(stationId)) return null;
   if (status !== 'pending' && status !== 'approved' && status !== 'suspended') return null;
-  let s: StationSession | null = null;
-  if (session && typeof session === 'object') {
-    const o = session as Record<string, unknown>;
-    if (typeof o.expiresAt === 'string') s = { technician: typeof o.technician === 'string' ? o.technician.slice(0, 200) : null, expiresAt: o.expiresAt };
-  }
   return {
     state: status, stationId, name: typeof name === 'string' ? name : '',
     verificationCode: typeof verificationCode === 'string' && /^[0-9A-F]{4}-[0-9A-F]{4}$/.test(verificationCode) ? verificationCode : null,
-    session: s,
   };
 }
 

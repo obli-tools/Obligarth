@@ -22,9 +22,9 @@ import { TargetFields, TargetPatch, assertGroup, insertTarget, patchTarget, remo
 //                                       TOTP step), THEN the definer (bench_claim_station). 201 the station; one 422
 //                                       claim_mismatch for every refusal (unknown, wrong code, wrong name, not pending,
 //                                       several candidates); 409 claim_conflict when the station targets another tenant
-//   GET    /                            the stations of the tenant, their targets and open session
+//   GET    /                            the stations of the tenant and their targets
 //   PATCH  /:id                         { name }: rename (standard)
-//   POST   /:id/suspend                 no second factor (protective): its tokens, provisionings and session closed
+//   POST   /:id/suspend                 no second factor (protective): its tokens and provisionings closed
 //   POST   /:id/resume                  strict second factor; 409 suspendedByPlatform when the platform suspended it
 //   POST   /:id/revoke                  simple second factor (protective, final)
 //   POST   /:id/targets                 { groupId, rolePolicy, namePrefix, nameTemplate, disableDevOptions }: strict;
@@ -33,8 +33,7 @@ import { TargetFields, TargetPatch, assertGroup, insertTarget, patchTarget, remo
 //                                       allowed here: the exception to D4 of a station the tenant owns; never of a
 //                                       target the platform suspended: 409 suspendedByPlatform, Q1)
 //   DELETE /:id/targets/:groupId        simple second factor (409 suspendedByPlatform for a target the platform suspended)
-//   POST   /:id/sessions/close          the open session of the station closed (protective)
-// The sessions open by POST /api/bench-sessions (sessions.routes.ts), as for any station that serves this tenant only.
+// No bench session since 28/11/2026: an approved station acts within its targets by itself (no route of sessions).
 // The server never reads bench_stations from the tenant's context: every read and every change goes through a definer
 // function bounded to the tenant's own stations (not_found for any other).
 // =============================================================================
@@ -94,8 +93,8 @@ async function groupPaths(tenantId: number): Promise<Map<number, string>> {
   return out;
 }
 
-/** The stations the tenant owns (its definer function), their targets (tenant context) and their session. */
-export async function ownedStations(tenantId: number, userId: number, only?: string): Promise<BenchOwnedStationView[]> {
+/** The stations the tenant owns (its definer function) and their targets (tenant context). */
+export async function ownedStations(tenantId: number, _userId: number, only?: string): Promise<BenchOwnedStationView[]> {
   const r = await db.raw('SELECT * FROM obligarth.bench_tenant_owned_stations(?)', [tenantId]) as { rows: Array<Record<string, any>> };
   const rows = only ? r.rows.filter((s) => String(s.id) === only) : r.rows;
   if (rows.length === 0) return [];
@@ -114,10 +113,6 @@ export async function ownedStations(tenantId: number, userId: number, only?: str
     suspendedByPlatform: s.suspended_by_platform === true, revokedAt: iso(s.revoked_at), revokedReason: s.revoked_reason ?? null,
     lastSeenAt: iso(s.last_seen_at), ownerSince: iso(s.owner_since),
     targets: targets.filter((t) => String(t.station_id) === String(s.id)).map(targetView),
-    session: s.session_id ? {
-      id: String(s.session_id), technician: s.technician ?? null, expiresAt: iso(s.session_expires_at) as string,
-      mine: s.session_user_id !== null && s.session_user_id !== undefined && Number(s.session_user_id) === userId,
-    } : null,
   }));
 }
 
@@ -128,7 +123,7 @@ async function ownedOne(tenantId: number, userId: number, id: string): Promise<B
   return s;
 }
 
-type SetAction = 'suspend' | 'resume' | 'revoke' | 'rename' | 'close_session';
+type SetAction = 'suspend' | 'resume' | 'revoke' | 'rename';
 interface SetOutcome { outcome: string; from_status: string | null; station_name: string | null; tokens: number; provisionings: number }
 
 /** One change of an owned station by its definer function, in the caller's transaction (tenant context). */
@@ -318,21 +313,6 @@ export function createBenchOwnedRouter(): Router {
     const step = await checkSecondFactor(req, { actionKey: 'bench.target_remove', allowTrustedIp: true, allowDevice: true });
     if (!step.ok) { sendStepUpFailure(res, step); return; }
     await removeTarget(req, id, tenantId, groupId, 'tenant');
-    res.json({ success: true, data: await ownedOne(tenantId, userId, id) });
-  }));
-
-  router.post('/:id/sessions/close', wrap(async (req, res) => {
-    const id = stationIdOf(req);
-    const tenantId = req.tenantId!;
-    const userId = req.session.userId!;
-    const ctx = await audit.fromRequest(req, tenantId);
-    await db.transaction(async (trx) => {
-      const o = await setOwned(trx, tenantId, userId, id, 'close_session');
-      if (o.outcome === 'done') {
-        await audit.appendInTx(trx, { tenantId, action: 'bench.session_closed', target: { type: 'bench_station', id },
-          details: { stationId: id, reason: 'owner', ownerTenantId: tenantId } }, ctx, { onFailure: 'spool' });
-      }
-    });
     res.json({ success: true, data: await ownedOne(tenantId, userId, id) });
   }));
 

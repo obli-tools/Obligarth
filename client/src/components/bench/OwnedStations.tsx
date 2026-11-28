@@ -2,9 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import toast from 'react-hot-toast';
 import { clsx } from 'clsx';
-import { Ban, KeyRound, Pause, Pencil, Play, Plus, ShieldAlert, Tag, Timer, Trash2, XCircle } from 'lucide-react';
+import { Ban, KeyRound, Pause, Pencil, Play, Plus, ShieldAlert, Tag, Trash2 } from 'lucide-react';
 import {
-  BENCH_LIMITS, BENCH_ROLE_POLICIES, normaliseBenchVerificationCode,
+  BENCH_ROLE_POLICIES, normaliseBenchVerificationCode,
   type BenchOwnedStationView, type BenchOwnedTargetView, type BenchRolePolicy, type DeviceGroup,
 } from '@obligarth/shared';
 import { benchStationsApi, type BenchTargetPatch } from '@/api/benchStations.api';
@@ -14,7 +14,6 @@ import { Modal } from '@/components/common/Modal';
 import { Button } from '@/components/common/Button';
 import { ToggleSwitch } from '@/components/common/ToggleSwitch';
 import { useConfirm, usePrompt } from '@/components/common/ConfirmDialog';
-import { useAuthStore } from '@/store/authStore';
 import { NameTemplateDialog, NameTemplateField, templateCheck } from './NameTemplateField';
 import { StationStatusPill, cardCls, cardTitleCls, chipCls, fail, fieldCls, fmt, labelCls, useRolePolicyLabel } from './benchUi';
 
@@ -47,7 +46,6 @@ export function OwnedStations({ onChanged }: { onChanged: () => void }) {
   const { t } = useTranslation();
   const confirm = useConfirm();
   const prompt = usePrompt();
-  const canOperate = useAuthStore((s) => s.isAdmin() || (s.permissions?.tenantCapabilities ?? []).includes('mdm.bench.operate'));
   const [rows, setRows] = useState<BenchOwnedStationView[] | null>(null);
   const [claiming, setClaiming] = useState(false);
   const [adding, setAdding] = useState<BenchOwnedStationView | null>(null);
@@ -121,18 +119,6 @@ export function OwnedStations({ onChanged }: { onChanged: () => void }) {
             )}
             {s.status !== 'revoked' && (
               <>
-                <div className="flex flex-wrap items-center gap-2 text-xs">
-                  {s.session ? (
-                    <>
-                      <span className="text-text-secondary"><Timer className="mr-1 inline h-3.5 w-3.5" />{t('bench.session.current', { technician: s.session.technician ?? '—', until: fmt(s.session.expiresAt) }) || `Session of ${s.session.technician ?? '—'}, until ${fmt(s.session.expiresAt)}`}</span>
-                      <Button size="sm" variant="ghost" onClick={() => void act(() => benchStationsApi.ownedCloseSession(s.id))}><XCircle className="mr-1 h-3.5 w-3.5" />{t('bench.session.close') || 'Close the session'}</Button>
-                    </>
-                  ) : canOperate && s.status === 'approved' && s.targets.some((x) => !x.suspendedAt) ? (
-                    <Button size="sm" onClick={() => void act(() => benchStationsApi.openTenantSession(s.id, BENCH_LIMITS.sessionMaxHours * 60))}>
-                      <Play className="mr-1 h-3.5 w-3.5" />{t('bench.session.open') || 'Open a bench session'}
-                    </Button>
-                  ) : <span className="text-text-muted">{t('bench.owned.noSession') || 'No bench session open.'}</span>}
-                </div>
                 <div>
                   <div className="mb-1 flex items-center">
                     <span className={labelCls}>{t('bench.stations.targets.title') || 'Targets'}</span>

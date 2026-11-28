@@ -1,8 +1,8 @@
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { z } from 'zod';
 import {
-  BENCH_LIMITS, MASTER_TENANT_ID, isMasterTenant, normaliseBenchVerificationCode,
-  type BenchSessionView, type BenchStationDetail, type BenchStationView, type BenchTargetView,
+  MASTER_TENANT_ID, isMasterTenant, normaliseBenchVerificationCode,
+  type BenchStationDetail, type BenchStationView, type BenchTargetView,
 } from '@obligarth/shared';
 import { audit } from '../audit';
 import { db } from '../db';
@@ -24,22 +24,21 @@ import { TargetFields, TargetPatch, assertGroup, insertTarget, patchTarget, remo
 //   POST   /:id/approve                        { verificationCode }: the code read on the station's screen (the console
 //                                              never shows it), checked by the server (422 verification_mismatch), then
 //                                              a strict second factor
-//   POST   /:id/suspend                        no second factor (protective): its tokens, provisionings and session closed
+//   POST   /:id/suspend                        no second factor (protective): its tokens and provisionings closed
 //   POST   /:id/resume                         strict second factor
 //   POST   /:id/revoke                         simple second factor (protective, final): the same cascade
 //   POST   /:id/targets                        { tenantId, groupId, rolePolicy, namePrefix, disableDevOptions }: strict
 //   PATCH  /:id/targets/:tenantId/:groupId     { suspended } alone: no second factor; anything else strict
 //                                              (allowLegacyOwner: the exception D3, audited apart)
 //   DELETE /:id/targets/:tenantId/:groupId     simple second factor
-//   POST   /:id/sessions                       { minutes }: a bench session of the administrator, strict second factor
-//   POST   /:id/sessions/close                 the open session closed
 //   POST   /:id/owner                          { tenantId }: the platform station given to a client (lot BANC-T, Q2): strict
 //                                              second factor; every target (and open provisioning) in that tenant (409
 //                                              foreignTargets); never the other way
 // A station of a client (lot BANC-T, Q1): the platform reads it, suspends it (the client does not lift that suspension;
 // a station the client suspended already becomes the platform's suspension), resumes its own suspension, revokes it,
-// closes its session, suspends one of its targets (same rule: suspended_by_platform on the target) and resumes its own
-// suspension of one; anything else (rename, targets, sessions) is 409 stationOwned.
+// suspends one of its targets (same rule: suspended_by_platform on the target) and resumes its own suspension of one;
+// anything else (rename, targets) is 409 stationOwned.
+// No bench session since 28/11/2026: an approved station acts within its targets by itself (no route of sessions).
 //   GET    /release, PUT /release              the version of the agent served to the stations ({ releaseId | null }:
 //                                              strict second factor)
 //   GET    /installer                          the installer of the station in the image
@@ -76,15 +75,7 @@ function stationId(req: Request): string {
   return id;
 }
 
-export function sessionView(r: Record<string, any> | undefined | null): BenchSessionView | null {
-  if (!r?.id) return null;
-  return {
-    id: String(r.id), stationId: String(r.station_id), userId: Number(r.user_id), technician: r.technician ?? null,
-    openedAt: iso(r.opened_at) as string, expiresAt: iso(r.expires_at) as string, closedAt: iso(r.closed_at),
-  };
-}
-
-function stationView(r: Record<string, any>, counts: Map<string, { targets: number; enrolled: number }>, session: BenchSessionView | null,
+function stationView(r: Record<string, any>, counts: Map<string, { targets: number; enrolled: number }>,
   tenantNames: Map<number, string>): BenchStationView {
   const id = String(r.id);
   const c = counts.get(id) ?? { targets: 0, enrolled: 0 };
@@ -93,7 +84,7 @@ function stationView(r: Record<string, any>, counts: Map<string, { targets: numb
     id, name: r.name, hostname: r.hostname, status: r.status, stationVersion: r.station_version ?? null,
     createdAt: iso(r.created_at) as string, approvedAt: iso(r.approved_at), suspendedAt: iso(r.suspended_at), revokedAt: iso(r.revoked_at),
     revokedReason: r.revoked_reason ?? null, lastSeenAt: iso(r.last_seen_at), lastIp: r.last_ip ?? null, registerIp: r.register_ip ?? null,
-    targetCount: c.targets, enrolledCount: c.enrolled, session,
+    targetCount: c.targets, enrolledCount: c.enrolled,
     ownerTenantId: owner, ownerTenantName: owner === null ? null : tenantNames.get(owner) ?? null, ownerSince: iso(r.owner_since),
     suspendedByPlatform: r.suspended_by_platform === true,
   };
@@ -112,14 +103,6 @@ const isOwned = (r: Record<string, any>): boolean =>
   r.owner_tenant_id !== null && r.owner_tenant_id !== undefined && Number(r.owner_tenant_id) !== MASTER_TENANT_ID;
 function refuseOwned(r: Record<string, any>): void {
   if (isOwned(r)) throw new AppError(409, 'This station belongs to a client: the platform only suspends or revokes it', 'stationOwned');
-}
-
-/** The open sessions, with their technician's label (identity context). */
-async function openSessions(stationIds: string[] | null): Promise<Map<string, BenchSessionView>> {
-  let q = db('bench_sessions as s').leftJoin('users as u', 'u.id', 's.user_id').whereNull('s.closed_at').where('s.expires_at', '>', new Date());
-  if (stationIds) q = q.whereIn('s.station_id', stationIds);
-  const rows = await q.select('s.*', db.raw("COALESCE(NULLIF(u.display_name, ''), u.username) AS technician")) as Array<Record<string, any>>;
-  return new Map(rows.map((r) => [String(r.station_id), sessionView(r)!]));
 }
 
 async function countsOf(): Promise<Map<string, { targets: number; enrolled: number }>> {
@@ -146,8 +129,7 @@ async function stationRow(id: string): Promise<Record<string, any>> {
 async function detailOf(id: string): Promise<BenchStationDetail> {
   return switchToIdentity(async () => {
     const r = await stationRow(id);
-    const sessions = await openSessions([id]);
-    return { ...stationView(r, await countsOf(), sessions.get(id) ?? null, await ownerNames([r])), targets: await targetsOf(id) };
+    return { ...stationView(r, await countsOf(), await ownerNames([r])), targets: await targetsOf(id) };
   });
 }
 
@@ -155,7 +137,6 @@ const ApproveBody = z.object({ verificationCode: z.string().max(20) }).strict();
 const RenameBody = z.object({ name: z.string().max(200) }).strict();
 const TargetBody = z.object({ tenantId: z.number().int().positive(), groupId: z.number().int().positive(), ...TargetFields }).strict();
 const OwnerBody = z.object({ tenantId: z.number().int().positive() }).strict();
-const SessionBody = z.object({ minutes: z.number().int().min(15).max(BENCH_LIMITS.sessionMaxHours * 60).optional() }).strict();
 const ReleaseBody = z.object({ releaseId: z.string().regex(UUID_RE).nullable() }).strict();
 
 /** A status change (compare-and-set on the status read) and its cascade, in one transaction of the identity context. */
@@ -226,9 +207,8 @@ export function createBenchAdminRouter(): Router {
       const rows = await db('bench_stations').orderByRaw("CASE status WHEN 'pending' THEN 0 WHEN 'approved' THEN 1 WHEN 'suspended' THEN 2 ELSE 3 END")
         .orderBy('created_at', 'desc').limit(1000).select('*') as Array<Record<string, any>>;
       const counts = await countsOf();
-      const sessions = await openSessions(null);
       const names = await ownerNames(rows);
-      return rows.map((r) => stationView(r, counts, sessions.get(String(r.id)) ?? null, names));
+      return rows.map((r) => stationView(r, counts, names));
     });
     res.json({ success: true, data });
   }));
@@ -384,17 +364,6 @@ export function createBenchAdminRouter(): Router {
     res.json({ success: true, data: await detailOf(id) });
   }));
 
-  router.post('/:id/sessions', wrap(async (req, res) => {
-    const id = stationId(req);
-    const b = body(SessionBody, req);
-    const r = await switchToIdentity(() => stationRow(id));
-    refuseOwned(r);
-    if (r.status !== 'approved') throw new AppError(409, 'The station is not approved', 'bad_state');
-    if (!(await stepUp(req, res, 'bench.session_open', 'strict'))) return;
-    await openBenchSession(req, id, r.name, b.minutes ?? BENCH_LIMITS.sessionMaxHours * 60, MASTER_TENANT_ID);
-    res.status(201).json({ success: true, data: await detailOf(id) });
-  }));
-
   // Lot BANC-T, Q2: a platform station given to a client (never the other way).
   router.post('/:id/owner', wrap(async (req, res) => {
     const id = stationId(req);
@@ -423,64 +392,5 @@ export function createBenchAdminRouter(): Router {
     res.json({ success: true, data: await detailOf(id) });
   }));
 
-  router.post('/:id/sessions/close', wrap(async (req, res) => {
-    const id = stationId(req);
-    await closeBenchSession(req, { stationId: id }, MASTER_TENANT_ID, 'admin');
-    res.json({ success: true, data: await detailOf(id) });
-  }));
-
   return router;
-}
-
-/** Opens the session of the request's user on a station (identity context): the station locked and still approved, the
- *  expired leftovers closed first, one open session per station (409 sessionOpen, also when a concurrent opening won the
- *  unique index). The audit entry (critical) goes to the chain of `chainTenantId`. */
-export async function openBenchSession(req: Request, id: string, stationName: string, minutes: number, chainTenantId: number): Promise<BenchSessionView> {
-  const userId = req.session.userId!;
-  const ctx = await audit.fromRequest(req, chainTenantId);
-  const m = Math.max(15, Math.min(BENCH_LIMITS.sessionMaxHours * 60, Math.floor(minutes)));
-  return switchToIdentity(() => db.transaction(async (trx) => {
-    const st = await trx('bench_stations').where({ id }).forUpdate().first('status') as { status: string } | undefined;
-    if (!st) throw new AppError(404, 'Station not found');
-    if (st.status !== 'approved') throw new AppError(409, 'The station is not approved', 'bad_state');
-    await trx('bench_sessions').where({ station_id: id }).whereNull('closed_at').where('expires_at', '<=', new Date())
-      .update({ closed_at: new Date(), close_reason: 'expired' });
-    if (await trx('bench_sessions').where({ station_id: id }).whereNull('closed_at').first('id')) {
-      throw new AppError(409, 'A bench session is open on this station already', 'sessionOpen');
-    }
-    const [row] = await trx('bench_sessions').insert({
-      station_id: id, user_id: userId, expires_at: trx.raw('now() + make_interval(mins => ?)', [m]),
-    }).returning('*') as Array<Record<string, any>>;
-    await audit.appendInTx(trx, {
-      tenantId: chainTenantId, action: 'bench.session_opened', target: { type: 'bench_station', id },
-      details: { stationId: id, name: stationName, sessionId: String(row.id), minutes: m, technicianUserId: userId },
-    }, ctx);
-    return sessionView({ ...row, technician: req.session.username ?? null })!;
-  })).catch((err) => {
-    if ((err as { code?: string })?.code === '23505' && /bench_sessions_open/.test(String((err as { constraint?: string }).constraint ?? ''))) {
-      throw new AppError(409, 'A bench session is open on this station already', 'sessionOpen');
-    }
-    throw err;
-  });
-}
-
-/** Closes the open session of a station (by the station, or by its id): protective. */
-export async function closeBenchSession(req: Request, which: { stationId?: string; sessionId?: string }, chainTenantId: number,
-  reason: 'user' | 'admin', mustOwn = false): Promise<boolean> {
-  const userId = req.session.userId!;
-  const ctx = await audit.fromRequest(req, chainTenantId);
-  return switchToIdentity(() => db.transaction(async (trx) => {
-    let q = trx('bench_sessions').whereNull('closed_at');
-    if (which.stationId) q = q.where({ station_id: which.stationId });
-    if (which.sessionId) q = q.where({ id: which.sessionId });
-    const s = await q.forUpdate().first('id', 'station_id', 'user_id') as Record<string, any> | undefined;
-    if (!s) return false;
-    if (mustOwn && Number(s.user_id) !== userId) throw new AppError(404, 'Session not found');
-    await trx('bench_sessions').where({ id: s.id }).update({ closed_at: new Date(), closed_by: userId, close_reason: reason });
-    await audit.appendInTx(trx, {
-      tenantId: chainTenantId, action: 'bench.session_closed', target: { type: 'bench_station', id: String(s.station_id) },
-      details: { stationId: String(s.station_id), sessionId: String(s.id), technicianUserId: Number(s.user_id), reason },
-    }, ctx, { onFailure: 'spool' });
-    return true;
-  }));
 }

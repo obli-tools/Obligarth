@@ -2,12 +2,11 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { clsx } from 'clsx';
-import { ChevronDown, ChevronRight, Pause, Play, Timer, Trash2, XCircle } from 'lucide-react';
-import { BENCH_LIMITS, isMasterTenant, type BenchProvisioningView, type BenchTenantStationView } from '@obligarth/shared';
+import { ChevronDown, ChevronRight, Pause, Trash2 } from 'lucide-react';
+import { isMasterTenant, type BenchProvisioningView, type BenchTenantStationView } from '@obligarth/shared';
 import { benchStationsApi } from '@/api/benchStations.api';
 import { Button } from '@/components/common/Button';
 import { useConfirm } from '@/components/common/ConfirmDialog';
-import { useAuthStore } from '@/store/authStore';
 import { useTenantStore } from '@/store/tenantStore';
 import { OwnedStations } from './OwnedStations';
 import {
@@ -16,8 +15,9 @@ import {
 } from './benchUi';
 
 // The Bench tab of the Android agent (lot BANC §3.7, §3.12; mdm.bench.manage): the stations that target the tenant (no
-// token, no address), the bench session (mdm.bench.operate, second factor), the suspension (no second factor) or the
-// removal (second factor) of a target of the tenant, and the history of the provisionings with their journal of steps.
+// token, no address), the suspension (no second factor) or the removal (second factor) of a target of the tenant, and
+// the history of the provisionings with their journal of steps. No bench session since 28/11/2026: an approved station
+// enrolls within its targets by itself.
 // Lot BANC-T §4: in a client tenant, the stations it owns come first (OwnedStations: the claim, their actions and
 // targets); the list below keeps the platform's stations that serve the tenant.
 
@@ -27,8 +27,6 @@ export function BenchTab() {
   const policyLabel = useRolePolicyLabel();
   const roleLabel = useRoleLabel();
   const errorLabel = useBenchErrorLabel();
-  const canOperate = useAuthStore((s) => s.isAdmin() || (s.permissions?.tenantCapabilities ?? []).includes('mdm.bench.operate'));
-  const isAdmin = useAuthStore((s) => s.isAdmin());
   const tenantId = useTenantStore((s) => s.currentTenantId);
   const client = tenantId !== null && !isMasterTenant(tenantId);
   const [stations, setStations] = useState<BenchTenantStationView[] | null>(null);
@@ -62,18 +60,6 @@ export function BenchTab() {
                 <span className="font-medium text-text-primary">{s.name}</span>
                 <StationStatusPill status={s.status} />
                 <span className="text-xs text-text-muted">{t('bench.stations.lastSeen') || 'Last activity'} : {fmt(s.lastSeenAt)}</span>
-                <span className="ml-auto flex items-center gap-2">
-                  {s.session ? (
-                    <>
-                      <span className="text-xs text-text-secondary"><Timer className="mr-1 inline h-3.5 w-3.5" />{t('bench.session.current', { technician: s.session.technician ?? '—', until: fmt(s.session.expiresAt) }) || `Session of ${s.session.technician ?? '—'}, until ${fmt(s.session.expiresAt)}`}</span>
-                      {(s.session.mine || isAdmin) && <Button size="sm" variant="ghost" onClick={() => void run(() => benchStationsApi.closeTenantSession(s.session!.id))}><XCircle className="mr-1 h-3.5 w-3.5" />{t('bench.session.close') || 'Close the session'}</Button>}
-                    </>
-                  ) : canOperate && s.status === 'approved' && s.targets.some((x) => !x.suspendedAt) && (
-                    <Button size="sm" onClick={() => void run(() => benchStationsApi.openTenantSession(s.id, BENCH_LIMITS.sessionMaxHours * 60))}>
-                      <Play className="mr-1 h-3.5 w-3.5" />{t('bench.session.open') || 'Open a bench session'}
-                    </Button>
-                  )}
-                </span>
               </div>
               {s.targets.map((x) => (
                 <div key={x.groupId} className="flex flex-wrap items-center gap-2 rounded-md px-2 py-1 text-xs transition-colors hover:bg-bg-tertiary">
@@ -150,6 +136,8 @@ export function BenchTab() {
                               <span className="w-40 shrink-0 text-text-primary">{t(`bench.step.${s.step}`) || s.step}</span>
                               <span className="text-text-secondary">{t(`bench.stepStatus.${s.status}`) || s.status}</span>
                               {s.code && <span className="text-text-muted">{errorLabel(s.code)}</span>}
+                              {/* 28/11/2026: the app disabled for a moment to hide accounts, then enabled again. */}
+                              {s.detail?.packages && s.detail.packages.length > 0 && <span className="font-mono text-text-muted">{s.detail.packages.join(', ')}</span>}
                             </div>
                           ))}
                           {r.steps.length === 0 && <div className="px-3 py-1 text-text-muted">{t('bench.history.noStep') || 'No step reported.'}</div>}

@@ -71,7 +71,6 @@ import { createObliwatchConsoleRouter } from '../integrations/obliwatch/consent'
 import { obliwatchIntegrationEnabled } from '../integrations/obliwatch/config';
 import { createBenchStationRouter } from '../bench/api.routes';
 import { createBenchAdminRouter } from '../bench/admin.routes';
-import { createBenchSessionsRouter } from '../bench/sessions.routes';
 import { createBenchHistoryRouter } from '../bench/history.routes';
 import { createBenchOwnedRouter } from '../bench/owned.routes';
 
@@ -200,11 +199,10 @@ tenantRouter.use('/legacy-agent', createLegacyAgentRouter());
 // The remote assistance sessions (P0-15 §4.2): request, journal, end, escalation, settings (remote/routes.ts).
 tenantRouter.use('/remote-sessions', createRemoteSessionsRouter());
 tenantRouter.use('/admin/legacy-agent', createLegacyAgentAdminRouter());
-// The bench stations (lot BANC §3.2): the platform's (master tenant, platform administrators: approval, targets, sessions,
-// version served), the sessions a technician opens from a tenant (mdm.bench.operate), the history of the provisionings
-// and the stations that target the tenant (mdm.bench.manage).
+// The bench stations (lot BANC §3.2): the platform's (master tenant, platform administrators: approval, targets, version
+// served), the history of the provisionings and the stations that target the tenant (mdm.bench.manage). No bench session
+// since 28/11/2026 (/bench-sessions removed): an approved station acts within its targets by itself.
 tenantRouter.use('/admin/bench-stations', createBenchAdminRouter());
-tenantRouter.use('/bench-sessions', createBenchSessionsRouter());
 tenantRouter.use('/bench-provisionings', createBenchHistoryRouter());
 // Lot BANC-T: the stations a client tenant owns (claim by the code of the station, management, targets of its tenant).
 tenantRouter.use('/bench-stations', createBenchOwnedRouter());

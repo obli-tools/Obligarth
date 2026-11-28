@@ -1,13 +1,13 @@
 import apiClient from './client';
 import type {
-  BenchOwnedStationView, BenchProvisioningView, BenchRolePolicy, BenchSessionView, BenchStationDetail, BenchStationInstallerInfo, BenchStationView,
+  BenchOwnedStationView, BenchProvisioningView, BenchRolePolicy, BenchStationDetail, BenchStationInstallerInfo, BenchStationView,
   BenchTenantStationView, LegacyAgentReleaseView,
 } from '@obligarth/shared';
 
 // =============================================================================
 // Console API of the bench stations (lot BANC §3.12): the platform's (/api/admin/bench-stations: master tenant,
-// platform administrators), the bench sessions a technician opens (/api/bench-sessions, mdm.bench.operate) and the
-// tenant's view (/api/bench-provisionings, mdm.bench.manage). A second factor, when the server asks for it, is
+// platform administrators) and the tenant's view (/api/bench-provisionings, mdm.bench.manage; no bench session since
+// 28/11/2026). A second factor, when the server asks for it, is
 // handled by the dialog of the client (TwoFactorGate).
 // =============================================================================
 
@@ -60,12 +60,6 @@ export const benchStationsApi = {
   async removeTarget(id: string, tenantId: number, groupId: number): Promise<BenchStationDetail> {
     return data(await apiClient.delete<ApiResponse<BenchStationDetail>>(`/admin/bench-stations/${id}/targets/${tenantId}/${groupId}`));
   },
-  async openSession(id: string, minutes: number): Promise<BenchStationDetail> {
-    return data(await apiClient.post<ApiResponse<BenchStationDetail>>(`/admin/bench-stations/${id}/sessions`, { minutes }));
-  },
-  async closeSession(id: string): Promise<BenchStationDetail> {
-    return data(await apiClient.post<ApiResponse<BenchStationDetail>>(`/admin/bench-stations/${id}/sessions/close`, {}));
-  },
   async release(): Promise<BenchServedInfo> { return data(await apiClient.get<ApiResponse<BenchServedInfo>>('/admin/bench-stations/release')); },
   async setRelease(releaseId: string | null): Promise<void> { await apiClient.put('/admin/bench-stations/release', { releaseId }); },
   async tenants(): Promise<Array<{ id: number; name: string }>> {
@@ -95,10 +89,6 @@ export const benchStationsApi = {
   async removeTenantTarget(stationId: string, groupId: number): Promise<BenchTenantStationView[]> {
     return data(await apiClient.delete<ApiResponse<BenchTenantStationView[]>>(`/bench-provisionings/targets/${stationId}/${groupId}`));
   },
-  async openTenantSession(stationId: string, minutes: number): Promise<BenchSessionView> {
-    return data(await apiClient.post<ApiResponse<BenchSessionView>>('/bench-sessions', { stationId, minutes }));
-  },
-  async closeTenantSession(sessionId: string): Promise<void> { await apiClient.post(`/bench-sessions/${sessionId}/close`, {}); },
 
   // ── The stations the tenant owns (lot BANC-T, /api/bench-stations: mdm.bench.manage, 404 in the master tenant) ──
   /** The claim of a pending station by its name and the code its screen shows (strict second factor, asked by the
@@ -127,8 +117,5 @@ export const benchStationsApi = {
   },
   async ownedRemoveTarget(id: string, groupId: number): Promise<BenchOwnedStationView> {
     return data(await apiClient.delete<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/targets/${groupId}`));
-  },
-  async ownedCloseSession(id: string): Promise<BenchOwnedStationView> {
-    return data(await apiClient.post<ApiResponse<BenchOwnedStationView>>(`/bench-stations/${id}/sessions/close`, {}));
   },
 };

@@ -51,7 +51,12 @@ export interface BenchSiteDevice {
   model: string | null;
   serialTail: string | null;
   lastSeenAt: string | null;
+  /** 28/11/2026: the device of the card asking (its serials given): its own name, not a name of another device. */
+  self?: true;
 }
+
+/** The serials of the card asking GET /v1/sites/:id/devices: the server marks its own device `self`. */
+export interface SelfSerials { adbSerial: string; hwSerial: string | null }
 
 /** GET /v1/sites/:id/devices[?groupId=]: the names used in the site, the name the target's template suggests. */
 export interface BenchSiteDevices {
@@ -66,7 +71,7 @@ export interface PlanRequest {
   groupId: number;
   /** Lot BANC-T §9: the site chosen on the card (one of the target's). */
   siteId?: string | null;
-  /** Lot BANC-T Q3: the exception D3 decided on the bench (an open session is required; the server audits it). */
+  /** Lot BANC-T Q3: the exception D3 decided on the bench (the server audits each use). */
   allowLegacyOwner?: boolean;
   device: { adbSerial: string; hwSerial: string | null; model: string; manufacturer: string; sdkInt: number; osRelease: string | null; oneUi: string | null };
   agentInstalled: { versionCode: number; signerSha256: string | null; adminActive: boolean; phase: string | null } | null;
@@ -115,7 +120,7 @@ export interface StepEntry {
   at: string;
   code?: string;
   /** packageId (lot BANC-A, step apps): the package of the tenant's store the entry is about. */
-  detail?: { code?: string; counts?: Record<string, number>; accountTypes?: string[]; sdk?: number; versionCode?: number; attempt?: number; packageId?: string };
+  detail?: { code?: string; counts?: Record<string, number>; accountTypes?: string[]; sdk?: number; versionCode?: number; attempt?: number; packageId?: string; packages?: string[] };
 }
 
 /** POST /v1/provisionings/apps (lot BANC-A, « compléter les apps »): what the bench reads of a device already enrolled.
@@ -141,7 +146,8 @@ export interface BenchApi {
   /** Lot BANC-T §9: the choice of the card, tenant → site → name. */
   tenants(): Promise<BenchTenant[]>;
   sites(tenantId: number, search: string | null): Promise<BenchSite[]>;
-  siteDevices(siteId: string, groupId: number | null): Promise<BenchSiteDevices>;
+  /** `self`: the serials of the card (28/11/2026), its own device marked; a server older ignores them. */
+  siteDevices(siteId: string, groupId: number | null, self?: SelfSerials | null): Promise<BenchSiteDevices>;
   agent(): Promise<ServedAgent>;
   downloadApk(sha256: string, dest: string): Promise<void>;
   plan(body: PlanRequest): Promise<PlanAnswer>;
@@ -155,11 +161,14 @@ export interface BenchApi {
   /** Lot BANC-A: the file of one of THOSE apps (by its SHA-256), written to `dest`; refusals keep their code (404
    *  apk_unavailable, 429 rate_limited with details.retryAfter in seconds, 500 apk_mismatch). */
   downloadPackage(sha256: string, provisioningId: string, dest: string): Promise<void>;
-  /** Lot BANC-A: « compléter les apps » of a device already enrolled (an open bench session is required). */
+  /** Lot BANC-A: « compléter les apps » of a device already enrolled (an approved station, within its targets). */
   planApps(body: AppsPlanRequest): Promise<BenchAppsPlanAnswer>;
   /** The server's time, ISO (the steps are stamped with it). */
   nowIso(): string;
 }
+
+/** A serial the server accepts in a query (the plan's own form). */
+const SELF_SERIAL = /^[A-Za-z0-9._:-]{1,64}$/;
 
 export class BenchApiError extends Error {
   constructor(readonly status: number, readonly code: string, message: string, readonly details: Record<string, unknown> | null = null) {
@@ -232,8 +241,15 @@ export class HttpBenchApi implements BenchApi {
     const q = search ? `?search=${encodeURIComponent(search.slice(0, 100))}` : '';
     return this.call(`/v1/tenants/${encodeURIComponent(String(tenantId))}/sites${q}`);
   }
-  siteDevices(siteId: string, groupId: number | null): Promise<BenchSiteDevices> {
-    return this.call(`/v1/sites/${encodeURIComponent(siteId)}/devices${groupId !== null ? `?groupId=${groupId}` : ''}`);
+  siteDevices(siteId: string, groupId: number | null, self: SelfSerials | null = null): Promise<BenchSiteDevices> {
+    const q = new URLSearchParams();
+    if (groupId !== null) q.set('groupId', String(groupId));
+    if (self && SELF_SERIAL.test(self.adbSerial)) {
+      q.set('adbSerial', self.adbSerial);
+      if (self.hwSerial && SELF_SERIAL.test(self.hwSerial)) q.set('hwSerial', self.hwSerial);
+    }
+    const qs = q.toString();
+    return this.call(`/v1/sites/${encodeURIComponent(siteId)}/devices${qs ? `?${qs}` : ''}`);
   }
   agent(): Promise<ServedAgent> { return this.call('/v1/agent'); }
 

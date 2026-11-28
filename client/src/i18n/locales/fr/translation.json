@@ -1994,7 +1994,7 @@
       "mdm_privacy_manage": "Confidentialité · Profils, notice et rétention",
       "mcp_access_keys": "MCP · Clés d’accès personnelles pour agents IA",
       "mdm_bench_manage": "Enrôlement · Stations de banc et historique d'intégration",
-      "mdm_bench_operate": "Enrôlement · Ouvrir une session de banc"
+      "mdm_bench_operate": "Enrôlement · Opération de banc (sans effet : plus de session de banc)"
     }
   },
   "notificationCenter": {
@@ -4313,7 +4313,6 @@
     "neverBlock": "Cette adresse n’est jamais bloquée.",
     "invalidIp": "Une adresse unique est attendue.",
     "stepUpRequired": "Un second facteur est requis.",
-    "sessionOpen": "Une session de banc est déjà ouverte sur cette station.",
     "ownerDeclaredConfirm": "Le propriétaire de l'appareil reste posé sans agent fonctionnel : confirmez explicitement la révocation.",
     "targetExists": "Ce groupe est déjà une cible de la station.",
     "releaseWithdrawn": "Cette version de l'agent est retirée.",
@@ -7407,7 +7406,15 @@
       "app_install_failed": "Installation de l'app échouée",
       "app_unavailable": "App plus disponible",
       "device_not_found": "Aucun appareil des cibles de la station ne correspond",
-      "identity_ambiguous": "Plusieurs appareils correspondent à cette identité"
+      "identity_ambiguous": "Plusieurs appareils correspondent à cette identité",
+      "account_app_disabled": "Appli des comptes désactivée un instant",
+      "account_app_disable_refused": "Android a refusé de désactiver l’appli des comptes",
+      "account_app_enabled": "Appli des comptes réactivée",
+      "account_app_enable_failed": "Appli des comptes non réactivée",
+      "accounts_hide_refused": "Comptes impossibles à masquer",
+      "accounts_still_seen": "Comptes encore vus par Android",
+      "accounts_marker_failed": "Marqueur non écrit sur l’appareil",
+      "owner_possible_accounts": "Propriétaire possible, les comptes masqués un instant"
     },
     "step": {
       "detect": "Détection",
@@ -7429,14 +7436,6 @@
       "warn": "Avertissement",
       "failed": "Échec",
       "skipped": "Ignoré"
-    },
-    "session": {
-      "title": "Session de banc",
-      "open": "Ouvrir une session de banc",
-      "close": "Fermer la session",
-      "current": "Session de {{technician}}, jusqu'à {{until}}",
-      "duration": "Durée (minutes)",
-      "hint": "La station n'enrôle aucun téléphone seule : un technicien l'ouvre ici pour une durée limitée (8 heures au plus). Pendant ce temps, chaque téléphone branché est enrôlé en son nom, après vérification qu'il a toujours le droit d'enrôler dans le tenant visé. Session fermée ou expirée : la station n'enrôle plus rien."
     },
     "tenant": {
       "stations": "Stations de banc de ce tenant",
@@ -7525,7 +7524,7 @@
         "button": "PC volé",
         "title": "Le PC d'un technicien est volé",
         "step1": "Suspendez la station (un clic, sans second facteur) : elle ne peut plus agir.",
-        "step2": "Révoquez-la : ses jetons non consommés sont révoqués, ses intégrations ouvertes abandonnées, sa session fermée.",
+        "step2": "Révoquez-la : ses jetons non consommés sont révoqués et ses intégrations ouvertes abandonnées.",
         "step3": "Passez en revue les appareils intégrés par cette station depuis le vol et mettez les appareils douteux en quarantaine d'identité.",
         "step4": "La station renouvelée crée une nouvelle clé ADB : l'ancienne autorisation expire au bout de 7 jours sur Android 11 et suivants ; sur Android 7 à 9, révoquez les autorisations de débogage USB au prochain passage."
       },
@@ -7561,7 +7560,8 @@
         "noGroup": "Aucun groupe.",
         "rolePolicy": "Rôle",
         "addHint": "Un second facteur est demandé. Le tenant voit les stations qui le ciblent et peut suspendre ou retirer une cible."
-      }
+      },
+      "autonomy": "Une station approuvée enrôle seule dans ses cibles (tenant et groupe, et les sites en dessous), sans session à ouvrir : chaque jeton, conversion et app installée est tracé à l’audit au nom de la station. Pour l’arrêter, suspendez-la (un clic) ou révoquez-la."
     },
     "nameTemplate": {
       "label": "Modèle du nom suggéré",
@@ -7601,7 +7601,6 @@
       "empty": "Aucune station n'appartient à ce tenant. Installez la station de banc sur un PC, puis ajoutez-la ici avec le code affiché sur son écran.",
       "platformSuspended": "Suspendue par la plateforme depuis le {{at}} : seule la plateforme la reprend. Contactez-la si ce n'est pas attendu.",
       "platformSuspendedError": "La plateforme a suspendu cette station ou cette cible : seule la plateforme la reprend.",
-      "noSession": "Aucune session de banc ouverte.",
       "targetRefused": "Cette station ne peut pas cibler ce groupe.",
       "targetExists": "Ce groupe est déjà une cible de la station.",
       "addTargetTitle": "Ajouter une cible à {{name}}",
@@ -7618,7 +7617,6 @@
       "targetSuspendedByPlatform": "Suspendue par la plateforme",
       "targetSuspendedByPlatformNote": "La plateforme a suspendu cette cible : seule la plateforme la reprend. La contacter si ce n’est pas attendu.",
       "suspendedByOwnerNote": "Suspendue par son propriétaire : c'est le client qui la reprend.",
-      "sessionByClient": "Aucune session ouverte. Les sessions d'une station de client sont ouvertes par les techniciens de son tenant.",
       "give": "Rattacher à un client",
       "giveTitle": "Rattacher {{name}} à un client",
       "giveHint": "Définitif : la station appartient alors à ce client, qui gère son nom, ses cibles et ses sessions ; elle ne revient jamais à la plateforme. La plateforme continue de la surveiller : suspendre, révoquer. Sa session ouverte est fermée. Un second facteur est demandé.",

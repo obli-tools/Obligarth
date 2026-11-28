@@ -116,6 +116,9 @@ export interface AccountsReading {
   types: string[];
   /** The package that carries each type, read from the authenticators. */
   owners: Record<string, string>;
+  /** Every account counted was read with a valid type (none left out of `types`): only then may the station hide the
+   *  accounts for a while (an account it cannot see the type of keeps the owner blocked). */
+  complete: boolean;
 }
 
 const ACCOUNT_TYPE_RE = /^[A-Za-z0-9._-]{1,64}$/;
@@ -128,16 +131,49 @@ export function parseAccounts(out: string): AccountsReading {
   for (const m of out.matchAll(/^\s*Accounts:\s*(\d+)/gm)) { count += Number(m[1]); sawHeader = true; }
   const types = new Set<string>();
   let listed = 0;
+  let rejected = 0;
   for (const m of out.matchAll(/Account \{name=[^}]*?,\s*type=([^}\s,]+)\}/g)) {
     listed++;
-    if (ACCOUNT_TYPE_RE.test(m[1])) types.add(m[1]);
+    if (ACCOUNT_TYPE_RE.test(m[1])) types.add(m[1]); else rejected++;
   }
   if (!sawHeader) count = listed;
   const owners: Record<string, string> = {};
   for (const m of out.matchAll(/AuthenticatorDescription \{type=([^}]+)\},\s*ComponentInfo\{([A-Za-z0-9_.]+)\//g)) {
     if (ACCOUNT_TYPE_RE.test(m[1]) && types.has(m[1])) owners[m[1]] = m[2];
   }
-  return { count, types: [...types].sort(), owners };
+  return { count, types: [...types].sort(), owners, complete: rejected === 0 && listed === count };
+}
+
+// ── accounts hidden for a while (owner decision of 28/11/2026) ──────────────
+
+/**
+ * The packages the station never disables, whatever account they carry: the agent, the framework, Settings, the
+ * system UI, the shell, the phone, the launchers, the package installers, the content providers, the keyboards. An
+ * account carried by one of them keeps the owner blocked, as before.
+ */
+export function isProtectedPackage(pkg: string): boolean {
+  if (pkg === AGENT_PACKAGE || pkg === 'android') return true;
+  if (/^com\.android\.(settings|systemui|shell|phone|providers\..+|server\..+)$/.test(pkg)) return true;
+  return /launcher|packageinstaller|\.home$|inputmethod|keyboard|honeyboard|systemui|settings/i.test(pkg);
+}
+
+/** `pm disable-user --user 0 <pkg>` / `pm enable <pkg>`: `Package <pkg> new state: disabled-user|enabled`. Read only
+ *  from that sentence, for that package (a refusal prints an exception: SecurityException, protected package…). */
+export function parsePmNewState(out: string, pkg: string): 'disabled' | 'enabled' | null {
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^Package (\S+) new state:\s*(disabled-user|disabled|enabled|default)\s*$/.exec(line.trim());
+    if (m && m[1] === pkg) return m[2] === 'enabled' || m[2] === 'default' ? 'enabled' : 'disabled';
+  }
+  return null;
+}
+
+const PACKAGE_NAME_RE = /^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)+$/;
+
+/** The marker the station leaves on the device while packages are disabled (`cat` of it): package names, blank
+ *  separated; any other word is ignored, and so is a package the station never disables. */
+export function parseHiddenMarker(out: string): string[] {
+  if (/No such file|not found|Permission denied/i.test(out)) return [];
+  return [...new Set(out.split(/\s+/).filter((w) => w.length <= 255 && PACKAGE_NAME_RE.test(w) && !isProtectedPackage(w)))].sort();
 }
 
 export interface PolicyReading {
